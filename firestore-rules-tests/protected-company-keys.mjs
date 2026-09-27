@@ -45,12 +45,15 @@ export const RESERVED_COMPANY_KEYS = Object.freeze([
   'contractEnforced',
 ]);
 
-/** Canonical root FIRST, then the reserved/deprecated names. */
+/** Canonical root FIRST, then the reserved/deprecated names, then
+ *  authority-control keys that must not be client-writable. */
 export const PROTECTED_COMPANY_KEYS = Object.freeze([
   CANONICAL_PROTECTED_ROOT,
   ...RESERVED_COMPANY_KEYS,
+  'roleCapabilities',
 ]);
 
 export const PLATFORM_ADMINS_COLLECTION = 'platform_admins';
+export const TRUSTED_STAFF_AUTHORITY_COLLECTION = 'trusted_staff_authority';
 export const PLANS_COLLECTION = 'plans';
 export const ADMIN_AUDIT_COLLECTION = 'platform_admin_audit';

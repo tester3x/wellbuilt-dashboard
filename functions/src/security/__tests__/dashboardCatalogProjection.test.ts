@@ -231,4 +231,76 @@ describe('projectDashboardCatalog', () => {
     expect(isSensitiveCatalogKey('passcodeHash')).toBe(true);
     expect(isSensitiveCatalogKey('sessionToken')).toBe(true);
   });
+
+  it('projects canonical profiles into approved for consumers that only read approved', () => {
+    const canonUuid = '11111111-2222-3333-4444-555555555555';
+    const rawProfiles = {
+      [canonUuid]: {
+        displayName: 'Adan',
+        legalName: 'Adan Secure',
+        name: 'adan',
+        active: true,
+        companyId: 'liquid-gold',
+        assignedRoutes: ['North'],
+        phone: '555-0199',
+      },
+      'acme-uuid': {
+        displayName: 'Acme Driver',
+        active: true,
+        companyId: 'acme-hauling',
+      },
+    };
+
+    // Caller is liquidGold: should project Adan into approved, but not Acme Driver
+    const outLg = projectDashboardCatalog({
+      approved: {},
+      profiles: rawProfiles,
+      users: {},
+      wellConfig: {},
+      caller: liquidGold,
+    });
+    expect(outLg.approved[canonUuid]).toBeDefined();
+    expect(outLg.approved[canonUuid].displayName).toBe('Adan');
+    expect(outLg.approved[canonUuid].legalName).toBe('Adan Secure');
+    expect(outLg.approved[canonUuid].driverId).toBe(canonUuid);
+    expect(outLg.approved['acme-uuid']).toBeUndefined();
+    expect(outLg.counts.approved).toBe(1);
+
+    // Platform admin caller sees both
+    const outPlat = projectDashboardCatalog({
+      approved: {},
+      profiles: rawProfiles,
+      users: {},
+      wellConfig: {},
+      caller: platform,
+    });
+    expect(outPlat.approved[canonUuid]).toBeDefined();
+    expect(outPlat.approved['acme-uuid']).toBeDefined();
+    expect(outPlat.counts.approved).toBe(2);
+  });
+
+  it('does not create duplicate approved entry when profile is already linked via migratedToDriverId', () => {
+    const canonUuid = '22222222-3333-4444-5555-666666666666';
+    const out = projectDashboardCatalog({
+      approved: {
+        legacyHash: {
+          displayName: 'Migrated Driver',
+          companyId: 'liquid-gold',
+          migratedToDriverId: canonUuid,
+        },
+      },
+      profiles: {
+        [canonUuid]: {
+          displayName: 'Migrated Driver',
+          companyId: 'liquid-gold',
+        },
+      },
+      users: {},
+      wellConfig: {},
+      caller: liquidGold,
+    });
+    expect(out.approved.legacyHash).toBeDefined();
+    expect(out.approved[canonUuid]).toBeUndefined(); // Not duplicated!
+    expect(out.counts.approved).toBe(1);
+  });
 });

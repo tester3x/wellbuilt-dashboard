@@ -35,6 +35,13 @@ import {
   productionCanonicalDriverReaders,
   type CanonicalDriverRecordReaders,
 } from '../canonicalDriverAuthority';
+import { requireRegisteredDashboardUser } from '../adminAuth';
+import { LEGACY_WELL_POOL_COMPANY_ID } from '../dashboardCatalogProjection';
+import {
+  normalizeDriverIds,
+  callerMayViewCompany,
+  buildStaffShiftResult,
+} from './staffShiftResolveCore';
 import {
   buildLifecycleEvent,
   decideClaim,
@@ -144,6 +151,55 @@ export const resolveActiveDriverShift = httpsV2.onCall(
     // Side-effect free by construction: resolve NEVER writes, so a login or a
     // cold-start check cannot mint a shift.
     return { ...result, protocolVersion: 1 as const };
+  },
+);
+
+// ── staff batched resolve (Dashboard driver shift dots) ─────────────────────
+
+const STAFF_RESOLVE_KEYS = ['driverIds'];
+
+/**
+ * Read-only, batched shift status for a Dashboard STAFF viewer.
+ *
+ * - Authorizes a REGISTERED Dashboard user, then gates EACH driver by tenancy that
+ *   mirrors the client's `docBelongsToTenant` (callerMayViewCompany): a company
+ *   dispatcher sees ONLY their own company's dots; a platform/unscoped admin sees all.
+ *   A driver the caller may not view resolves 'unverifiable' — never leaked.
+ * - Each driver is resolved against ITS OWN authority-record company (the dispatch
+ *   page shows a no-company admin every company's drivers, so a single caller-company
+ *   scope would wrongly gray them all). decideResolve still enforces driverId + the
+ *   record's own companyId, so a malformed/foreign record fails closed.
+ * - Returns per driverId: open | none | unverifiable, plus a shared asOf timestamp.
+ * - NEVER writes, no shadow flag, no HOS/presence/GPS inference. Canonical driverId only.
+ */
+export const staffResolveCompanyDriverShifts = httpsV2.onCall(
+  SHIFT_AUTHORITY_OPTIONS,
+  async (request) => {
+    const data = requireExactKeys(request.data ?? {}, STAFF_RESOLVE_KEYS);
+    const caller = await requireRegisteredDashboardUser(
+      request.auth?.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
+    const ids = normalizeDriverIds(data.driverIds);
+    if (!ids.ok) throw new httpsV2.HttpsError('invalid-argument', `driver_ids_${ids.reason}`);
+
+    const asOf = new Date().toISOString();
+    const results = await Promise.all(
+      ids.ids.map(async (driverId) => {
+        const snap = await db().doc(shiftAuthorityPath(driverId)).get();
+        const record = snap.exists ? readRecord(snap.data()) : null;
+        const recordCompany = record?.companyId || '';
+        // Tenancy (mirrors client docBelongsToTenant). A driver the caller may not
+        // view resolves 'unverifiable' — never another company's state.
+        if (!record || !callerMayViewCompany(caller, recordCompany, LEGACY_WELL_POOL_COMPANY_ID)) {
+          return buildStaffShiftResult(driverId, { state: 'unverifiable' }, asOf);
+        }
+        // Resolve against the record's OWN company (authorization already done above).
+        const resolved = decideResolve(record, { driverId, companyId: recordCompany });
+        return buildStaffShiftResult(driverId, resolved, asOf);
+      }),
+    );
+    return { results, companyId: caller.companyId ?? null, asOf, protocolVersion: 1 as const };
   },
 );
 

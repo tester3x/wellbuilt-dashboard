@@ -110,8 +110,15 @@ export function formatTTP(well: WellResponse, nowMs: number = Date.now()): strin
       const h = c.ttpHours;
       if (h === null) return 'rising';
       if (h <= 0) return 'PULL NOW';
-      if (h < 24) return `${Math.round(h)}h`;
-      const d = Math.floor(h / 24); const r = Math.round(h % 24); return r > 0 ? `${d}d ${r}h` : `${d}d`;
+      // Match WB-M / Dashboard Well Status: preserve live minute precision
+      // instead of rounding the countdown to a whole hour.
+      const totalMinutes = Math.max(0, Math.floor(h * 60));
+      const days = Math.floor(totalMinutes / 1440);
+      const hours = Math.floor((totalMinutes % 1440) / 60);
+      const minutes = totalMinutes % 60;
+      return days > 0
+        ? `${days}d ${hours}h ${minutes}m`
+        : `${hours}h ${minutes}m`;
     }
     case 'no-gain': return 'NO FLOW';
     case 'verify': return 'NEEDS DATA';
@@ -327,7 +334,11 @@ export function verifyReasonText(reason: string | undefined): string {
 
 export function matchesView(well: WellResponse, view: QueueView, nowMs: number = Date.now(), opts: ClassifyOpts = {}): boolean {
   const c = classifyWell(well, nowMs, opts);
-  if (c.state === 'down') return false;
+  // DOWN wells stay deliberately dispatchable and remain VISIBLE in the ALL view
+  // (and search), clearly badged DOWN — but are kept OUT of every automatic
+  // prediction bucket unless physical data reclassifies them. Their 'down' state
+  // matches none of the predictive views below, so no explicit exclusion is needed;
+  // only ALL returns them. (Status is never faked to achieve this.)
   switch (view) {
     case 'needs-pull': return c.state === 'pull-now';
     case 'next-24h': return c.state === 'approaching' && c.ttpHours !== null && c.ttpHours <= 24;
@@ -407,6 +418,14 @@ export function compareQueueRows(a: QueueRowItem, b: QueueRowItem): number {
     const readyA = a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
     const readyB = b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
     if (readyA !== readyB) return readyA - readyB;
+  }
+
+  // Deterministic tie-breaker: unassigned wells sort ahead of assigned wells
+  // ONLY when exact physical readiness time is identical (or within same tier).
+  const isAssignedA = !!a.assignment;
+  const isAssignedB = !!b.assignment;
+  if (isAssignedA !== isAssignedB) {
+    return isAssignedA ? 1 : -1;
   }
 
   return (a.well.wellName || '').localeCompare(b.well.wellName || '');

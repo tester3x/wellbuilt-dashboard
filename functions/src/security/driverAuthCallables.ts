@@ -18,7 +18,21 @@ import {
 } from './passcode';
 import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
-import { requireManageDrivers } from './adminAuth';
+import { requirePlatformAdmin } from './adminAuth';
+import {
+  requireTrustedCompanyCapability,
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+} from './trustedStaffAuthority';
+import { staffWriteDispatchAccessFromTrusted } from './operational/staffWriteDispatch';
+import { resolveCompanyJoinCode } from './companyOnboarding';
+import {
+  PENDING_REGISTRATION_TTL_MS,
+  isPendingExpired,
+  pendingExpiresAtMs,
+  pendingReservationId,
+  pollStatusFor,
+  reservationIsActive,
+} from './registrationLifecycle';
 import {
   claimRefusalMessage,
   decideCompensation,
@@ -36,6 +50,43 @@ import type { GlobalDriverClaims, SessionDriverClaims } from './tokenMint';
 
 const rtdb = () => admin.database();
 const fs = () => admin.firestore();
+
+async function releasePendingReservation(nameNorm: string, pendingId: string, status: string): Promise<void> {
+  const ref = fs().collection('driver_provisioning_attempts').doc(pendingReservationId(nameNorm));
+  await fs().runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    if (snap.exists && snap.data()?.pendingId === pendingId) {
+      tx.set(ref, { ...snap.data(), status, closedAtMs: Date.now() });
+    }
+  });
+}
+
+async function expirePendingRegistration(
+  pendingId: string,
+  pending: Record<string, unknown>,
+  nowMs: number,
+): Promise<boolean> {
+  if (!isPendingExpired(pending, nowMs)) return false;
+  const credRef = fs().collection('pending_credentials').doc(pendingId);
+  let nameNorm = '';
+  const claimed = await fs().runTransaction(async tx => {
+    const snap = await tx.get(credRef);
+    const value = snap.data();
+    nameNorm = String(value?.displayNameNorm || pending.nameNorm || '');
+    if (!snap.exists) return false;
+    if (value?.status === 'expired') return true;
+    if ((value?.status || 'pending') !== 'pending' || Number(value?.expiresAtMs || pendingExpiresAtMs(pending, nowMs)) > nowMs) return false;
+    tx.update(credRef, { status: 'expired', closedAtMs: nowMs, passcode: FieldValue.delete() });
+    return true;
+  });
+  if (!claimed) return false;
+  if (!nameNorm) return false;
+  const ref = rtdb().ref(`drivers/pending_secure/${pendingId}`);
+  await ref.update({ status: 'expired', expiredAt: nowMs });
+  await releasePendingReservation(nameNorm, pendingId, 'expired');
+  await rtdb().ref(`drivers/pending/${pendingId}`).update({ status: 'expired', expiredAt: nowMs }).catch(() => undefined);
+  return true;
+}
 
 /** Flip true only after all clients register App Check. */
 const ENFORCE_APPCHECK = process.env.SECURITY_ENFORCE_APPCHECK === 'true';
@@ -98,6 +149,11 @@ export const requestDriverRegistration = httpsV2.onCall(
     const source = typeof (request.data as any)?.source === 'string'
       ? String((request.data as any).source).slice(0, 16)
       : 'unknown';
+    const companyCode = String((request.data as any)?.companyCode || '').trim();
+    if (!companyCode) {
+      throw new httpsV2.HttpsError('invalid-argument', 'Company join code is required');
+    }
+    const company = await resolveCompanyJoinCode(companyCode);
 
     // Block if active secure driver already uses this display name
     const idx = await fs().collection('driver_name_index').doc(nameNorm).get();
@@ -114,51 +170,90 @@ export const requestDriverRegistration = httpsV2.onCall(
       }
     }
 
-    const pendingId = randomUUID();
+    const candidatePendingId = randomUUID();
     const passcodeRecord = await hashPasscodeScrypt(fields.passcode);
-    const now = FieldValue.serverTimestamp();
-
-    await fs().collection('pending_credentials').doc(pendingId).set({
-      passcode: passcodeRecord,
-      displayNameNorm: nameNorm,
-      createdAt: now,
+    const requestedAtMs = Date.now();
+    const expiresAtMs = requestedAtMs + PENDING_REGISTRATION_TTL_MS;
+    // Registration reservation lives in the existing durable provisioning
+    // journal collection, namespaced separately from approval attempts.
+    const reservationRef = fs().collection('driver_provisioning_attempts').doc(pendingReservationId(nameNorm));
+    const reservation = await fs().runTransaction(async tx => {
+      const existing = await tx.get(reservationRef);
+      const value = existing.data();
+      if (reservationIsActive(value, requestedAtMs)) {
+        if (value?.companyId !== company.companyId) {
+          throw new httpsV2.HttpsError('already-exists', 'A registration for this name is already pending');
+        }
+        return { pendingId: String(value.pendingId), created: false, record: value! };
+      }
+      const record = {
+        pendingId: candidatePendingId,
+        nameNorm,
+        displayName: fields.displayName,
+        legalName: fields.legalName || null,
+        companyName: company.companyName,
+        companyId: company.companyId,
+        source,
+        appId: meta.appId,
+        status: 'pending',
+        requestedAtMs,
+        expiresAtMs,
+      };
+      tx.set(reservationRef, record);
+      tx.set(fs().collection('pending_credentials').doc(candidatePendingId), {
+        passcode: passcodeRecord,
+        displayNameNorm: nameNorm,
+        status: 'pending',
+        createdAtMs: requestedAtMs,
+        expiresAtMs,
+      });
+      return { pendingId: candidatePendingId, created: true, record };
     });
+    const pendingId = reservation.pendingId;
+    const canonical = reservation.record;
 
+    // Stable, idempotent cross-store projection. A retry repairs a prior
+    // partial RTDB failure without replacing the original passcode.
     await rtdb().ref(`drivers/pending_secure/${pendingId}`).set({
-      displayName: fields.displayName,
-      legalName: fields.legalName || null,
-      companyName: fields.companyName || null,
-      source,
+      displayName: canonical.displayName,
+      nameNorm: canonical.nameNorm,
+      legalName: canonical.legalName,
+      companyName: canonical.companyName,
+      companyId: canonical.companyId,
+      resolvedCompanyName: canonical.companyName,
+      source: canonical.source,
       status: 'pending',
-      schemaVersion: 1,
-      requestedAt: ServerValue.TIMESTAMP,
-      appId: meta.appId,
+      schemaVersion: 2,
+      requestedAt: canonical.requestedAtMs,
+      expiresAtMs: canonical.expiresAtMs,
+      appId: canonical.appId,
     });
 
-    // Dual-run mirror into legacy pending shape for existing Admin UI (no passcode hash as key)
-    const legacyPush = await rtdb().ref('drivers/pending').push({
-      displayName: fields.displayName,
-      legalName: fields.legalName || null,
-      companyName: fields.companyName || null,
-      source,
+    // Stable mirror key prevents retries from creating duplicate legacy rows.
+    await rtdb().ref(`drivers/pending/${pendingId}`).set({
+      displayName: canonical.displayName,
+      legalName: canonical.legalName,
+      companyName: canonical.companyName,
+      companyId: canonical.companyId,
+      resolvedCompanyName: canonical.companyName,
+      source: canonical.source,
       status: 'pending',
-      requestedAt: new Date().toISOString(),
+      requestedAt: canonical.requestedAtMs,
+      expiresAtMs: canonical.expiresAtMs,
       securePendingId: pendingId,
-      // intentional: no passcodeHash field — blocks legacy approve-by-hash path for new regs
     });
 
     await writeSecurityAudit({
       action: 'requestDriverRegistration',
-      pendingId,
       appId: meta.appId,
       appCheckPresent: meta.appCheckPresent,
       ipHash: meta.ipHash,
-      detail: { source, legacyKey: legacyPush.key },
+      detail: { source, companyId: company.companyId, retry: !reservation.created },
     });
 
     return {
       pendingId,
-      legacyPendingKey: legacyPush.key,
+      legacyPendingKey: pendingId,
       status: 'pending' as const,
     };
   },
@@ -175,13 +270,26 @@ export const checkDriverRegistrationStatus = httpsV2.onCall(
     if (!snap.exists()) {
       return { status: 'none' as const };
     }
-    const status = (snap.val()?.status as string) || 'pending';
+    const value = snap.val() as Record<string, unknown>;
+    const nowMs = Date.now();
+    if (isPendingExpired(value, nowMs)) {
+      if (await expirePendingRegistration(pendingId, value, nowMs)) {
+        return { status: 'rejected' as const, terminalReason: 'expired' as const };
+      }
+      const credential = await fs().collection('pending_credentials').doc(pendingId).get();
+      if (credential.data()?.status === 'approving') {
+        return { status: 'pending' as const };
+      }
+    }
+    const status = pollStatusFor(value, nowMs);
     if (status === 'approved') {
-      const driverId = snap.val()?.driverId as string | undefined;
+      const driverId = value.driverId as string | undefined;
       return { status: 'approved' as const, driverId: driverId || null };
     }
     if (status === 'rejected') {
-      return { status: 'rejected' as const };
+      const terminalReason = value.status === 'expired' || value.status === 'cancelled'
+        ? value.status : undefined;
+      return { status: 'rejected' as const, terminalReason };
     }
     return { status: 'pending' as const };
   },
@@ -395,27 +503,40 @@ export const driverChangeOwnPasscode = httpsV2.onCall(
   },
 );
 
+async function requireTrustedDriversStaff(authUid: string | undefined) {
+  const trusted = await requireTrustedCompanyCapability(authUid, TRUSTED_CAPABILITY_MANAGE_DRIVERS);
+  const access = staffWriteDispatchAccessFromTrusted(trusted);
+  if (!access.ok) {
+    throw new httpsV2.HttpsError(
+      access.reason === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+      access.reason,
+    );
+  }
+  return access;
+}
+
 // ── Admin ─────────────────────────────────────────────────────────────────
 
 export const adminListPendingRegistrations = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedDriversStaff(request.auth?.uid);
     const snap = await rtdb().ref('drivers/pending_secure').once('value');
     const out: any[] = [];
     if (snap.exists()) {
       const val = snap.val();
       for (const [pendingId, raw] of Object.entries(val)) {
         const p = raw as any;
+        if (await expirePendingRegistration(pendingId, p, Date.now())) continue;
         if (p.status === 'approved' || p.status === 'rejected') continue;
+        if (p.status === 'expired' || p.status === 'cancelled') continue;
+        if (caller.companyId && p.companyId !== caller.companyId) continue;
         out.push({
           pendingId,
           displayName: p.displayName,
           legalName: p.legalName,
-          companyName: p.companyName,
+          companyName: p.resolvedCompanyName || p.companyName,
+          companyId: p.companyId || null,
           source: p.source,
           requestedAt: p.requestedAt,
           status: p.status || 'pending',
@@ -428,12 +549,15 @@ export const adminListPendingRegistrations = httpsV2.onCall(
     if (legacy.exists()) {
       for (const [key, raw] of Object.entries(legacy.val())) {
         const p = raw as any;
-        if (p.status === 'approved' || p.status === 'rejected') continue;
+        if (p.status === 'approved' || p.status === 'rejected' || p.status === 'expired' || p.status === 'cancelled') continue;
+        if (pendingExpiresAtMs(p, Date.now()) <= Date.now()) continue;
+        if (caller.companyId && p.companyId !== caller.companyId) continue;
         legacyPending.push({
           key,
           displayName: p.displayName,
           legalName: p.legalName,
-          companyName: p.companyName,
+          companyName: p.resolvedCompanyName || p.companyName,
+          companyId: p.companyId || null,
           source: p.source,
           requestedAt: p.requestedAt,
           securePendingId: p.securePendingId || null,
@@ -452,10 +576,7 @@ export const adminListPendingRegistrations = httpsV2.onCall(
 export const adminApproveDriverRegistration = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedDriversStaff(request.auth?.uid);
     const data = (request.data || {}) as {
       pendingId?: string;
       companyId?: string;
@@ -475,6 +596,9 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       throw new httpsV2.HttpsError('not-found', 'Pending registration not found');
     }
     const pending = pendingSnap.val();
+    if (caller.companyId && pending.companyId !== caller.companyId) {
+      throw new httpsV2.HttpsError('permission-denied', 'Employee request belongs to another company');
+    }
 
     /**
      * Read the durable attempt record BEFORE any pending-state guard.
@@ -494,7 +618,9 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
     const priorAttempt = await journal.read(attemptKeyId(attemptKey));
     if (priorAttempt?.completed) {
       // Same logical success, plus the writes the crash cut short.
-      await fs().collection('pending_credentials').doc(pendingId).delete();
+      const staleCredRef = fs().collection('pending_credentials').doc(pendingId);
+      const staleNameNorm = String((await staleCredRef.get()).data()?.displayNameNorm || '');
+      await staleCredRef.delete();
       if (pending.status !== 'approved') {
         await pendingRef.update({
           status: 'approved',
@@ -503,6 +629,7 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
           approvedBy: caller.uid,
         });
       }
+      if (staleNameNorm) await releasePendingReservation(staleNameNorm, pendingId, 'approved');
       return {
         driverId: priorAttempt.driverId,
         displayName: pending.displayName,
@@ -512,12 +639,38 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       };
     }
 
-    if (pending.status && pending.status !== 'pending') {
+    const approvalNowMs = Date.now();
+    const approvalCredRef = fs().collection('pending_credentials').doc(pendingId);
+    const approvalCred = await approvalCredRef.get();
+    const approvalNameNorm = String(approvalCred.data()?.displayNameNorm || '');
+    const approvalReservationRef = fs().collection('driver_provisioning_attempts').doc(pendingReservationId(approvalNameNorm));
+    const approvalClaim = await fs().runTransaction(async tx => {
+      const snap = await tx.get(approvalCredRef);
+      const value = snap.data();
+      if (!snap.exists) return false;
+      if (value?.status === 'approving') return true;
+      if (value?.status !== 'pending' || Number(value.expiresAtMs) <= approvalNowMs) return false;
+      tx.set(approvalCredRef, { ...value, status: 'approving', approvalStartedAt: approvalNowMs, approvalStartedBy: caller.uid });
+      return true;
+    });
+    if (!approvalClaim) {
+      if (await expirePendingRegistration(pendingId, pending, approvalNowMs)) {
+        throw new httpsV2.HttpsError('failed-precondition', 'Registration expired');
+      }
+      throw new httpsV2.HttpsError('failed-precondition', `Already ${pending.status || 'closed'}`);
+    }
+    await approvalReservationRef.update({ status: 'approving', approvalStartedAt: approvalNowMs }).catch(() => undefined);
+    await pendingRef.update({ status: 'approving', approvalStartedAt: approvalNowMs, approvalStartedBy: caller.uid });
+
+    if (pending.status && pending.status !== 'pending' && pending.status !== 'approving') {
       throw new httpsV2.HttpsError('failed-precondition', `Already ${pending.status}`);
     }
 
-    let companyId = (data.companyId || '').trim().toLowerCase() || null;
-    let companyName = (data.companyName || '').trim() || pending.companyName || null;
+    if (data.companyId && String(data.companyId).trim().toLowerCase() !== caller.companyId) {
+      throw new httpsV2.HttpsError('permission-denied', 'cross_company');
+    }
+    let companyId = caller.companyId;
+    let companyName = (pending.resolvedCompanyName || data.companyName || pending.companyName || '').trim() || null;
     if (caller.companyId) {
       companyId = caller.companyId;
     }
@@ -665,6 +818,7 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       approvedAt: ServerValue.TIMESTAMP,
       approvedBy: caller.uid,
     });
+    await releasePendingReservation(nameNorm, pendingId, 'approved');
 
     // Dual-run: also write a non-login legacy approved stub? NO — do not write
     // client-guessable SHA keys. Old clients will break at enforcement by design.
@@ -689,7 +843,6 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       action: 'adminApproveDriverRegistration',
       actorUid: caller.uid,
       driverId,
-      pendingId,
       detail: { companyId, shiftAuthority: authorityOutcomeLabel },
     });
 
@@ -700,10 +853,7 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
 export const adminRejectDriverRegistration = httpsV2.onCall(
   { timeoutSeconds: 20, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedDriversStaff(request.auth?.uid);
     const pendingId = String((request.data as any)?.pendingId || '').trim();
     const legacyKey = String((request.data as any)?.legacyKey || '').trim();
 
@@ -711,13 +861,29 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
       const ref = rtdb().ref(`drivers/pending_secure/${pendingId}`);
       const snap = await ref.once('value');
       if (snap.exists()) {
-        await ref.update({
-          status: 'rejected',
-          rejectedAt: ServerValue.TIMESTAMP,
-          rejectedBy: caller.uid,
+        const pending = snap.val();
+        if (caller.companyId && pending.companyId !== caller.companyId) {
+          throw new httpsV2.HttpsError('permission-denied', 'Employee request belongs to another company');
+        }
+        const rejectedAt = Date.now();
+        const credRef = fs().collection('pending_credentials').doc(pendingId);
+        const nameNorm = String((await credRef.get()).data()?.displayNameNorm || '');
+        const rejected = await fs().runTransaction(async tx => {
+          const credential = await tx.get(credRef);
+          const value = credential.data();
+          if (!credential.exists) return false;
+          if (value?.status === 'rejected') return true;
+          if ((value?.status || 'pending') !== 'pending') return false;
+          tx.update(credRef, { status: 'rejected', closedAtMs: rejectedAt, passcode: FieldValue.delete() });
+          return true;
         });
+        if (!rejected) {
+          throw new httpsV2.HttpsError('failed-precondition', `Already ${pending.status || 'closed'}`);
+        }
+        await ref.update({ status: 'rejected', rejectedAt, rejectedBy: caller.uid });
         // Keep pending_credentials tombstone? delete credential material only
-        await fs().collection('pending_credentials').doc(pendingId).delete().catch(() => undefined);
+        if (nameNorm) await releasePendingReservation(nameNorm, pendingId, 'rejected');
+        await rtdb().ref(`drivers/pending/${pendingId}`).update({ status: 'rejected', rejectedAt, rejectedBy: caller.uid }).catch(() => undefined);
       }
     }
 
@@ -733,8 +899,7 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
     await writeSecurityAudit({
       action: 'adminRejectDriverRegistration',
       actorUid: caller.uid,
-      pendingId: pendingId || null,
-      detail: { legacyKey: legacyKey || null },
+      detail: { secureRequest: !!pendingId, legacyRequest: !!legacyKey },
     });
 
     return { ok: true };
@@ -758,10 +923,7 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
 export const adminSetDriverPasscode = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedDriversStaff(request.auth?.uid);
     const data = (request.data || {}) as {
       driverId?: string;
       displayName?: string;
@@ -852,8 +1014,10 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       const r = await resolveProvisioningUuid(provJournal, key, {
         requestedDriverId: driverId || null,
         nameNorm,
-        companyId: (typeof data.companyId === 'string' && data.companyId.trim())
-          ? data.companyId.trim().toLowerCase() : null,
+        companyId: (typeof data.companyId === 'string' && data.companyId.trim()
+          && data.companyId.trim().toLowerCase() !== caller.companyId)
+          ? (() => { throw new httpsV2.HttpsError('permission-denied', 'cross_company'); })()
+          : caller.companyId,
         indexOwnerDriverId: idxOwner,
         indexOwnerActive: idxOwnerActive,
         isReset: !!driverId,
@@ -1145,10 +1309,11 @@ export const adminSetDriverPasscode = httpsV2.onCall(
 
     // Resolve company for authority ensure: never invent; prefer request /
     // pending create payload, else profile. Skip when unbound (standalone).
-    let authorityCompanyId: string | null =
-      (typeof data.companyId === 'string' && data.companyId.trim())
-        ? data.companyId.trim().toLowerCase()
-        : null;
+    if (typeof data.companyId === 'string' && data.companyId.trim()
+      && data.companyId.trim().toLowerCase() !== caller.companyId) {
+      throw new httpsV2.HttpsError('permission-denied', 'cross_company');
+    }
+    let authorityCompanyId: string | null = caller.companyId;
     if (!authorityCompanyId && pendingProfile && typeof pendingProfile.companyId === 'string') {
       authorityCompanyId = String(pendingProfile.companyId).trim().toLowerCase() || null;
     }
@@ -1224,13 +1389,13 @@ export const adminSetDriverPasscode = httpsV2.onCall(
 export const adminDeleteSecureDriver = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
+    const caller = await requirePlatformAdmin(
       request.auth?.uid,
       request.auth?.token as Record<string, unknown> | undefined,
     );
     const driverId = String((request.data as any)?.driverId || '').trim();
     const confirm = String((request.data as any)?.confirm || '');
-    if (!driverId || confirm !== 'DELETE_SECURE_DRIVER') {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(driverId) || confirm !== 'DELETE_SECURE_DRIVER') {
       throw new httpsV2.HttpsError(
         'invalid-argument',
         'driverId and confirm=DELETE_SECURE_DRIVER required',
@@ -1238,18 +1403,24 @@ export const adminDeleteSecureDriver = httpsV2.onCall(
     }
     const cred = await fs().collection('driver_credentials').doc(driverId).get();
     const nameNorm = cred.exists ? (cred.data()?.displayNameNorm as string) : null;
-    if (nameNorm) {
-      await fs().collection('driver_name_index').doc(nameNorm).delete().catch(() => undefined);
-    }
-    await fs().collection('driver_credentials').doc(driverId).delete().catch(() => undefined);
-    await rtdb().ref(`drivers/profiles/${driverId}`).remove().catch(() => undefined);
+    // Disable first; preserve credentials/name for a safe retry if another
+    // service fails. Never report success after a swallowed delete failure.
+    if (cred.exists) await cred.ref.update({ active: false });
     const { driverAuthUid } = await import('./tokenMint');
     const authUid = driverAuthUid(driverId);
     try {
       await admin.auth().deleteUser(authUid);
-    } catch {
-      /* may not exist */
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'auth/user-not-found') throw error;
     }
+    await rtdb().ref(`drivers/profiles/${driverId}`).remove();
+    await fs().runTransaction(async (tx) => {
+      const indexRef = nameNorm ? fs().collection('driver_name_index').doc(nameNorm) : null;
+      const index = indexRef ? await tx.get(indexRef) : null;
+      // A stale name index must never delete another driver's name reservation.
+      if (indexRef && index?.data()?.driverId === driverId) tx.delete(indexRef);
+      tx.delete(cred.ref);
+    });
     await writeSecurityAudit({
       action: 'adminDeleteSecureDriver',
       actorUid: caller.uid,
@@ -1353,7 +1524,7 @@ export const registerStandaloneDriver = httpsV2.onCall(
 export const adminComputeLegacyHash = httpsV2.onCall(
   { timeoutSeconds: 10, memory: '256MiB' },
   async (request) => {
-    await requireManageDrivers(request.auth?.uid);
+    await requireTrustedDriversStaff(request.auth?.uid);
     const displayName = String((request.data as any)?.displayName || '');
     const passcode = String((request.data as any)?.passcode || '');
     if (!displayName || !passcode) {

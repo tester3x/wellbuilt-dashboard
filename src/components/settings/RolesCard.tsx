@@ -8,8 +8,9 @@
 // role 'it') can open this card — caller gates via Settings page.
 //
 // Unset = inherit the built-in DEFAULT_ROLE_LABELS / DEFAULT_ROLE_CAPABILITIES
-// from @/lib/auth. Saving writes Partial overrides so unset roles continue
-// to inherit from defaults if we change the defaults later.
+// from @/lib/auth. Saving goes through staffWriteRoleCapabilities — a
+// company-scoped Admin SDK callable. Direct client writes of
+// roleCapabilities are Firestore-denied.
 
 import { useMemo, useState } from 'react';
 import {
@@ -18,7 +19,11 @@ import {
   DEFAULT_ROLE_CAPABILITIES,
   DEFAULT_ROLE_LABELS,
 } from '@/lib/auth';
-import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
+import { type CompanyConfig } from '@/lib/companySettings';
+import {
+  classifyRoleEditorError,
+  staffWriteRoleCapabilities,
+} from '@/lib/staffWriteRoleCapabilities';
 
 interface Props {
   company: CompanyConfig;
@@ -83,8 +88,11 @@ const CAPABILITY_GROUPS: { title: string; caps: { cap: Capability; label: string
 
 const ROLES_IN_DISPLAY_ORDER: UserRole[] = ['it', 'admin', 'manager', 'lead', 'safety', 'dispatch', 'payroll', 'driver', 'viewer'];
 
+const RESERVED_UI_CAPS = new Set<Capability>(['viewAllCompanies', 'viewTruthDebug', 'viewDiagnostics']);
+
 export function RolesCard({ company, onSave, canEdit }: Props) {
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [expandedRole, setExpandedRole] = useState<UserRole | null>(null);
 
   // Draft state: when the user edits anything, it lives here until save.
@@ -158,15 +166,16 @@ export function RolesCard({ company, onSave, canEdit }: Props) {
   const handleSave = async () => {
     if (!canEdit || saving) return;
     setSaving(true);
+    setError(null);
     try {
-      await updateCompanyFields(company.id, {
+      await staffWriteRoleCapabilities({
         roleLabels: draftLabels,
         roleCapabilities: draftCaps,
       });
       onSave();
     } catch (err) {
       console.error('[RolesCard] save failed:', err);
-      alert('Save failed. Check console for details.');
+      setError(classifyRoleEditorError(err));
     } finally {
       setSaving(false);
     }
@@ -184,6 +193,7 @@ export function RolesCard({ company, onSave, canEdit }: Props) {
         </div>
         {canEdit && (
           <button
+            type="button"
             onClick={handleSave}
             disabled={!isDirty || saving}
             className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
@@ -196,6 +206,12 @@ export function RolesCard({ company, onSave, canEdit }: Props) {
           </button>
         )}
       </div>
+
+      {error && (
+        <div role="alert" className="px-4 py-2 text-xs text-red-300 bg-red-950/40 border-b border-red-500/30">
+          {error}
+        </div>
+      )}
 
       <div className="divide-y divide-gray-700/60">
         {ROLES_IN_DISPLAY_ORDER.map(role => {
@@ -286,7 +302,7 @@ export function RolesCard({ company, onSave, canEdit }: Props) {
                                 type="checkbox"
                                 checked={checked}
                                 onChange={e => toggleCap(role, cap, e.target.checked)}
-                                disabled={!canEdit}
+                                disabled={!canEdit || RESERVED_UI_CAPS.has(cap)}
                                 className="mt-0.5 accent-purple-500"
                               />
                               <span className={`${checked ? 'text-gray-200' : 'text-gray-500'} leading-tight`}>

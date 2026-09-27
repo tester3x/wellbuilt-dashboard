@@ -18,6 +18,7 @@ import {
   subscribeToWellNavList,
 } from '@/lib/wells';
 import { deletePull, describeDeleteError } from '@/lib/pullDelete';
+import { waitForDeleteCompletion } from '@/lib/pullDeleteCompletion';
 import { editPull, describeEditError } from '@/lib/pullEdit';
 import {
   packetShowsEditBadge,
@@ -101,7 +102,7 @@ function WellDetailPage() {
   // Current well status comes from the SAME governed pool Dispatch and /mobile use —
   // never the forbidden packets/outgoing RTDB subscription. Derive this well's row and
   // its tank count from that one authorized response.
-  const { wells: poolWells, dataLoading: poolLoading, statusUnavailable: statusReadUnavailable } = useGovernedWellPool();
+  const { wells: poolWells, dataLoading: poolLoading, statusUnavailable: statusReadUnavailable, refresh: refreshWellPool } = useGovernedWellPool();
   const wellStatus = useMemo<WellResponse | null>(() => {
     if (isCanonical) {
       // Exact canonical match ONLY — no wellName fuzzy fallback (fail closed).
@@ -163,6 +164,7 @@ function WellDetailPage() {
   // Delete confirmation state
   const [deletingPull, setDeletingPull] = useState<PullPacket | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
 
   // Well navigation list (all wells for prev/next + picker)
   const [allWells, setAllWells] = useState<WellNavItem[]>([]);
@@ -246,16 +248,23 @@ function WellDetailPage() {
     };
   }, [wellName]);
 
-  // Manual refresh button handler
+  // Manual refresh button handler - updates BOTH Well History and Current Status
   const handleRefresh = async () => {
+    if (dataLoading) return; // Prevent overlapping / duplicate fetches on rapid clicks
     try {
       setDataLoading(true);
-      const history = await fetchWellHistoryUnified(wellName);
-      setPulls(history);
+      const [history] = await Promise.all([
+        fetchWellHistoryUnified(wellName),
+        refreshWellPool(),
+      ]);
+      const visible = pendingDeleteIds.size > 0
+        ? history.filter((p) => !pendingDeleteIds.has(p.packetId))
+        : history;
+      setPulls(visible);
       setError('');
     } catch (err) {
-      console.error('Error fetching well history:', err);
-      setError('Failed to load well history');
+      console.error('Error refreshing well detail:', err);
+      setError('Failed to load well data');
     } finally {
       setDataLoading(false);
     }
@@ -332,8 +341,11 @@ function WellDetailPage() {
         dateTimeChanged ? newDt.toISOString() : undefined,
         editWellDown
       );
-      // Success → refresh the projection and close the modal.
-      const history = await fetchWellHistoryUnified(wellName);
+      // Success → refresh history and well pool (Current Status) and close the modal.
+      const [history] = await Promise.all([
+        fetchWellHistoryUnified(wellName),
+        refreshWellPool(),
+      ]);
       setPulls(history);
       setEditingPull(null);
       setEditError(null);
@@ -356,17 +368,81 @@ function WellDetailPage() {
     if (!deletingPull) return;
     if (deleteSubmitting) return; // prevent double submission
 
+    const targetPacketId = deletingPull.packetId;
+    const targetWellName = deletingPull.wellName;
+
     setDeleteSubmitting(true);
     try {
-      // Governed delete — success only after the server acknowledges the
-      // callable. The row is NOT removed optimistically; we refresh from the
-      // server instead.
-      await deletePull(deletingPull.packetId, deletingPull.wellName);
-      const history = await fetchWellHistoryUnified(wellName);
-      setPulls(history);
-      setDeletingPull(null);
+      // Governed delete — staffDeletePull callable
+      const result = await deletePull(targetPacketId, targetWellName);
+
+      // Immediately hide the pull from the active UI and track as pending deletion
+      setPendingDeleteIds((prev) => new Set(prev).add(targetPacketId));
+      setPulls((prev) => prev.filter((p) => p.packetId !== targetPacketId));
+
+      if (result.alreadyApplied || !result.queued) {
+        // Pull was already gone — refresh both views immediately
+        const [freshHistory] = await Promise.all([
+          fetchWellHistoryUnified(wellName),
+          refreshWellPool(),
+        ]);
+        setPulls(freshHistory.filter((p) => p.packetId !== targetPacketId));
+        setPendingDeleteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(targetPacketId);
+          return next;
+        });
+        setDeletingPull(null);
+        return;
+      }
+
+      // Governed completion check with bounded retry:
+      // Poll up to 10 attempts (6s bounded window) verifying processor removed the pull
+      const completion = await waitForDeleteCompletion(targetPacketId, {
+        maxAttempts: 10,
+        intervalMs: 600,
+        isPacketPresent: async (pid) => {
+          const fresh = await fetchWellHistoryUnified(wellName);
+          return fresh.some((p) => p.packetId === pid);
+        },
+      });
+
+      if (completion.status === 'completed') {
+        // Backend processor completed! Refresh well pool so Current Status recalculates
+        await refreshWellPool();
+        const freshHistory = await fetchWellHistoryUnified(wellName);
+        setPulls(freshHistory.filter((p) => p.packetId !== targetPacketId));
+        setPendingDeleteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(targetPacketId);
+          return next;
+        });
+        setDeletingPull(null);
+      } else {
+        // Bounded retry timed out without confirming processor completion
+        await refreshWellPool();
+        const freshHistory = await fetchWellHistoryUnified(wellName);
+        setPendingDeleteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(targetPacketId);
+          return next;
+        });
+        setPulls(freshHistory);
+        setDeletingPull(null);
+        if (freshHistory.some((p) => p.packetId === targetPacketId)) {
+          setError('Deletion request was queued, but processing took longer than expected. Please click Refresh in a moment.');
+        }
+      }
     } catch (err) {
       console.error('Error deleting pull:', err);
+      // On failure, clear pending deletion, re-sync history, and show honest error
+      setPendingDeleteIds((prev) => {
+        const next = new Set(prev);
+        next.delete(targetPacketId);
+        return next;
+      });
+      const latest = await fetchWellHistoryUnified(wellName).catch(() => pulls);
+      setPulls(latest);
       setError(describeDeleteError(err));
     } finally {
       setDeleteSubmitting(false);
@@ -1029,7 +1105,10 @@ function WellDetailPage() {
           onSuccess={(submittedWell) => {
             if (submittedWell === wellName) {
               setTimeout(async () => {
-                const history = await fetchWellHistoryUnified(wellName);
+                const [history] = await Promise.all([
+                  fetchWellHistoryUnified(wellName),
+                  refreshWellPool(),
+                ]);
                 setPulls(history);
               }, 2000);
             }

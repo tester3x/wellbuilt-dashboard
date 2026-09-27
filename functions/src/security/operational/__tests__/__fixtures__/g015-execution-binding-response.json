@@ -1,0 +1,69 @@
+{
+  "ok": true,
+  "jobId": "W0Om3TsAHAJ4bu8d8K49",
+  "companyId": "liquid-gold",
+  "driverId": "2cad521c-13ac-4b6c-b1ab-07843c6bf06f",
+  "binding": {
+    "packageId": "water-hauling",
+    "packetRevision": 1,
+    "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "policyHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "execution": {
+    "jobTypeId": "pw",
+    "wellName": "Python",
+    "ndicWellName": "PYTHON 1"
+  },
+  "definition": {
+    "schemaVersion": 1,
+    "packetId": "water-hauling",
+    "industryId": "oil-gas",
+    "segmentId": "produced-water",
+    "label": "Water Hauling",
+    "jobTypes": [
+      {
+        "jobTypeId": "pw",
+        "label": "Production Water",
+        "capabilities": ["lifecycle", "pickup"]
+      }
+    ],
+    "capabilities": [
+      { "capabilityId": "lifecycle", "moduleVersion": 1, "configuration": {} },
+      { "capabilityId": "pickup", "moduleVersion": 1, "configuration": { "unit": "bbl" } }
+    ],
+    "fields": [
+      {
+        "key": "pickupLocationId",
+        "label": "Pickup",
+        "capabilityId": "pickup",
+        "kind": "location",
+        "required": true
+      }
+    ],
+    "commandRules": [
+      {
+        "command": "lifecycle.advance",
+        "states": ["planned", "accepted", "atPickup", "loaded", "inTransit", "atDropoff", "unloaded"]
+      },
+      { "command": "lifecycle.close", "states": ["unloaded"] },
+      { "command": "lifecycle.cancel", "states": ["planned", "accepted"] },
+      { "command": "pickup.record", "states": ["atPickup"] }
+    ],
+    "workflow": [
+      { "from": "planned", "to": "accepted", "command": "lifecycle.advance" },
+      { "from": "accepted", "to": "atPickup", "command": "lifecycle.advance" },
+      { "from": "atPickup", "to": "loaded", "command": "lifecycle.advance" },
+      { "from": "loaded", "to": "inTransit", "command": "lifecycle.advance" },
+      { "from": "inTransit", "to": "atDropoff", "command": "lifecycle.advance" },
+      { "from": "atDropoff", "to": "unloaded", "command": "lifecycle.advance" },
+      { "from": "unloaded", "to": "closed", "command": "lifecycle.close" },
+      { "from": "planned", "to": "cancelled", "command": "lifecycle.cancel" }
+    ],
+    "compatibility": {
+      "minimumContractVersion": 1,
+      "legacyAdapterId": null,
+      "migrationFrom": null
+    }
+  },
+  "implementedEffects": []
+}

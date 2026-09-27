@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:joincode-emulator": "firebase emulators:exec --only firestore --project wellbuilt-sync \"node firestore-rules-tests/test-joinCodeRotationEmulator.mjs\""
   },
   "dependencies": {
     "@tester3x/wellbuilt-contracts": "0.4.0",

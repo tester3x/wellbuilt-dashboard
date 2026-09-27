@@ -134,6 +134,14 @@ check('ADMIN fixture: plans/plan-field created',
   await patchDoc(OWNER, 'plans/plan-field', { planId: s('plan-field'), displayName: s('Field'), status: s('active') }), 200);
 check('ADMIN fixture: platform_admin_audit/audit-1 created',
   await patchDoc(OWNER, 'platform_admin_audit/audit-1', { action: s('plan.create'), actorUid: s('x') }), 200);
+check('ADMIN fixture: trusted_staff_authority/staff-1 created',
+  await patchDoc(OWNER, 'trusted_staff_authority/staff-1', {
+    schemaVersion: i(1),
+    uid: s('staff-1'),
+    companyId: s('liquid-gold'),
+    active: b(true),
+    capabilities: { arrayValue: { values: [s('manageDrivers')] } },
+  }), 200);
 
 // ══ REQUIRED DENIALS ══════════════════════════════════════════════════════
 
@@ -153,6 +161,30 @@ check('platform_admins update CLAIM denied',
 check('platform_admins update USER denied',
   await patchDoc(USER, 'platform_admins/fake-admin-1', { enabled: b(false) }, ['enabled']), 403);
 check('platform_admins delete CLAIM denied', await delDoc(CLAIM, 'platform_admins/fake-admin-1'), 403);
+
+check('trusted_staff_authority get UNAUTH denied', await getDoc(UNAUTH, 'trusted_staff_authority/staff-1'), 403);
+check('trusted_staff_authority get USER denied', await getDoc(USER, 'trusted_staff_authority/staff-1'), 403);
+check('trusted_staff_authority get FAKE denied', await getDoc(FAKE, 'trusted_staff_authority/staff-1'), 403);
+check('trusted_staff_authority get CLAIM denied', await getDoc(CLAIM, 'trusted_staff_authority/staff-1'), 403);
+check('trusted_staff_authority get own uid denied',
+  await getDoc(`Bearer ${token('staff-1')}`, 'trusted_staff_authority/staff-1'), 403);
+check('trusted_staff_authority list UNAUTH denied', await listCol(UNAUTH, 'trusted_staff_authority'), 403);
+check('trusted_staff_authority list CLAIM denied', await listCol(CLAIM, 'trusted_staff_authority'), 403);
+check('trusted_staff_authority create CLAIM denied',
+  await patchDoc(CLAIM, 'trusted_staff_authority/claim-staff-1', {
+    schemaVersion: i(1), uid: s('claim-staff-1'), companyId: s('x'), active: b(true),
+  }), 403);
+check('trusted_staff_authority create UNAUTH denied',
+  await patchDoc(UNAUTH, 'trusted_staff_authority/intruder-1', { uid: s('intruder-1'), active: b(true) }), 403);
+check('trusted_staff_authority update CLAIM denied',
+  await patchDoc(CLAIM, 'trusted_staff_authority/staff-1', { active: b(false) }, ['active']), 403);
+check('trusted_staff_authority update USER denied',
+  await patchDoc(USER, 'trusted_staff_authority/staff-1', { companyId: s('other') }, ['companyId']), 403);
+check('trusted_staff_authority delete CLAIM denied', await delDoc(CLAIM, 'trusted_staff_authority/staff-1'), 403);
+check('trusted_staff_authority merge capabilities denied (USER)',
+  await patchDoc(USER, 'trusted_staff_authority/staff-1', {
+    capabilities: { arrayValue: { values: [s('manageDrivers'), s('manageRolesAndCapabilities')] } },
+  }, ['capabilities']), 403);
 
 // plans — create/update/delete/list denied; direct get also denied
 // pending Part B callables (no installed app reads plans).
@@ -222,6 +254,45 @@ check('set wellbuiltContract null denied (USER)',
   await patchDoc(USER, 'companies/configured-co', { wellbuiltContract: nul() }, ['wellbuiltContract']), 403);
 check('add wellbuiltContract denied even for CLAIM bearer',
   await patchDoc(CLAIM, 'companies/legacy-co', { wellbuiltContract: wellbuiltContract() }, ['wellbuiltContract']), 403);
+
+// companies — roleCapabilities is authority-control (G-008R1). A viewer
+// must not be able to write roleCapabilities.viewer=["manageDrivers"]
+// and then pass requireManageDrivers.
+check('ADMIN fixture: caps-co created WITH roleCapabilities',
+  await patchDoc(OWNER, 'companies/caps-co', {
+    name: s('Caps Co'),
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('viewHome')] } } }),
+  }), 200);
+check('create containing roleCapabilities denied (USER)',
+  await patchDoc(USER, 'companies/new-co-rc', {
+    name: s('RC'),
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }), 403);
+check('add roleCapabilities to legacy doc denied (USER)',
+  await patchDoc(USER, 'companies/legacy-co', {
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['roleCapabilities']), 403);
+check('replace complete roleCapabilities map denied (USER)',
+  await patchDoc(USER, 'companies/caps-co', {
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['roleCapabilities']), 403);
+check('nested roleCapabilities.viewer change denied (USER)',
+  await patchDoc(USER, 'companies/caps-co', {
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['roleCapabilities.viewer']), 403);
+check('delete roleCapabilities denied (USER — masked path absent from body)',
+  await patchDoc(USER, 'companies/caps-co', {}, ['roleCapabilities']), 403);
+check('set roleCapabilities null denied (USER)',
+  await patchDoc(USER, 'companies/caps-co', { roleCapabilities: nul() }, ['roleCapabilities']), 403);
+check('merge/update cannot smuggle roleCapabilities beside a permitted field (USER)',
+  await patchDoc(USER, 'companies/legacy-co', {
+    name: s('Sneaky'),
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['name', 'roleCapabilities']), 403);
+check('add roleCapabilities denied even for CLAIM bearer',
+  await patchDoc(CLAIM, 'companies/legacy-co', {
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['roleCapabilities']), 403);
 
 // companies — reserved Part A flat keys stay permanently denied.
 check('company create containing planId denied (USER)',

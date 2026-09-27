@@ -117,3 +117,33 @@ test('NO-FLOW low well never becomes urgent by age alone', () => {
   assert.equal(classifyWell(low, NOW).state, 'no-gain');
   assert.equal(classifyWell(low, NOW + 300 * 3600_000).state, 'no-gain'); // still frozen, never urgent
 });
+
+test('DOWN PRECEDENCE: config isDown=true overridden by operational wellDown=false -> merged result is UP', () => {
+  const [w] = mergeWellPool(
+    { 'Test Well': { ...CFG, isDown: true } },
+    { 'Test Well': { lastPullBottomLevel: "6'", lastPullDateTimeUTC: iso(-1), flowRate: '4:39:17', wellDown: false, currentLevel: "6'0\"" } },
+  );
+  assert.equal(w.isDown, false, 'st.wellDown=false must override config.isDown=true');
+  assert.equal(w.wellDown, false, 'wellDown flag must be false');
+  const c = classifyWell(w, NOW);
+  assert.notEqual(c.state, 'down', 'well must not classify as DOWN when operational status says UP');
+});
+
+test('DOWN PRECEDENCE INVERSE: config isDown absent/false overridden by operational wellDown=true -> merged result is DOWN', () => {
+  const [w] = mergeWellPool(
+    { 'Active Well': { ...CFG, isDown: false } },
+    { 'Active Well': { lastPullBottomLevel: "4'", lastPullDateTimeUTC: iso(-1), flowRate: '0:30:00', wellDown: true } },
+  );
+  assert.equal(w.isDown, true, 'st.wellDown=true must override config.isDown=false');
+  assert.equal(w.wellDown, true, 'wellDown flag must be true');
+  const c = classifyWell(w, NOW);
+  assert.equal(c.state, 'down', 'well must classify as DOWN when operational status says DOWN');
+});
+
+test('DOWN FALLBACK: absent operational status preserves config.isDown', () => {
+  const [downUnpulled] = mergeWellPool({ DownConfigOnly: { ...CFG, isDown: true } }, {});
+  assert.equal(downUnpulled.isDown, true, 'unpulled well with config.isDown=true must remain down');
+
+  const [upUnpulled] = mergeWellPool({ UpConfigOnly: { ...CFG } }, {});
+  assert.equal(upUnpulled.isDown, false, 'unpulled well without config.isDown must default to false');
+});

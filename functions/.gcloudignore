@@ -40,6 +40,6 @@ firebase-debug.*.log
 
 # NOTE: lib/ is intentionally NOT ignored. It is gitignored but it is the
 # compiled entry point (package.json main = lib/index.js) and must ship.
-# NOTE: contracts-mirror/ is intentionally NOT ignored. It is the
-# credential-free A9B deployment mirror of the immutable contracts
-# package and must ship for a token-free `npm ci`.
+# NOTE: vendor/ is intentionally NOT ignored. It contains the
+# credential-free deterministic deployment tarball of the immutable contracts
+# package (@tester3x/wellbuilt-contracts 0.7.0) and must ship for token-free `npm ci`.

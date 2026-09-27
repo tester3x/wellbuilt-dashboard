@@ -1,13 +1,11 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    // The published contracts mirror is pure ESM and lives outside
-    // node_modules, so ts-jest must be allowed to compile its .js down to
-    // CommonJS. Tests then load the REAL contract constants; a stub would let
-    // the mirror drift out from under them.
+    // @tester3x/wellbuilt-contracts@0.7.0 is pure ESM. ts-jest compiles its
+    // published .js to CommonJS so tests load the real package, not a stub.
     "allowJs": true,
     "noUnusedLocals": false
   },
-  "include": ["src"],
+  "include": ["src", "node_modules/@tester3x/wellbuilt-contracts"],
   "exclude": []
 }

@@ -170,9 +170,9 @@ the mapping exists once, not in three repositories.
 3. Publish `0.2.0` to GitHub Packages (`0.1.0` remains immutable and
    published).
 4. Re-pin consumers deliberately, one repository per commit.
-5. Regenerate the Dashboard Functions A9B mirror from the **new**
-   immutable artifact (`mirror-contracts.mjs --regenerate --tarball`),
-   which fails closed on any hash mismatch.
+5. Vendor the new immutable Contracts tarball into `functions/vendor/` and
+   update `package.json` to depend on `file:vendor/...` (superseding the
+   legacy mirror generator `mirror-contracts.mjs`).
 6. Only then implement vc51.9D Parts 5–7.
 
 ## Open decisions for review

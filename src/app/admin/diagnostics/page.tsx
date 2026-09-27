@@ -161,7 +161,7 @@ function resolveDriverDisplay(row: DiagRow): string {
 }
 
 export default function DiagnosticsPage() {
-  const { user, loading, userCompany } = useAuth();
+  const { user, loading, userCompany, authResolved } = useAuth();
   const router = useRouter();
 
   const [filterApp, setFilterApp] = useState<'' | DiagApp>('');
@@ -185,9 +185,9 @@ export default function DiagnosticsPage() {
 
   // Auth gate — same redirect pattern as truth-debug. Keeps the
   // page consistent with other admin tools and avoids flashing
-  // sensitive data before the role check resolves.
+  // sensitive data before the role check resolves. Waits for authResolved.
   useEffect(() => {
-    if (loading) return;
+    if (!authResolved) return;
     if (!user) {
       router.push('/login');
       return;
@@ -195,7 +195,7 @@ export default function DiagnosticsPage() {
     if (user.companyId || !hasCapability(user, 'viewDiagnostics', userCompany)) { // tenant containment (7/9): platform-admin-only tool
       router.push('/');
     }
-  }, [user, loading, userCompany, router]);
+  }, [user, authResolved, userCompany, router]);
 
   // Resolve which Firestore filter to push server-side. Firestore
   // composite indexes only cover (singleField, timestamp DESC), so

@@ -1,4 +1,12 @@
 import { evaluateDismissDispatch } from '../dismissDispatch';
+import {
+  decideTrustedCompanyCapability,
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+  TRUSTED_CAPABILITY_MANAGE_ROLES,
+  TRUSTED_STAFF_AUTHORITY_SCHEMA_VERSION,
+} from '../../trustedStaffAuthority';
+import { staffWriteDispatchAccessFromTrusted } from '../staffWriteDispatch';
+import { parseDispatchId } from '../dispatchPacketPin';
 
 describe('evaluateDismissDispatch', () => {
   const job = {
@@ -239,5 +247,75 @@ describe('dismissDispatch callable source', () => {
     expect(callable).toMatch(/tx\.get\(jobRef\)/);
     expect(callable).toMatch(/where\('splitGroupId'/);
     expect(callable).toMatch(/tx\.get\(/);
+  });
+
+  it('authorizes through trusted manageDrivers, never requireManageDrivers', () => {
+    expect(callable).toMatch(/requireTrustedCompanyCapability/);
+    expect(callable).toMatch(/TRUSTED_CAPABILITY_MANAGE_DRIVERS/);
+    expect(callable).toMatch(/staffWriteDispatchAccessFromTrusted/);
+    expect(callable).toMatch(/parseDispatchId/);
+    expect(callable).not.toMatch(/requireManageDrivers/);
+    expect(callable).not.toMatch(/adminAuth/);
+    expect(callable).toMatch(/isPlatformAdmin: access\.isPlatformAdmin/);
+    expect(callable).toMatch(/callerCompanyId: access\.companyId/);
+    expect(callable).toMatch(/dismissedBy: access\.uid/);
+  });
+});
+
+describe('dismissDispatch trusted authority gate', () => {
+  const UID = 'uid-staff-1';
+  const COMPANY = 'liquid-gold';
+  const OTHER = 'other-hauler';
+  const JOB = 'W0Om3TsAHAJ4bu8d8K49';
+
+  function rec(over: Record<string, unknown> = {}) {
+    return {
+      schemaVersion: TRUSTED_STAFF_AUTHORITY_SCHEMA_VERSION,
+      uid: UID,
+      companyId: COMPANY,
+      active: true,
+      capabilities: [TRUSTED_CAPABILITY_MANAGE_DRIVERS],
+      ...over,
+    };
+  }
+
+  function decide(authUid: string | undefined, record: unknown, jobCompany = COMPANY) {
+    const trusted = decideTrustedCompanyCapability(authUid, record, TRUSTED_CAPABILITY_MANAGE_DRIVERS);
+    if (!trusted.ok) return trusted;
+    const access = staffWriteDispatchAccessFromTrusted(trusted);
+    if (!access.ok) return access;
+    const id = parseDispatchId(JOB);
+    if (!id.ok) return id;
+    return evaluateDismissDispatch({
+      job: { id: JOB, status: 'declined', companyId: jobCompany },
+      siblings: [],
+      callerCompanyId: access.companyId,
+      isPlatformAdmin: access.isPlatformAdmin,
+    });
+  }
+
+  it('trusted manageDrivers can dismiss a same-company declined job', () => {
+    const r = decide(UID, rec());
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.idempotent).toBe(false);
+  });
+
+  it('missing/inactive/mismatched/malformed trusted records fail before evaluate', () => {
+    expect(decide(UID, null)).toMatchObject({ ok: false, reason: 'no_trusted_authority_record' });
+    expect(decide(UID, rec({ active: false }))).toMatchObject({ ok: false, reason: 'trusted_authority_inactive' });
+    expect(decide(UID, rec({ uid: 'other-uid' }))).toMatchObject({ ok: false, reason: 'trusted_authority_uid_mismatch' });
+    expect(decide(UID, rec({ extra: true })).ok).toBe(false);
+  });
+
+  it('manageRoles without manageDrivers cannot dismiss', () => {
+    expect(decide(UID, rec({ capabilities: [TRUSTED_CAPABILITY_MANAGE_ROLES] })))
+      .toMatchObject({ ok: false, reason: 'missing_required_capability' });
+  });
+
+  it('cross-company dispatch fails closed with isPlatformAdmin hard-false', () => {
+    const r = decide(UID, rec(), OTHER);
+    expect(r).toMatchObject({ ok: false, reason: 'cross_company' });
+    const access = staffWriteDispatchAccessFromTrusted({ uid: UID, companyId: COMPANY });
+    expect(access.ok && access.isPlatformAdmin).toBe(false);
   });
 });

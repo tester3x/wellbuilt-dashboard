@@ -24,6 +24,11 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const operators = company.assignedOperators || [];
+  // Include custom job types in available options
+  const availableJobTypes = Array.from(new Set([
+    ...JOB_TYPES,
+    ...(company.customJobTypes || []).map(t => (typeof t === 'string' ? t : t.label)).filter(Boolean),
+  ]));
   // Counties that have frost zones configured — "All Counties" first
   const frostCounties = Object.keys(company.payConfig?.frostZones || {})
     .sort((a, b) => a === 'All Counties' ? -1 : b === 'All Counties' ? 1 : a.localeCompare(b));
@@ -170,7 +175,7 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
                       className="flex-1 px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
                     >
                       <option value="">Select job type...</option>
-                      {JOB_TYPES.map(jt => (
+                      {availableJobTypes.map(jt => (
                         <option key={jt} value={jt}>{jt}</option>
                       ))}
                     </select>

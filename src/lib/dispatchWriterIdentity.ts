@@ -18,7 +18,7 @@
  * legacy-alias fallback.
  */
 
-import type { DriverIdentity } from './dispatchDriverIdentity';
+import { resolveDispatchDriver, type DriverIdentity } from './dispatchDriverIdentity.ts';
 
 const t = (v: unknown): string => (typeof v === 'string' ? v.trim() : v != null ? String(v).trim() : '');
 
@@ -26,6 +26,18 @@ const t = (v: unknown): string => (typeof v === 'string' ? v.trim() : v != null 
 export function isCanonicalDriverId(id: unknown): boolean {
   const s = t(id);
   return s.length > 0 && s.includes('-');
+}
+
+/** Approved rows can retain a hash key after secure conversion. The governed
+ * migratedToDriverId points to the canonical profile and must be used for writes. */
+export function canonicalIdFromApprovedRow(
+  key: string,
+  row: { driverId?: unknown; migratedToDriverId?: unknown },
+): string | undefined {
+  for (const candidate of [row.driverId, row.migratedToDriverId, key]) {
+    if (isCanonicalDriverId(candidate)) return t(candidate);
+  }
+  return undefined;
 }
 
 /** Real human name for a driver: legalName preferred, then displayName. Never a login-only fallback beyond these. */
@@ -59,4 +71,32 @@ export function assignmentIdentityForDriver(d: DriverIdentity): AssignmentIdenti
   }
   // Legacy driver with no canonical UUID: keep the record key as the compat hash.
   return { driverHash: t(d.key), driverName };
+}
+
+/** The platform-admin create callable requires the selected driver's company.
+ * Scoped staff must omit it so the server derives their own company instead. */
+export function dispatchCreateTargetForDriver(
+  platformAdmin: boolean,
+  driver: Pick<DriverIdentity, 'companyId'>,
+): { companyId?: string } {
+  if (!platformAdmin) return {};
+  const companyId = t(driver.companyId);
+  if (!companyId) throw new Error('Selected driver has no company. Refresh the driver list before dispatching.');
+  return { companyId };
+}
+
+/** Resolve the target from the selected driver's governed roster identity.
+ * The server independently checks this company against the driver and well. */
+export function dispatchCreateTargetForAssignment(
+  platformAdmin: boolean,
+  record: Record<string, unknown>,
+  drivers: DriverIdentity[],
+): { companyId?: string } {
+  if (!platformAdmin) return {};
+  const driver = resolveDispatchDriver({
+    driverId: typeof record.driverId === 'string' ? record.driverId : undefined,
+    driverHash: typeof record.driverHash === 'string' ? record.driverHash : undefined,
+  }, drivers);
+  if (!driver) throw new Error('Selected driver is missing from the driver list. Refresh before dispatching.');
+  return dispatchCreateTargetForDriver(true, driver);
 }

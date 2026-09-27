@@ -23,6 +23,7 @@ export interface DriverIdentity {
   legacyAliases?: string[];    // governed legacy hashes bound to THIS driver
   displayName?: string;        // real profile display name (shown on cards)
   legalName?: string;
+  loginAlias?: string;         // login/username — NEVER displayed; guards displayName against login leakage
 }
 
 export interface DispatchIdentity {

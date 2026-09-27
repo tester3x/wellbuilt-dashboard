@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assignmentIdentityForDriver,
+  canonicalIdFromApprovedRow,
+  dispatchCreateTargetForAssignment,
+  dispatchCreateTargetForDriver,
   driverRealName,
   isCanonicalDriverId,
 } from '../dispatchWriterIdentity.ts';
 import type { DriverIdentity } from '../dispatchDriverIdentity.ts';
+import { buildCreatePayload } from '../staffWriteDispatchCore.ts';
 
 const CANON = '2cad521c-13ac-4b6c-b1ab-07843c6bf06f';
 const LEGACY_HASH = 'a'.repeat(64);
@@ -48,6 +52,20 @@ test('canonical id comes from the record key when it is a UUID and driverId is a
   assert.equal(id.driverHash, CANON);
 });
 
+test('converted approved row uses its governed migrated UUID for dispatch creation', () => {
+  const migrated = canonicalIdFromApprovedRow(LEGACY_HASH, { migratedToDriverId: CANON });
+  assert.equal(migrated, CANON);
+  const assignment = assignmentIdentityForDriver({
+    key: LEGACY_HASH,
+    driverId: migrated,
+    companyId: 'liquid-gold',
+    displayName: 'Mike S24 Burger',
+  });
+  assert.deepEqual(assignment, { driverId: CANON, driverHash: CANON, driverName: 'Mike S24 Burger' });
+  assert.equal(canonicalIdFromApprovedRow(LEGACY_HASH, { driverId: LEGACY_HASH, migratedToDriverId: CANON }), CANON);
+  assert.equal(canonicalIdFromApprovedRow(LEGACY_HASH, {}), undefined);
+});
+
 test('legacy-hash-keyed driver (no canonical UUID) keeps the key as compat hash, no driverId', () => {
   const legacy: DriverIdentity = { key: LEGACY_HASH, companyId: 'liquid-gold', displayName: 'LegacyGuy', legalName: 'Legacy Guy' };
   const id = assignmentIdentityForDriver(legacy);
@@ -61,4 +79,19 @@ test('a passcode-hash record key is NEVER promoted to the canonical driverId', (
   const id = assignmentIdentityForDriver(d);
   assert.equal(id.driverId, undefined);
   assert.equal(id.driverHash, LEGACY_HASH);
+});
+
+test('PW create retains selected company for local checks but leaves wire authority to the server', () => {
+  const assignment = assignmentIdentityForDriver(mike);
+  const target = dispatchCreateTargetForAssignment(true, assignment, [
+    { key: 'other-uuid', companyId: 'other-company', displayName: 'Other' }, mike,
+  ]);
+  assert.deepEqual(target, { companyId: 'liquid-gold' });
+  const input = { ...assignment, ...target, wellName: 'Gabriel 2', jobType: 'pw' };
+  const payload = buildCreatePayload(input);
+  assert.equal(input.companyId, 'liquid-gold');
+  assert.equal(Object.hasOwn(payload.record as Record<string, unknown>, 'companyId'), false);
+  assert.deepEqual(dispatchCreateTargetForAssignment(false, assignment, []), {});
+  assert.throws(() => dispatchCreateTargetForAssignment(true, assignment, []), /missing from the driver list/);
+  assert.throws(() => dispatchCreateTargetForDriver(true, { companyId: '' }), /Selected driver has no company/);
 });

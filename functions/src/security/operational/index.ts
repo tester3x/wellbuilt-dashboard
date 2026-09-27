@@ -6,6 +6,7 @@ export { upsertDriverShift } from './shiftWrite';
 // vc51.9AG — server-owned explicit-shift authority (resolve/claim/close).
 export {
   resolveActiveDriverShift,
+  staffResolveCompanyDriverShifts,
   claimDriverShift,
   closeDriverShift,
   recordDepartReturn,

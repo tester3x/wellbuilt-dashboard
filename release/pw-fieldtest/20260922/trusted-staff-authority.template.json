@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "uid": "<staffUid>",
+  "companyId": "<companyId>",
+  "active": true,
+  "capabilities": [
+    "manageDrivers"
+  ]
+}

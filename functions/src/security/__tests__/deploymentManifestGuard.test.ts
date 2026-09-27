@@ -1,0 +1,41 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+describe('deployment manifest guard — prevent silent pruning of deployed callables', () => {
+  const indexSource = fs.readFileSync(path.join(__dirname, '../../index.ts'), 'utf8');
+
+  // Authoritative deployed onboarding and join-code endpoints
+  // Verified from live deployment manifest wbt-fn-list-20260906.json
+  const REQUIRED_DEPLOYED_ENDPOINTS = [
+    'getCompanyJoinCode',
+    'adminCreateCompanyWithJoinCode',
+    'adminApproveCompanyOnboarding',
+    'adminListCompanyOnboardingRequests',
+    'requestCompanyOnboarding',
+  ];
+
+  test.each(REQUIRED_DEPLOYED_ENDPOINTS)(
+    'functions/src/index.ts exports deployed callable: %s',
+    (callableName) => {
+      // Must be exported as an entrypoint in index.ts
+      const exportRegex = new RegExp(`\\b${callableName}\\b`);
+      expect(indexSource).toMatch(exportRegex);
+    },
+  );
+
+  test('cross-references against repo-tracked deployedCallables.json manifest', () => {
+    const manifestPath = path.join(__dirname, '../../../../src/lib/__tests__/deployedCallables.json');
+    if (!fs.existsSync(manifestPath)) {
+      throw new Error(`Repo-tracked deployedCallables.json missing at: ${manifestPath}`);
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const deployedNames = new Set(Array.isArray(manifest.names) ? manifest.names : []);
+    for (const required of REQUIRED_DEPLOYED_ENDPOINTS) {
+      expect(deployedNames.has(required)).toBe(true);
+    }
+  });
+
+  test('functions/src/index.ts exports new callable rotateCompanyJoinCode', () => {
+    expect(indexSource).toMatch(/\brotateCompanyJoinCode\b/);
+  });
+});

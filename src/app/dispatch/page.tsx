@@ -1,8 +1,19 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useState, useMemo, useCallback, useRef, Suspense, type ReactNode } from 'react';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
+import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
+import { operationalDriverName } from '@/lib/operationalDriverName';
+import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
+import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
+import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
+import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
+import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
+import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
+import { combinedLocationResults } from '@/lib/builderWellSearch';
+import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
@@ -10,7 +21,9 @@ import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
 import { wellDetailHref } from '@/lib/wellDetailLink';
 import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
-import { assignmentIdentityForDriver, driverRealName } from '@/lib/dispatchWriterIdentity';
+import { groupDispatchRows } from '@/lib/dispatchJobStacks';
+import { assignmentIdentityForDriver, canonicalIdFromApprovedRow, dispatchCreateTargetForAssignment, driverRealName } from '@/lib/dispatchWriterIdentity';
+import { projectDispatchDriverRoster } from '@/lib/dispatchRosterProjection';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -31,8 +44,28 @@ import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch as _dismissDispatch } from '@/lib/dismissDispatch';
-import { staffCancelDispatch as _staffCancelDispatch, staffCreateDispatch as _staffCreateDispatch, staffUpdateDispatch as _staffUpdateDispatch } from '@/lib/staffWriteDispatch';
-import { hasCapability } from '@/lib/auth';
+import {
+  staffCancelDispatch as _staffCancelDispatch,
+  staffCreateDispatch as _staffCreateDispatch,
+  staffUpdateDispatch as _staffUpdateDispatch,
+  cancelRetainedCreation,
+  DispatchCreationCoordinator,
+  ExecuteUnitOptions,
+  mintDispatchId,
+  getDispatchCallableInvoker,
+  createServiceWorkWorkflow,
+  executeServiceWorkWorkflow,
+  cancelServiceWorkWorkflow,
+  canonicalJobTypeIdForServiceType,
+  type ServiceWorkWorkflowState,
+  createProjectWorkflow,
+  executeCreateProjectWorkflow,
+  cancelCreateProjectWorkflow,
+  type CreateProjectWorkflowState,
+  type FirestoreProjectWriter,
+  type ProjectDataInput,
+} from '@/lib/staffWriteDispatch';
+import { hasCapability, isPlatformAdmin } from '@/lib/auth';
 import {
   filterTicketsForCompany,
   invoiceBelongsToCompany,
@@ -49,6 +82,7 @@ interface ApprovedDriver {
   legacyAliases?: string[]; // governed legacy hashes/ids bound to this driver
   displayName: string;
   legalName?: string;    // Real name from registration (e.g. "Michael Burger")
+  loginAlias?: string;   // Login/username (drivers/approved `name`) — NEVER displayed; used only to guard displayName against login leakage
   active?: boolean;
   companyId?: string;
   companyName?: string;
@@ -70,8 +104,10 @@ interface DispatchJob {
   operator?: string;
   route?: string;
   jobType: 'pw' | 'service';
+  jobTypeId?: string;
   serviceType?: string;
   packageId?: string;  // Job package ID (e.g. 'water-hauling', 'aggregate')
+  packetRevision?: number;
   status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined' | 'dismissed';
   notes?: string;
   priority: number;
@@ -235,8 +271,14 @@ type RowAssignment =
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 function DispatchPageInner() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
   const router = useRouter();
+  const dispatchPathname = usePathname();
+  // Restore scroll position across refresh (session-scoped; restores after data lays out).
+  useScrollRestore(
+    { uid: user?.uid ?? null, companyId: user?.companyId || userCompany?.id || null, pathname: dispatchPathname },
+    { elementSelector: '[data-dashboard-scroll="dispatch"]', ready: !loading && !!user },
+  );
 
   // Capability gate for ALL dispatch mutations. The Dispatch tab is visible to
   // any role with `viewDispatch` (e.g. `viewer`), but only `createDispatch`
@@ -261,9 +303,56 @@ function DispatchPageInner() {
     }
     return true;
   };
-  const staffCreateDispatch = (record: Record<string, unknown>) => {
+
+  // Session-owned creation coordinator (per-session/tab isolation, UID + companyId scoped)
+  const sessionTenantId = user?.companyId || userCompany?.id || undefined;
+  const sessionUserId = user?.uid || undefined;
+  const coordinatorRef = useRef<DispatchCreationCoordinator | null>(null);
+  const sessionKey = `${sessionUserId || 'anon'}::${sessionTenantId || 'nocompany'}`;
+
+  if (!coordinatorRef.current || coordinatorRef.current.sessionKey !== sessionKey) {
+    if (coordinatorRef.current) {
+      coordinatorRef.current.resetAuthenticatedSession(sessionTenantId, sessionUserId);
+    }
+    coordinatorRef.current = new DispatchCreationCoordinator({
+      tenantId: sessionTenantId,
+      userId: sessionUserId,
+    });
+  }
+  const coordinator = coordinatorRef.current;
+
+  useEffect(() => {
+    return () => {
+      coordinatorRef.current?.clearAll();
+    };
+  }, []);
+
+  const cancelScopedCreation = (actionScopeOrId?: string) => {
+    cancelRetainedCreation(actionScopeOrId, coordinator);
+  };
+  const beginAction = (scope: string, actionId?: string) => {
+    return coordinator.beginAction({
+      actionId,
+      actionScope: scope,
+      tenantId: sessionTenantId,
+      userId: sessionUserId,
+    });
+  };
+  const finalizeAction = (actionId: string) => {
+    coordinator.finalizeAction(actionId);
+  };
+
+  const staffCreateDispatch = (record: Record<string, unknown>, options?: ExecuteUnitOptions) => {
     ensureCanCreateDispatch();
-    return _staffCreateDispatch(record);
+    // For platform admins, resolve the target from the selected roster driver.
+    // The callable independently validates company, driver, well and packet.
+    const target = dispatchCreateTargetForAssignment(isPlatformAdmin(user), record, drivers);
+    return _staffCreateDispatch({ ...record, ...target }, {
+      ...options,
+      coordinator,
+      tenantId: sessionTenantId,
+      userId: sessionUserId,
+    });
   };
   const staffUpdateDispatch = (dispatchId: string, record: Record<string, unknown>) => {
     ensureCanCreateDispatch();
@@ -308,8 +397,17 @@ function DispatchPageInner() {
   }, []);
   const [drivers, setDrivers] = useState<ApprovedDriver[]>([]);
   const [dispatches, setDispatches] = useState<DispatchJob[]>([]);
+  // True once the Active Jobs dispatch subscription has delivered its first real
+  // dataset. Distinguishes "no jobs yet loaded" (initial []) from "loaded, zero
+  // jobs" so expanded-group restore never prunes against a still-loading empty set.
+  const [dispatchesLoaded, setDispatchesLoaded] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
   const [driversLoading, setDriversLoading] = useState(true);
+  // Governed shift-dot state (green/red/gray) via the staff batched resolve callable.
+  const [shiftResults, setShiftResults] = useState<Map<string, ShiftResolveResult>>(new Map());
+  const [shiftResolvedCompany, setShiftResolvedCompany] = useState<string | null>(null);
+  const [shiftLoading, setShiftLoading] = useState(true);
+  const [shiftError, setShiftError] = useState(false);
   const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; dispatches?: string }>({});
   // True when the authoritative live-status read failed for the whole queue.
   // A failed read is a QUEUE-LEVEL UNAVAILABLE state — never 80 individual
@@ -367,6 +465,7 @@ function DispatchPageInner() {
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
+  const [swWorkflow, setSwWorkflow] = useState<ServiceWorkWorkflowState>(() => createServiceWorkWorkflow());
   const [swSplitTicket, setSwSplitTicket] = useState(false);
   const [swHeavyWater, setSwHeavyWater] = useState(false);
   // Pre-dispatch extra split legs (C/D/E…). Companion to swSplitTicket:
@@ -503,6 +602,7 @@ function DispatchPageInner() {
   const [newProjectServiceType, setNewProjectServiceType] = useState('');
   const [npbTab, setNpbTab] = useState<'details' | 'drivers' | 'notes'>('details');
   const [creatingProject, setCreatingProject] = useState(false);
+  const [projectWorkflow, setProjectWorkflow] = useState<CreateProjectWorkflowState>(() => createProjectWorkflow());
   const [projectWellSearch, setProjectWellSearch] = useState('');
 
   // Dynamic service types from job packages (falls back to hardcoded)
@@ -517,6 +617,40 @@ function DispatchPageInner() {
       router.push('/login');
     }
   }, [user, loading, router]);
+
+  // Governed shift dots: batch-resolve loaded drivers' canonical shift state via
+  // staffResolveCompanyDriverShifts (server reads the client-denied authority). Refresh
+  // on load, when the driver set changes, and every 60s so shift start/end reflects
+  // without a logout. Error/absence → gray (never a false red).
+  const driverCanonicalIds = useMemo(
+    () => drivers.map(d => d.driverId || (typeof d.key === 'string' && d.key.includes('-') ? d.key : '')).filter(Boolean),
+    [drivers],
+  );
+  useEffect(() => {
+    if (!user || driversLoading) return;
+    if (driverCanonicalIds.length === 0) { setShiftLoading(false); return; }
+    let cancelled = false;
+    const run = async () => {
+      const r = await resolveCompanyDriverShifts(driverCanonicalIds);
+      if (cancelled) return;
+      setShiftResults(r.resultsByDriverId);
+      setShiftResolvedCompany(r.companyId);
+      setShiftError(r.error);
+      setShiftLoading(false);
+    };
+    run();
+    const timer = setInterval(run, 60000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [user, driversLoading, driverCanonicalIds]);
+
+  const driverShiftDot = useCallback((d: { driverId?: string; key?: string; companyId?: string }) => shiftDotForDriver({
+    canonicalDriverId: d.driverId || (typeof d.key === 'string' && d.key.includes('-') ? d.key : ''),
+    companyId: d.companyId,
+    resultsByDriverId: shiftResults,
+    resolvedCompanyId: shiftResolvedCompany,
+    loading: shiftLoading,
+    error: shiftError,
+  }), [shiftResults, shiftResolvedCompany, shiftLoading, shiftError]);
 
   // Persist navigable Well Queue state (view / route / search) into the URL WITHOUT
   // navigating, so a reload restores it. Only applied once auth is resolved and the
@@ -729,6 +863,7 @@ function DispatchPageInner() {
         jobs.push({ id: d.id, ...d.data() } as DispatchJob);
       });
       setDispatches(jobs.filter(j => docBelongsToTenant(j.companyId, user.companyId)));
+      setDispatchesLoaded(true);
       setReadErrors(prev => ({ ...prev, dispatches: undefined }));
     }, (err) => {
       console.error('Dispatch listener error:', err);
@@ -835,93 +970,28 @@ function DispatchPageInner() {
     setDriversLoading(true);
     try {
       const catalog = await adminGetDashboardCatalog();
-      const approved: ApprovedDriver[] = [];
-      const data = (catalog.approved || {}) as Record<string, any>;
-
-      Object.entries(data).forEach(([hash, val]: [string, any]) => {
-          // Handle both flat and legacy nested formats
-          if (val.displayName) {
-            // Flat format
-            if (val.active !== false) {
-              approved.push({
-                key: hash,
-                driverId: val.driverId || (typeof hash === 'string' && hash.includes('-') ? hash : undefined),
-                legacyAliases: [val.migratedToDriverId].filter(Boolean),
-                displayName: val.displayName,
-                legalName: val.legalName || val.profile?.legalName || '',
-                active: val.active,
-                companyId: val.companyId,
-                companyName: val.companyName,
-                assignedRoutes: val.assignedRoutes || [],
-                phone: val.profile?.phone || '',
-              });
-            }
-          } else {
-            // Legacy nested format — grab first device
-            const deviceKeys = Object.keys(val);
-            if (deviceKeys.length > 0) {
-              const first = val[deviceKeys[0]];
-              if (first.active !== false && first.displayName) {
-                approved.push({
-                  key: hash,
-                  driverId: first.driverId || (typeof hash === 'string' && hash.includes('-') ? hash : undefined),
-                  legacyAliases: [first.migratedToDriverId].filter(Boolean),
-                  displayName: first.displayName,
-                  legalName: first.legalName || first.profile?.legalName || '',
-                  active: first.active,
-                  companyId: first.companyId,
-                  companyName: first.companyName,
-                  assignedRoutes: first.assignedRoutes || [],
-                  phone: first.profile?.phone || '',
-                });
-              }
-            }
-          }
-        });
-
-      // Tenant containment (7/9): scoped users see only their own company's
-      // drivers (liquid-gold also owns legacy unstamped records).
-      const scoped = approved.filter(d => docBelongsToTenant(d.companyId, user?.companyId));
-      scoped.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      // Canonical dispatch roster projection: unifies approved rows with modern
+      // canonical profiles (profiles-only drivers) under company containment.
+      const scoped = projectDispatchDriverRoster(catalog, user?.companyId);
       setDrivers(scoped);
       setReadErrors(prev => ({ ...prev, drivers: undefined }));
 
-      // Fetch shift status for each driver (fire-and-forget — UI updates when ready)
-      (async () => {
-        try {
-          const firestore = getFirestoreDb();
-          // Use local date (not UTC) to match WB S which writes shift docs with device local date
-          const now = new Date();
-          const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-          const statusMap = new Map<string, boolean>();
-
-          // Batch fetch shift docs for all drivers
-          await Promise.all(scoped.map(async (d) => {
-            try {
-              const shiftDoc = await getDoc(doc(firestore, 'driver_shifts', `${d.key}_${today}`));
-              if (shiftDoc.exists()) {
-                const events = shiftDoc.data()?.events || [];
-                if (events.length > 0) {
-                  const lastEvent = events[events.length - 1];
-                  // On shift if last event is login or depart_return (not logout)
-                  statusMap.set(d.key, lastEvent.type !== 'logout');
-                }
-              }
-            } catch {}
-          }));
-
-          // Always update shift status — even if no docs found (all drivers off shift)
-          setDrivers(prev => prev.map(d => ({
-            ...d,
-            onShift: statusMap.get(d.key) ?? false,
-          })).sort((a, b) => {
-            // On-shift drivers first, then alphabetical
-            if (a.onShift && !b.onShift) return -1;
-            if (!a.onShift && b.onShift) return 1;
-            return (a.legalName || a.displayName).localeCompare(b.legalName || b.displayName);
-          }));
-        } catch {}
-      })();
+      // Shift status dot: intentionally NOT fetched here anymore.
+      //
+      // ROOT CAUSE of the "every driver red" defect: the prior code read
+      // driver_shifts/{d.key}_{today} (the drivers/approved ROSTER KEY + TODAY's
+      // local date) and set onShift = (last event !== 'logout'). Wrong on two axes:
+      //   1. it keys by the roster key, not the canonical driverId;
+      //   2. it inspects only TODAY's day document, so an open shift whose ORIGIN
+      //      day is earlier (e.g. Mike ZFold7 Burger's open period 2026-09-13,
+      //      viewed on 2026-09-15) is never found — the dot fell to red for everyone.
+      // The authoritative state lives in the server-owned, client-DENIED
+      // `driver_shift_authority/{canonicalDriverId}` record (decideResolve), which a
+      // browser cannot read. Correct truth therefore requires a governed staff-/
+      // company-scoped resolve callable (see report: staffResolveCompanyDriverShifts).
+      // Until that callable is deployed the selector shows a gray "Shift status
+      // unavailable" dot (shiftDotCore) rather than a FALSE red. Do NOT reintroduce a
+      // shadow driver_shifts read or derive the dot from HOS/presence/GPS/dispatch.
     } catch (err) {
       console.error('Failed to load drivers:', err);
       setDrivers([]);
@@ -970,8 +1040,11 @@ function DispatchPageInner() {
       const canonicalName = matched?.wellName || d.wellName;
 
       // Real driver name via the canonical resolver (never the login/stamped name).
+      // Central identity policy for human-facing OPERATIONAL screens: prefer displayName,
+      // fall back to legalName — but never the login (operationalDriverName guards the
+      // case where a profile's displayName IS the login, e.g. "Mikezfold").
       const rd = resolveDispatchDriver(d, drivers || []);
-      const driverLabel = rd ? (rd.legalName || rd.displayName || 'Driver').split(' ')[0] : (d.driverFirstName || d.driverName || 'Assigned');
+      const driverLabel = rd ? operationalDriverName(rd) : (d.driverFirstName || d.driverName || 'Assigned');
       const entry = { job: d, status: d.status, driver: driverLabel, assignedMs };
 
       const prev = m.get(canonicalName);
@@ -1024,15 +1097,24 @@ function DispatchPageInner() {
     return isStaleCompletedReentry({ basisMs: wellBasisMs(w), completedAssignedMs: c.assignedMs });
   };
 
+  // Route-scoped well collection: all tab counts and queue views derive from this
+  // collection when a route filter is active; 'all' yields the full company catalog.
+  const routeWells = useMemo(() => {
+    if (!routeFilter || routeFilter === 'all') return wells;
+    return wells.filter(w => w.route === routeFilter);
+  }, [wells, routeFilter]);
+
   const pwQueue = useMemo(() => {
-    const live = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+    // Include DOWN wells here so they remain visible in the ALL view (and search),
+    // badged DOWN. The needs-pull branch (state === 'pull-now') and matchesView keep
+    // DOWN out of every automatic prediction bucket. Status is never faked.
+    const live = routeWells;
     const applyText = (list: WellResponse[]) => {
       let f = list;
       if (search.trim()) {
         const q = search.trim().toLowerCase();
         f = f.filter(w => (w.wellName || '').toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q) || (w.ndicName || '').toLowerCase().includes(q));
       }
-      if (routeFilter && routeFilter !== 'all') f = f.filter(w => w.route === routeFilter);
       return f;
     };
     const asgn = (w: WellResponse) => pwAssignmentByWell.get(w.wellName) || (w.ndicName ? pwAssignmentByWell.get(w.ndicName) : undefined);
@@ -1063,15 +1145,15 @@ function DispatchPageInner() {
         return { well: w, priority, assignment };
       })
       .sort(compareQueueRows);
-  }, [wells, dispatches, search, routeFilter, queueView, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
+  }, [routeWells, dispatches, search, queueView, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
 
   // Needs Pull physical-demand split: total = both groups; also the actionable
   // (unassigned) vs already-assigned counts so the primary number never implies
-  // every listed well still needs a driver.
+  // every listed well still needs a driver. Scoped to the active route filter.
   const needsPullSplit = useMemo(() => {
     const asgn = (w: WellResponse) => pwAssignmentByWell.get(w.wellName) || (w.ndicName ? pwAssignmentByWell.get(w.ndicName) : undefined);
     let unassigned = 0, assigned = 0;
-    for (const w of wells) {
+    for (const w of routeWells) {
       if (w.isDown || w.currentLevel === 'DOWN') continue;
       const a = asgn(w);
       if (a && pwLifecycle(a.status) === 'started') continue;          // started → Active Jobs
@@ -1080,32 +1162,34 @@ function DispatchPageInner() {
       if (a && pwLifecycle(a.status) === 'not_started') assigned++; else unassigned++;
     }
     return { total: unassigned + assigned, unassigned, assigned };
-  }, [wells, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
+  }, [routeWells, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
 
-  // Counts per primary view (all routes). Needs Pull = physical demand (both
-  // groups, started excluded); other views unchanged.
+  // Counts per primary view, scoped to the selected route ('all' = company-wide totals).
+  // Needs Pull = physical demand (both groups, started excluded); other views scoped identically.
   const viewCounts = useMemo(() => {
-    const live = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+    // ALL counts every route well INCLUDING DOWN (they appear in the ALL view).
+    // next-24h / needs-data derive from wellBucket, which classifies DOWN as its own
+    // 'down' bucket, so those predictive counts naturally exclude DOWN wells.
     return {
       'needs-pull': needsPullSplit.total,
-      'next-24h': live.filter(w => wellBucket(w, asOfMs) === 'next-24h').length,
-      'needs-data': live.filter(w => wellBucket(w, asOfMs) === 'needs-data').length,
-      'all': live.length,
+      'next-24h': routeWells.filter(w => wellBucket(w, asOfMs) === 'next-24h').length,
+      'needs-data': routeWells.filter(w => wellBucket(w, asOfMs) === 'needs-data').length,
+      'all': routeWells.length,
     } as Record<QueueView, number>;
-  }, [wells, asOfMs, needsPullSplit]);
+  }, [routeWells, asOfMs, needsPullSplit]);
 
   // Z Fold recovery — when the queue is collapsed (stacked + not expanded), a
   // search still surfaces matching wells so the list is reachable on the Fold.
   const searchHits = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return [];
-    return wells
+    return routeWells
       .filter(w => {
         const isDown = w.isDown || w.currentLevel === 'DOWN';
-        if (isDown) return false;
-        if (w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
+        // DOWN wells surface in search (badged DOWN) so a dispatcher can deliberately
+        // find and dispatch one; the empty-data guard must not hide them.
+        if (!isDown && w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
         if (!(w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q))) return false;
-        if (routeFilter !== 'all' && w.route !== routeFilter) return false;
         return true;
       })
       .map(w => {
@@ -1123,7 +1207,7 @@ function DispatchPageInner() {
         const bR = b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
         return aR - bR;
       });
-  }, [wells, search, routeFilter, asOfMs, pwAssignmentByWell]);
+  }, [routeWells, search, asOfMs, pwAssignmentByWell]);
 
   const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
   const queueRows = showingSearchHits ? searchHits : pwQueue;
@@ -1170,7 +1254,9 @@ function DispatchPageInner() {
         ndicWellName: resolvedNdicName,
         route: assignTarget.route || '',
         jobType: 'pw',
+        jobTypeId: 'pw',
         packageId: 'water-hauling',
+        packetRevision: 4,
         status: 'pending',
         notes: assignNotes || '',
         priority: priority.sortOrder,
@@ -1190,8 +1276,12 @@ function DispatchPageInner() {
         } : {}),
       };
 
-      await staffCreateDispatch(job);
-
+      const actionId = `assign_${assignTarget.wellName}_${driver.key}`;
+      await staffCreateDispatch(job, {
+        actionId,
+        actionScope: 'assign-modal',
+        unitId: `${assignTarget.wellName}::${driver.key}`,
+      });
       // Track PW usage for R&D pipeline (non-blocking)
       const compId = user?.companyId || driver.companyId || 'unknown';
       trackJobTypeUsage('Production Water', compId, 'water-hauling');
@@ -1205,9 +1295,9 @@ function DispatchPageInner() {
       setAssignDisposalWell(null);
       setDisposalSearch('');
       setDisposalResults([]);
+      finalizeAction(actionId);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
-      setAssignTarget(null);
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
     } finally {
@@ -1225,158 +1315,108 @@ function DispatchPageInner() {
       const selectedDrivers = drivers.filter(d => swDriverHashes.has(d.key));
       if (selectedDrivers.length === 0) throw new Error('No drivers found');
 
-      // Generate a group ID so Dashboard can link related service work dispatches
-      const serviceGroupId = selectedDrivers.length > 1 ? `sg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : undefined;
-      // Crew list — first names from legalName so logins stay private
-      const getFirstName = (d: ApprovedDriver) => {
-        if (d.legalName) return d.legalName.split(' ')[0];
-        return d.displayName; // fallback if no legalName
-      };
-      const assignedDrivers = selectedDrivers.length > 1 ? selectedDrivers.map(getFirstName) : undefined;
-
       // Look up NDIC name from wells list
       const matchedWell = wells.find(w => w.wellName === swWellName.trim() || w.ndicName === swWellName.trim());
       const swNdicName = matchedWell?.ndicName || swWellName.trim();
 
-      // Split ticket: generate shared splitGroupId for linked jobs.
-      // splitTotal = 1 (base) + 1 (leg B from swDropoff) + N (extras C/D/E…).
-      // All siblings carry the same splitTotal so the WB T client can show
-      // "Split N of M" badges + the addSplitLeg CF can extend the chain
-      // later without recomputing.
-      const splitGroupId = swSplitTicket ? `split_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : undefined;
-      const splitTotal = swSplitTicket
-        ? 2 + swExtraSplitLegs.length
-        : undefined;
+      await executeServiceWorkWorkflow({
+        workflow: swWorkflow,
+        coordinator,
+        invoke: getDispatchCallableInvoker(),
+        selectedDrivers,
+        wellName: matchedWell?.wellName || swWellName.trim(),
+        ndicWellName: swNdicName,
+        serviceType: swServiceType.trim(),
+        packageId: jobTypeToPackageId[swServiceType.trim()] || undefined,
+        dropoff: swDropoff.trim() || undefined,
+        onsiteBy: swOnsiteBy || undefined,
+        notes: swNotes || undefined,
+        isSplitTicket: swSplitTicket,
+        isHeavyWater: swHeavyWater,
+        extraSplitLegs: swExtraSplitLegs,
+        assignedBy: user?.email || 'dashboard',
+        userEmail: user?.email || undefined,
+        tenantId: sessionTenantId,
+        userId: sessionUserId,
+        onUiComplete: async () => {
+          // Track job type usage for R&D pipeline (non-blocking)
+          const compId = user?.companyId || selectedDrivers[0]?.companyId || 'unknown';
+          trackJobTypeUsage(swServiceType.trim(), compId, jobTypeToPackageId[swServiceType.trim()] || 'custom');
 
-      const promises = selectedDrivers.map(driver => {
-        const baseJob: Omit<DispatchJob, 'id'> = {
-          // Canonical driver identity contract (driverId + canonical driverHash + real name).
-          ...assignmentIdentityForDriver(driver),
-          ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
-          wellName: matchedWell?.wellName || swWellName.trim(),
-          ndicWellName: swNdicName,
-          ...(swDropoff.trim() ? { disposal: swDropoff.trim() } : {}),
-          ...(swOnsiteBy ? { onsiteBy: swOnsiteBy } : {}),
-          jobType: 'service',
-          serviceType: swServiceType.trim(),
-          packageId: jobTypeToPackageId[swServiceType.trim()] || undefined,
-          status: 'pending',
-          notes: swNotes || '',
-          priority: 5,
-          assignedAt: Timestamp.now(),
-          assignedBy: user?.email || 'dashboard',
-          ...(serviceGroupId ? { serviceGroupId } : {}),
-          ...(assignedDrivers ? { assignedDrivers } : {}),
-          ...(swHeavyWater ? { isHeavyWater: true } : {}),
-          ...(splitGroupId ? { splitGroupId, splitSequence: 1, ...(splitTotal != null ? { splitTotal } : {}) } : {}),
-        };
+          // Auto-create group chat thread for multi-driver SW jobs
+          if (selectedDrivers.length > 1 && swWorkflow.serviceGroupId) {
+            try {
+              const myPid = user?.uid ? `user:${user.uid}` : '';
+              const participants = [myPid, ...selectedDrivers.map(d => `driver:${d.key}`)].filter(Boolean);
+              const participantNames: Record<string, string> = {};
+              if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
+              selectedDrivers.forEach(d => {
+                participantNames[`driver:${d.key}`] = d.legalName || d.displayName;
+              });
+              const threadTitle = `${swServiceType.trim()} — ${matchedWell?.wellName || swWellName.trim()}`;
+              const crewNames = selectedDrivers.map(d => (d.legalName || d.displayName).split(' ')[0]).join(', ');
+              const sysText = `Service work dispatched: ${swServiceType.trim()} at ${matchedWell?.wellName || swWellName.trim()}\nCrew: ${crewNames}${swNotes ? `\nNotes: ${swNotes}` : ''}${swDropoff.trim() ? `\nDrop-off: ${swDropoff.trim()}` : ''}`;
+              const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
+                type: 'service_group',
+                serviceGroupId: swWorkflow.serviceGroupId,
+                companyId: user?.companyId || '',
+                title: threadTitle,
+                participants,
+                participantNames,
+                status: 'active',
+                createdAt: Timestamp.now(),
+                updatedAt: Timestamp.now(),
+                lastRead: {},
+                lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
+              });
+              await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
+                text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
+                systemType: 'job_assigned',
+              });
+            } catch (chatErr) {
+              console.warn('[Dispatch] Auto-create SW chat failed (non-blocking):', chatErr);
+            }
+          }
 
-        const docs = [staffCreateDispatch(baseJob)];
+          const names = selectedDrivers.map(d => d.legalName || d.displayName).join(', ');
+          setMessage(`Service work dispatched to ${names}`);
+          setSwWellName('');
+          setSwDropoff('');
+          setSwServiceType('');
+          setSwOnsiteBy('');
+          setSwNotes('');
+          setSwDriverHashes(new Set());
+          setSwSplitTicket(false);
+          setSwHeavyWater(false);
+          setSwExtraSplitLegs([]);
+          setSwExtraLegDraft(null);
+          setTimeout(() => setMessage(''), 4000);
 
-        // Split ticket: create second linked job (drop-off → service work at destination)
-        if (swSplitTicket && swDropoff.trim()) {
-          const job2: Omit<DispatchJob, 'id'> = {
-            ...baseJob,
-            wellName: swDropoff.trim(),
-            ndicWellName: swDropoff.trim(),
-            disposal: swDropoff.trim(),
-            notes: `Split ticket B — ${swNotes || swServiceType.trim()}`,
-            splitGroupId: splitGroupId!,
-            splitSequence: 2,
-            ...(splitTotal != null ? { splitTotal } : {}),
-          };
-          docs.push(staffCreateDispatch(job2));
-        }
-
-        // Extra split legs (C/D/E…) — same metadata namespace as leg B, no
-        // Multi-Haul. Each entry becomes a sibling dispatch doc with
-        // monotonic splitSequence and the shared splitTotal. Pre-filled bbls
-        // (optional) carries into the driver's TicketModule prefill on
-        // accept via origin.dispatchBbls (per FlowController 4/29 changelog).
-        if (swSplitTicket && swExtraSplitLegs.length > 0) {
-          swExtraSplitLegs.forEach((extra, idx) => {
-            const letter = String.fromCharCode(67 + idx); // C, D, E…
-            const bblsNum = extra.bbls ? parseFloat(extra.bbls) : NaN;
-            const extraJob: Omit<DispatchJob, 'id'> = {
-              ...baseJob,
-              wellName: extra.disposal,
-              ndicWellName: extra.disposal,
-              disposal: extra.disposal,
-              notes: extra.notes
-                ? `Split ticket ${letter} — ${extra.notes}`
-                : `Split ticket ${letter} — ${swServiceType.trim()}`,
-              splitGroupId: splitGroupId!,
-              splitSequence: 3 + idx,
-              ...(splitTotal != null ? { splitTotal } : {}),
-              ...(isFinite(bblsNum) && bblsNum > 0 ? { bbls: bblsNum } : {}),
-            };
-            docs.push(staffCreateDispatch(extraJob));
-          });
-        }
-
-        return Promise.all(docs);
+          // Mint new workflow identity for the next deliberate service job
+          setSwWorkflow(createServiceWorkWorkflow());
+        },
       });
-
-      await Promise.all(promises);
-
-      // Track job type usage for R&D pipeline (non-blocking)
-      const compId = user?.companyId || selectedDrivers[0]?.companyId || 'unknown';
-      trackJobTypeUsage(swServiceType.trim(), compId, jobTypeToPackageId[swServiceType.trim()] || 'custom');
-
-      // Auto-create group chat thread for multi-driver SW jobs
-      if (selectedDrivers.length > 1 && serviceGroupId) {
-        try {
-          const myPid = user?.uid ? `user:${user.uid}` : '';
-          const participants = [myPid, ...selectedDrivers.map(d => `driver:${d.key}`)].filter(Boolean);
-          const participantNames: Record<string, string> = {};
-          if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
-          selectedDrivers.forEach(d => {
-            participantNames[`driver:${d.key}`] = d.legalName || d.displayName;
-          });
-          const threadTitle = `${swServiceType.trim()} — ${matchedWell?.wellName || swWellName.trim()}`;
-          const crewNames = selectedDrivers.map(d => (d.legalName || d.displayName).split(' ')[0]).join(', ');
-          const sysText = `Service work dispatched: ${swServiceType.trim()} at ${matchedWell?.wellName || swWellName.trim()}\nCrew: ${crewNames}${swNotes ? `\nNotes: ${swNotes}` : ''}${swDropoff.trim() ? `\nDrop-off: ${swDropoff.trim()}` : ''}`;
-          const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
-            type: 'service_group',
-            serviceGroupId,
-            companyId: user?.companyId || '',
-            title: threadTitle,
-            participants,
-            participantNames,
-            status: 'active',
-            createdAt: Timestamp.now(),
-            updatedAt: Timestamp.now(),
-            lastRead: {},
-            lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
-          });
-          await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
-            text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
-            systemType: 'job_assigned',
-          });
-        } catch (chatErr) {
-          console.warn('[Dispatch] Auto-create SW chat failed (non-blocking):', chatErr);
-        }
-      }
-
-      const names = selectedDrivers.map(d => d.legalName || d.displayName).join(', ');
-      setMessage(`Service work dispatched to ${names}`);
-      setSwWellName('');
-      setSwDropoff('');
-      setSwServiceType('');
-      setSwOnsiteBy('');
-      setSwNotes('');
-      setSwDriverHashes(new Set());
-      setSwSplitTicket(false);
-      setSwHeavyWater(false);
-      setSwExtraSplitLegs([]);
-      setSwExtraLegDraft(null);
-      setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
     } finally {
       setSwSubmitting(false);
     }
+  }
+
+  function cancelServiceWork() {
+    cancelServiceWorkWorkflow(swWorkflow, coordinator);
+    setSwWellName('');
+    setSwDropoff('');
+    setSwServiceType('');
+    setSwOnsiteBy('');
+    setSwNotes('');
+    setSwDriverHashes(new Set());
+    setSwSplitTicket(false);
+    setSwHeavyWater(false);
+    setSwExtraSplitLegs([]);
+    setSwExtraLegDraft(null);
+    setSwWorkflow(createServiceWorkWorkflow());
   }
 
   // ─── Cancel Dispatch ───────────────────────────────────────────────────────
@@ -1430,7 +1470,7 @@ function DispatchPageInner() {
       // pattern (array-typed optionals + objects). Replaces the prior
       // `|| undefined` form which threw "Unsupported field value: undefined"
       // at addDoc when any optional input was empty.
-      const projectData: Omit<Project, 'id'> = {
+      const projectData: ProjectDataInput = {
         name: newProjectName.trim(),
         wellNames: newProjectWells,
         operatorName: newProjectOperator.trim(),
@@ -1447,99 +1487,110 @@ function DispatchPageInner() {
         ...(dayHashes.length > 0 ? { dayDriverHashes: dayHashes } : {}),
         ...(nightHashes.length > 0 ? { nightDriverHashes: nightHashes } : {}),
         ...(Object.keys(newProjectDriverDisposals).length > 0 ? { driverDisposals: newProjectDriverDisposals } : {}),
-      } as Omit<Project, 'id'>;
-      const docRef = await addDoc(collection(firestore, 'projects'), projectData);
+      };
 
-      // Create dispatches for today's assigned drivers
-      if (newProjectDriverHashes.size > 0) {
-        for (const wellName of newProjectWells) {
-          const wellData = wells.find(w => w.wellName === wellName);
-          for (const driverHash of newProjectDriverHashes) {
-            const driver = drivers.find(d => d.key === driverHash);
-            if (!driver) continue;
-            const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
-            const driverDisposal = newProjectDriverDisposals[driverHash];
-            // Same `|| undefined` → `|| null` normalization as projectData
-            // above. Optional string fields: null. Optional structured
-            // groups: spread-omit. Firestore never sees `undefined`.
-            await staffCreateDispatch({
-              // Canonical driver identity contract (driverId + canonical driverHash + real name).
-              ...assignmentIdentityForDriver(driver),
-              driverFirstName,
-              wellName,
-              ndicWellName: wellData?.ndicName || wellName,
-              operator: newProjectOperator.trim(),
-              route: wellData?.route || '',
-              jobType: newProjectJobType,
-              serviceType: newProjectServiceType || null,
-              status: 'pending',
-              priority: 500,
-              assignedAt: Timestamp.now(),
-              assignedBy: user?.email || '',
-              projectId: docRef.id,
-              notes: newProjectNotes.trim() || null,
-              ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
-            });
+      const projectWriter: FirestoreProjectWriter = {
+        getDoc: async (pId: string) => {
+          const snap = await getDoc(doc(firestore, 'projects', pId));
+          return {
+            exists: snap.exists(),
+            data: () => snap.data(),
+          };
+        },
+        setDoc: async (pId: string, data: Record<string, unknown>) => {
+          await setDoc(doc(firestore, 'projects', pId), data);
+        },
+      };
+
+      await executeCreateProjectWorkflow({
+        workflow: projectWorkflow,
+        coordinator,
+        invoke: getDispatchCallableInvoker(),
+        projectWriter,
+        projectData,
+        wells,
+        drivers,
+        assignedBy: user?.email || '',
+        tenantId: sessionTenantId,
+        userId: sessionUserId,
+        onUiComplete: async (pId) => {
+          // Auto-create project chat thread with all assigned drivers
+          if (newProjectDriverHashes.size > 0) {
+            try {
+              const allDriverHashes = Array.from(newProjectDriverHashes);
+              const myPid = user?.uid ? `user:${user.uid}` : '';
+              const participants = [myPid, ...allDriverHashes.map(h => `driver:${h}`)].filter(Boolean);
+              const participantNames: Record<string, string> = {};
+              if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
+              allDriverHashes.forEach(h => {
+                const d = drivers.find(dr => dr.key === h);
+                if (d) participantNames[`driver:${h}`] = d.displayName;
+              });
+              const threadTitle = newProjectName.trim() || `Project - ${newProjectWells[0] || 'Unnamed'}`;
+              const crewNames = allDriverHashes.map(h => { const d = drivers.find(dr => dr.key === h); return d ? (d.legalName || d.displayName).split(' ')[0] : h; }).join(', ');
+              const sysText = `Project "${threadTitle}" created\nCrew: ${crewNames}\nWells: ${newProjectWells.join(', ')}${newProjectNotes ? `\nNotes: ${newProjectNotes}` : ''}`;
+              const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
+                type: 'project',
+                projectId: pId,
+                companyId: user?.companyId || '',
+                title: threadTitle,
+                participants,
+                participantNames,
+                status: 'active',
+                createdAt: Timestamp.now(),
+                updatedAt: Timestamp.now(),
+                lastRead: {},
+                lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
+              });
+              await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
+                text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
+              });
+            } catch (chatErr) {
+              console.warn('[Dispatch] Auto-create project chat failed (non-blocking):', chatErr);
+            }
           }
-        }
-      }
 
-      // Auto-create project chat thread with all assigned drivers
-      if (newProjectDriverHashes.size > 0) {
-        try {
-          const allDriverHashes = Array.from(newProjectDriverHashes);
-          const myPid = user?.uid ? `user:${user.uid}` : '';
-          const participants = [myPid, ...allDriverHashes.map(h => `driver:${h}`)].filter(Boolean);
-          const participantNames: Record<string, string> = {};
-          if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
-          allDriverHashes.forEach(h => {
-            const d = drivers.find(dr => dr.key === h);
-            if (d) participantNames[`driver:${h}`] = d.displayName;
-          });
-          const threadTitle = newProjectName.trim() || `Project - ${newProjectWells[0] || 'Unnamed'}`;
-          const crewNames = allDriverHashes.map(h => { const d = drivers.find(dr => dr.key === h); return d ? (d.legalName || d.displayName).split(' ')[0] : h; }).join(', ');
-          const sysText = `Project "${threadTitle}" created\nCrew: ${crewNames}\nWells: ${newProjectWells.join(', ')}${newProjectNotes ? `\nNotes: ${newProjectNotes}` : ''}`;
-          const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
-            type: 'project',
-            projectId: docRef.id,
-            companyId: user?.companyId || '',
-            title: threadTitle,
-            participants,
-            participantNames,
-            status: 'active',
-            createdAt: Timestamp.now(),
-            updatedAt: Timestamp.now(),
-            lastRead: {},
-            lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
-          });
-          await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
-            text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
-          });
-        } catch (chatErr) {
-          console.warn('[Dispatch] Auto-create project chat failed (non-blocking):', chatErr);
-        }
-      }
+          // Reset form
+          setNewProjectName('');
+          setNewProjectWells([]);
+          setNewProjectOperator('');
+          setNewProjectNotes('');
+          setNewProjectEndDate('');
+          setNewProjectDriverHashes(new Set());
+          setNewProjectDriverShifts(new Map());
+          setNewProjectDriverDisposals({});
+          setNewProjectJobType('service');
+          setNewProjectServiceType('');
+          setProjectWellSearch('');
+          setMessage('Project created');
+          setTimeout(() => setMessage(''), 3000);
 
-      // Reset form
-      setNewProjectName('');
-      setNewProjectWells([]);
-      setNewProjectOperator('');
-      setNewProjectNotes('');
-      setNewProjectEndDate('');
-      setNewProjectDriverHashes(new Set());
-      setNewProjectDriverShifts(new Map());
-      setNewProjectDriverDisposals({});
-      setNewProjectJobType('service');
-      setNewProjectServiceType('');
-      setProjectWellSearch('');
-      setMessage('Project created');
-      setTimeout(() => setMessage(''), 3000);
+          // Mint new project workflow identity for the next deliberate project
+          setProjectWorkflow(createProjectWorkflow());
+        },
+      });
     } catch (err: any) {
       setMessage(`Error creating project: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
     } finally {
       setCreatingProject(false);
     }
+  }
+
+  function cancelProject() {
+    cancelCreateProjectWorkflow(projectWorkflow, coordinator);
+    setNewProjectName('');
+    setNewProjectWells([]);
+    setNewProjectOperator('');
+    setNewProjectNotes('');
+    setNewProjectEndDate('');
+    setNewProjectDriverHashes(new Set());
+    setNewProjectDriverShifts(new Map());
+    setNewProjectDriverDisposals({});
+    setNewProjectJobType('service');
+    setNewProjectServiceType('');
+    setProjectWellSearch('');
+    setProjectWorkflow(createProjectWorkflow());
   }
 
   async function updateProjectStatus(projectId: string, status: 'active' | 'paused' | 'completed') {
@@ -1577,6 +1628,8 @@ function DispatchPageInner() {
       // Create dispatches for this driver for project wells
       const driver = drivers.find(d => d.key === driverHash);
       if (driver) {
+        const batchActionId = `proj_add_${projectId}_${driverHash}`;
+        beginAction('add-driver-to-project', batchActionId);
         const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
         for (const wellName of project.wellNames) {
           const wellData = wells.find(w => w.wellName === wellName);
@@ -1597,11 +1650,13 @@ function DispatchPageInner() {
             assignedBy: user?.email || '',
             projectId: projectId,
             ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
+          }, {
+            actionId: batchActionId,
+            actionScope: 'add-driver-to-project',
+            unitId: `${projectId}::${driverHash}::${wellName}`,
           });
         }
-      }
-      // Auto-add driver to existing project chat thread
-      if (driver) {
+        // Auto-add driver to existing project chat thread
         try {
           const firestore2 = getFirestoreDb();
           const threadSnap = await getDocs(query(
@@ -1633,6 +1688,7 @@ function DispatchPageInner() {
         } catch (chatErr) {
           console.warn('[Dispatch] Auto-add driver to project chat failed (non-blocking):', chatErr);
         }
+        finalizeAction(batchActionId);
       }
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -1661,6 +1717,9 @@ function DispatchPageInner() {
           .map(d => `${d.driverHash}::${d.wellName}`)
       );
 
+      const batchActionId = `proj_sched_${projectId}`;
+      beginAction('assign-scheduled', batchActionId);
+
       let created = 0;
       for (const wellName of project.wellNames) {
         const wellData = wells.find(w => w.wellName === wellName);
@@ -1688,6 +1747,10 @@ function DispatchPageInner() {
             projectId,
             notes: project.notes || undefined,
             ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
+          }, {
+            actionId: batchActionId,
+            actionScope: 'assign-scheduled',
+            unitId: `${projectId}::${driverHash}::${wellName}`,
           });
           created++;
         }
@@ -1747,6 +1810,8 @@ function DispatchPageInner() {
           console.warn('[Dispatch] Auto-add shift drivers to project chat failed (non-blocking):', chatErr);
         }
       }
+
+      finalizeAction(batchActionId);
 
       if (created > 0) {
         setMessage(`Created ${created} ${shift} shift dispatch${created !== 1 ? 'es' : ''}`);
@@ -1825,7 +1890,9 @@ function DispatchPageInner() {
         ndicWellName: reassignJob.ndicWellName || reassignJob.wellName,
         route: reassignJob.route || '',
         jobType: reassignJob.jobType,
+        jobTypeId: reassignJob.jobTypeId || (reassignJob.jobType === 'pw' ? 'pw' : (reassignJob.serviceType ? canonicalJobTypeIdForServiceType(reassignJob.serviceType) : 'service-work')),
         packageId: reassignJob.packageId || 'water-hauling',
+        packetRevision: reassignJob.packetRevision || 4,
         status: 'pending',
         notes: reassignJob.notes || '',
         priority: reassignJob.priority,
@@ -1854,8 +1921,12 @@ function DispatchPageInner() {
       if (reassignJob.assignedDrivers) newJob.assignedDrivers = reassignJob.assignedDrivers;
       if (reassignJob.disposalLegalDesc) newJob.disposalLegalDesc = reassignJob.disposalLegalDesc;
 
-      await staffCreateDispatch(newJob);
-
+      const actionId = `reassign_${reassignJob.id || reassignJob.wellName}_${driver.key}`;
+      await staffCreateDispatch(newJob, {
+        actionId,
+        actionScope: 'reassign-modal',
+        unitId: `${reassignJob.id || reassignJob.wellName}::${driver.key}`,
+      });
       // Update the original job
       if (reassignJob.id) {
         if (loadsKept > 0) {
@@ -1876,6 +1947,7 @@ function DispatchPageInner() {
       setMessage(`Reassigned ${reassignJob.ndicWellName || reassignJob.wellName}${loadLabel} to ${driverFirstName}`);
       setReassignJob(null);
       setReassignDriverHash('');
+      finalizeAction(actionId);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -1961,6 +2033,9 @@ function DispatchPageInner() {
       if (!driver) throw new Error('Driver not found');
       const firestore = getFirestoreDb();
 
+      const batchActionId = `multi_assign_${driver.key}_${selectedWells.size}`;
+      beginAction('multi-assign-modal', batchActionId);
+
       // Create one dispatch doc per well with loadCount from Action # boxes
       const promises: Promise<any>[] = [];
       selectedWells.forEach((loadCount, wellName) => {
@@ -1981,6 +2056,9 @@ function DispatchPageInner() {
           ndicWellName: resolvedNdic,
           route: well?.route || '',
           jobType: 'pw',
+          jobTypeId: 'pw',
+          packageId: 'water-hauling',
+          packetRevision: 4,
           status: 'pending',
           notes: assignNotes || '',
           priority: priority.sortOrder,
@@ -1999,7 +2077,11 @@ function DispatchPageInner() {
             ...(assignDisposalWell?.county ? { disposalCounty: assignDisposalWell.county } : {}),
           } : {}),
         };
-        promises.push(staffCreateDispatch(job));
+        promises.push(staffCreateDispatch(job, {
+          actionId: batchActionId,
+          actionScope: 'multi-assign-modal',
+          unitId: `${wellName}::${driver.key}`,
+        }));
       });
 
       await Promise.all(promises);
@@ -2015,6 +2097,7 @@ function DispatchPageInner() {
       setAssignDisposalWell(null);
       setDisposalSearch('');
       setDisposalResults([]);
+      finalizeAction(batchActionId);
       setTimeout(() => setMessage(''), 5000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -2128,6 +2211,9 @@ function DispatchPageInner() {
         // Build full crew list
         const allDrivers = [...editSwGroupJobs.map(j => j.driverFirstName || j.driverName), ...newDrivers.map(getFirstName)];
 
+        const batchActionId = `edit_sw_crew_${editSwJob.id || editSwJob.wellName}`;
+        beginAction('edit-sw-modal', batchActionId);
+
         // Create new dispatch docs for added drivers
         const addPromises = newDrivers.map(driver => {
           const job: Omit<DispatchJob, 'id'> = {
@@ -2146,7 +2232,11 @@ function DispatchPageInner() {
             serviceGroupId,
             assignedDrivers: allDrivers,
           };
-          return staffCreateDispatch(job);
+          return staffCreateDispatch(job, {
+            actionId: batchActionId,
+            actionScope: 'edit-sw-modal',
+            unitId: `${editSwJob.id || editSwJob.wellName}::${driver.key}`,
+          });
         });
         await Promise.all(addPromises);
 
@@ -2159,6 +2249,7 @@ function DispatchPageInner() {
           });
         });
         await Promise.all(updateCrewPromises);
+        finalizeAction(batchActionId);
       }
 
       setMessage('Dispatch updated');
@@ -2206,7 +2297,9 @@ function DispatchPageInner() {
         ndicWellName: editSwJob.ndicWellName || editSwJob.wellName,
         route: editSwJob.route || '',
         jobType: 'pw',
+        jobTypeId: 'pw',
         packageId: editSwJob.packageId || 'water-hauling',
+        packetRevision: 4,
         status: 'pending',
         notes: editSwJob.notes || '',
         priority: editSwJob.priority,
@@ -2224,14 +2317,19 @@ function DispatchPageInner() {
       if (editSwJob.disposalLegalDesc) newJob.disposalLegalDesc = editSwJob.disposalLegalDesc;
       if (loadsToGive > 1) newJob.loadCount = loadsToGive;
 
-      await staffCreateDispatch(newJob);
-
+      const actionId = `split_loads_${editSwJob.id || editSwJob.wellName}_${driver.key}`;
+      await staffCreateDispatch(newJob, {
+        actionId,
+        actionScope: 'split-loads',
+        unitId: `${editSwJob.id || editSwJob.wellName}::${driver.key}`,
+      });
       await staffUpdateDispatch(editSwJob.id, {
         loadCount: (editSwJob.loadsCompleted || 0) + loadsKept,
       });
 
       setMessage(`Gave ${loadsToGive} load${loadsToGive > 1 ? 's' : ''} to ${driverFirstName}`);
       setEditSwJob(null);
+      finalizeAction(actionId);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -2371,38 +2469,36 @@ function DispatchPageInner() {
                           {selectedWells.size} well{selectedWells.size !== 1 ? 's' : ''} checked
                           {totalSelectedLoads !== selectedWells.size && <span className="text-blue-400 ml-1">({totalSelectedLoads} loads)</span>}
                         </div>
-                      ) : (
+                      ) : assignTarget ? (
                         <>
+                          {/* A well is selected — show it (bold) with a clear (✕) control. */}
                           <input type="text"
-                            value={assignTarget ? (assignTarget.ndicName || assignTarget.wellName) : assignWellSearch}
-                            onChange={(e) => {
-                              if (assignTarget) { setAssignTarget(null); setAssignDriverHash(''); }
-                              setAssignWellSearch(e.target.value);
-                            }}
+                            value={assignTarget.ndicName || assignTarget.wellName}
+                            onChange={(e) => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(e.target.value); }}
                             placeholder="Search wells or click Assign below..."
-                            className={`w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none ${assignTarget ? 'border-blue-500 font-bold' : 'border-gray-700 focus:border-blue-500'}`}
+                            aria-label="Selected well"
+                            className="w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none border-blue-500 font-bold"
                           />
-                          {assignTarget && (
-                            <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
-                              className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
-                          )}
-                          {!assignTarget && assignWellSearch.length >= 2 && (
-                            <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
-                              {wells
-                                .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase()))
-                                .slice(0, 8)
-                                .map(w => (
-                                  <button key={w.wellName} onClick={() => { setAssignTarget(w); setAssignWellSearch(''); }}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
-                                    {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
-                                  </button>
-                                ))}
-                              {wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).length === 0 && (
-                                <div className="px-3 py-1.5 text-gray-500 text-xs">No wells found</div>
-                              )}
-                            </div>
-                          )}
+                          <button onClick={() => { cancelScopedCreation('assign-modal'); setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
+                            className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
                         </>
+                      ) : (
+                        <BuilderAutocomplete
+                          value={assignWellSearch}
+                          onValueChange={setAssignWellSearch}
+                          items={assignWellSearch.length >= 2
+                            ? wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).slice(0, 8)
+                            : []}
+                          onSelect={(w) => { setAssignTarget(w); setAssignWellSearch(''); }}
+                          getItemKey={(w) => w.wellName}
+                          renderItem={(w) => (<>{w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span></>)}
+                          placeholder="Search wells or click Assign below..."
+                          ariaLabel="Search wells"
+                          minChars={2}
+                          inputClassName="w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none border-gray-700 focus:border-blue-500"
+                          listClassName="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto"
+                          optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
+                        />
                       )}
                     </div>
                     {/* Well info box — static height, content shows when well selected */}
@@ -2444,12 +2540,12 @@ function DispatchPageInner() {
                         {assignTarget?.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
                           <optgroup label={`Route: ${assignTarget.route}`}>
                             {drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).map(d => (
-                              <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
+                              <option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>
                             ))}
                           </optgroup>
                         )}
                         <optgroup label="All Drivers">
-                          {drivers.map(d => (<option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>))}
+                          {drivers.map(d => (<option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>))}
                         </optgroup>
                       </select>
                     </div>
@@ -2462,19 +2558,19 @@ function DispatchPageInner() {
                           <button onClick={() => { setAssignDisposal(''); setAssignDisposalWell(null); setDisposalSearch(''); }} className="text-gray-400 hover:text-white text-xs">✕</button>
                         </div>
                       ) : (
-                        <input type="text" value={disposalSearch}
-                          onChange={(e) => { setDisposalSearch(e.target.value); setDisposalResults(e.target.value.length >= 2 ? searchDisposals(e.target.value, allDisposals) : []); }}
-                          placeholder="Search SWD..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
-                      )}
-                      {disposalResults.length > 0 && !assignDisposalWell && (
-                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg">
-                          {disposalResults.map((d, i) => (
-                            <button key={d.api_no || i} onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                              {d.well_name} <span className="text-gray-400 text-xs ml-1">{d.county || ''}</span>
-                            </button>
-                          ))}
-                        </div>
+                        <BuilderAutocomplete
+                          value={disposalSearch}
+                          onValueChange={(v) => { setDisposalSearch(v); setDisposalResults(v.length >= 2 ? searchDisposals(v, allDisposals) : []); }}
+                          items={assignDisposalWell ? [] : disposalResults}
+                          onSelect={(d) => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
+                          getItemKey={(d, i) => d.api_no || String(i)}
+                          renderItem={(d) => (<>{d.well_name} <span className="wb-option-sub text-gray-400 text-xs ml-1">{d.county || ''}</span></>)}
+                          placeholder="Search SWD..."
+                          ariaLabel="Search SWD disposal"
+                          inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                          listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg"
+                          optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
+                        />
                       )}
                     </div>
                     {/* Loads + Notes — loads greyed in multi-well mode */}
@@ -2524,85 +2620,37 @@ function DispatchPageInner() {
                       <div className="flex-1 space-y-2">
                         <div className="relative">
                           <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
-                          <input
-                            type="text"
+                          <BuilderAutocomplete
                             value={swWellName}
-                            onChange={(e) => setSwWellName(e.target.value)}
+                            onValueChange={setSwWellName}
+                            items={combinedLocationResults(swWellName, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swWellName.trim().toLowerCase(), allDisposals) })}
+                            onSelect={(item) => setSwWellName(item.value)}
+                            getItemKey={(item, i) => `${item.value}-${i}`}
+                            renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
                             placeholder="Type to search..."
-                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            ariaLabel="Well / location"
+                            minChars={2}
+                            inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
+                            optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
-                          {(() => {
-                            const q = swWellName.trim().toLowerCase();
-                            if (q.length < 2) return null;
-                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                              allDisposals.some(d => d.well_name.toLowerCase() === q);
-                            if (exactMatch) return null;
-                            const seen = new Set<string>();
-                            const wellMatches = wells
-                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                              .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                            const operatorMatches = allOperatorWells
-                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
-                              .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = searchDisposals(q, allDisposals)
-                              .filter(d => !seen.has(d.well_name.toLowerCase()))
-                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                            if (combined.length === 0) return null;
-                            return (
-                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                                {combined.map((item, i) => (
-                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwWellName(item.value)}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                                    {item.label}
-                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
-                                  </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
                         </div>
                         <div className="relative">
                           <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
-                          <input
-                            type="text"
+                          <BuilderAutocomplete
                             value={swDropoff}
-                            onChange={(e) => setSwDropoff(e.target.value)}
+                            onValueChange={setSwDropoff}
+                            items={combinedLocationResults(swDropoff, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals) })}
+                            onSelect={(item) => setSwDropoff(item.value)}
+                            getItemKey={(item, i) => `${item.value}-${i}`}
+                            renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
                             placeholder="SWD or well..."
-                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            ariaLabel="Drop-off (optional)"
+                            minChars={2}
+                            inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
+                            optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
-                          {(() => {
-                            const q = swDropoff.trim().toLowerCase();
-                            if (q.length < 2) return null;
-                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                              allDisposals.some(d => d.well_name.toLowerCase() === q);
-                            if (exactMatch) return null;
-                            const seen2 = new Set<string>();
-                            const wellMatches = wells
-                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                              .map(w => { seen2.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                            const operatorMatches = allOperatorWells
-                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen2.has(w.well_name.toLowerCase()))
-                              .map(w => { seen2.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = searchDisposals(q, allDisposals)
-                              .filter(d => !seen2.has(d.well_name.toLowerCase()))
-                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                            if (combined.length === 0) return null;
-                            return (
-                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                                {combined.map((item, i) => (
-                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwDropoff(item.value)}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                                    {item.label}
-                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
-                                  </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
                         </div>
                       </div>{/* end left: Well + Drop-off */}
                       {/* Right: Service Type + Onsite By stacked */}
@@ -2802,11 +2850,21 @@ function DispatchPageInner() {
                     </div>{/* end bottom row */}
                   </div>{/* end SW body */}
                   {/* Dispatch button */}
-                  <button onClick={submitServiceWork}
-                    disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
-                    className="w-full mt-2 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors flex-shrink-0">
-                    {swSubmitting ? 'Sending...' : 'Dispatch'}
-                  </button>
+                  <div className="flex gap-2 mt-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={cancelServiceWork}
+                      disabled={swSubmitting}
+                      className="px-3 py-1.5 border border-gray-600 hover:border-gray-500 text-gray-300 text-xs rounded transition-colors"
+                    >
+                      Clear
+                    </button>
+                    <button onClick={submitServiceWork}
+                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
+                      className="flex-1 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                      {swSubmitting ? 'Sending...' : 'Dispatch'}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -2827,6 +2885,14 @@ function DispatchPageInner() {
                       </button>
                     ))}
                     <span className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={cancelProject}
+                      disabled={creatingProject}
+                      className="px-3 py-1 border border-gray-600 hover:border-gray-500 text-gray-300 text-xs rounded transition-colors"
+                    >
+                      Clear
+                    </button>
                     <button onClick={createProject}
                       disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
                       className="px-4 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
@@ -2845,25 +2911,39 @@ function DispatchPageInner() {
                       </div>
                       <div className="flex-1 relative">
                         <label className="block text-xs text-gray-400 mb-1">Operator</label>
-                        <input type="text" value={newProjectOperator}
-                          onChange={(e) => { setNewProjectOperator(e.target.value); setOperatorSuggestions(searchOperators(e.target.value, allOperators)); }}
+                        <BuilderAutocomplete
+                          value={newProjectOperator}
+                          onValueChange={(v) => { setNewProjectOperator(v); setOperatorSuggestions(searchOperators(v, allOperators)); }}
+                          items={operatorSuggestions}
+                          onSelect={(op) => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
+                          getItemKey={(op) => op.name}
+                          renderItem={(op) => op.name}
                           placeholder="e.g. Hess, Slawson"
-                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
-                        {operatorSuggestions.length > 0 && (
-                          <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
-                            {operatorSuggestions.map(op => (
-                              <button key={op.name} onClick={() => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
-                                className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">{op.name}</button>
-                            ))}
-                          </div>
-                        )}
+                          ariaLabel="Operator / customer"
+                          inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500"
+                          listClassName="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto"
+                          optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
+                        />
                       </div>
                     </div>
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">Wells ({newProjectWells.length} selected)</label>
-                      <input type="text" value={projectWellSearch} onChange={(e) => setProjectWellSearch(e.target.value)}
+                      <BuilderAutocomplete
+                        value={projectWellSearch}
+                        onValueChange={setProjectWellSearch}
+                        items={projectWellSearch.length >= 2
+                          ? wells.filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName)).slice(0, 10)
+                          : []}
+                        onSelect={(w) => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
+                        getItemKey={(w) => w.wellName}
+                        renderItem={(w) => (<>{w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span></>)}
                         placeholder="Search wells..."
-                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
+                        ariaLabel="Search wells to add to the project"
+                        minChars={2}
+                        inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500"
+                        listClassName="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto mt-1"
+                        optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
+                      />
                       {newProjectWells.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {newProjectWells.map(w => (
@@ -2872,19 +2952,6 @@ function DispatchPageInner() {
                               <button onClick={() => setNewProjectWells(prev => prev.filter(n => n !== w))} className="text-emerald-400 hover:text-white">×</button>
                             </span>
                           ))}
-                        </div>
-                      )}
-                      {projectWellSearch.length >= 2 && (
-                        <div className="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto mt-1">
-                          {wells
-                            .filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName))
-                            .slice(0, 10)
-                            .map(w => (
-                              <button key={w.wellName} onClick={() => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
-                                className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
-                                {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
-                              </button>
-                            ))}
                         </div>
                       )}
                     </div>
@@ -3017,7 +3084,7 @@ function DispatchPageInner() {
                     <label className="block text-xs text-gray-400 mb-1">Job Description & Instructions</label>
                     <textarea value={newProjectNotes} onChange={(e) => setNewProjectNotes(e.target.value)}
                       placeholder={"Be on location loaded at 7:00am\n\nEmpty truck to Pad 379. Suck up rain water by the Recycle pump. Haul to SWD.\n\nYou will meet the roustabout crew around 1:30-2:00pm to clear the Recycle line at Pad 379.\n\nOnce finished follow the crew to Atlas Pad."}
-                      className="w-full flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-none" />
+                      className="w-full flex-1 min-h-[180px] sm:min-h-[240px] px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-y" />
                   </div>
                 )}
                 </div>
@@ -3074,7 +3141,10 @@ function DispatchPageInner() {
                   type="button"
                   onClick={() => dockQueue(!queueDetached)}
                   title={queueDetached ? 'Return the Well Queue to the dashboard' : 'Open the Well Queue in its own window'}
-                  className="hidden xl:inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0"
+                  // Pop-Out is a wide-screen convenience (xl only); once detached, the
+                  // pop-out window is narrow (~560px) so Reattach must ALWAYS be visible
+                  // there — otherwise there is no way to dock back from inside the window.
+                  className={`${queueDetached ? 'inline-flex' : 'hidden xl:inline-flex'} items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0`}
                 >{queueDetached ? '⧉ Reattach' : '⧉ Pop Out'}</button>
                 <button
                   type="button"
@@ -3085,7 +3155,13 @@ function DispatchPageInner() {
                 >
                   {wellQueueExpanded ? 'Hide list' : 'Show list'}
                 </button>
-                <span className="text-gray-500 text-xs flex-shrink-0">{statusUnavailable ? 'status unavailable' : `${queueRows.length} wells`}</span>
+                <span className="text-gray-500 text-xs flex-shrink-0">
+                  {statusUnavailable
+                    ? 'status unavailable'
+                    : search.trim()
+                      ? `${queueRows.length} matching of ${routeWells.length} route wells`
+                      : `${queueRows.length} wells`}
+                </span>
               </div>
 
               {/* Selection indicator — shows in Well Queue header area */}
@@ -3096,7 +3172,7 @@ function DispatchPageInner() {
                     {totalSelectedLoads !== selectedWells.size && <span className="text-blue-300 ml-1">({totalSelectedLoads} loads)</span>}
                   </span>
                   <span className="flex-1" />
-                  <button onClick={() => { setSelectedWells(new Map()); setAssignTarget(null); }} className="text-gray-400 hover:text-white text-xs">Clear</button>
+                  <button onClick={() => { cancelScopedCreation('multi-assign-modal'); setSelectedWells(new Map()); setAssignTarget(null); }} className="text-gray-400 hover:text-white text-xs">Clear</button>
                 </div>
               )}
 
@@ -3117,12 +3193,13 @@ function DispatchPageInner() {
                     <thead className="bg-gray-700 sticky top-0 z-10">
                       <tr>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 w-24 min-w-[88px]">Priority</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 min-w-[130px]">Coverage</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Well</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Current Level (Est.)</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Flow</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">TTP</th>
                         <th className="dispatch-queue-col-pulls px-2 py-2 text-left text-[11px] font-medium text-gray-300">Pulls/Day</th>
-                        <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-28">
+                        <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-36">
                           <div className="flex items-center justify-end gap-1.5">
                             <span>Action</span>
                             {(() => { const sel = queueRows.filter(q => !q.assignment && q.priority.state !== 'down'); return (
@@ -3136,18 +3213,22 @@ function DispatchPageInner() {
                       {queueRows.map(({ well, priority, assignment }) => {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
-                        // Assigned-but-not-started → dimmed bottom group: 'Assigned • driver'
-                        // Assignment state: secondary badge and status, never demoting physical urgency.
-                        // Assigned rows show 'Assigned • driver', View (if wbmHref), and Reassign (never Assign).
+                        // Assignment state: rendered in dedicated Coverage column, never demoting physical urgency.
+                        // Assigned rows show 'ASSIGNED — driver', visible View affordance, and Reassign (never Assign).
                         const isAssigned = !!assignment;
                         // Assignment eligibility (documented policy — does NOT blindly
-                        // track "actionable"): a DOWN well is never dispatchable; a
-                        // predicted well (PULL NOW / APPROACHING) assigns normally; a
-                        // NEEDS DATA / NO GAIN well has no pull prediction, so Assign is
-                        // a visible manual OVERRIDE (dispatcher may send a driver to
-                        // physically verify) — never presented as an agreeing prediction.
-                        const assignBlocked = priority.state === 'down';
+                        // track "actionable"): a DOWN well is DELIBERATELY dispatchable
+                        // via the Assign button with a required DOWN confirmation (status
+                        // is never changed or faked), but is kept out of bulk select-all /
+                        // checkbox so it is never swept into a batch unwarned; a predicted
+                        // well (PULL NOW / APPROACHING) assigns normally; a NEEDS DATA /
+                        // NO GAIN well has no pull prediction, so Assign is a visible manual
+                        // OVERRIDE (dispatcher may send a driver to physically verify) —
+                        // never presented as an agreeing prediction.
+                        const isDownWell = priority.state === 'down';
                         const assignOverride = priority.state === 'verify' || priority.state === 'no-gain';
+                        const assignWarn = assignOverride || isDownWell;
+                        const bulkSelectBlocked = isDownWell;
                         const wbmHref = wellDetailHref(well);
                         return (
                           <tr
@@ -3156,12 +3237,19 @@ function DispatchPageInner() {
                             className={`transition-colors ${wbmHref ? 'cursor-pointer' : ''} ${isAssigned ? 'bg-gray-800/40 hover:bg-gray-750' : `hover:bg-gray-750 ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''}`} ${isSelected ? 'bg-blue-900/20' : ''}`}
                           >
                             <td className="px-2 py-1.5">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className={`inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
-                                {isAssigned && (
-                                  <span className="inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded bg-slate-600 text-white">ASSIGNED</span>
-                                )}
-                              </div>
+                              <span className={`inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
+                            </td>
+                            <td className="px-2 py-1.5">
+                              {isAssigned ? (
+                                <span className="inline-flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-900/40 text-blue-200 border border-blue-700/50">
+                                  <span>ASSIGNED —</span>
+                                  <span className="font-semibold text-white">{assignment!.driver}</span>
+                                </span>
+                              ) : (
+                                <span className="inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-700/50 text-gray-400 border border-gray-600/40">
+                                  UNASSIGNED
+                                </span>
+                              )}
                             </td>
                             <td className="px-2 py-1.5">
                               {wbmHref ? (
@@ -3200,16 +3288,27 @@ function DispatchPageInner() {
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well, asOfMs)}</td>
                             <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-2">
                               {isAssigned ? (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="text-[10px] whitespace-nowrap text-gray-300">Assigned <span className="text-gray-500">•</span> <span className="text-white font-medium">{assignment!.driver}</span></span>
-                                  {wbmHref && (
+                                <div className="flex items-center justify-end gap-1.5">
+                                  {wbmHref ? (
                                     <button
                                       type="button"
                                       onClick={() => router.push(wbmHref)}
                                       aria-label={`View ${well.wellName} in WB-M`}
                                       title={`View ${well.wellName} in WB-M`}
                                       className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-gray-700 hover:bg-gray-600 text-gray-200"
+                                    >
+                                      View
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      aria-disabled="true"
+                                      aria-label={`View ${well.wellName} (detail unavailable)`}
+                                      title="Well detail unavailable (missing canonical company or NDIC API number)"
+                                      className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-gray-800/60 text-gray-500 cursor-not-allowed border border-gray-700/50"
                                     >
                                       View
                                     </button>
@@ -3223,6 +3322,31 @@ function DispatchPageInner() {
                                 </div>
                               ) : (
                               <div className="flex items-center justify-end gap-2">
+                                {/* View is UNCONDITIONAL — beside Assign on unassigned rows, exactly as it is
+                                    beside Reassign on assigned rows. Previously it lived only in the assigned
+                                    branch, so unassigned (e.g. Stock Yards) rows rendered no View affordance. */}
+                                {wbmHref ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => router.push(wbmHref)}
+                                    aria-label={`View ${well.wellName} in WB-M`}
+                                    title={`View ${well.wellName} in WB-M`}
+                                    className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-gray-700 hover:bg-gray-600 text-gray-200"
+                                  >
+                                    View
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled
+                                    aria-disabled="true"
+                                    aria-label={`View ${well.wellName} (detail unavailable)`}
+                                    title="Well detail unavailable (missing canonical company or NDIC API number)"
+                                    className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-gray-800/60 text-gray-500 cursor-not-allowed border border-gray-700/50"
+                                  >
+                                    View
+                                  </button>
+                                )}
                                 {isSelected ? (
                                   <div className="flex items-center gap-1">
                                     <input type="text" inputMode="numeric" pattern="[0-9]*" value={loadCount}
@@ -3237,7 +3361,15 @@ function DispatchPageInner() {
                                 ) : (
                                   <button
                                     onClick={() => {
-                                      if (assignOverride) {
+                                      if (isDownWell) {
+                                        // DOWN is a deliberate override — dispatching does NOT
+                                        // change or clear the well's DOWN status.
+                                        const ok = window.confirm(
+                                          `${well.wellName} is marked DOWN.\n\n` +
+                                          `Dispatching a Production Water or Service Work job will NOT change or clear its DOWN status. Send a driver anyway?`
+                                        );
+                                        if (!ok) return;
+                                      } else if (assignOverride) {
                                         // Manual override: this well has no pull prediction. Explain the
                                         // exact verification reason and require confirmation before assigning.
                                         const reason = verifyReasonText(priority.reason);
@@ -3249,21 +3381,24 @@ function DispatchPageInner() {
                                       }
                                       openAssignModal(well);
                                     }}
-                                    disabled={selectedWells.size > 0 || assignBlocked}
-                                    title={assignBlocked
-                                      ? 'Well is DOWN — not dispatchable'
+                                    disabled={selectedWells.size > 0}
+                                    title={isDownWell
+                                      ? 'Well is DOWN — dispatch is a deliberate override (status is never changed; confirmation required)'
                                       : assignOverride ? `${priority.label}: ${verifyReasonText(priority.reason)} — manual override (confirmation required)` : undefined}
                                     className={`px-2 py-1 text-white text-[10px] font-medium rounded transition-colors whitespace-nowrap ${
-                                      selectedWells.size > 0 || assignBlocked ? 'bg-gray-600 cursor-not-allowed opacity-50'
-                                        : assignOverride ? 'bg-amber-700 hover:bg-amber-600 ring-1 ring-amber-400/60'
-                                        : 'bg-blue-600 hover:bg-blue-500'}`}>{assignOverride ? 'Assign anyway' : 'Assign'}</button>
+                                      selectedWells.size > 0 ? 'bg-gray-600 cursor-not-allowed opacity-50'
+                                        : assignWarn ? 'bg-amber-700 hover:bg-amber-600 ring-1 ring-amber-400/60'
+                                        : 'bg-blue-600 hover:bg-blue-500'}`}>{assignWarn ? 'Assign anyway' : 'Assign'}</button>
                                 )}
-                                <input type="checkbox" checked={isSelected}
-                                  disabled={!!assignTarget || assignBlocked}
-                                  onChange={() => toggleWellSelection(well.wellName)}
-                                  className={`w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${assignTarget || assignBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
                               </div>
                               )}
+                              <input type="checkbox" checked={isSelected}
+                                disabled={isAssigned || !!assignTarget || bulkSelectBlocked}
+                                aria-label={`Select ${well.wellName} for bulk dispatch`}
+                                title={isAssigned ? 'Already assigned' : bulkSelectBlocked ? 'DOWN wells require individual confirmation' : assignTarget ? 'Finish the current assignment first' : 'Select for bulk dispatch'}
+                                onChange={() => toggleWellSelection(well.wellName)}
+                                className={`w-4 h-4 flex-shrink-0 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${isAssigned || assignTarget || bulkSelectBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
+                              </div>
                             </td>
                           </tr>
                         );
@@ -3285,9 +3420,13 @@ function DispatchPageInner() {
               onDock={() => dockJobs(false)}
               title="Active Jobs"
               mountClassName="detached-pane detached-pane-jobs"
+              width={1100}
+              height={800}
             >
-              {/* Panel header with tabs */}
-              <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
+              {/* Panel header with tabs. flex-wrap so at narrow widths the controls
+                  (including Reattach) wrap cleanly onto a second line instead of the
+                  Reattach button being pushed off / hidden. */}
+              <div className="flex flex-wrap items-center justify-between gap-y-1 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => { setRightPanelTab('jobs'); setSelectedProject(null); }}
@@ -3343,18 +3482,21 @@ function DispatchPageInner() {
                     type="button"
                     onClick={() => dockJobs(!jobsDetached)}
                     title={jobsDetached ? 'Return Active Jobs to the dashboard' : 'Open Active Jobs in its own window'}
-                    className="hidden xl:inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0"
+                    // Same rule as the Well Queue: Pop-Out is xl-only, but the Reattach
+                    // control MUST be visible in the narrow detached window so Active Jobs
+                    // can always be docked back. (Fixes the missing-Reattach pop-out bug.)
+                    className={`${jobsDetached ? 'inline-flex' : 'hidden xl:inline-flex'} items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0`}
                   >{jobsDetached ? '⧉ Reattach' : '⧉ Pop Out'}</button>
                   {rightPanelTab === 'jobs' && (
                     <>
                       {(() => { const pw = dispatches.filter(d => d.jobType === 'pw' && d.status !== 'completed'); const pwLoads = pw.reduce((s, d) => s + ((d as any).loadCount || 1), 0); return pwLoads > 0 ? (
                         <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
-                          {pwLoads} PW
+                          {pwLoads} {jobTypeCode('pw')}
                         </span>
                       ) : null; })()}
                       {(() => { const sw = dispatches.filter(d => d.jobType === 'service' && d.status !== 'completed'); const swLoads = sw.reduce((s, d) => s + ((d as any).loadCount || 1), 0); return swLoads > 0 ? (
                         <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
-                          {swLoads} SW
+                          {swLoads} {jobTypeCode('service')}
                         </span>
                       ) : null; })()}
                     </>
@@ -3403,6 +3545,9 @@ function DispatchPageInner() {
                     onEditServiceWork={openEditSwModal}
                     onReassignDeclined={openReassignModal}
                     onDismissDeclined={dismissDeclinedDispatch}
+                    activeJobsReady={!driversLoading && dispatchesLoaded}
+                    wells={wells}
+                    nowMs={asOfMs}
                   />
                 )}
                 {rightPanelTab === 'completed' && (
@@ -3587,7 +3732,7 @@ function DispatchPageInner() {
               >
                 <option value="">Select driver...</option>
                 {drivers.map(d => (
-                  <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
+                  <option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>
                 ))}
               </select>
             </div>
@@ -3595,7 +3740,7 @@ function DispatchPageInner() {
             {/* Buttons */}
             <div className="flex gap-3">
               <button
-                onClick={() => { setReassignJob(null); setReassignDriverHash(''); }}
+                onClick={() => { cancelScopedCreation('reassign-modal'); setReassignJob(null); setReassignDriverHash(''); }}
                 className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
               >
                 Cancel
@@ -3623,7 +3768,7 @@ function DispatchPageInner() {
                 Edit {editSwJob.jobType === 'service' ? 'Service Work' : 'Dispatch'}
               </h3>
               <button
-                onClick={() => setEditSwJob(null)}
+                onClick={() => { cancelScopedCreation('edit-sw-modal'); setEditSwJob(null); }}
                 className="text-gray-400 hover:text-white"
               >&#10005;</button>
             </div>
@@ -3668,9 +3813,9 @@ function DispatchPageInner() {
                           .slice(0, 10)
                           .map(w => (
                             <button key={w.wellName} type="button" onClick={() => setEditSwWellName(w.ndicName || w.wellName)}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                              className="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm">
                               {w.ndicName || w.wellName}
-                              {w.route && <span className="text-gray-500 text-xs ml-2">{w.route}</span>}
+                              {w.route && <span className="wb-option-sub text-gray-500 text-xs ml-2">{w.route}</span>}
                             </button>
                           ))
                         }
@@ -3703,10 +3848,10 @@ function DispatchPageInner() {
                           key={`${d.well_name}-${i}`}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => { setEditPwDisposal(d.well_name); setEditPwShowDisposalDropdown(false); }}
-                          className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors"
+                          className="wb-option-row px-3 py-2 text-sm text-white"
                         >
                           <span>{d.well_name}</span>
-                          {d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                          {d.operator && <span className="wb-option-sub text-gray-500 ml-2 text-xs">{d.operator}</span>}
                         </button>
                       ))}
                     </div>
@@ -3772,7 +3917,7 @@ function DispatchPageInner() {
                           {drivers
                             .filter(d => d.key !== editSwJob.driverHash)
                             .map(d => (
-                              <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
+                              <option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>
                             ))
                           }
                         </select>
@@ -3801,7 +3946,7 @@ function DispatchPageInner() {
                   </button>
                   <span className="flex-1" />
                   <button
-                    onClick={() => setEditSwJob(null)}
+                    onClick={() => { cancelScopedCreation('edit-sw-modal'); setEditSwJob(null); }}
                     className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
                   >
                     Close
@@ -3919,10 +4064,10 @@ function DispatchPageInner() {
                           key={`${d.well_name}-${i}`}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => { setEditSwDisposal(d.well_name); setEditSwShowDisposalDropdown(false); }}
-                          className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors"
+                          className="wb-option-row px-3 py-2 text-sm text-white"
                         >
                           <span>{d.well_name}</span>
-                          {d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                          {d.operator && <span className="wb-option-sub text-gray-500 ml-2 text-xs">{d.operator}</span>}
                         </button>
                       ))}
                     </div>
@@ -3963,7 +4108,7 @@ function DispatchPageInner() {
                   </button>
                   <span className="flex-1" />
                   <button
-                    onClick={() => setEditSwJob(null)}
+                    onClick={() => { cancelScopedCreation('edit-sw-modal'); setEditSwJob(null); }}
                     className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
                   >
                     Close
@@ -4069,7 +4214,16 @@ function ModalPredictionBanner({ well }: { well: WellResponse }) {
   );
 }
 
-function StageBadge({ job }: { job: DispatchJob }) {
+function StageBadge({ job, slot }: { job: DispatchJob; slot?: boolean }) {
+  // `slot` renders the categorical stage/status in the standardized Active-Job slot
+  // (fixed width/height, centered); without it the original compact pill is used, so
+  // shared surfaces (modals, history, crew panels) are unchanged.
+  const Pill = ({ className, title, children }: { className: string; title?: string; children: ReactNode }) =>
+    slot ? (
+      <CategoryBadge className={className} title={title}>{children}</CategoryBadge>
+    ) : (
+      <span className={`px-2 py-0.5 text-xs font-medium rounded whitespace-nowrap ${className}`} title={title}>{children}</span>
+    );
   const stageConfig: Record<string, { bg: string; text: string; icon: string; label: string }> = {
     en_route_pickup:  { bg: 'bg-blue-600/30',    text: 'text-blue-300',    icon: '>', label: 'To Pickup' },
     on_site_pickup:   { bg: 'bg-emerald-600/30',  text: 'text-emerald-300', icon: '*', label: 'At Pickup' },
@@ -4094,9 +4248,11 @@ function StageBadge({ job }: { job: DispatchJob }) {
     const dest = job.driverDest;
     return (
       <div className="flex items-center gap-1.5">
-        <span className={`px-2 py-0.5 text-xs font-medium rounded ${cfg.bg} ${cfg.text}`}>
+        {/* Categorical stage → standardized slot (when in an Active Job row). */}
+        <Pill className={`${cfg.bg} ${cfg.text}`}>
           {cfg.label}
-        </span>
+        </Pill>
+        {/* Destination is informational, not categorical → separate truncated chip. */}
         {dest && (job.driverStage === 'en_route_pickup' || job.driverStage === 'en_route_dropoff') && (
           <span className="text-gray-500 text-xs truncate max-w-[140px]" title={dest}>{dest}</span>
         )}
@@ -4105,41 +4261,77 @@ function StageBadge({ job }: { job: DispatchJob }) {
   }
 
   const fb = statusFallback[job.status] || statusFallback.pending;
+  const pendingAge = job.status === 'pending' ? timeAgo(job.assignedAt) : '';
   return (
-    <span className={`px-2 py-0.5 text-xs font-medium rounded ${fb.bg} ${fb.text} ${job.status === 'pending_approval' ? 'animate-pulse' : ''}`}>
-      {fb.label}
+    <Pill
+      className={`${fb.bg} ${fb.text} ${job.status === 'pending_approval' ? 'animate-pulse' : ''}`}
+      title={pendingAge ? `Pending for ${pendingAge} since assignment` : undefined}
+    >
+      {fb.label}{pendingAge ? ` · ${pendingAge}` : ''}
+    </Pill>
+  );
+}
+
+// Fixed-size categorical badge slot — ONE reusable treatment so every categorical
+// pill in an Active Job row (PW/SW, load count, Ticket A/B, ★ Next, ⚠ DOWN, Heavy,
+// Driver Started, Pending·age, and stage/status) shares an IDENTICAL width and
+// height with centered content. A short label such as "PW" intentionally sits
+// centered with empty slack inside the standardized slot. Long INFORMATIONAL text
+// (transfer reason, driver name, stage destination) is not a category — it stays a
+// separately constrained/truncated info chip and must NOT use this slot.
+// w-[6.5rem] (104px) is a FIXED width — not a minimum — so every categorical badge
+// is exactly the same size regardless of label length; short labels ("PW") center
+// with empty slack, as requested. The width is sized to the widest categorical label
+// the row can show (measured against the app font at 10px bold: "Needs Approval"
+// ~89px, "Driver Started" ~79px, "Pending · 12h" ~78px, transient "Pending · just
+// now" ~101px — all within the 104px box). h-5 fixes the height, text is centered,
+// and whitespace-nowrap guarantees no wrap/clip.
+const CATEGORY_BADGE_SLOT =
+  'inline-flex items-center justify-center text-center h-5 w-[6.5rem] px-1.5 text-[10px] font-bold leading-none rounded whitespace-nowrap flex-shrink-0';
+function CategoryBadge({ className = '', title, children }: { className?: string; title?: string; children: ReactNode }) {
+  return (
+    <span title={title} className={`${CATEGORY_BADGE_SLOT} ${className}`}>
+      {children}
     </span>
   );
 }
 
-// Job type badge — small colored tag
-function JobTypeBadge({ type, serviceType }: { type: 'pw' | 'service'; serviceType?: string }) {
-  if (type === 'service') {
-    return (
-      <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] font-bold rounded uppercase tracking-wider flex-shrink-0">
-        SW{serviceType ? ` · ${serviceType}` : ''}
-      </span>
-    );
-  }
+// Job-type badge — its OWN compact identity group (~40x20), centered, ONE small
+// shared size. Every job type renders as a canonical two-letter acronym (PW/SW/…);
+// the full job-type name (and any service sub-type) is preserved in the tooltip /
+// aria-label. This is deliberately NOT the larger 104px categorical slot — that slot
+// stays for Next / DOWN / Heavy / Driver Started / stage-status badges.
+const JOB_TYPE_BADGE_SLOT =
+  'inline-flex items-center justify-center text-center w-10 h-5 text-[10px] font-bold leading-none rounded uppercase tracking-wider flex-shrink-0';
+function JobTypeBadge({ type, serviceType }: { type: string; serviceType?: string }) {
+  const { code, full } = jobTypeAcronym(type);
+  const color =
+    code === 'SW' ? 'bg-purple-600/30 text-purple-300'
+    : code === 'PW' ? 'bg-blue-600/30 text-blue-300'
+    : 'bg-slate-600/40 text-slate-200';
+  const title = serviceType ? `${full} · ${serviceType}` : full;
   return (
-    <span className="px-1.5 py-0.5 bg-blue-600/30 text-blue-300 text-[10px] font-bold rounded uppercase tracking-wider flex-shrink-0">
-      PW
+    <span className={`${JOB_TYPE_BADGE_SLOT} ${color}`} title={title} aria-label={title}>
+      {code}
     </span>
   );
 }
 
 // Single job row — shows all info a dispatcher needs
-function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss }: {
+function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss, isRecommendedNext, isWellDown }: {
   job: DispatchJob;
   cancelDispatch: (id: string) => void;
   compact?: boolean;
   onClickServiceWork?: (job: DispatchJob) => void;
   onReassign?: (job: DispatchJob) => void;
   onDismiss?: (job: DispatchJob) => void;
+  /** Marks the existing card as the Recommended next job (never a duplicate card). */
+  isRecommendedNext?: boolean;
+  /** Canonical live well state is DOWN — show a prominent warning; the job stays actionable. */
+  isWellDown?: boolean;
 }) {
   const dropoff = job.hauledTo || job.disposal;
   const isClickable = !!onClickServiceWork;
-  const ago = timeAgo(job.assignedAt);
 
   // Split ticket visual — light tint so linked jobs stand out
   const splitBg = job.splitGroupId
@@ -4153,133 +4345,135 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
       className={`${compact ? 'py-2 px-3' : 'py-3 px-4'} ${splitBg} rounded-lg hover:bg-gray-900/80 transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
       onClick={isClickable ? () => onClickServiceWork!(job) : undefined}
     >
-      <div className="flex items-center gap-2">
-        {/* Job type badge */}
+      {/* Row 1: Identity: type, well, quantity, and linked-ticket facts always stay together. */}
+      <div className="flex items-center gap-2 min-w-0">
         <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
-
-        {/* Well name — primary info */}
-        <span className="text-white font-medium text-sm truncate" style={{ minWidth: 100 }}>
+        <span className="text-white font-medium text-sm break-words flex-1 min-w-0" title={job.ndicWellName || job.wellName}>
           {job.ndicWellName || job.wellName}
         </span>
-
-        {/* Load count — show remaining loads */}
         {(() => {
           const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
           return remaining > 1 ? (
-            <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">
+            <CategoryBadge className="bg-yellow-600/30 text-yellow-300 flex-shrink-0">
               x{remaining}
-            </span>
+            </CategoryBadge>
           ) : null;
         })()}
-
-        {/* Transfer badge */}
-        {job.type === 'transfer' && job.transferFromDriver && (
-          <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-[10px] rounded font-medium flex-shrink-0">
-            from {job.transferFromDriver}
-          </span>
-        )}
-
-        {/* Transfer reason — sender's stated reason for requesting transfer */}
-        {job.type === 'transfer' && job.transferReason && (
-          <span
-            className="px-1.5 py-0.5 bg-amber-700/30 text-amber-200 text-[10px] rounded font-medium flex-shrink-0 max-w-[220px] truncate"
-            title={job.transferReason}
-          >
-            Reason: {job.transferReason}
-          </span>
-        )}
-
-        {/* Driver-initiated badge (liveDispatchSync) */}
-        {job.source === 'driver' && (
-          <span className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-medium flex-shrink-0">
-            Driver Started
-          </span>
-        )}
-
-        {/* Split ticket badge */}
         {job.splitGroupId && (
-          <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] rounded font-bold flex-shrink-0">
+          <CategoryBadge className="bg-purple-600/30 text-purple-300 flex-shrink-0">
             {job.splitSequence === 1 ? 'TICKET A' : job.splitSequence === 2 ? 'TICKET B' : `TICKET ${String.fromCharCode(64 + (job.splitSequence || 1))}`}
-          </span>
+          </CategoryBadge>
         )}
-
-        {/* Heavy water badge */}
-        {(job as any).isHeavyWater && (
-          <span className="px-1.5 py-0.5 bg-amber-600/30 text-amber-300 text-[10px] rounded font-bold flex-shrink-0">
-            HEAVY
-          </span>
-        )}
-
-        {/* Time since assigned */}
-        {ago && (
-          <span className="text-gray-600 text-[10px] flex-shrink-0">{ago}</span>
-        )}
-
-        <span className="flex-1" />
-
-        {/* Stage badge */}
-        <StageBadge job={job} />
-
-        {/* Edit icon */}
-        {isClickable && (
-          <span className="text-gray-500 hover:text-gray-300 text-xs flex-shrink-0" title="Edit dispatch">
-            &#9998;
-          </span>
-        )}
-
-        {/* Reassign button — for pending/accepted jobs */}
-        {onReassign && (job.status === 'pending' || job.status === 'accepted') && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onReassign(job); }}
-            className="text-blue-400/60 hover:text-blue-300 text-xs flex-shrink-0 transition-colors"
-            title="Reassign to another driver"
-          >👯</button>
-        )}
-
-        {/* Remove button — dispatcher dismissing, not driver canceling */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!job.id) return;
-            if (!onDismiss) {
-              window.alert('Dismiss is not wired. This is a control failure, not an empty action.');
-              return;
-            }
-            onDismiss(job);
-          }}
-          className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors p-1"
-          title="Remove dispatch"
-          aria-label={`Remove dispatch for ${job.ndicWellName || job.wellName}`}
-        >&#10005;</button>
       </div>
 
       {/* Detail row — invoice #, drop-off, notes */}
       {(job.invoiceNumber || job.ticketNumber || dropoff || job.notes) && (
-        <div className="flex items-center gap-3 mt-1.5 ml-[42px] text-xs">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 ml-[48px] text-xs">
           {(job.invoiceNumber || job.ticketNumber) && (
-            <span className="text-gray-400">
+            <span className="text-gray-400 flex-shrink-0">
               <span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}
             </span>
           )}
           {dropoff && (
-            <span className="text-cyan-400/70 truncate max-w-[200px]" title={dropoff}>
+            <span className="text-cyan-400/70 break-words" title={dropoff}>
               → {dropoff}
             </span>
           )}
           {job.notes && (
-            <span className="text-gray-500 truncate max-w-[200px] italic" title={job.notes}>
+            <span className="text-gray-500 italic break-words" title={job.notes}>
               {job.notes}
             </span>
           )}
         </div>
       )}
+
+      {/* Row 3: Status & action badges on their own row below well name and destination */}
+      <div className={`flex flex-wrap items-center justify-between gap-1.5 ${compact ? 'mt-1.5 pt-1' : 'mt-2 pt-1.5'} border-t border-gray-800/60`}>
+        {/* Operational flags: recommendations, warnings, and special handling. */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {isRecommendedNext && (
+            <CategoryBadge
+              className="bg-emerald-600/30 text-emerald-300"
+              title="Recommended next job (first physically-ready assigned job)"
+            >
+              ★ Next
+            </CategoryBadge>
+          )}
+          {isWellDown && (
+            <CategoryBadge
+              className="bg-red-600 text-white"
+              title="Canonical well state is DOWN — job remains actionable (may still hold pullable water)"
+            >
+              ⚠ DOWN
+            </CategoryBadge>
+          )}
+          {(job as any).isHeavyWater && (
+            <CategoryBadge className="bg-amber-600/30 text-amber-300">
+              HEAVY
+            </CategoryBadge>
+          )}
+          {/* Informational (not categorical): driver name / transfer reason stay as
+              separately constrained, truncated chips — never forced into the slot. */}
+          {job.type === 'transfer' && job.transferFromDriver && (
+            <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-[10px] rounded font-medium whitespace-nowrap max-w-[160px] truncate flex-shrink-0" title={`from ${job.transferFromDriver}`}>
+              from {job.transferFromDriver}
+            </span>
+          )}
+          {job.type === 'transfer' && job.transferReason && (
+            <span
+              className="px-1.5 py-0.5 bg-amber-700/30 text-amber-200 text-[10px] rounded font-medium max-w-[220px] truncate flex-shrink-0"
+              title={job.transferReason}
+            >
+              Reason: {job.transferReason}
+            </span>
+          )}
+
+          {/* Job state: origin/progress followed by the current stage and its age. */}
+          {job.source === 'driver' && (
+            <CategoryBadge className="bg-emerald-600/30 text-emerald-300">
+              Driver Started
+            </CategoryBadge>
+          )}
+          <StageBadge job={job} slot />
+        </div>
+
+        {/* Controls always remain the final group. */}
+        <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+          {isClickable && (
+            <span className="text-gray-500 hover:text-gray-300 text-xs p-1" title="Edit dispatch">
+              &#9998;
+            </span>
+          )}
+          {onReassign && (job.status === 'pending' || job.status === 'accepted') && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onReassign(job); }}
+              className="text-blue-400/60 hover:text-blue-300 text-xs transition-colors p-1"
+              title="Reassign to another driver"
+            >👯</button>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!job.id) return;
+              if (!onDismiss) {
+                window.alert('Dismiss is not wired. This is a control failure, not an empty action.');
+                return;
+              }
+              onDismiss(job);
+            }}
+            className="text-red-400/60 hover:text-red-300 text-xs transition-colors p-1"
+            title="Remove dispatch"
+            aria-label={`Remove dispatch for ${job.ndicWellName || job.wellName}`}
+          >&#10005;</button>
+        </div>
+      </div>
     </div>
   );
 }
 
 // Driver-centric active dispatch panel — groups ALL jobs by driver
 // Multi-driver SW jobs shown separately at bottom with all crew visible
-function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined }: {
+function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined, activeJobsReady = true, wells, nowMs }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
   drivers?: { key: string; driverId?: string; legacyAliases?: string[]; companyId?: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
@@ -4287,8 +4481,27 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   onEditServiceWork?: (job: DispatchJob) => void;
   onReassignDeclined?: (job: DispatchJob) => void;
   onDismissDeclined?: (jobId: string) => Promise<void> | void;
+  /** True once auth/company resolved AND the first real Active Jobs dataset loaded. */
+  activeJobsReady?: boolean;
+  /** Canonical well pool + shared clock — for the SAME physical-readiness order + live DOWN state as the Well Queue. */
+  wells?: WellResponse[];
+  nowMs?: number;
 }) {
-  const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
+  // Expanded driver groups persist across refresh — session-scoped by uid+companyId+
+  // pathname, keyed by the canonical group id the Active Jobs render groups on
+  // (dispatchDriverGroupKey — canonical driverId), never a display name or list index.
+  const { user: expandedUser } = useAuth();
+  const expandedPathname = usePathname();
+  const expandedScope = useMemo(
+    () => ({ uid: expandedUser?.uid ?? null, companyId: expandedUser?.companyId ?? null, pathname: expandedPathname }),
+    [expandedUser?.uid, expandedUser?.companyId, expandedPathname],
+  );
+  const [expandedList, setExpandedList] = useSessionDeepLinkState<string[]>(
+    expandedScope,
+    'activeJobs.expandedDrivers',
+    [],
+  );
+  const expandedDrivers = useMemo(() => new Set(expandedList), [expandedList]);
   const [confirmDismissJob, setConfirmDismissJob] = useState<DispatchJob | null>(null);
   const [dismissSubmitting, setDismissSubmitting] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
@@ -4338,6 +4551,23 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     return crews;
   }, [assigned]);
 
+  // ONE canonical live-priority source: rank every well by the SAME comparator the Well
+  // Queue uses (compareQueueRows over classifyWell at the SAME nowMs), so Active Jobs and
+  // the Well Queue consume identical readiness. A job joins its well via matchWellInPool
+  // (canonical NDIC identity, NOT display-name equality) — never a stale dispatch snapshot.
+  const rankNowMs = nowMs ?? Date.now();
+  const physicalWellRank = useMemo(() => buildWellQueueRankIndex(wells || [], rankNowMs), [wells, rankNowMs]);
+  const rankOf = useCallback(
+    (j: DispatchJob): PhysicalJobRankInput =>
+      rankJob(
+        { id: j.id, wellName: j.wellName, ndicWellName: j.ndicWellName, status: j.status, driverStage: j.driverStage, assignedAtMs: j.assignedAt?.toMillis?.() || 0 },
+        wells || [],
+        physicalWellRank,
+        rankNowMs,
+      ),
+    [wells, physicalWellRank, rankNowMs],
+  );
+
   // Group ALL jobs by driver — every dispatch shows in the driver's personal list
   // (multi-driver SW jobs also appear in Crew Jobs section for at-a-glance crew view)
   const grouped = useMemo(() => {
@@ -4349,21 +4579,13 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(d);
     });
-    // Sort each driver's jobs: split tickets grouped (A before B), then by assignedAt
+    // Sort each driver's jobs by the SHARED physical-readiness contract, so the assigned
+    // subset matches the Well Queue: in-progress pinned, then by the well's Well-Queue
+    // rank, deterministic ties. Assignment status never alters physical priority.
     map.forEach((jobs, key) => {
-      jobs.sort((a, b) => {
-        // Split ticket jobs sort together by splitGroupId, then by sequence
-        if (a.splitGroupId && b.splitGroupId && a.splitGroupId === b.splitGroupId) {
-          return (a.splitSequence || 0) - (b.splitSequence || 0);
-        }
-        // Split ticket groups sort before non-split (so they stay visually grouped)
-        if (a.splitGroupId && !b.splitGroupId) return -1;
-        if (!a.splitGroupId && b.splitGroupId) return 1;
-        // Otherwise sort by assigned time (newest first)
-        const aTime = a.assignedAt?.toMillis?.() || 0;
-        const bTime = b.assignedAt?.toMillis?.() || 0;
-        return bTime - aTime;
-      });
+      const rankById = new Map(jobs.map(jb => [jb.id, rankOf(jb)]));
+      const ordered = [...jobs].sort((a, b) => comparePhysicalJobs(rankById.get(a.id)!, rankById.get(b.id)!));
+      map.set(key, ordered);
     });
     return new Map(
       Array.from(map.entries()).sort(([, a], [, b]) => {
@@ -4372,15 +4594,40 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         return bActive - aActive;
       })
     );
-  }, [assigned, drivers]);
+  }, [assigned, drivers, rankOf]);
+
+  // Recommended-next per driver group: first non-in-progress job in physical order (DOWN
+  // is NOT categorically excluded — a DOWN well may hold pullable water — it just sorts to
+  // the DOWN tier, so a ready well wins first). Marks an existing card; never a duplicate.
+  const recommendedByGroup = useMemo(() => {
+    const m = new Map<string, string | null>();
+    grouped.forEach((jobs, key) => m.set(key, recommendedNextJobId(jobs.map(rankOf))));
+    return m;
+  }, [grouped, rankOf]);
+
+  // Live canonical DOWN state per job (joined via matchWellInPool, not a stale snapshot).
+  const downByJobId = useMemo(() => {
+    const s = new Set<string>();
+    grouped.forEach(jobs => jobs.forEach(j => { if (rankOf(j).down && j.id) s.add(j.id); }));
+    return s;
+  }, [grouped, rankOf]);
+
+  // Prune stored expanded groups to the live canonical group set — but ONLY once
+  // the dataset is ready (auth/company resolved + first real Active Jobs dataset +
+  // canonical group keys available). While loading, hold the restored set verbatim
+  // so a still-empty live set never collapses Mike's restored group or persists [].
+  useEffect(() => {
+    if (!activeJobsReady) return;
+    const liveKeys = new Set(grouped.keys());
+    const { next, changed } = pruneExpandedGroups(expandedList, liveKeys, true);
+    if (changed) setExpandedList(next);
+    // expandedList intentionally omitted from deps — this reconciles against the
+    // live group set when data/readiness change, not on every expand/collapse.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeJobsReady, grouped]);
 
   function toggleDriver(hash: string) {
-    setExpandedDrivers(prev => {
-      const next = new Set(prev);
-      if (next.has(hash)) next.delete(hash);
-      else next.add(hash);
-      return next;
-    });
+    setExpandedList(prev => (prev.includes(hash) ? prev.filter(h => h !== hash) : [...prev, hash]));
   }
 
   if (dispatches.length === 0) {
@@ -4400,33 +4647,26 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
           {declinedJobs.map(job => (
             <div key={job.id} className="border border-red-600/30 rounded-lg overflow-hidden bg-red-950/20">
               <div className="px-4 py-3">
-                <div className="flex items-center gap-2">
+                {/* Row 1: Identity */}
+                <div className="flex items-center gap-2 min-w-0">
                   <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
-                  <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+                  <span className="text-white font-medium text-sm break-words flex-1 min-w-0" title={job.ndicWellName || job.wellName}>{job.ndicWellName || job.wellName}</span>
                   {(() => {
                     const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
                     return remaining > 1 ? (
                       <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">x{remaining}</span>
                     ) : null;
                   })()}
-                  <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">{job.status === 'cancelled' ? 'CANCELLED' : 'DECLINED'}</span>
-                  <span className="flex-1" />
-                  <button
-                    onClick={() => onReassignDeclined?.(job)}
-                    className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
-                  >Reassign</button>
-                  <button
-                    onClick={() => {
-                      setConfirmDismissJob(job);
-                      setDismissError(null);
-                    }}
-                    className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
-                    title="Accept decline and dismiss"
-                  >Dismiss</button>
                 </div>
-                {/* Decline details */}
-                <div className="mt-2 ml-[42px] space-y-1">
-                  <div className="flex items-center gap-2 text-xs">
+                {/* Row 2: Destination & decline details */}
+                <div className="mt-1.5 ml-[48px] space-y-1 text-xs">
+                  {job.disposal && (
+                    <div className="text-cyan-400/70 break-words">→ {job.disposal}</div>
+                  )}
+                  {(job.invoiceNumber || job.ticketNumber) && (
+                    <div className="text-gray-400"><span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}</div>
+                  )}
+                  <div className="flex items-center gap-2">
                     <span className="text-red-400/80 font-medium">
                       {job.declinedBy || job.driverFirstName || job.driverName}
                     </span>
@@ -4435,14 +4675,28 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     )}
                   </div>
                   {job.declineReason && (
-                    <div className="text-gray-400 text-xs italic">&ldquo;{job.declineReason}&rdquo;</div>
+                    <div className="text-gray-400 italic break-words">&ldquo;{job.declineReason}&rdquo;</div>
                   )}
-                  {(job.invoiceNumber || job.ticketNumber) && (
-                    <span className="text-gray-400 text-xs"><span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}</span>
-                  )}
-                  {job.disposal && (
-                    <span className="text-cyan-400/70 text-xs">→ {job.disposal}</span>
-                  )}
+                </div>
+                {/* Row 3: Status & action badges below well name and destination */}
+                <div className="flex flex-wrap items-center justify-between gap-1.5 mt-2 pt-1.5 border-t border-red-900/40">
+                  <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">
+                    {job.status === 'cancelled' ? 'CANCELLED' : 'DECLINED'}
+                  </span>
+                  <div className="flex items-center gap-2 ml-auto">
+                    <button
+                      onClick={() => onReassignDeclined?.(job)}
+                      className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
+                    >Reassign</button>
+                    <button
+                      onClick={() => {
+                        setConfirmDismissJob(job);
+                        setDismissError(null);
+                      }}
+                      className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
+                      title="Accept decline and dismiss"
+                    >Dismiss</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4468,14 +4722,21 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         const activeJob = jobs.find(j => j.driverStage && !['completed', 'paused'].includes(j.driverStage));
         const isPaused = jobs.some(j => j.driverStage === 'paused' || j.status === 'paused');
         const allPending = jobs.every(j => j.status === 'pending');
-
-        const earliestAssigned = jobs.reduce((earliest, j) => {
-          if (!j.assignedAt) return earliest;
-          const ts = j.assignedAt.toDate ? j.assignedAt.toDate() : (j.assignedAt.seconds ? new Date(j.assignedAt.seconds * 1000) : new Date(j.assignedAt));
-          if (!earliest || ts < earliest) return ts;
-          return earliest;
-        }, null as Date | null);
-        const driverTimeAgo = earliestAssigned ? timeAgo({ toDate: () => earliestAssigned }) : '';
+        const renderJob = (job: DispatchJob) => (
+          <DispatchJobRow
+            job={job}
+            cancelDispatch={cancelDispatch}
+            compact={jobs.length > 2}
+            onClickServiceWork={onEditServiceWork}
+            onReassign={onReassignDeclined}
+            isRecommendedNext={recommendedByGroup.get(driverHash) === job.id}
+            isWellDown={!!job.id && downByJobId.has(job.id)}
+            onDismiss={(j) => {
+              setConfirmDismissJob(j);
+              setDismissError(null);
+            }}
+          />
+        );
 
         return (
           <div key={driverHash} className="border border-gray-700/50 rounded-lg overflow-hidden">
@@ -4495,12 +4756,11 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                 <div className="flex items-center gap-2">
                   <span className="text-white font-semibold text-sm">{driverName}</span>
                   {pwCount > 0 && (
-                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">{pwCount} PW</span>
+                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">{pwCount} {jobTypeCode('pw')}</span>
                   )}
                   {swCount > 0 && (
-                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">{swCount} SW</span>
+                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">{swCount} {jobTypeCode('service')}</span>
                   )}
-                  {driverTimeAgo && <span className="text-gray-600 text-[10px]">{driverTimeAgo}</span>}
                 </div>
                 {/* Active job detail line — shows what the driver is currently doing */}
                 {!isExpanded && activeJob && (
@@ -4534,19 +4794,30 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
             {isExpanded && (
               <div className="space-y-1 p-2 bg-gray-900/30">
-                {jobs.map(job => (
-                  <DispatchJobRow
-                    key={job.id}
-                    job={job}
-                    cancelDispatch={cancelDispatch}
-                    compact={jobs.length > 2}
-                    onClickServiceWork={onEditServiceWork}
-                    onReassign={onReassignDeclined}
-                    onDismiss={(j) => {
-                      setConfirmDismissJob(j);
-                      setDismissError(null);
-                    }}
-                  />
+                {groupDispatchRows(jobs).map(row => row.jobs.length === 1 ? (
+                  <div key={row.key}>{renderJob(row.jobs[0])}</div>
+                ) : (
+                  <details key={row.key} className="group rounded-lg border border-gray-700/60 bg-gray-900/40 overflow-hidden">
+                    {/* Compact, tinted stack header: clearly a heading for the child loads */}
+                    <summary className="cursor-pointer list-none flex items-center justify-between gap-2 px-3 py-2 bg-gray-800/80 hover:bg-gray-800 transition-colors border-b border-transparent group-open:border-gray-700/50 select-none [&::-webkit-details-marker]:hidden">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <JobTypeBadge type={row.jobs[0].jobType} />
+                        <span className="min-w-0 flex-1 break-words text-sm font-semibold text-white" title={row.jobs[0].ndicWellName || row.jobs[0].wellName}>
+                          {row.jobs[0].ndicWellName || row.jobs[0].wellName}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="px-2 py-0.5 bg-gray-700/70 text-gray-300 text-xs font-medium rounded">
+                          {row.remainingLoads} {row.remainingLoads === 1 ? 'load' : 'loads'}
+                        </span>
+                        <span className="text-xs text-gray-400 transition-transform duration-150 group-open:rotate-180">▼</span>
+                      </div>
+                    </summary>
+                    {/* Child cards: each retains full 3-row layout with its own destination, status badges, and actions */}
+                    <div className="space-y-1.5 p-2 bg-gray-950/20">
+                      {row.jobs.map(job => <div key={job.id}>{renderJob(job)}</div>)}
+                    </div>
+                  </details>
                 ))}
               </div>
             )}
@@ -5564,7 +5835,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
 // Row for unassigned transfer requests — pulsing orange, driver dropdown for dispatch to assign
 function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }: {
   job: DispatchJob;
-  drivers: { key: string; displayName: string; legalName?: string; onShift?: boolean }[];
+  drivers: { key: string; displayName: string; legalName?: string; loginAlias?: string; onShift?: boolean }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   cancelDispatch: (id: string) => void;
 }) {
@@ -5618,8 +5889,9 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
           className="flex-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-orange-500"
         >
           <option value="">Select driver...</option>
+          {/* Transfer-approval sub-row: shift dot not resolved in this component's context. */}
           {drivers.map(d => (
-            <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
+            <option key={d.key} value={d.key} title="Shift status unavailable (transfer picker)">{'⚪ '}{operationalDriverName(d)}</option>
           ))}
         </select>
         <button

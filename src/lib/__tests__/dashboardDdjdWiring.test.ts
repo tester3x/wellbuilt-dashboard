@@ -25,13 +25,13 @@ test('Active Jobs group header resolves via canonical resolver + REAL name (no l
 });
 
 test('Well Queue assignment attribution uses the resolver (real name, never stamped login)', () => {
-  assert.match(page, /const rd = resolveDispatchDriver\(d, drivers\)/);
+  assert.match(page, /const rd = resolveDispatchDriver\(d, drivers(\s*\|\|\s*\[\])?\)/);
   assert.ok(!/driver: d\.driverFirstName \|\| d\.driverName \|\| '\?'/.test(page), 'no stamped-name attribution');
 });
 
-test('drivers list stamps canonical driverId + legacy aliases', () => {
-  assert.match(page, /driverId: val\.driverId/);
-  assert.match(page, /legacyAliases: \[val\.migratedToDriverId\]\.filter\(Boolean\)/);
+test('drivers list uses the tested canonical roster projection with company scope', () => {
+  assert.match(page, /import \{ projectDispatchDriverRoster \} from '@\/lib\/dispatchRosterProjection'/);
+  assert.match(page, /const scoped = projectDispatchDriverRoster\(catalog, user\?\.companyId\)/);
   assert.match(page, /interface ApprovedDriver \{[\s\S]*?driverId\?: string;[\s\S]*?legacyAliases\?: string\[\];/);
 });
 

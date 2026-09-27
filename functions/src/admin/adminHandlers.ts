@@ -62,7 +62,7 @@ export const RESERVED_COMPANY_KEYS: readonly string[] = Object.freeze([
   'configurationVersion', 'contractEnforced',
 ]);
 export const PROTECTED_COMPANY_KEYS: readonly string[] = Object.freeze([
-  WELLBUILT_CONTRACT_KEY, ...RESERVED_COMPANY_KEYS,
+  WELLBUILT_CONTRACT_KEY, ...RESERVED_COMPANY_KEYS, 'roleCapabilities',
 ]);
 
 // ── shared guard ──────────────────────────────────────────────────────────

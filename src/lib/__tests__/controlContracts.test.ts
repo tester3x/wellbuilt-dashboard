@@ -29,6 +29,7 @@ const deployedSet = new Set(DEPLOYED.names);
  * deploys one, this list must shrink (a test below enforces that).
  */
 const KNOWN_BLOCKED_MISSING: Record<string, string> = {
+  staffIngestDashboardPull: 'BLOCKED: exported in source, but absent from the 2026-09-23 production Functions inventory; deploy and verify this named callable before treating +Add Pull as working.',
   updateSpillNotificationPolicy: 'BLOCKED: deploy the spill-notification-policy callable (no deployed target).',
   staffBackfillDieselPrices: 'BLOCKED: deploy a governed diesel-backfill callable (only triggerDieselFetch/weeklyDieselPriceFetch exist).',
   staffRetireLegacyDriverLogin: 'BLOCKED: driver-identity lane (Laptop ChatGPT) — deploy retire-legacy-login callable.',
@@ -158,11 +159,10 @@ test('CONTRACT GAP: Save Changes sends op:update but deployed staffWriteWellConf
 
 // ── +Add Pull: rules-denied direct write, no governed dashboard target (BLOCKED) ─
 
-test('+Add Pull is a known rules-denied direct write (BLOCKED — no governed dashboard add-pull callable)', () => {
+test('+Add Pull uses governed staffIngestDashboardPull, not a client RTDB write', () => {
   const modal = read('../../components/AddPullModal.tsx');
-  assert.match(modal, /set\s*\(\s*ref\s*\([^)]*packets\/incoming/, 'AddPullModal still direct-writes packets/incoming (documented BLOCKED)');
-  // Neither ingestDriverPacket nor ingestWbmPull is dashboard-callable (both requireSecureDriver);
-  // a governed staff add-pull callable is the backend dependency.
+  assert.match(modal, /staffIngestDashboardPull/);
+  assert.doesNotMatch(modal, /set\s*\(\s*ref\s*\([^)]*packets\/incoming/);
 });
 
 // ── REPAIRED this branch (fix/dashboard-button-runtime-20260913) ─────────────
@@ -513,21 +513,31 @@ test('Well-pool merge carries the height-first classifier inputs (target/level/g
   const wells = read('../../lib/wells.ts');
   assert.ok(!/export function mergeWellPool/.test(wells), 'mergeWellPool lives only in the firebase-free core');
   assert.match(wells, /from '\.\/wellPoolCore'/, 'wells imports from the core');
-  assert.match(wells, /export \{ wellResponsesFromCatalog, mergeWellPool \};/, 'wells re-exports the core merge');
+  assert.match(wells, /export \{[^}]*\bwellResponsesFromCatalog\b[^}]*\bmergeWellPool\b[^}]*\};/, 'wells re-exports the core merge');
 });
 
 // ── Assign gating agrees with the documented eligibility policy ───────────
-test('Row Assign gating: DOWN not dispatchable; NEEDS DATA / NO GAIN require an explained "Assign anyway" confirmation', () => {
+test('Row Assign gating: DOWN is deliberately dispatchable (confirm required, status never faked); NEEDS DATA / NO GAIN require an explained "Assign anyway" confirmation', () => {
   const page = read('../../app/dispatch/page.tsx');
-  assert.match(page, /const assignBlocked = priority\.state === 'down';/, 'DOWN blocks assignment');
+  // DOWN is identified but NOT hard-blocked — the old assignBlocked=down gate is gone.
+  assert.match(page, /const isDownWell = priority\.state === 'down';/, 'DOWN identified (not hard-blocked)');
+  assert.ok(!/const assignBlocked = priority\.state === 'down';/.test(page), 'legacy DOWN hard-block removed');
   assert.match(page, /const assignOverride = priority\.state === 'verify' \|\| priority\.state === 'no-gain';/, 'verify/no-gain are overrides');
-  assert.match(page, /disabled=\{selectedWells\.size > 0 \|\| assignBlocked\}/, 'Assign button disabled for DOWN');
+  assert.match(page, /const assignWarn = assignOverride \|\| isDownWell;/, 'DOWN + overrides both warn');
+  // Assign button only disables during multi-select — never solely because a well is DOWN.
+  assert.match(page, /disabled=\{selectedWells\.size > 0\}/, 'Assign button not disabled for DOWN alone');
+  // DOWN stays out of bulk select-all / checkbox so it is never swept into a batch unwarned.
+  assert.match(page, /const bulkSelectBlocked = isDownWell;/, 'DOWN excluded from bulk selection');
+  assert.match(page, /q\.priority\.state !== 'down'/, 'select-all excludes DOWN');
   // Understandable override treatment — not a bare "Assign*".
-  assert.match(page, /assignOverride \? 'Assign anyway' : 'Assign'/, 'override reads "Assign anyway"');
+  assert.match(page, /assignWarn \? 'Assign anyway' : 'Assign'/, 'warned wells read "Assign anyway"');
   assert.ok(!/'Assign\*'/.test(page), 'no bare Assign* label remains');
-  // The exact verification reason is surfaced, and assignment requires confirmation.
+  // The exact verification reason is surfaced, and DOWN/override assignment requires confirmation.
   assert.match(page, /verifyReasonText\(priority\.reason\)/, 'shows the exact verification reason');
-  assert.match(page, /window\.confirm\(/, 'override assignment requires confirmation');
+  assert.match(page, /is marked DOWN/, 'DOWN confirmation explains the deliberate override');
+  assert.match(page, /window\.confirm\(/, 'DOWN/override assignment requires confirmation');
+  // Requirement #4: dispatch NEVER mutates/falsifies wellDown.
+  assert.ok(!/wellDown\s*[:=]\s*(?:true|false)/.test(page), 'dispatch never writes wellDown');
 });
 
 test('verifyReasonText maps every WB‑M-parity reason code to human text', () => {
@@ -578,18 +588,15 @@ test('Dispatch wires detachable Well Queue + Active Jobs with a persisted dock p
   assert.match(page, /Reattach/, 'Reattach control present');
 });
 
-// ── Needs Pull two-group assigned-well visibility + decline realignment ──────
-test('Dispatch Needs Pull: two ordered groups, in-place reassign, physical-demand split', () => {
+// ── Needs Pull global physical priority, in-place reassign, physical-demand split ──────
+test('Dispatch Needs Pull: global physical priority sort, in-place reassign, physical-demand split', () => {
   const page = read('../../app/dispatch/page.tsx');
-  // Assigned-but-not-started rows are muted + carry Assigned • driver + a Reassign
-  // control (no disabled Assign, no checkbox).
-  assert.match(page, /assignment\?\.state === 'assigned_not_started'/, 'row detects assigned-not-started');
+  // Assigned rows are detected, carry in-place Reassign control (no disabled Assign, no checkbox).
+  assert.match(page, /const isAssigned = !!assignment;/, 'row detects assignment');
   assert.match(page, /openReassignInPlace\(assignment!\.job\)/, 'assigned row uses in-place Reassign');
-  assert.match(page, /Assigned <span[^>]*>•<\/span>/, "shows 'Assigned • driver'");
   assert.match(page, /Reassign \$\{well\.wellName\} to another driver/, 'accessible Reassign label/title');
-  // Two ordered groups for the needs-pull view (unassigned first, then assigned).
-  assert.match(page, /queueView === 'needs-pull'/, 'needs-pull view has dedicated grouping');
-  assert.match(page, /return \[\.\.\.unassigned, \.\.\.assigned\]/, 'unassigned group precedes assigned group');
+  // Unified global physical sort (compareQueueRows) — physical urgency is never demoted by assignment.
+  assert.match(page, /\.sort\(compareQueueRows\)/, 'queue sorted by global physical priority');
   assert.match(page, /pwLifecycle/, 'uses the shared lifecycle helper');
   // In-place reassign updates the SAME dispatch (never mints a duplicate) + accepted confirm.
   assert.match(page, /reassignMode === 'in_place'/, 'in-place reassign branch');

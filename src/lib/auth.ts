@@ -2,12 +2,14 @@
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User
 } from 'firebase/auth';
-import { ref, get, set, update, serverTimestamp } from 'firebase/database';
-import { getFirebaseAuth, getFirebaseDatabase } from './firebase';
+import { ref, get, set } from 'firebase/database';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseAuth, getFirebaseDatabase, getFirebaseFunctions } from './firebase';
 
 // ── Role primitives ─────────────────────────────────────────────────────────
 // Canonical employee responsibilities. Customers can RELABEL (roleLabels on
@@ -270,22 +272,12 @@ export async function registerWithEmail(
 ): Promise<WellBuiltUser> {
   const auth = getFirebaseAuth();
   const result = await createUserWithEmailAndPassword(auth, email, password);
-  // Capture the signup so the requested company name isn't lost.
-  try {
-    const db = getFirebaseDatabase();
-    await set(ref(db, `users/${result.user.uid}`), {
-      status: 'pending',
-      requestedCompanyName: companyName?.trim() || null,
-      requestedAt: serverTimestamp(),
-      role: 'viewer',
-      companyId: null,
-      onboardingStatus: 'pending_company_assignment',
-      email: result.user.email || email,
-      displayName: result.user.email || email,
-    });
-  } catch (err) {
-    console.warn('[auth] failed to write pending signup record (non-fatal):', err);
+  const requested = companyName?.trim() || '';
+  if (requested.length < 2) {
+    throw { code: 'invalid-argument', message: 'Company name must be 2–120 characters' };
   }
+  const fn = httpsCallable(getFirebaseFunctions(), 'requestCompanyOnboarding');
+  await fn({ companyName: requested });
   return await getUserWithRole(result.user);
 }
 
@@ -293,6 +285,25 @@ export async function registerWithEmail(
 export async function signOut(): Promise<void> {
   const auth = getFirebaseAuth();
   await firebaseSignOut(auth);
+}
+
+/**
+ * Send a password-reset email via Firebase's hosted reset flow. NON-ENUMERATING:
+ * a missing account resolves as success (the caller always shows the generic ack).
+ * Only invalid-email / network / rate-limit re-throw (as a bare {code}) so the UI can
+ * message them distinctly. Never logs the email, reset link, action code, or the raw
+ * Firebase error payload.
+ */
+export async function sendDashboardPasswordReset(email: string): Promise<void> {
+  const auth = getFirebaseAuth();
+  try {
+    await sendPasswordResetEmail(auth, email.trim());
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code === 'auth/user-not-found') return; // do not reveal non-existence
+    // Strip the payload — propagate only the non-sensitive error code.
+    throw { code } as { code?: string };
+  }
 }
 
 // Get user with role from database
@@ -341,7 +352,12 @@ async function getUserWithRole(user: User): Promise<WellBuiltUser> {
       writeBack.displayName = user.email.split('@')[0];
     }
     if (Object.keys(writeBack).length > 0) {
-      update(userRef, writeBack).catch(err => {
+      // Child-path writes only. A parent update(users/{uid}) is denied under
+      // default-deny even when email/displayName children are writable.
+      const writes = Object.entries(writeBack).map(([field, value]) =>
+        set(ref(db, `users/${user.uid}/${field}`), value),
+      );
+      Promise.all(writes).catch(err => {
         console.warn('[auth] backfill users/{uid} failed (non-fatal):', err);
       });
     }

@@ -52,7 +52,11 @@ test('part 6: Reattach lives in the portaled header; named window prevents dupli
   // so it is portaled into the detached window.
   assert.match(dispatch, /queueDetached \? '⧉ Reattach' : '⧉ Pop Out'/, 'reattach toggle in the queue header');
   assert.match(pane, /window\.open\('', `wb_\$\{title\.replace/, 'named target window — reused, not duplicated');
-  assert.match(pane, /if \(child\.closed\) onDock\(\)/, 'closing the window reattaches (no strand/duplicate)');
+  assert.match(pane, /if \(!child \|\| child\.closed\) onDock\(\)/, 'closing the window reattaches (no strand/duplicate)');
+  // Hardened: the child body is cleared before the single marked mount is appended,
+  // so a reused window can never strand a second, orphaned copy of the subtree.
+  assert.match(pane, /child\.document\.body\.replaceChildren\(\);/, 'child body cleared → exactly one mount');
+  assert.match(pane, /data-wb-detached-mount/, 'single marked mount node');
 });
 
 test('part 7: reload restoration — URL init + persist, gated on auth', () => {

@@ -331,9 +331,9 @@ export function SWDDirectoryCard({ company, onSave, canEdit }: Props) {
                                 setFormCounty(d.county || '');
                                 setDisposalSuggestions([]);
                               }}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-700 last:border-0"
+                              className="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-700 last:border-0"
                             >
-                              {d.well_name} <span className="text-gray-500">{d.operator}</span>
+                              {d.well_name} <span className="wb-option-sub text-gray-500">{d.operator}</span>
                             </button>
                           ))}
                         </div>
@@ -393,7 +393,7 @@ export function SWDDirectoryCard({ company, onSave, canEdit }: Props) {
                             <button
                               key={op.name}
                               onClick={() => { setFormOperator(op.name); setOperatorSuggestions([]); }}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-700 last:border-0"
+                              className="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-700 last:border-0"
                             >
                               {op.name}
                             </button>

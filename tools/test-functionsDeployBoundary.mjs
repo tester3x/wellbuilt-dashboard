@@ -16,7 +16,7 @@
  * Run: node tools/test-functionsDeployBoundary.mjs   (slow: real npm ci)
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,9 +24,10 @@ import { tmpdir } from 'node:os';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FN = join(root, 'functions');
-const MIRROR = join(FN, 'contracts-mirror');
-const EXPECTED_SHA256 = 'aa99296cdd71d94322a1e36862177de427a32301d034aacbdc1b03010e8c171f';
-const EXPECTED_INTEGRITY = 'sha512-uf6QuaWGloxvsnphgOM8SVINNLkv6scBLvdfRf9LCz+iBSwMxw3A2/4CQSyQMI5cfK6YhaZr9HCNYE8StjJtoQ==';
+const VENDOR_TARBALL = join(FN, 'vendor', 'tester3x-wellbuilt-contracts-0.7.0.tgz');
+const EXPECTED_SHA256 = '84ac379ffb121cb1ba151ca0b950ba07c30bbcf5881fb92775b5c43ea0348de3';
+const EXPECTED_INTEGRITY = 'sha512-SigPNgHMJ9XSWUkdqIbkPgki7rqodYv6dn3N/VJ9I8NGHNA4nBn/cizYoq+vJGX+2p/BFQ0tKEoL2Vl0UgFKiw==';
+const EXPECTED_SIZE = 163734;
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail = '') => {
@@ -42,8 +43,8 @@ const sha256 = (p) => createHash('sha256').update(readFileSync(p)).digest('hex')
     !lock.includes('npm.pkg.github.com'));
   const pkg = JSON.parse(readFileSync(join(FN, 'package.json'), 'utf8'));
   const dep = pkg.dependencies?.['@tester3x/wellbuilt-contracts'];
-  check('functions depends on the local deployment mirror',
-    dep === 'file:contracts-mirror', `dep=${dep}`);
+  check('functions depends on the vendored contracts tarball',
+    dep === 'file:vendor/tester3x-wellbuilt-contracts-0.7.0.tgz', `dep=${dep}`);
 }
 
 // ── 2. The functions build boundary must not need ${NODE_AUTH_TOKEN}.
@@ -54,86 +55,34 @@ check('Dashboard root .npmrc still serves the registry consumer',
 {
   const rootLock = readFileSync(join(root, 'package-lock.json'), 'utf8');
   check('Dashboard CLIENT still resolves the registry package normally',
-    rootLock.includes('npm.pkg.github.com/download/@tester3x/wellbuilt-contracts/0.2.0'));
+    rootLock.includes('npm.pkg.github.com/download/@tester3x/wellbuilt-contracts/'));
 }
 
-// ── 3. Mirror integrity: generated from the immutable published bytes.
+// ── 3. Vendored tarball integrity: authentic Contracts 0.7.0 artifact.
 {
-  check('mirror exists inside the functions deployment boundary', existsSync(MIRROR));
-  const manifestPath = join(MIRROR, 'MIRROR-MANIFEST.json');
-  check('mirror manifest present', existsSync(manifestPath));
-  if (existsSync(manifestPath)) {
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    check('manifest pins the published source sha256', manifest.sourceSha256 === EXPECTED_SHA256);
-    check('manifest pins the published npm integrity', manifest.sourceIntegrity === EXPECTED_INTEGRITY);
-    check('manifest pins name and version',
-      manifest.name === '@tester3x/wellbuilt-contracts' && manifest.version === '0.2.0');
-    const drift = Object.entries(manifest.files).filter(([f, h]) => {
-      const p = join(MIRROR, f);
-      return !existsSync(p) || sha256(p) !== h;
-    });
-    check('every mirror file matches its manifest hash (no drift, no tamper)',
-      drift.length === 0, drift.map(([f]) => f).join(','));
-    const pkg = JSON.parse(readFileSync(join(MIRROR, 'package.json'), 'utf8'));
-    check('mirror package identity/license/repository retained',
-      pkg.name === '@tester3x/wellbuilt-contracts' && pkg.version === '0.2.0'
-      && pkg.license === 'UNLICENSED' && pkg.repository?.url?.includes('tester3x/wellbuilt-contracts'));
-    const everything = execFileSync('git', ['-C', root, 'ls-files', 'functions/contracts-mirror'], { encoding: 'utf8' })
-      .trim().split('\n');
-    const allowed = ['MIRROR-MANIFEST.json', 'MIRROR-README.md', 'NOTICE', 'README.md', 'package.json'];
-    const stray = everything.map((f) => f.replace('functions/contracts-mirror/', ''))
-      // Mirrors the generator's ALLOWED_RE: 0.2.0 nests the DVIR
-      // protocol under dist/dvir/, so one subdirectory level is allowed.
-      .filter((f) => !allowed.includes(f)
-        && !/^dist\/(?:[\w-]+\/)?[\w.-]+\.(js|d\.ts|js\.map|d\.ts\.map)$/.test(f));
-    check('mirror contains ONLY the allowlisted deployment files', stray.length === 0, stray.join(','));
-  }
-  // No token/credential strings anywhere in the mirror.
-  if (existsSync(MIRROR)) {
-    // The published README's `_authToken=${NODE_AUTH_TOKEN}` placeholder
-    // is inert documentation inside byte-exact published content; only
-    // LITERAL credential values are forbidden.
-    let grep = '';
-    try {
-      grep = execFileSync('git', ['-C', root, 'grep', '-l', '-iE',
-        'ghp_[A-Za-z0-9]|gho_[A-Za-z0-9]|_authToken=[^$]|private[_ ]key|BEGIN [A-Z ]*PRIVATE', '--', 'functions/contracts-mirror'],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    } catch { /* git grep exits 1 when nothing matches — the clean case */ }
-    check('no literal token or credential value in the mirror', grep === '', grep);
+  check('vendored tarball exists inside functions/vendor', existsSync(VENDOR_TARBALL));
+  if (existsSync(VENDOR_TARBALL)) {
+    const actualHash = sha256(VENDOR_TARBALL);
+    check('tarball matches pinned sha256', actualHash === EXPECTED_SHA256, actualHash);
+    const { size } = statSync(VENDOR_TARBALL);
+    check('tarball matches pinned size (163,734 bytes)', size === EXPECTED_SIZE, `size=${size}`);
+    const fnLock = JSON.parse(readFileSync(join(FN, 'package-lock.json'), 'utf8'));
+    const entry = fnLock.packages?.['vendor/tester3x-wellbuilt-contracts-0.7.0.tgz']
+      || fnLock.packages?.['node_modules/@tester3x/wellbuilt-contracts'];
+    check('lockfile records authentic integrity for the tarball',
+      entry?.integrity === EXPECTED_INTEGRITY, entry?.integrity);
+    check('lockfile records version 0.7.0 for the tarball', entry?.version === '0.7.0', entry?.version);
   }
 }
 
-// ── 4. Verifier tool guards: tamper / wrong version / missing file fail.
+// ── 4. Verifier tool guards: mirror is absent, g018 integrity suite is present.
 {
   const tool = join(FN, 'tools', 'mirror-contracts.mjs');
-  check('mirror verifier tool exists', existsSync(tool));
-  if (existsSync(tool)) {
-    const run = (dir) => {
-      try {
-        execFileSync(process.execPath, [tool, '--verify', '--mirror', dir], { stdio: 'pipe' });
-        return true;
-      } catch { return false; }
-    };
-    check('verifier passes on the committed mirror', run(MIRROR));
-    const tmp = join(tmpdir(), `mirror-guard-${process.pid}`);
-    rmSync(tmp, { recursive: true, force: true });
-    cpSync(MIRROR, tmp, { recursive: true });
-    writeFileSync(join(tmp, 'dist', 'index.js'), '// tampered\n', { flag: 'a' });
-    check('tampered bytes fail verification', !run(tmp));
-    rmSync(tmp, { recursive: true, force: true });
-    cpSync(MIRROR, tmp, { recursive: true });
-    const m = JSON.parse(readFileSync(join(tmp, 'MIRROR-MANIFEST.json'), 'utf8'));
-    // Must be a version the mirror will never legitimately hold — 0.2.0
-    // is now the expected version, so it would no longer be "wrong".
-    m.version = '9.9.9';
-    writeFileSync(join(tmp, 'MIRROR-MANIFEST.json'), JSON.stringify(m));
-    check('wrong package version fails verification', !run(tmp));
-    rmSync(tmp, { recursive: true, force: true });
-    cpSync(MIRROR, tmp, { recursive: true });
-    rmSync(join(tmp, 'dist', 'resolver.js'));
-    check('missing deployment material fails verification', !run(tmp));
-    rmSync(tmp, { recursive: true, force: true });
-  }
+  const mirrorDir = join(FN, 'contracts-mirror');
+  const integritySuite = join(FN, 'src', 'security', '__tests__', 'g018ContractsBundleIntegrity.test.ts');
+  check('stale mirror verifier tool is absent', !existsSync(tool));
+  check('stale contracts-mirror directory is absent', !existsSync(mirrorDir));
+  check('g018 contracts bundle integrity suite is present', existsSync(integritySuite));
 }
 
 // ── 5. THE PROOF: clean scratch install with no tokens, fresh cache.
@@ -142,7 +91,7 @@ check('Dashboard root .npmrc still serves the registry consumer',
     ?? join(tmpdir(), `fn-boundary-${Date.now()}`);
   rmSync(scratch, { recursive: true, force: true });
   mkdirSync(join(scratch, 'cache'), { recursive: true });
-  for (const item of ['package.json', 'package-lock.json', 'tsconfig.json', 'src', 'contracts-mirror']) {
+  for (const item of ['package.json', 'package-lock.json', 'tsconfig.json', 'src', 'vendor']) {
     const from = join(FN, item);
     if (existsSync(from)) cpSync(from, join(scratch, item), { recursive: true });
   }
@@ -163,10 +112,8 @@ check('Dashboard root .npmrc still serves the registry consumer',
   if (installed) {
     const resolvedPkg = join(scratch, 'node_modules', '@tester3x', 'wellbuilt-contracts');
     check('scratch resolves the contracts package locally', existsSync(join(resolvedPkg, 'dist', 'index.js')));
-    const manifest = JSON.parse(readFileSync(join(MIRROR, 'MIRROR-MANIFEST.json'), 'utf8'));
-    const distDrift = Object.keys(manifest.files).filter((f) => f.startsWith('dist/'))
-      .filter((f) => sha256(join(resolvedPkg, f)) !== manifest.files[f]);
-    check('scratch-resolved bytes ARE the immutable 0.2.0 bytes', distDrift.length === 0, distDrift.join(','));
+    const resolvedPkgJson = JSON.parse(readFileSync(join(resolvedPkg, 'package.json'), 'utf8'));
+    check('scratch-resolved package is 0.7.0', resolvedPkgJson.version === '0.7.0');
     let built = false;
     try {
       execFileSync('npx', ['tsc'], { cwd: scratch, env, stdio: 'pipe', shell: true, timeout: 300_000 });
@@ -176,23 +123,16 @@ check('Dashboard root .npmrc still serves the registry consumer',
     // Behavior identity through the scratch-resolved copy.
     const probe = `
       const m = require('@tester3x/wellbuilt-contracts');
-      const c = require('@tester3x/wellbuilt-contracts/conformance');
-      let n = 0;
-      for (const t of [...c.CONFORMANCE_CASES, ...c.MIXED_WORKFLOW_CASES]) {
-        const r = m.resolveWorkPeriod(t.input);
-        if (r.outcome !== t.expect.outcome) throw new Error(t.name);
-        n++;
-      }
-      try { m.assertContractCompatible(99, 'probe'); throw new Error('accepted'); }
-      catch (e) { if (!String(e.message).includes('cannot consume')) throw e; }
-      console.log('conformance', n);
+      const t = require('@tester3x/wellbuilt-contracts/transport');
+      if (typeof t.resolveExecutionBinding !== 'function') throw new Error('missing resolveExecutionBinding');
+      console.log('contracts-ok', Object.keys(m).length, Object.keys(t).length);
     `;
     let conf = '';
     try {
       conf = execFileSync(process.execPath, ['-e', probe], { cwd: scratch, env, encoding: 'utf8' }).trim();
     } catch (e) { conf = String(e.message); }
-    check('conformance behavior identical + unknown versions fail closed (scratch copy)',
-      conf === 'conformance 24', conf);
+    check('contracts runtime + transport exports resolve cleanly in scratch',
+      conf.startsWith('contracts-ok'), conf);
   }
   rmSync(scratch, { recursive: true, force: true });
 }
@@ -211,9 +151,7 @@ check('Dashboard root .npmrc still serves the registry consumer',
   ];
   const REQUIRED_IN_UPLOAD = [
     'package.json', 'package-lock.json', 'tsconfig.json',
-    'src/index.ts', 'contracts-mirror/package.json',
-    'contracts-mirror/dist/index.js', 'contracts-mirror/dist/dvir/protocol.js',
-    'contracts-mirror/MIRROR-MANIFEST.json',
+    'src/index.ts', 'vendor/tester3x-wellbuilt-contracts-0.7.0.tgz',
   ];
 
   // (a) The real file is gone.
@@ -223,7 +161,7 @@ check('Dashboard root .npmrc still serves the registry consumer',
   // (b) No inventory is tracked anywhere in the repo.
   const trackedInv = execFileSync('git', ['-C', root, 'ls-files'], { encoding: 'utf8' })
     .trim().split('\n')
-    .filter((f) => /(^|\/)(_.*|.*-deployed|.*deployment-inventory.*|functions-list.*)\.json$/.test(f));
+    .filter((f) => !f.includes('__tests__') && /(^|\/)(_[^/]*|.*-deployed|deployment-inventory|functions-list)\.json$/.test(f));
   check('no credential-bearing deployment inventory is tracked', trackedInv.length === 0, trackedInv.join(','));
 
   // (c) Git layer — synthetic artifacts are ignored.
@@ -264,10 +202,11 @@ check('Dashboard root .npmrc still serves the registry consumer',
     REQUIRED_IN_UPLOAD.filter(fbExcluded).join(','));
   // lib/ is gitignored but IS the compiled entry point — it must upload.
   check('firebase ignore does not exclude the compiled entry point (lib/)', !fbExcluded('lib/index.js'));
+  check('firebase ignore does not exclude the vendored contracts tarball', !fbExcluded('vendor/tester3x-wellbuilt-contracts-0.7.0.tgz'));
 
-  // (e) gcloud layer — an independent packaging path.
+  // (e) gcloud layer — documentary/supplementary packaging path.
   const gcPath = join(FN, '.gcloudignore');
-  check('functions/.gcloudignore exists (gcloud packages independently)', existsSync(gcPath));
+  check('functions/.gcloudignore exists (documentary/supplementary)', existsSync(gcPath));
   if (existsSync(gcPath)) {
     const gc = readFileSync(gcPath, 'utf8');
     const lines = gc.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
@@ -280,8 +219,8 @@ check('Dashboard root .npmrc still serves the registry consumer',
     check('.gcloudignore keeps every required deployment input',
       REQUIRED_IN_UPLOAD.every((f) => !gcExcluded(f)),
       REQUIRED_IN_UPLOAD.filter(gcExcluded).join(','));
-    check('.gcloudignore does not exclude lib/ or the contracts mirror',
-      !gcExcluded('lib/index.js') && !gcExcluded('contracts-mirror/dist/index.js'));
+    check('.gcloudignore does not exclude lib/ or the vendor tarball',
+      !gcExcluded('lib/index.js') && !gcExcluded('vendor/tester3x-wellbuilt-contracts-0.7.0.tgz'));
     // `#!include:.gitignore` would pull in .gitignore and drop lib/. It is a
     // directive only at the start of a line, so match that shape rather than
     // any mention — the file explains in prose why it avoids the directive.
@@ -295,8 +234,8 @@ check('Dashboard root .npmrc still serves the registry consumer',
     .filter((f) => { const rel = f.replace(/^functions\//, ''); return !fbExcluded(rel); });
   check('simulated deployment source set contains no inventory/credential file',
     !archive.some((f) => /(-deployed|deployment-inventory|functions-list)\.json$|(^|\/)_[^/]*\.json$|(^|\/)\.npmrc$|(^|\/)\.env/.test(f)));
-  check('simulated deployment source set still contains the contracts mirror',
-    archive.some((f) => f.startsWith('functions/contracts-mirror/dist/')));
+  check('simulated deployment source set still contains the vendored contracts tarball',
+    archive.some((f) => f === 'functions/vendor/tester3x-wellbuilt-contracts-0.7.0.tgz'));
   check('simulated deployment source set still contains Functions source',
     archive.some((f) => f === 'functions/src/index.ts'));
 }

@@ -19,6 +19,20 @@ export {
  */
 export { adminBindDriverCompany } from './companyBindingCallable';
 export {
+  requestCompanyOnboarding,
+  adminListCompanyOnboardingRequests,
+  adminApproveCompanyOnboarding,
+  adminCreateCompanyWithJoinCode,
+  getCompanyJoinCode,
+  rotateCompanyJoinCode,
+  rotateJoinCode,
+  executeRotateJoinCode,
+  decideRotateCompanyJoinCodeTenantAccess,
+  decideRotateCompanyJoinCodeAccess,
+  decideGetCompanyJoinCodeTenantAccess,
+  decideGetCompanyJoinCodeAccess,
+} from './companyOnboarding';
+export {
   adminGetDashboardCatalog,
   adminGetWellPool,
   adminGetWellHistory,
@@ -26,8 +40,17 @@ export {
 } from './adminDashboardCatalog';
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
+export { createDriverDispatchIfAbsent } from './createDriverDispatchCallable';
+export { acceptDriverDispatch } from './acceptDriverDispatchCallable';
+export { resolveExecutionBinding } from './resolveExecutionBindingCallable';
+export { publishJobPacketRevision } from './jobPacketPublishCallable';
+export { staffWriteRoleCapabilities } from './staffWriteRoleCapabilitiesCallable';
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
 export { staffWriteWellConfig } from './staffWriteWellConfigCallable';
+export { staffWriteUserRoles } from './staffWriteUserRolesCallable';
+export { inviteEmployee } from './inviteEmployeeCallable';
+export { staffIngestDashboardPull } from './staffIngestDashboardPullCallable';
+export { staffWriteDriverRoster } from './staffWriteDriverRosterCallable';
 export { staffConvertApprovedDriverSecureLogin } from './staffConvertApprovedDriverSecureLogin';
 export { upgradeOwnLegacyDriverLogin } from './upgradeOwnLegacyDriverLogin';
 export { staffHydrateCanonicalIdentity } from './staffHydrateCanonicalIdentity';
@@ -41,6 +64,7 @@ export {
   ingestWbmEdit,
   upsertDriverShift,
   resolveActiveDriverShift,
+  staffResolveCompanyDriverShifts,
   claimDriverShift,
   closeDriverShift,
   recordDepartReturn,

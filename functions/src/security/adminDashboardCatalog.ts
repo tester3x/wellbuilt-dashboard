@@ -8,7 +8,12 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { requireManageDrivers, requireRegisteredDashboardUser } from './adminAuth';
+import {
+  requireTrustedCompanyCapability,
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+} from './trustedStaffAuthority';
+import { staffWriteDispatchAccessFromTrusted } from './operational/staffWriteDispatch';
+import type { DashboardCaller } from './adminAuth';
 import {
   callerCanViewGlobalWellPool,
   pickAllowlisted,
@@ -18,13 +23,32 @@ import {
 import { projectWellPerformance, wellKeyFromName } from './operational/selectWellPerformance';
 import { requestedAdminWellName } from './operational/staffWellPerformanceRequest';
 
+function trustedCatalogCaller(access: { uid: string; companyId: string; isPlatformAdmin: false }): DashboardCaller {
+  return {
+    uid: access.uid,
+    companyId: access.companyId,
+    roles: [],
+    caps: [TRUSTED_CAPABILITY_MANAGE_DRIVERS],
+    isPlatformAdmin: false,
+  };
+}
+
+async function requireTrustedCatalogCaller(authUid: string | undefined): Promise<DashboardCaller> {
+  const trusted = await requireTrustedCompanyCapability(authUid, TRUSTED_CAPABILITY_MANAGE_DRIVERS);
+  const access = staffWriteDispatchAccessFromTrusted(trusted);
+  if (!access.ok) {
+    throw new httpsV2.HttpsError(
+      access.reason === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+      access.reason,
+    );
+  }
+  return trustedCatalogCaller(access);
+}
+
 export const adminGetDashboardCatalog = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB', enforceAppCheck: false },
   async (request) => {
-    const caller = await requireManageDrivers(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedCatalogCaller(request.auth?.uid);
 
     const rtdb = admin.database();
     const [approvedSnap, profilesSnap, usersSnap, wellSnap, pendingSnap, outgoingSnap] = await Promise.all([
@@ -57,10 +81,7 @@ export const adminGetDashboardCatalog = httpsV2.onCall(
 export const adminGetWellPool = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const caller = await requireRegisteredDashboardUser(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedCatalogCaller(request.auth?.uid);
     const projected = projectDashboardCatalog({
       approved: {},
       users: {},
@@ -106,10 +127,7 @@ function asRecord(v: unknown): Record<string, unknown> {
 export const adminGetWellHistory = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB', enforceAppCheck: false },
   async (request) => {
-    const caller = await requireRegisteredDashboardUser(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedCatalogCaller(request.auth?.uid);
     if (!callerCanViewGlobalWellPool(caller)) {
       throw new httpsV2.HttpsError('permission-denied', 'Caller cannot view the global well pool');
     }
@@ -141,10 +159,7 @@ export const adminGetWellHistory = httpsV2.onCall(
 export const adminGetWellPerformance = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const caller = await requireRegisteredDashboardUser(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedCatalogCaller(request.auth?.uid);
     if (!callerCanViewGlobalWellPool(caller)) {
       throw new httpsV2.HttpsError('permission-denied', 'Caller cannot view the global well pool');
     }

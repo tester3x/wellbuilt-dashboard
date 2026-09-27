@@ -11,6 +11,7 @@ import {
   loadAllCompanies,
 } from '@/lib/companySettings';
 import { CompanyProfileCard } from '@/components/settings/CompanyProfileCard';
+import { CompanyJoinCodeCard } from '@/components/admin/CompanyJoinCodeCard';
 import { InvoiceConfigCard } from '@/components/settings/InvoiceConfigCard';
 import { OperationsCard } from '@/components/settings/OperationsCard';
 import { OilCompaniesCard } from '@/components/settings/OilCompaniesCard';
@@ -32,7 +33,7 @@ import { JobTypeRnDCard } from '@/components/settings/JobTypeRnDCard';
 import { RolesCard } from '@/components/settings/RolesCard';
 
 export default function SettingsPage() {
-  const { user, loading: authLoading, userCompany } = useAuth();
+  const { user, loading: authLoading, userCompany, authResolved } = useAuth();
   const router = useRouter();
 
   const [company, setCompany] = useState<CompanyConfig | null>(null);
@@ -44,12 +45,17 @@ export default function SettingsPage() {
   // Determine if WB admin (no companyId = sees all companies)
   const isWbAdmin = user ? !user.companyId : false;
 
-  // Auth guard — redirect if not authorized
+  // Auth guard — redirect if not authorized (waits for authResolved to prevent bounce on refresh)
   useEffect(() => {
-    if (!authLoading && user && !hasCapability(user, 'viewSettings', userCompany)) {
+    if (!authResolved) return;
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    if (!hasCapability(user, 'viewSettings', userCompany)) {
       router.push('/');
     }
-  }, [user, authLoading, router]);
+  }, [user, authResolved, userCompany, router]);
 
   // Load companies
   useEffect(() => {
@@ -179,6 +185,10 @@ export default function SettingsPage() {
         ) : (
           <div className="space-y-4">
             <CompanyProfileCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            {/* Employee Registration — the company's own join code (self-gated to
+                manageDrivers/platform; the card sends no companyId for a tenant user,
+                so the server resolves their OWN company). */}
+            <CompanyJoinCodeCard companyId={company.id} />
             <PackagesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <CustomJobTypesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <InvoiceConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />

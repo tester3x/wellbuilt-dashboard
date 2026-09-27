@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { WellBuiltUser, subscribeToAuthState, signIn, signOut, hasRole, UserRole } from '@/lib/auth';
 import { loadCompanyById, type CompanyConfig } from '@/lib/companySettings';
+import { computeAuthResolved } from '@/lib/authGateCore';
 
 // Firebase Auth is enabled. DEV_MODE exists only as an emergency escape hatch
 // for local work when real auth is unavailable; deployed builds must run with
@@ -26,6 +27,14 @@ interface AuthContextType {
    * Consumers pass this to hasCapability(user, cap, userCompany) / getRoleLabel.
    */
   userCompany: CompanyConfig | null;
+  /** True while a scoped user's company config is still being fetched. */
+  companyLoading: boolean;
+  /**
+   * True only once BOTH auth and (for company-scoped users) company hydration have
+   * settled. Capability-gated pages MUST wait on this before any fallback navigation,
+   * so a slow company load can never bounce a deep-linked screen to home.
+   */
+  authResolved: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   hasRole: (role: UserRole) => boolean;
@@ -37,6 +46,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<WellBuiltUser | null>(DEV_MODE ? DEV_USER : null);
   const [loading, setLoading] = useState(!DEV_MODE);
   const [userCompany, setUserCompany] = useState<CompanyConfig | null>(null);
+  // Starts true (non-dev) so authResolved stays false through the window between
+  // auth settling and the company effect running — no premature home redirect.
+  const [companyLoading, setCompanyLoading] = useState(!DEV_MODE);
 
   useEffect(() => {
     // Skip Firebase auth subscription in dev mode
@@ -59,15 +71,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const cid = user?.companyId;
     if (!cid) {
       setUserCompany(null);
+      setCompanyLoading(false); // no company to hydrate (WB admin / signed out)
       return;
     }
     let cancelled = false;
+    setCompanyLoading(true); // explicit unresolved state while the config loads
     loadCompanyById(cid)
       .then(cfg => { if (!cancelled) setUserCompany(cfg); })
       .catch(err => {
         console.warn('[AuthContext] failed to load userCompany:', err);
         if (!cancelled) setUserCompany(null);
-      });
+      })
+      .finally(() => { if (!cancelled) setCompanyLoading(false); });
     return () => { cancelled = true; };
   }, [user?.companyId]);
 
@@ -99,6 +114,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         loading,
         userCompany,
+        companyLoading,
+        authResolved: computeAuthResolved({ loading, companyLoading }),
         signIn: handleSignIn,
         signOut: handleSignOut,
         hasRole: checkRole,

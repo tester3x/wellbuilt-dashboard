@@ -7,7 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { SubHeader } from '@/components/SubHeader';
 import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
-import { ref, get, set, remove, onValue, query, orderByChild, equalTo, update } from 'firebase/database';
+import { ref, get, set, remove, onValue, query, orderByChild, equalTo } from 'firebase/database';
 import { doc, getDoc } from 'firebase/firestore';
 import {
   loadOperators,
@@ -36,7 +36,12 @@ import {
   rebuildRoutesFromConfigs,
   type AddWellSubmitStatus,
 } from '@/lib/addWellSubmit';
-import { staffCreateWellConfig, staffUpdateWellConfig } from '@/lib/staffWriteWellConfig';
+import {
+  staffCreateWellConfig,
+  staffUpdateWellConfig,
+  staffDeleteWellConfig,
+  staffRenameWellConfig,
+} from '@/lib/staffWriteWellConfig';
 import {
   applyUpdateWellSuccess,
   buildUpdateWellConfigPatch,
@@ -661,55 +666,13 @@ export default function AdminPage() {
       const wellsInRoute = routeWells[selectedRoute] || [];
 
       if (action === 'unassign') {
-        // Move all wells to Unassigned
-        const updates: Record<string, string> = {};
         for (const wellName of wellsInRoute) {
-          updates[`well_config/${wellName}/route`] = 'Unrouted';
-        }
-        if (Object.keys(updates).length > 0) {
-          await update(ref(db), updates);
+          await set(ref(db, `well_config/${wellName}/route`), 'Unrouted');
         }
         showMessage(`Route "${selectedRoute}" deleted, ${wellsInRoute.length} wells moved to Unrouted`);
       } else if (action === 'delete') {
-        // Permanently delete wells and their history
         for (const wellName of wellsInRoute) {
-          // Delete well config
-          await remove(ref(db, `well_config/${wellName}`));
-
-          // Delete all processed packets for this well
-          const processedRef = ref(db, 'packets/processed');
-          const snapshot = await get(processedRef);
-          if (snapshot.exists()) {
-            const deleteUpdates: Record<string, null> = {};
-            snapshot.forEach((child) => {
-              const data = child.val();
-              if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
-                deleteUpdates[`packets/processed/${child.key}`] = null;
-              }
-            });
-            if (Object.keys(deleteUpdates).length > 0) {
-              await update(ref(db), deleteUpdates);
-            }
-          }
-
-          // Delete outgoing status
-          const outgoingRef = ref(db, 'packets/outgoing');
-          const outSnapshot = await get(outgoingRef);
-          if (outSnapshot.exists()) {
-            const outDeleteUpdates: Record<string, null> = {};
-            outSnapshot.forEach((child) => {
-              const data = child.val();
-              if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
-                outDeleteUpdates[`packets/outgoing/${child.key}`] = null;
-              }
-            });
-            if (Object.keys(outDeleteUpdates).length > 0) {
-              await update(ref(db), outDeleteUpdates);
-            }
-          }
-
-          // Delete performance data
-          await remove(ref(db, `performance/${wellName}`));
+          await staffDeleteWellConfig({ wellName });
         }
         showMessage(`Route "${selectedRoute}" and ${wellsInRoute.length} wells permanently deleted`);
       }
@@ -763,14 +726,10 @@ export default function AdminPage() {
       const db = getFirebaseDatabase();
       const wellsInRoute = routeWells[selectedRoute] || [];
 
-      // Update all wells to use the new route name
-      const updates: Record<string, string> = {};
+      // Per-child writes. A root multi-location update is evaluated at the
+      // default-deny parent and cannot use well_config/$well/route grants.
       for (const wellName of wellsInRoute) {
-        updates[`well_config/${wellName}/route`] = newName;
-      }
-
-      if (Object.keys(updates).length > 0) {
-        await update(ref(db), updates);
+        await set(ref(db, `well_config/${wellName}/route`), newName);
       }
 
       showMessage(`Route renamed from "${selectedRoute}" to "${newName}"`);
@@ -936,51 +895,9 @@ export default function AdminPage() {
       showMessage(`Renaming well to "${newName}"... This may take a moment.`);
 
       try {
-        // 1. Create new config entry
-        await set(ref(db, `well_config/${newName}`), config);
-
-        // 2. Update all processed packets with this well name
-        const processedQuery = query(
-          ref(db, 'packets/processed'),
-          orderByChild('wellName'),
-          equalTo(selectedWell)
-        );
-        const processedSnap = await get(processedQuery);
-        const processedUpdates: Record<string, any> = {};
-        processedSnap.forEach((child) => {
-          processedUpdates[`packets/processed/${child.key}/wellName`] = newName;
-        });
-        if (Object.keys(processedUpdates).length > 0) {
-          await update(ref(db), processedUpdates);
-        }
-
-        // 3. Update outgoing response
-        const outgoingQuery = query(
-          ref(db, 'packets/outgoing'),
-          orderByChild('wellName'),
-          equalTo(selectedWell)
-        );
-        const outgoingSnap = await get(outgoingQuery);
-        const outgoingUpdates: Record<string, any> = {};
-        outgoingSnap.forEach((child) => {
-          outgoingUpdates[`packets/outgoing/${child.key}/wellName`] = newName;
-        });
-        if (Object.keys(outgoingUpdates).length > 0) {
-          await update(ref(db), outgoingUpdates);
-        }
-
-        // 4. Update performance data - need to copy the entire node
-        const perfSnap = await get(ref(db, `performance/${selectedWell}`));
-        if (perfSnap.exists()) {
-          await set(ref(db, `performance/${newName}`), perfSnap.val());
-          await remove(ref(db, `performance/${selectedWell}`));
-        }
-
-        // 5. Delete old config entry
-        await remove(ref(db, `well_config/${selectedWell}`));
-
-        showMessage(`Well renamed from "${selectedWell}" to "${newName}"`);
-        setSelectedWell(newName);
+        const renamed = await staffRenameWellConfig({ wellName: selectedWell, newName });
+        showMessage(`Well renamed from "${selectedWell}" to "${renamed.wellName}"`);
+        setSelectedWell(renamed.wellName);
       } catch (error) {
         console.error('Error renaming well:', error);
         showMessage('Error renaming well. Check console for details.');
@@ -1071,47 +988,8 @@ export default function AdminPage() {
         await set(ref(db, `well_config/${selectedWell}/route`), 'Unrouted');
         showMessage(`Well "${selectedWell}" moved to Unrouted`);
       } else if (action === 'delete') {
-        // Permanently delete well and all its history
         const wellName = selectedWell;
-
-        // Delete well config
-        await remove(ref(db, `well_config/${wellName}`));
-
-        // Delete all processed packets for this well
-        const processedRef = ref(db, 'packets/processed');
-        const snapshot = await get(processedRef);
-        if (snapshot.exists()) {
-          const deleteUpdates: Record<string, null> = {};
-          snapshot.forEach((child) => {
-            const data = child.val();
-            if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
-              deleteUpdates[`packets/processed/${child.key}`] = null;
-            }
-          });
-          if (Object.keys(deleteUpdates).length > 0) {
-            await update(ref(db), deleteUpdates);
-          }
-        }
-
-        // Delete outgoing status
-        const outgoingRef = ref(db, 'packets/outgoing');
-        const outSnapshot = await get(outgoingRef);
-        if (outSnapshot.exists()) {
-          const outDeleteUpdates: Record<string, null> = {};
-          outSnapshot.forEach((child) => {
-            const data = child.val();
-            if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
-              outDeleteUpdates[`packets/outgoing/${child.key}`] = null;
-            }
-          });
-          if (Object.keys(outDeleteUpdates).length > 0) {
-            await update(ref(db), outDeleteUpdates);
-          }
-        }
-
-        // Delete performance data
-        await remove(ref(db, `performance/${wellName}`));
-
+        await staffDeleteWellConfig({ wellName });
         showMessage(`Well "${wellName}" and all history permanently deleted`);
       }
 

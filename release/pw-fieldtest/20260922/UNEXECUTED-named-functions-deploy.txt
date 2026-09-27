@@ -1,0 +1,58 @@
+UNEXECUTED — G-017R1 field-test named Functions deploy preparation.
+
+Project: wellbuilt-sync
+Source SHA: 473935a34ea54e03932e7f6b0f80a80bc0705618
+Branch: release/dashboard-pw-governed-fieldtest-20260921
+
+================================================================================
+DEPLOY GUARD — MANDATORY ABORT CONDITIONS
+================================================================================
+ABORT immediately if any command includes:
+  --only firestore
+  --only database
+  unfiltered `firebase deploy`
+  firestore.rules
+  database.rules.json
+  database.rules.secure.json
+
+SAFETY CONSTRAINTS:
+1. NEVER deploy rules files from this repository during this release.
+2. NEVER run unfiltered `firebase deploy`.
+3. Preserve all existing deployed-only functions by deploying strictly by name.
+4. DO NOT EXECUTE ANY DEPLOY COMMAND IN THIS LANE.
+
+================================================================================
+A. MINIMUM PW FIELD-TEST FUNCTIONS (7 Callables — UNEXECUTED)
+================================================================================
+Genuinely minimal callables required for the controlled Production Water vertical slice:
+1. publishJobPacketRevision: Publishes the base packet revision (water-hauling rev 1).
+2. staffWriteDispatch: Creates the pinned dispatch record with assigned driver.
+3. acceptDriverDispatch: Driver accepts the assigned dispatch in WB-T.
+4. resolveExecutionBinding: Driver resolves context, 4 pins, authoritative well, and definition.
+5. adminGetDashboardCatalog: Supplies active well catalog and driver roster for staff dispatch UI.
+6. adminGetWellPool: Supplies active well pool for dispatch well selection.
+7. dismissDispatch: Provides cleanup/cancellation of the disposable field-test dispatch.
+
+Exact command (do not execute without explicit authorization):
+
+firebase deploy --project wellbuilt-sync --only functions:publishJobPacketRevision,functions:staffWriteDispatch,functions:acceptDriverDispatch,functions:resolveExecutionBinding,functions:adminGetDashboardCatalog,functions:adminGetWellPool,functions:dismissDispatch
+
+================================================================================
+B. OPTIONAL STAFF/ADMIN SUPPORT FUNCTIONS (12 Callables — UNEXECUTED)
+================================================================================
+Support callables for driver-initiated dispatch, separate driver reassignment,
+well configuration updates, historical analytics, and role administration:
+- createDriverDispatchIfAbsent: Driver-initiated self-dispatch (not used for staff dispatch).
+- staffWriteWellConfig: Modifies well metadata/tank dimensions (not needed for existing well).
+- staffWriteDriverAssignment: Reassigns an existing dispatch (staffWriteDispatch create assigns driver).
+- adminGetWellHistory: Fetches historical tickets/runs (retrospective analytics).
+- adminGetWellPerformance: Computes bbl/hr performance metrics (retrospective analytics).
+- getCompanyJoinCode: Retrieves join code for driver self-registration.
+- rotateCompanyJoinCode: Rotates join code.
+- adminBindDriverCompany: Binds a driver to a company.
+- inviteEmployee: Invites staff/employees (requires manageRolesAndCapabilities).
+- staffWriteUserRoles: Updates user roles (requires manageRolesAndCapabilities).
+- staffWriteRoleCapabilities: Updates role capabilities (requires manageRolesAndCapabilities).
+- staffWriteDriverRoster: Updates driver roster metadata.
+
+firebase deploy --project wellbuilt-sync --only functions:createDriverDispatchIfAbsent,functions:staffWriteWellConfig,functions:staffWriteDriverAssignment,functions:adminGetWellHistory,functions:adminGetWellPerformance,functions:getCompanyJoinCode,functions:rotateCompanyJoinCode,functions:adminBindDriverCompany,functions:inviteEmployee,functions:staffWriteUserRoles,functions:staffWriteRoleCapabilities,functions:staffWriteDriverRoster

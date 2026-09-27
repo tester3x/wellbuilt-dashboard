@@ -1,0 +1,18 @@
+{
+  "op": "create",
+  "dispatchId": "<clientMintedDispatchId>",
+  "packetRef": {
+    "packageId": "water-hauling",
+    "revision": "<packetRevision>"
+  },
+  "record": {
+    "driverId": "<fieldTestDriverId>",
+    "driverHash": "<fieldTestDriverHash>",
+    "driverName": "<fieldTestDriverName>",
+    "wellName": "<authorizedWellName>",
+    "ndicWellName": "<authorizedNdicWellName>",
+    "jobType": "pw",
+    "operator": "<authorizedOperator>",
+    "notes": "G-017R1 governed Production Water field-test dispatch (unexecuted template)"
+  }
+}

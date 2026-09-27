@@ -10,7 +10,18 @@ import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
 import { getFirestoreDb } from '@/lib/firebase';
 import { getFirebaseDatabase } from '@/lib/firebase';
-import { ref, onValue, update } from 'firebase/database';
+import { ref, onValue, set, remove, type Database } from 'firebase/database';
+
+async function writeWellRouteChild(
+  db: Database,
+  well: string,
+  child: 'routeRecording' | 'routeGroupWell' | 'route',
+  value: boolean | string | null,
+): Promise<void> {
+  const path = `well_config/${well}/${child}`;
+  if (value === null) await remove(ref(db, path));
+  else await set(ref(db, path), value);
+}
 import {
   collection,
   doc,
@@ -238,11 +249,9 @@ export default function GpsRoutesTab() {
           .filter(([, cfg]) => cfg.routeGroupWell === groupId)
           .map(([name]) => name);
 
-        const updates: Record<string, any> = {};
         for (const w of groupMembers) {
-          updates[`well_config/${w}/routeRecording`] = true;
+          await writeWellRouteChild(db, w, 'routeRecording', true);
         }
-        await update(ref(db), updates);
         setAddMessage(`Pad group reactivated! ${groupMembers.length} wells: ${groupMembers.join(', ')}`);
         return;
       }
@@ -279,16 +288,15 @@ export default function GpsRoutesTab() {
 
       // Auto-add and group
       if (nearby.length > 0) {
-        const updates: Record<string, any> = {};
         const padWells = [wellName, ...nearby];
         for (const w of padWells) {
-          updates[`well_config/${w}/routeRecording`] = true;
-          updates[`well_config/${w}/routeGroupWell`] = wellName;
+          await writeWellRouteChild(db, w, 'routeRecording', true);
+          await writeWellRouteChild(db, w, 'routeGroupWell', wellName);
         }
-        await update(ref(db), updates);
         setAddMessage(`Pad detected! Added ${padWells.length} wells: ${padWells.join(', ')}`);
       } else {
-        await update(ref(db, `well_config/${wellName}`), { routeRecording: true, routeGroupWell: wellName });
+        await writeWellRouteChild(db, wellName, 'routeRecording', true);
+        await writeWellRouteChild(db, wellName, 'routeGroupWell', wellName);
         setAddMessage(`Recording enabled for ${wellName}`);
       }
     } catch (err) {
@@ -321,7 +329,7 @@ export default function GpsRoutesTab() {
       if (!selectedNdic?.latitude || !selectedNdic?.longitude) {
         // Custom location not in any collection — mark as standalone group of one
         const db2 = getFirebaseDatabase();
-        await update(ref(db2, `well_config/${wellName}`), { routeGroupWell: wellName });
+        await writeWellRouteChild(db2, wellName, 'routeGroupWell', wellName);
         setPadMessage({ well: wellName, text: 'Custom location — marked as standalone' });
         setPadSearchingWell(null);
         setTimeout(() => setPadMessage(null), 3000);
@@ -351,18 +359,16 @@ export default function GpsRoutesTab() {
       if (found.length === 0) {
         // Mark as "group of one" — searched, nothing found. Hides the Find Pad Wells button.
         const db2 = getFirebaseDatabase();
-        await update(ref(db2, `well_config/${wellName}`), { routeGroupWell: wellName });
+        await writeWellRouteChild(db2, wellName, 'routeGroupWell', wellName);
         setPadMessage({ well: wellName, text: 'No nearby wells found — marked as standalone' });
         setTimeout(() => setPadMessage(null), 3000);
       } else {
         const db = getFirebaseDatabase();
-        const updates: Record<string, any> = {};
         const padWells = [wellName, ...found];
         for (const w of padWells) {
-          updates[`well_config/${w}/routeRecording`] = true;
-          updates[`well_config/${w}/routeGroupWell`] = wellName;
+          await writeWellRouteChild(db, w, 'routeRecording', true);
+          await writeWellRouteChild(db, w, 'routeGroupWell', wellName);
         }
-        await update(ref(db), updates);
         setPadMessage({ well: wellName, text: `Grouped ${padWells.length} wells: ${found.join(', ')}` });
         setTimeout(() => setPadMessage(null), 5000);
       }
@@ -390,21 +396,17 @@ export default function GpsRoutesTab() {
     setTogglingWell(well.wellName);
     try {
       const db = getFirebaseDatabase();
-      const updates: Record<string, any> = {};
       const allMembers = [well.wellName, ...(well.groupMembers || [])];
       const newState = !well.isRecording;
       const safeGroupWell = sanitizeRtdbKey(well.routeGroupWell || well.wellName);
       for (const w of allMembers) {
         const safeKey = sanitizeRtdbKey(w);
         if (!safeKey) continue;
-        updates[`well_config/${safeKey}/routeRecording`] = newState ? true : null;
-        // Ensure routeGroupWell is set — keeps well in GPS Routes list after recording stops.
-        // Wells added before this fix may not have it, so set it retroactively.
+        await writeWellRouteChild(db, safeKey, 'routeRecording', newState ? true : null);
         if (!allConfigs[w]?.routeGroupWell) {
-          updates[`well_config/${safeKey}/routeGroupWell`] = safeGroupWell;
+          await writeWellRouteChild(db, safeKey, 'routeGroupWell', safeGroupWell);
         }
       }
-      await update(ref(db), updates);
     } catch (err) {
       // The toggle write had no try/catch before — a denied/failed write
       // failed silently. Surface it so the operator knows the state didn't change.
@@ -549,7 +551,8 @@ export default function GpsRoutesTab() {
                     const db = getFirebaseDatabase();
                     const safeKey = sanitizeRtdbKey(name);
                     if (safeKey) {
-                      await update(ref(db, `well_config/${safeKey}`), { routeRecording: true, routeGroupWell: safeKey });
+                      await writeWellRouteChild(db, safeKey, 'routeRecording', true);
+                      await writeWellRouteChild(db, safeKey, 'routeGroupWell', safeKey);
                     }
                     setAddMessage(`Recording enabled for ${name}`);
                   } catch (err) {
