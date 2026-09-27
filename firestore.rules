@@ -601,6 +601,17 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Governed JSA request and per-job acknowledgment documents.
+    // Callables use the Admin SDK, which bypasses these rules.
+    // No other match grants these paths. The catch-all below also denies
+    // them; these blocks name the collections explicitly.
+    match /jsa_governed_requests/{requestId} {
+      allow read, write: if false;
+    }
+    match /jsa_job_acknowledgments/{id} {
+      allow read, write: if false;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;

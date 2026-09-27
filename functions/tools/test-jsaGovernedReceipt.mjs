@@ -237,8 +237,7 @@ check('pending TTL is finite and under a day', JSA_PENDING_TTL_MS > 0 && JSA_PEN
 // rules deny client writes
 const rules = readFileSync(join(root, '..', 'firestore.rules'), 'utf8');
 check('rules deny all client access to governed collection',
-  /match \/jsa_governed_requests\/\{requestId\}/.test(rules)
-  && /allow read, write: if false/.test(rules));
+  /match \/jsa_governed_requests\/\{requestId\} \{\s*allow read, write: if false;\s*\}/.test(rules));
 check('legacy jsa_read_receipts block still present',
   /match \/jsa_read_receipts\/\{requestId\}/.test(rules));
 

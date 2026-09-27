@@ -475,8 +475,8 @@ const olderLogout = { type: 'logout', shiftId: olderPeriod, timestamp: '2026-08-
     && /export const jsaAcknowledgeJob/.test(readFileSync(join(root, 'src/jsaReceipt/jsaReceiptCallables.ts'), 'utf8'))
     && readFileSync(join(root, 'src/index.ts'), 'utf8').includes('jsaAcknowledgeJob'));
   check('explicit deny rule candidate is isolated',
-    /match \/jsa_job_acknowledgments\/\{id\}/.test(readFileSync(join(root, '..', 'firestore.rules'), 'utf8'))
-    && /allow read, write: if false/.test(readFileSync(join(root, '..', 'firestore.rules'), 'utf8')));
+    /match \/jsa_job_acknowledgments\/\{id\} \{\s*allow read, write: if false;\s*\}/.test(
+      readFileSync(join(root, '..', 'firestore.rules'), 'utf8')));
 }
 {
   const d = mem();
