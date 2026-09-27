@@ -30,6 +30,11 @@ export interface AuthoritativeDriver {
    * Only the tickets audience is ever told this; see handleSsoExchange.
    */
   displayName: string | null;
+  /**
+   * Canonical legal name already stored for this driver, or null/absent.
+   * Never a login or display name copied into this field.
+   */
+  legalName?: string | null;
 }
 
 /** The stored authorization-code record. Never contains the raw code. */
@@ -52,6 +57,17 @@ export interface SsoCodeRecord {
    * issuance. Exchange echoes this and never anything the redeemer sends.
    */
   shiftBinding?: { shiftId: string; phase: 'pre_trip' | 'post_trip' };
+  /**
+   * JSA audience only: server-authored shift facts stored at issuance.
+   * Exchange echoes a value that still parses and never a client field.
+   */
+  jsaBinding?: {
+    shiftState: 'open' | 'none';
+    periodId?: string;
+    originLocalDate?: string;
+    requiresActiveShift: boolean;
+    jsaEnabled: boolean;
+  };
 }
 
 export interface SsoTransaction {

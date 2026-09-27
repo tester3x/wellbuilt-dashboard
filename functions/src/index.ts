@@ -4510,6 +4510,19 @@ export {
 // it runs before WB-T has any session. See sso/ssoCallables.ts.
 export { ssoIssueAuthorizationCode, ssoExchangeAuthorizationCode } from './sso/ssoCallables';
 
+// Governed JSA producers. These are source exports, not a deployment.
+export {
+  jsaRegisterReadRequest,
+  jsaGetReadRequest,
+  jsaCompleteReadRequest,
+  jsaConsumeReadResult,
+  jsaPersistGovernedArtifact,
+  jsaResolveCurrentShiftReadEvidence,
+  jsaAcknowledgeJob,
+} from './jsaReceipt/jsaReceiptCallables';
+export { jsaStandalone } from './jsaReceipt/jsaStandaloneCallable';
+export { jsaManageTemplate } from './jsaReceipt/jsaTemplateManagementCallable';
+
 // ── vc51.9A6-B: protected platform-admin callables ─────────────────────────
 // Dual-gated (verified wellbuiltAdmin claim + enabled platform_admins
 // record) via functions/src/admin/authority.ts. See admin/callables.ts.

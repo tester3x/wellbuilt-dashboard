@@ -9,6 +9,7 @@
  */
 import {
   SSO_AUDIENCE_EQUIPMENT,
+  WELLBUILT_APP_JSA,
   isSsoAudience,
   resolveWellbuiltAppKey,
   type SsoShiftBinding,
@@ -26,7 +27,8 @@ import {
 } from './ssoDeps.js';
 import { decideEquipmentAuthorization, shiftOriginDay } from './equipmentAuthorization.js';
 import { decideAppEntitlementAuthorization } from './appEntitlementAuthorization.js';
-import { decideResolve } from '../security/operational/shiftAuthority.js';
+import { decideJsaAccess, type JsaBindingShape } from './jsaAuthorization.js';
+import { decideResolve, type ResolveResult } from '../security/operational/shiftAuthority.js';
 
 /** Fields a client may never dictate. Presence is a protocol violation. */
 const CLIENT_FORBIDDEN_IDENTITY_FIELDS = ['uid', 'driverId', 'companyId', 'driverHash', 'passcode'];
@@ -158,6 +160,7 @@ export async function handleSsoIssueCode(
   //     Every input is a server record. The audience is mapped to its
   //     canonical app key by the contract itself, so no second naming
   //     table exists and an alias or unknown identity can never resolve.
+  let storedJsaBinding: JsaBindingShape | undefined;
   {
     const app = resolveWellbuiltAppKey(req.audience);
     const contractState = await deps.getCompanyContract(driver.companyId);
@@ -170,11 +173,7 @@ export async function handleSsoIssueCode(
       contract: contractState.contract,
       plan,
     };
-    // Two-phase: the authority read happens ONLY when the canonical
-    // decision says a shift is required, so the plan — not this handler —
-    // decides whether the extra read is owed.
-    let decision = decideAppEntitlementAuthorization({ ...authzInput, shift: null });
-    if (!decision.ok && decision.refusal === 'active_shift_required') {
+    const readShift = async (): Promise<ResolveResult> => {
       // The authoritative, date-free shift record. It is bound to BOTH the
       // driver and the selected company, so a shift belonging to another
       // membership cannot satisfy this gate, and a closed, superseded,
@@ -182,23 +181,44 @@ export async function handleSsoIssueCode(
       // 'open' rather than being guessed at. Nothing here reads a
       // timestamp, a cached client value, or a request field.
       const record = await deps.getShiftAuthority(driver.driverId);
-      const shift = decideResolve(record, {
+      return decideResolve(record, {
         driverId: driver.driverId,
-        companyId: driver.companyId,
+        companyId: claimCompanyId,
       });
-      decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
-    }
-    if (!decision.ok) {
-      // Coarse to the client, precise to the operator — the same shape the
-      // equipment refusal uses. `refusal` separates commercial exclusion
-      // from an unmet shift gate for whoever reads the logs; the client is
-      // told only 'not_authorized', so it cannot probe a company's plan.
-      deps.log('sso.code.refused', {
-        audience: req.audience,
-        reason: decision.refusal,
-        detail: decision.detail,
+    };
+    if (app === WELLBUILT_APP_JSA) {
+      // Same decideJsaAccess used by governed register/complete. Issuance
+      // stores the binding; it does not trust a client shift field.
+      const access = decideJsaAccess({
+        contractState: contractState.state,
+        contract: contractState.contract,
+        plan,
+        shift: await readShift(),
       });
-      throw new SsoError('permission-denied', 'not_authorized', decision.refusal);
+      if (!access.ok) {
+        deps.log('sso.code.refused', {
+          audience: req.audience,
+          reason: access.refusal,
+          detail: access.detail,
+        });
+        throw new SsoError('permission-denied', 'not_authorized', access.refusal);
+      }
+      storedJsaBinding = access.binding;
+    } else {
+      // Two-phase for every other audience: the authority read happens
+      // ONLY when the canonical decision says a shift is required.
+      let decision = decideAppEntitlementAuthorization({ ...authzInput, shift: null });
+      if (!decision.ok && decision.refusal === 'active_shift_required') {
+        decision = decideAppEntitlementAuthorization({ ...authzInput, shift: await readShift() });
+      }
+      if (!decision.ok) {
+        deps.log('sso.code.refused', {
+          audience: req.audience,
+          reason: decision.refusal,
+          detail: decision.detail,
+        });
+        throw new SsoError('permission-denied', 'not_authorized', decision.refusal);
+      }
     }
   }
 
@@ -228,6 +248,7 @@ export async function handleSsoIssueCode(
       expiresAt: deps.expiresAtTimestamp(expiresAtMs),
       consumed: false,
       ...(storedBinding ? { shiftBinding: storedBinding } : {}),
+      ...(storedJsaBinding ? { jsaBinding: storedJsaBinding } : {}),
     });
   });
 

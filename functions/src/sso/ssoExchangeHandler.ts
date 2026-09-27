@@ -16,15 +16,19 @@ import {
   SSO_AUDIENCE_EQUIPMENT,
   SSO_SESSION_APP_BY_AUDIENCE,
   audienceCarriesDisplayName,
+  audienceCarriesJsaBinding,
   isSsoAudience,
   isSsoShiftBinding,
   normalizeSsoDisplayName,
+  resolveWellbuiltAppKey,
+  WELLBUILT_APP_JSA,
   SSO_PROTOCOL_VERSION,
   SSO_SESSION_APP_CLAIM,
   validateSsoExchangeRequest,
   type SsoAudience,
   type SsoExchangeResponse,
 } from '@tester3x/wellbuilt-contracts';
+import { readStoredJsaBinding } from './jsaAuthorization.js';
 import {
   SsoError,
   ssoCodePath,
@@ -64,13 +68,20 @@ function readRecord(data: Record<string, unknown> | undefined): SsoCodeRecord | 
     // longer parses is dropped rather than trusted, so a corrupted or
     // hand-edited record cannot inject a binding into the response.
     ...(isSsoShiftBinding(data.shiftBinding) ? { shiftBinding: data.shiftBinding } : {}),
+    ...(() => {
+      const jsaBinding = readStoredJsaBinding(data.jsaBinding);
+      return jsaBinding ? { jsaBinding } : {};
+    })(),
   };
 }
 
 export async function handleSsoExchange(
   deps: SsoDeps,
   data: unknown,
-): Promise<SsoExchangeResponse> {
+): Promise<SsoExchangeResponse & {
+  jsaBinding?: NonNullable<SsoCodeRecord['jsaBinding']>;
+  legalName?: string;
+}> {
   // 1. Shape first — reject malformed encodings before any database work,
   //    so a garbage-flooding caller never reaches storage.
   const parsed = validateSsoExchangeRequest(data);
@@ -200,8 +211,28 @@ export async function handleSsoExchange(
     ...(record.audience === SSO_AUDIENCE_EQUIPMENT && isSsoShiftBinding(record.shiftBinding)
       ? { shiftBinding: record.shiftBinding }
       : {}),
+    ...(audienceCarriesJsaBinding(record.audience as SsoAudience) && record.jsaBinding
+      ? { jsaBinding: record.jsaBinding }
+      : {}),
     ...(displayName ? { displayName } : {}),
+    ...(() => {
+      const legalName = legalNameForSsoExchange(record.audience, driver.legalName);
+      return legalName ? { legalName } : {};
+    })(),
   };
+}
+
+/**
+ * JSA-audience-only echo of a legal name already on the revalidated driver.
+ * Omitted when missing. Never displayName, a request field, a claim, or a log.
+ */
+export function legalNameForSsoExchange(
+  audience: string,
+  legalName: string | null | undefined,
+): string | undefined {
+  if (resolveWellbuiltAppKey(audience) !== WELLBUILT_APP_JSA) return undefined;
+  if (typeof legalName !== 'string' || legalName.length === 0) return undefined;
+  return legalName;
 }
 
 /** SHA-256 of a UTF-8 string as raw bytes, via the injected hex digest. */
