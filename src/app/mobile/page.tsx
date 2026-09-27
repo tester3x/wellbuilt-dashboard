@@ -10,6 +10,7 @@ import { WellResponse } from '@/lib/wells';
 import { useGovernedWellPool } from '@/lib/useGovernedWellPool';
 import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
+import { DEFAULT_SUMMARY_SORT, sortMobileSummaryWells, type SummarySort as RouteSort, type SummarySortField as SortField } from '@/lib/mobileSummarySort';
 
 // One shared wall-clock instant for the whole page (useSharedNow drives it). Leaf
 // rows read it via context so the live level projection advances off ONE ticker,
@@ -23,14 +24,6 @@ import { assignRouteColors } from '@/lib/routeColor';
 import { loadDisposals, type NdicWell } from '@/lib/firestoreWells';
 
 type ViewMode = 'cards' | 'table';
-type SortField = 'wellName' | 'tanks' | 'nextPull' | 'level' | 'flowRate' | 'timeTillPull' | 'status';
-type SortDir = 'asc' | 'desc';
-
-interface RouteSort {
-  field: SortField;
-  dir: SortDir;
-}
-
 export default function MobilePage() {
   const { user, loading, userCompany } = useAuth();
   // +Add Pull records a load — gate on the dispatch-write capability (same as
@@ -94,7 +87,7 @@ export default function MobilePage() {
     setRouteSorts(prev => {
       const updated = { ...prev };
       let changed = false;
-      for (const route of routes) if (!updated[route]) { updated[route] = { field: 'wellName', dir: 'asc' }; changed = true; }
+      for (const route of routes) if (!updated[route]) { updated[route] = DEFAULT_SUMMARY_SORT; changed = true; }
       return changed ? updated : prev;
     });
     setRoutePullBbls(prev => {
@@ -160,61 +153,12 @@ export default function MobilePage() {
   // Handle sort for a specific route
   const handleRouteSort = (route: string, field: SortField) => {
     setRouteSorts(prev => {
-      const current = prev[route] || { field: 'wellName', dir: 'asc' };
+      const current = prev[route] || DEFAULT_SUMMARY_SORT;
       if (current.field === field) {
         return { ...prev, [route]: { field, dir: current.dir === 'asc' ? 'desc' : 'asc' } };
       } else {
         return { ...prev, [route]: { field, dir: 'asc' } };
       }
-    });
-  };
-
-  // Sort function for wells within a route
-  const sortWells = (wellsToSort: WellResponse[], sortState: RouteSort): WellResponse[] => {
-    const { field, dir } = sortState;
-    return [...wellsToSort].sort((a, b) => {
-      let comparison = 0;
-
-      switch (field) {
-        case 'wellName':
-          comparison = a.wellName.localeCompare(b.wellName);
-          break;
-        case 'tanks':
-          comparison = (a.tanks || 1) - (b.tanks || 1);
-          break;
-        case 'nextPull':
-          const nextA = a.nextPullTime ? new Date(a.nextPullTime).getTime() : 99999999999999;
-          const nextB = b.nextPullTime ? new Date(b.nextPullTime).getTime() : 99999999999999;
-          comparison = nextA - nextB;
-          break;
-        case 'level': {
-          // Sort by the LIVE projected level (same projection the row displays),
-          // not the stale stored currentLevel. Unavailable/down sort low (-1).
-          const pa = projectWellLevel(a, asOfMs);
-          const pb = projectWellLevel(b, asOfMs);
-          const levelA = pa.available && pa.estFeet != null ? pa.estFeet * 12 : -1;
-          const levelB = pb.available && pb.estFeet != null ? pb.estFeet * 12 : -1;
-          comparison = levelA - levelB;
-          break;
-        }
-        case 'flowRate':
-          const flowA = parseFlowRateToSeconds(a.flowRate);
-          const flowB = parseFlowRateToSeconds(b.flowRate);
-          comparison = flowA - flowB;
-          break;
-        case 'timeTillPull':
-          const tillA = parseEtaToMinutes(a.timeTillPull || a.etaToMax);
-          const tillB = parseEtaToMinutes(b.timeTillPull || b.etaToMax);
-          comparison = tillA - tillB;
-          break;
-        case 'status':
-          const statusA = getStatusPriority(a);
-          const statusB = getStatusPriority(b);
-          comparison = statusA - statusB;
-          break;
-      }
-
-      return dir === 'asc' ? comparison : -comparison;
     });
   };
 
@@ -244,8 +188,8 @@ export default function MobilePage() {
         })
       : routeWells;
 
-    const sortState = routeSorts[route] || { field: 'wellName', dir: 'asc' };
-    const sorted = sortWells(adjustedWells, sortState);
+    const sortState = routeSorts[route] || DEFAULT_SUMMARY_SORT;
+    const sorted = sortMobileSummaryWells(adjustedWells, sortState, asOfMs);
 
     // Paginate Unrouted group to prevent massive lists
     if (paginate && route === 'Unrouted' && !unroutedShowAll && sorted.length > UNROUTED_PAGE_SIZE) {
@@ -453,7 +397,7 @@ export default function MobilePage() {
                   wells={getWellsForRoute(route)}
                   isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
                   onToggle={() => toggleRoute(route)}
-                  sortState={routeSorts[route] || { field: 'wellName', dir: 'asc' }}
+                  sortState={routeSorts[route] || DEFAULT_SUMMARY_SORT}
                   onSort={(field) => handleRouteSort(route, field)}
                   pullBbls={routePullBbls[route] || 140}
                   defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
@@ -554,30 +498,6 @@ function parseLevelToInches(level: string): number {
     return parseInt(match[1]) * 12 + parseInt(match[2]);
   }
   return -1;
-}
-
-function parseEtaToMinutes(eta: string): number {
-  if (!eta || eta === '--') return 99999;
-  const match = eta.match(/(\d+):(\d+)/);
-  if (match) {
-    return parseInt(match[1]) * 60 + parseInt(match[2]);
-  }
-  return 99999;
-}
-
-function parseFlowRateToSeconds(flowRate: string): number {
-  if (!flowRate || flowRate === '--') return 99999;
-  const match = flowRate.match(/(\d+)m\s*(\d+)s/);
-  if (match) {
-    return parseInt(match[1]) * 60 + parseInt(match[2]);
-  }
-  return 99999;
-}
-
-function getStatusPriority(well: WellResponse): number {
-  if (well.isDown || well.currentLevel === 'DOWN') return 0;
-  if (well.currentLevel === '--') return 2;
-  return 1;
 }
 
 // Recalculate Tank @ Level and Time Till Pull for a different pullBbls amount
