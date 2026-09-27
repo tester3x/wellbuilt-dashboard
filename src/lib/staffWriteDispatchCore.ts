@@ -20,19 +20,18 @@ function isTimestampLike(val: unknown): val is { toMillis: () => number } {
 
 /**
  * Serialize a staff dispatch payload.
- * assignedAt/companyId are omitted so the server stamps/derives them.
+ * assignedAt/companyId are omitted for every value type so the server stamps/derives them.
  * Any other Timestamp-like value is serialized — never silently dropped.
  * Decline fields are rejected (server owns the decline lifecycle).
  */
 export function jsonSafe(record: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(record)) {
-    if (val === undefined) continue;
+    if (val === undefined || SERVER_AUTHORITATIVE.has(key)) continue;
     if (DECLINE_FIELDS.has(key)) {
       throw new Error(`decline_fields_immutable:${key}`);
     }
     if (isTimestampLike(val)) {
-      if (SERVER_AUTHORITATIVE.has(key)) continue;
       const ms = val.toMillis();
       out[key] = { seconds: Math.floor(ms / 1000), nanoseconds: (ms % 1000) * 1e6 };
       continue;

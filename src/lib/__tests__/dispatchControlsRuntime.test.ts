@@ -76,15 +76,14 @@ test('Dispatch Create: op=create, record is jsonSafe, returns dispatchId', async
   const m = mock({ dispatchId: 'd_99' });
   const ts = { toMillis: () => 1_700_000_000_000 };
   const out = await runCreateDispatch(m.invoke, {
-    wellName: 'W', assignedAt: ts, companyId: ts, scheduledFor: ts, notes: 'hi', skip: undefined,
+    wellName: 'W', assignedAt: ts, companyId: 'company-test', scheduledFor: ts, notes: 'hi', skip: undefined,
   });
   const payload = m.calls[0] as { op: string; record: Record<string, unknown> };
   assert.equal(payload.op, 'create');
   assert.equal(payload.record.wellName, 'W');
-  // Server-authoritative fields are omitted ONLY when Timestamp-like (jsonSafe
-  // drops them so the server stamps/derives them).
+  // Server-authoritative fields are omitted regardless of their value type.
   assert.ok(!('assignedAt' in payload.record), 'assignedAt (Timestamp) is omitted for the server to stamp');
-  assert.ok(!('companyId' in payload.record), 'companyId (Timestamp) is omitted for the server to derive');
+  assert.ok(!('companyId' in payload.record), 'companyId (string) is omitted for the server to derive');
   assert.ok(!('skip' in payload.record), 'undefined fields are dropped');
   assert.deepEqual(payload.record.scheduledFor, { seconds: 1_700_000_000, nanoseconds: 0 }, 'Timestamp serialized, not dropped');
   assert.deepEqual(out, { dispatchId: 'd_99' });
