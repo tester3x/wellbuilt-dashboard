@@ -4720,6 +4720,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         const swCount = jobs.filter(j => j.jobType === 'service').reduce((s, j) => s + ((j as any).loadCount || 1), 0);
 
         const activeJob = jobs.find(j => j.driverStage && !['completed', 'paused'].includes(j.driverStage));
+        const summaryJobs = activeJob ? jobs.filter(j => j.id !== activeJob.id) : jobs;
         const isPaused = jobs.some(j => j.driverStage === 'paused' || j.status === 'paused');
         const allPending = jobs.every(j => j.status === 'pending');
         const renderJob = (job: DispatchJob) => (
@@ -4753,7 +4754,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-white font-semibold text-sm">{driverName}</span>
                   {pwCount > 0 && (
                     <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">{pwCount} {jobTypeCode('pw')}</span>
@@ -4764,8 +4765,8 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                 </div>
                 {/* Active job detail line — shows what the driver is currently doing */}
                 {!isExpanded && activeJob && (
-                  <div className="flex items-center gap-1.5 mt-0.5 text-xs">
-                    <span className="text-white font-medium truncate">{activeJob.ndicWellName || activeJob.wellName}</span>
+                  <div className="flex flex-wrap items-center gap-1.5 mt-0.5 text-xs">
+                    <span className="max-w-full text-white font-medium [overflow-wrap:anywhere]">{activeJob.ndicWellName || activeJob.wellName}</span>
                     {(activeJob.hauledTo || activeJob.disposal || activeJob.disposalName) && (
                       <>
                         <span className="text-gray-600">→</span>
@@ -4775,14 +4776,14 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     <div className="flex-shrink-0 ml-auto"><StageBadge job={activeJob} /></div>
                   </div>
                 )}
-                {!isExpanded && !activeJob && jobs.length >= 1 && (
-                  <div className="text-gray-500 text-xs mt-0.5 truncate">
-                    {jobs.map(j => j.ndicWellName || j.wellName).join(' · ')}
-                  </div>
-                )}
-                {!isExpanded && activeJob && jobs.length > 1 && (
-                  <div className="text-gray-500 text-[10px] mt-0.5 truncate">
-                    {jobs.filter(j => j.id !== activeJob.id).map(j => j.ndicWellName || j.wellName).join(' · ')}
+                {!isExpanded && summaryJobs.length > 0 && (
+                  <div className={`flex flex-wrap gap-x-1.5 gap-y-0.5 text-gray-500 mt-0.5 ${activeJob ? 'text-[10px]' : 'text-xs'}`}>
+                    {summaryJobs.map((job, index) => (
+                      <span key={job.id || index} className="max-w-full [overflow-wrap:anywhere]">
+                        {job.ndicWellName || job.wellName}
+                        {index < summaryJobs.length - 1 && <span aria-hidden="true" className="ml-1.5">·</span>}
+                      </span>
+                    ))}
                   </div>
                 )}
               </div>
