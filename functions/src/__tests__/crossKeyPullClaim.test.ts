@@ -73,6 +73,39 @@ describe('cross-key pull claim', () => {
     expect(retry.next?.executionToken).toBeNull();
   });
 
+  test('equal clocks still admit only one same-key writer when tokens are not injected', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(5_000);
+    const box: { claim: PullClaim | null } = { claim: null };
+    const ref = {
+      async transaction(update: (current: PullClaim | null) => PullClaim | null) {
+        box.claim = update(box.claim);
+        const committed = box.claim;
+        return { snapshot: { val: () => committed } };
+      },
+    };
+    const writes: string[] = [];
+    let releaseFirst: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const run = async () => {
+      const outcome = await commitPullClaim(ref, identity(BARE));
+      if (outcome !== 'proceed') return outcome;
+      await gate;
+      writes.push('write');
+      await ref.transaction((current) => markPullClaimApplied(current, BARE) || current);
+      return 'wrote' as const;
+    };
+    const first = run();
+    await Promise.resolve();
+    const second = await run();
+    expect(second).toBe('busy');
+    expect(writes).toEqual([]);
+    expect(box.claim?.executionToken).toMatch(/^[0-9a-f]{32}$/);
+    releaseFirst();
+    expect(await first).toBe('wrote');
+    expect(writes).toEqual(['write']);
+    jest.restoreAllMocks();
+  });
+
   test('a second same-key invocation waits while the first lease is active', async () => {
     const box: { claim: PullClaim | null } = { claim: null };
     const ref = {

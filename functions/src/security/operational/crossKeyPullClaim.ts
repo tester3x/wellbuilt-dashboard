@@ -4,8 +4,14 @@
  * The second matching arrival is retired. A different payload or
  * company is not applied and is not overwritten onto the winner.
  */
+import { randomBytes } from 'crypto';
 
 export const PULL_EXECUTION_LEASE_MS = 3 * 60 * 1000;
+
+/** One token per invocation. Not derived from the packet id or the clock. */
+export function newPullExecutionToken(): string {
+  return randomBytes(16).toString('hex');
+}
 
 export interface PullClaim {
   logicalId: string;
@@ -155,7 +161,7 @@ export async function commitPullClaim(
 ): Promise<CrossKeyOutcome> {
   const clock: ClaimAttempt = attempt ?? {
     nowMs: Date.now(),
-    executionToken: `${identity.storageKey}:${Date.now()}`,
+    executionToken: newPullExecutionToken(),
   };
   const result = await ref.transaction((current) => {
     const decision = crossKeyClaimUpdate(current, identity, clock);
