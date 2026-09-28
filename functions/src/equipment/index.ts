@@ -48,11 +48,16 @@ export const eQuipmentAssignments = httpsV2.onCall(
 /**
  * WB eQuipment — DVIR callable.
  * dvir.submitPreTrip
+ * dvir.resolveAssetIdentity — read-only canonical truck/trailer ids.
+ *   Does not decide DVIR requirement, completion, or Start Job.
  */
 export const eQuipmentDVIR = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '256MiB' },
   async (request) => {
     const data = (request.data || {}) as DvirRequest;
-    return handleDvirRequest(data, { authUid: request.auth?.uid });
+    return handleDvirRequest(data, {
+      authUid: request.auth?.uid,
+      authToken: (request.auth?.token || null) as Record<string, unknown> | null,
+    });
   },
 );

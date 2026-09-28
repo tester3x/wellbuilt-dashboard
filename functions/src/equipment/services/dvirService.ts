@@ -1,6 +1,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireDriver } from '../auth/requireDriver';
+import { lookupDvirAssetIdentity, productionIdentityLookupIo } from './dvirAssetIdentityLookup';
 import {
   dashboardActorRef,
   requireDashboardDvirRead,
@@ -24,7 +25,8 @@ const firestore = admin.firestore();
 export type DvirAction =
   | 'dvir.submitPreTrip'
   | 'dvir.listForCompany'
-  | 'dvir.getInspection';
+  | 'dvir.getInspection'
+  | 'dvir.resolveAssetIdentity';
 
 export interface DvirRequest {
   actor?: DriverActor;
@@ -34,6 +36,7 @@ export interface DvirRequest {
 
 export interface DvirRequestOptions {
   authUid?: string;
+  authToken?: Record<string, unknown> | null;
 }
 
 type ServiceMode = 'driver' | 'dashboard';
@@ -62,6 +65,13 @@ export async function handleDvirRequest(
   req: DvirRequest,
   options: DvirRequestOptions = {},
 ): Promise<unknown> {
+  if (req?.action === 'dvir.resolveAssetIdentity') {
+    return lookupDvirAssetIdentity({
+      auth: { uid: options.authUid, token: options.authToken },
+      payload: req.payload ?? {},
+      io: productionIdentityLookupIo(),
+    });
+  }
   const ctx = await validate(req, options);
   const result = await execute(ctx);
   return result.data;
