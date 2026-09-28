@@ -141,7 +141,7 @@ function validate(req: AssignmentRequest, options: AssignmentRequestOptions): Se
       action,
       companyId,
       actor: req.actor,
-      actorRef: { type: 'driver', driverHash: '' },
+      actorRef: { type: 'canonical_driver', driverId: '' },
       payload,
       authToken: options.authToken,
       loadAuthority,
@@ -176,12 +176,7 @@ async function authorize(ctx: ServiceContext): Promise<void> {
       );
     }
     ctx.canonicalDriverId = subject.driverId;
-    ctx.driver = {
-      driverHash: subject.driverId,
-      displayName: 'Driver',
-      companyId: subject.companyId,
-    };
-    ctx.actorRef = { type: 'driver', driverHash: subject.driverId };
+    ctx.actorRef = { type: 'canonical_driver', driverId: subject.driverId };
     return;
   }
 
@@ -283,10 +278,10 @@ async function startAssignment(ctx: ServiceContext): Promise<ServiceResult> {
       driverId,
       assignedBy: ctx.actorRef,
       assignmentRole,
-      assignmentReason,
+      ...(assignmentReason ? { assignmentReason } : {}),
       active: true,
       startedAt: typeof ctx.payload.startedAt === 'string' ? ctx.payload.startedAt : now,
-      notes: optionalString(ctx.payload.notes),
+      ...(optionalString(ctx.payload.notes) ? { notes: optionalString(ctx.payload.notes) } : {}),
       createdAt: now,
       createdBy: ctx.actorRef,
       updatedAt: now,
@@ -336,14 +331,16 @@ async function endAssignment(ctx: ServiceContext): Promise<ServiceResult> {
     const now = new Date().toISOString();
     const endedAt = typeof ctx.payload.endedAt === 'string' ? ctx.payload.endedAt : now;
     const meta = buildMetadata(ctx.actorRef, existing);
+    const notes = ctx.payload.notes !== undefined ? optionalString(ctx.payload.notes) : existing.notes;
     const record: Assignment = {
       ...existing,
       active: false,
       endedAt,
-      notes: ctx.payload.notes !== undefined ? optionalString(ctx.payload.notes) : existing.notes,
+      ...(notes ? { notes } : {}),
       updatedAt: now,
       updatedBy: meta.updatedBy,
     };
+    if (!notes) delete record.notes;
 
     tx.set(ref, record, { merge: false });
     return { assignment: record, ended: true };
@@ -436,10 +433,10 @@ async function transferAssignment(ctx: ServiceContext): Promise<ServiceResult> {
       driverId,
       assignedBy: ctx.actorRef,
       assignmentRole,
-      assignmentReason,
+      ...(assignmentReason ? { assignmentReason } : {}),
       active: true,
       startedAt: now,
-      notes: optionalString(ctx.payload.notes),
+      ...(optionalString(ctx.payload.notes) ? { notes: optionalString(ctx.payload.notes) } : {}),
       createdAt: now,
       createdBy: ctx.actorRef,
       updatedAt: now,
@@ -527,7 +524,7 @@ async function listActiveForDriver(ctx: ServiceContext): Promise<ServiceResult> 
 async function getMyEquipmentProfile(ctx: ServiceContext): Promise<ServiceResult> {
   const equipmentId = String(ctx.payload.equipmentId || '');
   if (!equipmentId) throw new httpsV2.HttpsError('invalid-argument', 'equipmentId is required');
-  if (ctx.mode !== 'driver' || !ctx.driver) {
+  if (ctx.mode !== 'driver' || !ctx.canonicalDriverId) {
     throw new httpsV2.HttpsError('permission-denied', 'Driver actor required');
   }
 
@@ -711,8 +708,8 @@ function requireStoredDriverId(assignment: Assignment): string {
 
 async function productionAssignmentAuthority(driverId: string): Promise<AssignmentAuthority | null> {
   const loaded = await loadCanonicalDriverAuthority(driverId, productionCanonicalDriverReaders());
-  if (!loaded?.active || !loaded.companyId) return null;
-  return { active: true, companyId: loaded.companyId };
+  if (!loaded?.companyId) return null;
+  return { active: loaded.active, companyId: loaded.companyId };
 }
 
 export async function hasActiveAssignmentForEquipment(companyId: string, equipmentId: string): Promise<boolean> {
