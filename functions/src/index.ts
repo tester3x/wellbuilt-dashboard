@@ -178,17 +178,23 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     const counterpartSnap = logicalId
       ? await db.ref(`packets/processed/${counterpartStorageKey(key)}`).once('value')
       : null;
-    if (processedSnap.exists() || counterpartSnap?.exists() || (claim && claim.winnerKey && claim.winnerKey !== key)) {
+    if (processedSnap.exists() || counterpartSnap?.exists() || (claim && claim.phase === 'applied' && claim.winnerKey !== key)) {
       console.log(`[Watchdog] ${data.wellName}: pull already claimed (${key}), cleaning up stale incoming`);
       await db.ref(`packets/incoming/${key}`).remove();
       alreadyProcessedCount++;
       continue;
     }
     if (claim && claim.winnerKey === key && claim.phase === 'claimed') {
+      if (typeof claim.executionUntilMs === 'number' && claim.executionUntilMs > Date.now()) {
+        continue;
+      }
       await db.ref(`packets/incoming/${key}`).remove();
       await db.ref(`packets/incoming/${key}`).set(data);
-      console.log(`[Watchdog] Retriggered same pull key: ${key}`);
+      console.log(`[Watchdog] Retriggered same pull key after lease expiry: ${key}`);
       retriggeredCount++;
+      continue;
+    }
+    if (claim && claim.winnerKey && claim.winnerKey !== key) {
       continue;
     }
 
@@ -1004,6 +1010,10 @@ export const processIncomingPull = functionsV1.database
           bblsTaken: data.bblsTaken,
           tankLevelFeet: data.tankLevelFeet,
         });
+        if (outcome === 'busy') {
+          console.log(`[CROSS_KEY_BUSY] ${logicalId}: execution lease held`);
+          return null;
+        }
         if (outcome === 'retire') {
           console.log(`[CROSS_KEY_RETIRE] ${logicalId}: ${packetId} already claimed`);
           await removeIncomingPacket(db.ref(), packetId);

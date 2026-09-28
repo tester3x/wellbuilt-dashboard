@@ -5,6 +5,8 @@
  * company is not applied and is not overwritten onto the winner.
  */
 
+export const PULL_EXECUTION_LEASE_MS = 3 * 60 * 1000;
+
 export interface PullClaim {
   logicalId: string;
   winnerKey: string;
@@ -14,6 +16,16 @@ export interface PullClaim {
   bblsTaken: number | null;
   tankLevelFeet: number | null;
   phase: 'claimed' | 'applied';
+  /** Present while one invocation owns the write chain. */
+  executionToken: string | null;
+  executionUntilMs: number | null;
+}
+
+export interface ClaimAttempt {
+  nowMs: number;
+  executionToken: string;
+  /** Fail closed: a processed row already exists, so do not enter the write chain. */
+  processedExists?: boolean;
 }
 
 export interface PullIdentity {
@@ -25,7 +37,7 @@ export interface PullIdentity {
   tankLevelFeet?: unknown;
 }
 
-export type CrossKeyOutcome = 'proceed' | 'retire' | 'conflict' | 'cross_tenant';
+export type CrossKeyOutcome = 'proceed' | 'retire' | 'conflict' | 'cross_tenant' | 'busy';
 
 export function logicalPullId(storageKey: string): string {
   const id = String(storageKey || '').trim();
@@ -66,6 +78,25 @@ export function buildPullClaim(identity: PullIdentity): PullClaim {
     bblsTaken: num(identity.bblsTaken),
     tankLevelFeet: num(identity.tankLevelFeet),
     phase: 'claimed',
+    executionToken: null,
+    executionUntilMs: null,
+  };
+}
+
+function leaseHeldByOther(claim: PullClaim, attempt: ClaimAttempt): boolean {
+  return claim.phase === 'claimed'
+    && typeof claim.executionUntilMs === 'number'
+    && claim.executionUntilMs > attempt.nowMs
+    && !!claim.executionToken
+    && claim.executionToken !== attempt.executionToken;
+}
+
+function withLease(claim: PullClaim, attempt: ClaimAttempt): PullClaim {
+  return {
+    ...claim,
+    phase: 'claimed',
+    executionToken: attempt.executionToken,
+    executionUntilMs: attempt.nowMs + PULL_EXECUTION_LEASE_MS,
   };
 }
 
@@ -92,10 +123,16 @@ function payloadConflicts(claim: PullClaim, identity: PullIdentity): boolean {
 export function crossKeyClaimUpdate(
   current: PullClaim | null,
   identity: PullIdentity,
-): { next: PullClaim; outcome: CrossKeyOutcome } {
+  attempt: ClaimAttempt,
+): { next: PullClaim | null; outcome: CrossKeyOutcome } {
+  if (attempt.processedExists) return { next: current, outcome: 'retire' };
   const incoming = buildPullClaim(identity);
-  if (!current) return { next: incoming, outcome: 'proceed' };
-  if (current.winnerKey === identity.storageKey) return { next: current, outcome: 'proceed' };
+  if (!current) return { next: withLease(incoming, attempt), outcome: 'proceed' };
+  if (current.winnerKey === identity.storageKey) {
+    if (current.phase === 'applied') return { next: current, outcome: 'retire' };
+    if (leaseHeldByOther(current, attempt)) return { next: current, outcome: 'busy' };
+    return { next: withLease(current, attempt), outcome: 'proceed' };
+  }
   if (tenantConflicts(current, identity)) return { next: current, outcome: 'cross_tenant' };
   if (payloadConflicts(current, identity)) return { next: current, outcome: 'conflict' };
   return { next: current, outcome: 'retire' };
@@ -104,19 +141,26 @@ export function crossKeyClaimUpdate(
 export function markPullClaimApplied(current: PullClaim | null, storageKey: string): PullClaim | null {
   if (!current || current.winnerKey !== storageKey) return current;
   if (current.phase === 'applied') return current;
-  return { ...current, phase: 'applied' };
+  return { ...current, phase: 'applied', executionToken: null, executionUntilMs: null };
 }
 
 export interface ClaimRef {
-  transaction(update: (current: PullClaim | null) => PullClaim): Promise<{ snapshot: { val(): PullClaim | null } }>;
+  transaction(update: (current: PullClaim | null) => PullClaim | null): Promise<{ snapshot: { val(): PullClaim | null } }>;
 }
 
-export async function commitPullClaim(ref: ClaimRef, identity: PullIdentity): Promise<CrossKeyOutcome> {
-  const result = await ref.transaction((current) => crossKeyClaimUpdate(current, identity).next);
+export async function commitPullClaim(
+  ref: ClaimRef,
+  identity: PullIdentity,
+  attempt?: ClaimAttempt,
+): Promise<CrossKeyOutcome> {
+  const clock: ClaimAttempt = attempt ?? {
+    nowMs: Date.now(),
+    executionToken: `${identity.storageKey}:${Date.now()}`,
+  };
+  const result = await ref.transaction((current) => {
+    const decision = crossKeyClaimUpdate(current, identity, clock);
+    return decision.next ?? current;
+  });
   const committed = result.snapshot.val();
-  if (!committed) return 'proceed';
-  return crossKeyClaimUpdate(committed, identity).outcome === 'proceed'
-    && committed.winnerKey === identity.storageKey
-    ? 'proceed'
-    : crossKeyClaimUpdate(committed, identity).outcome;
+  return crossKeyClaimUpdate(committed, identity, clock).outcome;
 }
