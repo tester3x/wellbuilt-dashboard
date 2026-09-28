@@ -31,7 +31,9 @@ export type RejectionReason =
   | 'MALFORMED_PULL_TIME'
   | 'MALFORMED_WELL_WATERMARK'
   | 'STRANDED_INCOMING_PACKET'
-  | 'PACKET_ID_COLLISION';
+  | 'PACKET_ID_COLLISION'
+  | 'CROSS_KEY_CONFLICT'
+  | 'CROSS_KEY_TENANT';
 
 export interface GuardVerdict {
   action: 'process' | 'quarantine';

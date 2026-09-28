@@ -34,6 +34,13 @@ import {
   resolveOriginalSubmissionAt,
 } from './editHistory';
 import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
+import {
+  commitPullClaim,
+  counterpartStorageKey,
+  logicalPullId,
+  markPullClaimApplied,
+  shouldApplyCrossKeyGuard,
+} from './security/operational/crossKeyPullClaim';
 
 
 admin.initializeApp();
@@ -163,10 +170,25 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     // Re-triggering would cause processIncomingPull to run AGAIN, overwriting any
     // edits that were applied to the outgoing in between.
     const processedSnap = await db.ref(`packets/processed/${key}`).once('value');
-    if (processedSnap.exists()) {
-      console.log(`[Watchdog] ${data.wellName}: already processed (${key}), cleaning up stale incoming`);
+    const logicalId = logicalPullId(key);
+    const claimSnap = logicalId
+      ? await db.ref(`packets/pull_claims/${logicalId}`).once('value')
+      : null;
+    const claim = claimSnap?.val() || null;
+    const counterpartSnap = logicalId
+      ? await db.ref(`packets/processed/${counterpartStorageKey(key)}`).once('value')
+      : null;
+    if (processedSnap.exists() || counterpartSnap?.exists() || (claim && claim.winnerKey && claim.winnerKey !== key)) {
+      console.log(`[Watchdog] ${data.wellName}: pull already claimed (${key}), cleaning up stale incoming`);
       await db.ref(`packets/incoming/${key}`).remove();
       alreadyProcessedCount++;
+      continue;
+    }
+    if (claim && claim.winnerKey === key && claim.phase === 'claimed') {
+      await db.ref(`packets/incoming/${key}`).remove();
+      await db.ref(`packets/incoming/${key}`).set(data);
+      console.log(`[Watchdog] Retriggered same pull key: ${key}`);
+      retriggeredCount++;
       continue;
     }
 
@@ -967,6 +989,45 @@ export const processIncomingPull = functionsV1.database
       return null;
     }
 
+    // Same physical pull may also arrive under the idem_ storage key.
+    // Claim that identity before any well, outgoing, performance, or
+    // canonical-job write. The loser is retired; a conflicting payload
+    // is quarantined and does not replace the winner.
+    if (shouldApplyCrossKeyGuard(reqType)) {
+      const logicalId = logicalPullId(packetId);
+      if (logicalId) {
+        const outcome = await commitPullClaim(db.ref(`packets/pull_claims/${logicalId}`), {
+          storageKey: packetId,
+          companyId: (data as any).companyId || null,
+          driverId: data.driverId || null,
+          wellName,
+          bblsTaken: data.bblsTaken,
+          tankLevelFeet: data.tankLevelFeet,
+        });
+        if (outcome === 'retire') {
+          console.log(`[CROSS_KEY_RETIRE] ${logicalId}: ${packetId} already claimed`);
+          await removeIncomingPacket(db.ref(), packetId);
+          return null;
+        }
+        if (outcome === 'conflict' || outcome === 'cross_tenant') {
+          await quarantineIncomingPacket(db.ref(), {
+            packetId,
+            packet: data,
+            verdict: {
+              action: 'quarantine',
+              reason: outcome === 'cross_tenant' ? 'CROSS_KEY_TENANT' : 'CROSS_KEY_CONFLICT',
+              readableReason: outcome === 'cross_tenant'
+                ? 'Counterpart pull belongs to a different company or driver. Incoming held; winner unchanged.'
+                : 'Counterpart pull has different well, barrels, or tank level. Incoming held; winner unchanged.',
+              comparedWatermarkUTC: null,
+            },
+            nowMs: Date.now(),
+          });
+          return null;
+        }
+      }
+    }
+
     // ─── GS3 7/21/2026 guards: future-time + lossless quarantine ────────
     // A pull entered as 11:07 PM instead of 11:07 AM became this well's
     // outgoing watermark; five legitimate packets then compared "stale"
@@ -1341,6 +1402,15 @@ export const processIncomingPull = functionsV1.database
       canonicalProcessingComplete: true,
       canonicalProcessingCompletedAt: admin.database.ServerValue.TIMESTAMP,
     });
+    if (shouldApplyCrossKeyGuard(reqType)) {
+      const logicalId = logicalPullId(packetId);
+      if (logicalId) {
+        await db.ref(`packets/pull_claims/${logicalId}`).transaction((current) => {
+          if (!current) return;
+          return markPullClaimApplied(current, packetId) || current;
+        });
+      }
+    }
 
     // ── canonical_jobs + Phase 1.2 server-side back-patch ─────────────────
     // Best-effort. Failure here never blocks packet processing — canonical_jobs
