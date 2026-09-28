@@ -6,9 +6,8 @@
  * Future custodians may include shop, yard, or non-driver roles — first implementation
  * is driver-scoped only.
  *
- * Custodian identity uses driverHash today. The service layer is designed so
- * driverHash can later resolve through membershipId without changing surrounding
- * architecture: Equipment → Assignment → (future Membership → Person).
+ * Custodian identity is the canonical driver UUID (`driverId`).
+ * A passcode hash is not an assignment key.
  *
  * Answers one question: "Who currently has custody of this equipment?"
  * Not dispatch, maintenance, workflow, trip history, repair history, or inspection history.
@@ -44,7 +43,7 @@ export const ASSIGNMENT_REASONS = [
 export type AssignmentReason = (typeof ASSIGNMENT_REASONS)[number];
 
 // ── Canonical assignment record ─────────────────────────────────────────────
-// assignmentId is permanent identity. Relationships use equipmentId + driverHash.
+// assignmentId is permanent identity. Relationships use equipmentId + driverId.
 //
 // Uniqueness: at most one active assignment per (companyId, equipmentId).
 // Enforced server-side in a Firestore transaction — never rely on pre-query + separate write.
@@ -56,7 +55,8 @@ export interface Assignment {
   assignmentId: string;
   companyId: string;
   equipmentId: string;
-  driverHash: string;
+  /** Canonical authenticated driver UUID. Not a passcode hash. */
+  driverId: string;
   assignedBy: ActorRef;
   assignmentRole: AssignmentRole;
   /** Reserved — optional until business rules are defined. */
@@ -87,7 +87,7 @@ export interface AssignmentEndInput {
 
 export interface AssignmentTransferInput {
   equipmentId: string;
-  driverHash: string;
+  driverId: string;
   assignmentRole?: AssignmentRole;
   assignmentReason?: AssignmentReason | null;
   notes?: string;

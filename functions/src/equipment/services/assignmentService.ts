@@ -1,8 +1,17 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { requireDriver } from '../auth/requireDriver';
 import { dashboardActorRef, requireDashboardAssignmentRead } from '../auth/requireDashboardEQuipment';
 import { requireDashboardAssignmentManager } from '../auth/requireDashboardAssignments';
+import {
+  canonicalAssignmentFromData,
+  clientAliasKeys,
+  resolveAssignmentSubject,
+  type AssignmentAuthority,
+} from '../assignmentIdentity';
+import {
+  loadCanonicalDriverAuthority,
+  productionCanonicalDriverReaders,
+} from '../../security/canonicalDriverAuthority';
 import { ActorRef, DriverActor, DriverProfile, DashboardProfile } from '../types/actor';
 import { buildMetadata } from '../types/metadata';
 import { Equipment, equipmentCollection } from '../types/equipment';
@@ -42,6 +51,8 @@ export interface AssignmentRequest {
 
 export interface AssignmentRequestOptions {
   authUid?: string;
+  authToken?: Record<string, unknown> | null;
+  loadAuthority?: (driverId: string) => Promise<AssignmentAuthority | null>;
 }
 
 type ServiceMode = 'driver' | 'dashboard';
@@ -56,6 +67,10 @@ interface ServiceContext {
   actorRef: ActorRef;
   payload: Record<string, unknown>;
   authUid?: string;
+  authToken?: Record<string, unknown> | null;
+  /** Set for driver calls and for dashboard actions that name one driver. */
+  canonicalDriverId?: string;
+  loadAuthority: (driverId: string) => Promise<AssignmentAuthority | null>;
 }
 
 interface ServiceResult {
@@ -114,17 +129,22 @@ function validate(req: AssignmentRequest, options: AssignmentRequestOptions): Se
     throw new httpsV2.HttpsError('invalid-argument', 'companyId is required');
   }
 
+  const payload = req.payload || {};
+  if (clientAliasKeys(payload).length > 0) {
+    throw new httpsV2.HttpsError('invalid-argument', 'Client driver alias is not assignment authority');
+  }
+  const loadAuthority = options.loadAuthority || productionAssignmentAuthority;
+
   if (DRIVER_READ_ACTIONS.has(action)) {
-    if (!req.actor || req.actor.type !== 'driver') {
-      throw new httpsV2.HttpsError('invalid-argument', 'driver actor is required for assignment.listActiveForDriver');
-    }
     return {
       mode: 'driver',
       action,
       companyId,
       actor: req.actor,
-      actorRef: { type: 'driver', driverHash: req.actor.driverHash.trim().toLowerCase() },
-      payload: req.payload || {},
+      actorRef: { type: 'driver', driverHash: '' },
+      payload,
+      authToken: options.authToken,
+      loadAuthority,
     };
   }
 
@@ -133,28 +153,35 @@ function validate(req: AssignmentRequest, options: AssignmentRequestOptions): Se
     action,
     companyId,
     actorRef: { type: 'dashboard', uid: options.authUid || '' },
-    payload: req.payload || {},
+    payload,
     authUid: options.authUid,
+    authToken: options.authToken,
+    loadAuthority,
   };
 }
 
 async function authorize(ctx: ServiceContext): Promise<void> {
-  if (ctx.mode === 'driver' && ctx.actor) {
-    ctx.driver = await requireDriver(ctx.actor);
-    if (ctx.driver.companyId && ctx.driver.companyId !== ctx.companyId) {
-      throw new httpsV2.HttpsError('permission-denied', 'Driver does not belong to this company');
+  if (ctx.mode === 'driver') {
+    const subject = await resolveAssignmentSubject({
+      mode: 'driver',
+      companyId: ctx.companyId,
+      token: ctx.authToken,
+      payload: ctx.payload,
+      loadAuthority: ctx.loadAuthority,
+    });
+    if (!subject.ok) {
+      throw new httpsV2.HttpsError(
+        subject.reason === 'malformed' ? 'invalid-argument' : 'permission-denied',
+        subject.reason,
+      );
     }
-    const requestedHash = ctx.payload.driverHash
-      ? normalizeDriverHash(String(ctx.payload.driverHash))
-      : ctx.driver.driverHash;
-    if (requestedHash !== ctx.driver.driverHash) {
-      throw new httpsV2.HttpsError('permission-denied', 'driverHash must match authenticated driver');
-    }
-    ctx.actorRef = {
-      type: 'driver',
-      driverHash: ctx.driver.driverHash,
-      displayName: ctx.driver.displayName,
+    ctx.canonicalDriverId = subject.driverId;
+    ctx.driver = {
+      driverHash: subject.driverId,
+      displayName: 'Driver',
+      companyId: subject.companyId,
     };
+    ctx.actorRef = { type: 'driver', driverHash: subject.driverId };
     return;
   }
 
@@ -205,17 +232,14 @@ function returnResult(result: ServiceResult): unknown {
 
 async function startAssignment(ctx: ServiceContext): Promise<ServiceResult> {
   const equipmentId = String(ctx.payload.equipmentId || '');
-  const driverHash = normalizeDriverHash(String(ctx.payload.driverHash || ''));
+  const driverId = await requireNamedDriver(ctx);
   if (!equipmentId) throw new httpsV2.HttpsError('invalid-argument', 'equipmentId is required');
-  if (!driverHash) throw new httpsV2.HttpsError('invalid-argument', 'driverHash is required');
 
   const assignmentRole = parseAssignmentRole(ctx.payload.assignmentRole) || 'primary_operator';
   const assignmentReason = parseAssignmentReason(ctx.payload.assignmentReason);
   const assignmentId = ctx.payload.assignmentId
     ? String(ctx.payload.assignmentId)
     : reserveAssignmentId(ctx.companyId);
-
-  await assertDriverBelongsToCompany(driverHash, ctx.companyId);
 
   const col = firestore.collection(assignmentsCollection(ctx.companyId));
 
@@ -227,7 +251,7 @@ async function startAssignment(ctx: ServiceContext): Promise<ServiceResult> {
       if (
         existing.active
         && existing.equipmentId === equipmentId
-        && existing.driverHash === driverHash
+        && existing.driverId === driverId
         && existing.companyId === ctx.companyId
       ) {
         return { assignment: existing, created: false };
@@ -242,6 +266,9 @@ async function startAssignment(ctx: ServiceContext): Promise<ServiceResult> {
       col.where('equipmentId', '==', equipmentId).where('active', '==', true).limit(1),
     );
     if (!activeSnap.empty) {
+      if (!canonicalAssignmentFromData(activeSnap.docs[0].data())) {
+        throw new httpsV2.HttpsError('failed-precondition', 'Assignment is not a canonical driver assignment');
+      }
       throw new httpsV2.HttpsError(
         'failed-precondition',
         'Equipment already has an active assignment. End or transfer custody first.',
@@ -253,7 +280,7 @@ async function startAssignment(ctx: ServiceContext): Promise<ServiceResult> {
       assignmentId,
       companyId: ctx.companyId,
       equipmentId,
-      driverHash,
+      driverId,
       assignedBy: ctx.actorRef,
       assignmentRole,
       assignmentReason,
@@ -276,7 +303,7 @@ async function startAssignment(ctx: ServiceContext): Promise<ServiceResult> {
         companyId: ctx.companyId,
         assignmentId: assignment.assignmentId,
         equipmentId: assignment.equipmentId,
-        driverHash: assignment.driverHash,
+        driverId: assignment.driverId,
       }]
     : [];
 
@@ -300,6 +327,7 @@ async function endAssignment(ctx: ServiceContext): Promise<ServiceResult> {
     if (existing.companyId !== ctx.companyId) {
       throw new httpsV2.HttpsError('permission-denied', 'Assignment does not belong to this company');
     }
+    requireStoredDriverId(existing);
 
     if (!existing.active) {
       return { assignment: existing, ended: false };
@@ -327,7 +355,7 @@ async function endAssignment(ctx: ServiceContext): Promise<ServiceResult> {
         companyId: ctx.companyId,
         assignmentId: assignment.assignmentId,
         equipmentId: assignment.equipmentId,
-        driverHash: assignment.driverHash,
+        driverId: requireStoredDriverId(assignment),
       }]
     : [];
 
@@ -336,17 +364,14 @@ async function endAssignment(ctx: ServiceContext): Promise<ServiceResult> {
 
 async function transferAssignment(ctx: ServiceContext): Promise<ServiceResult> {
   const equipmentId = String(ctx.payload.equipmentId || '');
-  const driverHash = normalizeDriverHash(String(ctx.payload.driverHash || ''));
+  const driverId = await requireNamedDriver(ctx);
   if (!equipmentId) throw new httpsV2.HttpsError('invalid-argument', 'equipmentId is required');
-  if (!driverHash) throw new httpsV2.HttpsError('invalid-argument', 'driverHash is required');
 
   const assignmentRole = parseAssignmentRole(ctx.payload.assignmentRole) || 'primary_operator';
   const assignmentReason = parseAssignmentReason(ctx.payload.assignmentReason);
   const newAssignmentId = ctx.payload.newAssignmentId
     ? String(ctx.payload.newAssignmentId)
     : reserveAssignmentId(ctx.companyId);
-
-  await assertDriverBelongsToCompany(driverHash, ctx.companyId);
 
   const col = firestore.collection(assignmentsCollection(ctx.companyId));
 
@@ -363,7 +388,7 @@ async function transferAssignment(ctx: ServiceContext): Promise<ServiceResult> {
       if (
         newData.active
         && newData.equipmentId === equipmentId
-        && newData.driverHash === driverHash
+        && newData.driverId === driverId
         && newData.companyId === ctx.companyId
       ) {
         const previousId = String(ctx.payload.previousAssignmentId || '');
@@ -386,8 +411,9 @@ async function transferAssignment(ctx: ServiceContext): Promise<ServiceResult> {
     const currentRef = activeSnap.docs[0].ref;
     const currentSnap = await tx.get(currentRef);
     const current = currentSnap.data() as Assignment;
+    requireStoredDriverId(current);
 
-    if (current.driverHash === driverHash) {
+    if (current.driverId === driverId) {
       throw new httpsV2.HttpsError('failed-precondition', 'Equipment is already assigned to this driver');
     }
 
@@ -407,7 +433,7 @@ async function transferAssignment(ctx: ServiceContext): Promise<ServiceResult> {
       assignmentId: newAssignmentId,
       companyId: ctx.companyId,
       equipmentId,
-      driverHash,
+      driverId,
       assignedBy: ctx.actorRef,
       assignmentRole,
       assignmentReason,
@@ -433,7 +459,7 @@ async function transferAssignment(ctx: ServiceContext): Promise<ServiceResult> {
           companyId: ctx.companyId,
           assignmentId: result.previous.assignmentId,
           equipmentId: result.previous.equipmentId,
-          driverHash: result.previous.driverHash,
+          driverId: requireStoredDriverId(result.previous),
         },
         {
           type: 'EquipmentTransferred',
@@ -441,15 +467,15 @@ async function transferAssignment(ctx: ServiceContext): Promise<ServiceResult> {
           equipmentId,
           previousAssignmentId: result.previous.assignmentId,
           newAssignmentId: result.current.assignmentId,
-          previousDriverHash: result.previous.driverHash,
-          newDriverHash: result.current.driverHash,
+          previousDriverId: requireStoredDriverId(result.previous),
+          newDriverId: result.current.driverId,
         },
         {
           type: 'EquipmentAssigned',
           companyId: ctx.companyId,
           assignmentId: result.current.assignmentId,
           equipmentId: result.current.equipmentId,
-          driverHash: result.current.driverHash,
+          driverId: result.current.driverId,
         },
       ]
     : [];
@@ -471,29 +497,26 @@ async function getActiveForEquipment(ctx: ServiceContext): Promise<ServiceResult
     .get();
 
   return {
-    data: { assignment: snap.empty ? null : (snap.docs[0].data() as Assignment) },
+    data: { assignment: snap.empty ? null : canonicalAssignmentFromData(snap.docs[0].data()) },
     events: [],
   };
 }
 
 async function listActiveForDriver(ctx: ServiceContext): Promise<ServiceResult> {
-  const driverHash = ctx.mode === 'driver'
-    ? ctx.driver!.driverHash
-    : normalizeDriverHash(String(ctx.payload.driverHash || ''));
-  if (!driverHash) throw new httpsV2.HttpsError('invalid-argument', 'driverHash is required');
-
-  if (ctx.mode === 'dashboard') {
-    await assertDriverBelongsToCompany(driverHash, ctx.companyId);
-  }
+  const driverId = ctx.mode === 'driver'
+    ? ctx.canonicalDriverId || ''
+    : await requireNamedDriver(ctx);
+  if (!driverId) throw new httpsV2.HttpsError('permission-denied', 'unauthenticated');
 
   const snap = await firestore
     .collection(assignmentsCollection(ctx.companyId))
-    .where('driverHash', '==', driverHash)
+    .where('driverId', '==', driverId)
     .where('active', '==', true)
     .get();
 
   const assignments = snap.docs
-    .map((d) => d.data() as Assignment)
+    .map((d) => canonicalAssignmentFromData(d.data()))
+    .filter((row): row is Assignment => row !== null && row.driverId === driverId)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 
   const items = await enrichAssignmentsWithIdentity(ctx.companyId, assignments);
@@ -511,7 +534,7 @@ async function getMyEquipmentProfile(ctx: ServiceContext): Promise<ServiceResult
   const activeSnap = await firestore
     .collection(assignmentsCollection(ctx.companyId))
     .where('equipmentId', '==', equipmentId)
-    .where('driverHash', '==', ctx.driver.driverHash)
+    .where('driverId', '==', ctx.canonicalDriverId)
     .where('active', '==', true)
     .limit(1)
     .get();
@@ -574,7 +597,8 @@ async function listForCompany(ctx: ServiceContext): Promise<ServiceResult> {
     .get();
 
   const assignments = snap.docs
-    .map((d) => d.data() as Assignment)
+    .map((d) => canonicalAssignmentFromData(d.data()))
+    .filter((row): row is Assignment => row !== null)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 
   return { data: { assignments }, events: [] };
@@ -591,25 +615,30 @@ async function listHistoryForEquipment(ctx: ServiceContext): Promise<ServiceResu
     .get();
 
   return {
-    data: { assignments: snap.docs.map((d) => d.data() as Assignment) },
+    data: {
+      assignments: snap.docs
+        .map((d) => canonicalAssignmentFromData(d.data()))
+        .filter((row): row is Assignment => row !== null),
+    },
     events: [],
   };
 }
 
 async function listHistoryForDriver(ctx: ServiceContext): Promise<ServiceResult> {
-  const driverHash = normalizeDriverHash(String(ctx.payload.driverHash || ''));
-  if (!driverHash) throw new httpsV2.HttpsError('invalid-argument', 'driverHash is required');
-
-  await assertDriverBelongsToCompany(driverHash, ctx.companyId);
+  const driverId = await requireNamedDriver(ctx);
 
   const snap = await firestore
     .collection(assignmentsCollection(ctx.companyId))
-    .where('driverHash', '==', driverHash)
+    .where('driverId', '==', driverId)
     .orderBy('startedAt', 'desc')
     .get();
 
   return {
-    data: { assignments: snap.docs.map((d) => d.data() as Assignment) },
+    data: {
+      assignments: snap.docs
+        .map((d) => canonicalAssignmentFromData(d.data()))
+        .filter((row): row is Assignment => row !== null && row.driverId === driverId),
+    },
     events: [],
   };
 }
@@ -651,12 +680,39 @@ async function loadEquipmentForAssignment(
   return equipment;
 }
 
-async function assertDriverBelongsToCompany(driverHash: string, companyId: string): Promise<DriverProfile> {
-  const driver = await requireDriver({ type: 'driver', driverHash });
-  if (!driver.companyId || driver.companyId !== companyId) {
-    throw new httpsV2.HttpsError('failed-precondition', 'Driver does not belong to this company');
+async function requireNamedDriver(ctx: ServiceContext): Promise<string> {
+  if (ctx.mode === 'driver') {
+    if (!ctx.canonicalDriverId) throw new httpsV2.HttpsError('permission-denied', 'unauthenticated');
+    return ctx.canonicalDriverId;
   }
-  return driver;
+  const subject = await resolveAssignmentSubject({
+    mode: 'dashboard',
+    companyId: ctx.companyId,
+    token: ctx.authToken,
+    payload: ctx.payload,
+    loadAuthority: ctx.loadAuthority,
+  });
+  if (!subject.ok) {
+    throw new httpsV2.HttpsError(
+      subject.reason === 'malformed' ? 'invalid-argument' : 'permission-denied',
+      subject.reason,
+    );
+  }
+  return subject.driverId;
+}
+
+function requireStoredDriverId(assignment: Assignment): string {
+  const visible = canonicalAssignmentFromData(assignment);
+  if (!visible) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Assignment is not a canonical driver assignment');
+  }
+  return visible.driverId;
+}
+
+async function productionAssignmentAuthority(driverId: string): Promise<AssignmentAuthority | null> {
+  const loaded = await loadCanonicalDriverAuthority(driverId, productionCanonicalDriverReaders());
+  if (!loaded?.active || !loaded.companyId) return null;
+  return { active: true, companyId: loaded.companyId };
 }
 
 export async function hasActiveAssignmentForEquipment(companyId: string, equipmentId: string): Promise<boolean> {
@@ -667,10 +723,6 @@ export async function hasActiveAssignmentForEquipment(companyId: string, equipme
     .limit(1)
     .get();
   return !snap.empty;
-}
-
-function normalizeDriverHash(value: string): string {
-  return value.trim().toLowerCase();
 }
 
 function parseAssignmentRole(value: unknown): AssignmentRole | undefined {

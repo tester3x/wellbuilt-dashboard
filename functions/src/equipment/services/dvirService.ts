@@ -6,6 +6,7 @@ import {
   dashboardActorRef,
   requireDashboardDvirRead,
 } from '../auth/requireDashboardEQuipment';
+import { isCanonicalDriverId } from '../assignmentIdentity';
 import { ActorRef, DriverActor, DriverProfile, DashboardProfile } from '../types/actor';
 import { buildMetadata } from '../types/metadata';
 import { Assignment, assignmentsCollection } from '../types/assignment';
@@ -51,6 +52,8 @@ interface ServiceContext {
   actorRef: ActorRef;
   payload: Record<string, unknown>;
   authUid?: string;
+  /** Canonical driver UUID from the Auth token. Not a passcode hash. */
+  canonicalDriverId?: string;
 }
 
 interface ServiceResult {
@@ -112,6 +115,10 @@ async function validate(req: DvirRequest, options: DvirRequestOptions): Promise<
     throw new httpsV2.HttpsError('invalid-argument', 'driver actor is required');
   }
 
+  const tokenDriverId = options.authToken?.driverId;
+  const canonicalDriverId = options.authToken?.kind === 'driver' && isCanonicalDriverId(tokenDriverId)
+    ? tokenDriverId
+    : undefined;
   const driver = await requireDriver(req.actor);
   if (driver.companyId && driver.companyId !== companyId) {
     throw new httpsV2.HttpsError('permission-denied', 'Driver does not belong to this company');
@@ -132,6 +139,7 @@ async function validate(req: DvirRequest, options: DvirRequestOptions): Promise<
     driver,
     actorRef: { type: 'driver', driverHash: driver.driverHash, displayName: driver.displayName },
     payload: req.payload || {},
+    canonicalDriverId,
   };
 }
 
@@ -311,8 +319,9 @@ async function assertDriverCustody(
     }
     const assignment = snap.data() as Assignment;
     if (
-      !assignment.active
-      || assignment.driverHash !== ctx.driver!.driverHash
+      !ctx.canonicalDriverId
+      || !assignment.active
+      || assignment.driverId !== ctx.canonicalDriverId
       || assignment.equipmentId !== equipmentId
     ) {
       throw new httpsV2.HttpsError('permission-denied', 'No active assignment for this equipment');
@@ -320,10 +329,13 @@ async function assertDriverCustody(
     return;
   }
 
+  if (!ctx.canonicalDriverId) {
+    throw new httpsV2.HttpsError('permission-denied', 'No active assignment for this equipment');
+  }
   const activeSnap = await firestore
     .collection(assignmentsCollection(ctx.companyId))
     .where('equipmentId', '==', equipmentId)
-    .where('driverHash', '==', ctx.driver!.driverHash)
+    .where('driverId', '==', ctx.canonicalDriverId)
     .where('active', '==', true)
     .limit(1)
     .get();

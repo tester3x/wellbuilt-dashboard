@@ -141,7 +141,6 @@ export default function EquipmentPage() {
       setDocuments(docList);
 
       const hashes = [
-        ...assignmentList.map((a) => a.driverHash),
         ...dvirRes.inspections.map((i) => i.driverHash),
         ...docList.map((d) => d.driverHash),
       ];
@@ -285,7 +284,7 @@ export default function EquipmentPage() {
                       <td className="p-3">{item.active ? 'Active' : 'Retired'}</td>
                       <td className="p-3 text-gray-300">
                         {assignment
-                          ? `${driverNames[assignment.driverHash] || assignment.driverHash.slice(0, 8)} · ${ASSIGNMENT_ROLE_LABELS[assignment.assignmentRole]}`
+                          ? `${assignment.driverId ? assignment.driverId.slice(0, 8) : '—'} · ${ASSIGNMENT_ROLE_LABELS[assignment.assignmentRole]}`
                           : '—'}
                       </td>
                     </tr>
@@ -314,7 +313,7 @@ export default function EquipmentPage() {
                   return (
                     <tr key={a.assignmentId} className="border-t border-gray-700 hover:bg-gray-800/50">
                       <td className="p-3">{equip ? `${equip.equipmentTypeId} ${equip.unitNumber}` : a.equipmentId}</td>
-                      <td className="p-3">{driverNames[a.driverHash] || a.driverHash.slice(0, 8)}</td>
+                      <td className="p-3">{a.driverId ? a.driverId.slice(0, 8) : '—'}</td>
                       <td className="p-3">{ASSIGNMENT_ROLE_LABELS[a.assignmentRole]}</td>
                       <td className="p-3">{formatDateTime(a.startedAt)}</td>
                       <td className="p-3">Canonical · Active</td>

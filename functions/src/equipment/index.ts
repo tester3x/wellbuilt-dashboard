@@ -41,7 +41,10 @@ export const eQuipmentAssignments = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '256MiB' },
   async (request) => {
     const data = (request.data || {}) as AssignmentRequest;
-    return handleAssignmentRequest(data, { authUid: request.auth?.uid });
+    return handleAssignmentRequest(data, {
+      authUid: request.auth?.uid,
+      authToken: (request.auth?.token || null) as Record<string, unknown> | null,
+    });
   },
 );
 

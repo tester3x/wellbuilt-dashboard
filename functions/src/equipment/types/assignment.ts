@@ -25,7 +25,8 @@ export interface Assignment {
   assignmentId: string;
   companyId: string;
   equipmentId: string;
-  driverHash: string;
+  /** Canonical authenticated driver UUID. Not a passcode hash. */
+  driverId: string;
   assignedBy: ActorRef;
   assignmentRole: AssignmentRole;
   assignmentReason?: AssignmentReason | null;
@@ -45,14 +46,14 @@ export type AssignmentDomainEvent =
       companyId: string;
       assignmentId: string;
       equipmentId: string;
-      driverHash: string;
+      driverId: string;
     }
   | {
       type: 'EquipmentAssignmentEnded';
       companyId: string;
       assignmentId: string;
       equipmentId: string;
-      driverHash: string;
+      driverId: string;
     }
   | {
       type: 'EquipmentTransferred';
@@ -60,8 +61,8 @@ export type AssignmentDomainEvent =
       equipmentId: string;
       previousAssignmentId: string;
       newAssignmentId: string;
-      previousDriverHash: string;
-      newDriverHash: string;
+      previousDriverId: string;
+      newDriverId: string;
     };
 
 export const ASSIGNMENT_RESTRICTED_EQUIPMENT_STATUSES = ['in_shop', 'out_of_service'] as const;

@@ -19,7 +19,7 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "driverHash",
+          "fieldPath": "driverId",
           "order": "ASCENDING"
         },
         {
@@ -33,7 +33,7 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "driverHash",
+          "fieldPath": "driverId",
           "order": "ASCENDING"
         },
         {

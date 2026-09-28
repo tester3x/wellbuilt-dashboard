@@ -23,6 +23,7 @@ import {
   type TrustedAssignmentRow,
   type TrustedRegistryRow,
 } from '../dvirAssetIdentity';
+import { equipmentIdForCanonicalAssignment } from '../assignmentIdentity';
 import { assignmentsCollection } from '../types/assignment';
 import { Equipment, equipmentCollection } from '../types/equipment';
 
@@ -253,15 +254,16 @@ export function productionIdentityLookupIo(): IdentityLookupIo {
     },
     async listActiveAssignments(companyId, driverId) {
       const snap = await firestore.collection(assignmentsCollection(companyId))
-        .where('driverHash', '==', driverId)
+        .where('driverId', '==', driverId)
         .where('active', '==', true)
         .limit(ASSIGNMENT_CAP + 1)
         .get();
       return {
         truncated: snap.size > ASSIGNMENT_CAP,
-        rows: snap.docs.slice(0, ASSIGNMENT_CAP).map((doc) => ({
-          equipmentId: String((doc.data() as { equipmentId?: string }).equipmentId || ''),
-        })),
+        rows: snap.docs.slice(0, ASSIGNMENT_CAP).flatMap((doc) => {
+          const equipmentId = equipmentIdForCanonicalAssignment(doc.data(), driverId);
+          return equipmentId ? [{ equipmentId }] : [];
+        }),
       };
     },
     async loadEquipment(companyId, equipmentId) {
