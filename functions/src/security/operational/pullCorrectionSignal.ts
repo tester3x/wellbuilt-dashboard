@@ -8,6 +8,7 @@
  * Scope: authenticated company, driver, well (fails closed on all three).
  * Identity: originalPacketId + content revision hash of (bottomLevel, pullDateTimeUTC, flowRate).
  * Ordering: monotonic CAS check ensures older replays cannot overwrite newer revisions.
+ * Infrastructure: queries and RTDB errors bubble up as retryable failures rather than false deliveries.
  */
 import * as crypto from 'crypto';
 import type * as admin from 'firebase-admin';
@@ -17,6 +18,7 @@ export const LEGACY_WELL_POOL_COMPANY_ID = 'liquid-gold';
 export interface PullCorrectionSignal {
   packetId: string;
   revision: string;
+  sequence?: number; // Sequence tie-break for equal-clock timestamps
   bottomLevel: string;
   pullDateTimeUTC: string;
   flowRate: string;
@@ -61,6 +63,7 @@ export interface EvaluatePullCorrectionInput {
   pullDateTimeUTC: string;
   flowRate: string;
   existingRevision?: string | null;
+  sequence?: number;
 }
 
 export type EvaluatePullCorrectionResult =
@@ -116,6 +119,7 @@ export function evaluatePullCorrectionPublication(
     signal: {
       packetId: pid,
       revision,
+      sequence: input.sequence || 0,
       bottomLevel: bottom,
       pullDateTimeUTC: time,
       flowRate: flow,
@@ -144,6 +148,7 @@ export function buildDispatchCorrectionPatch(
     lastPullCorrection: {
       packetId: signal.packetId,
       revision: signal.revision,
+      ...(signal.sequence !== undefined ? { sequence: signal.sequence } : {}),
       bottomLevel: signal.bottomLevel,
       pullDateTimeUTC: signal.pullDateTimeUTC,
       flowRate: signal.flowRate,
@@ -170,6 +175,7 @@ export interface DispatchLookupHints {
 /**
  * Resolves dispatch document IDs associated with a pull packet.
  * Checks direct hints first, then queries by packet identity.
+ * DO NOT swallow query errors: infrastructure errors must bubble up so retry loops persist.
  */
 export async function findDispatchIdsForPull(
   firestore: admin.firestore.Firestore,
@@ -199,6 +205,7 @@ export async function findDispatchIdsForPull(
     }
   } catch (err) {
     console.warn('[pullCorrectionSignal] findDispatchIdsForPull query error:', err);
+    throw err;
   }
 
   return Array.from(ids);
@@ -262,6 +269,7 @@ export function extractDispatchDriverCandidates(data: Record<string, any>): stri
 /**
  * Resolves equivalence between two driver identity keys (e.g. canonical UUID vs legacy approved hash).
  * Checks custom resolver first, then queries RTDB identity bindings and approved profiles.
+ * DO NOT swallow RTDB errors: infrastructure errors must bubble up.
  */
 export async function areDriverIdentitiesEquivalent(
   idA: string,
@@ -300,7 +308,7 @@ export async function areDriverIdentitiesEquivalent(
     return false;
   } catch (err) {
     console.warn('[pullCorrectionSignal] error resolving driver equivalence:', err);
-    return false;
+    throw err;
   }
 }
 
@@ -346,8 +354,10 @@ export interface PublishPullCorrectionResult {
   ok: boolean;
   revision: string;
   updatedDispatchIds: string[];
+  failedDispatchIds: string[];
   skipped?: string;
   results?: Record<string, { ok: boolean; applied?: boolean; reason?: string }>;
+  error?: string;
 }
 
 /**
@@ -355,18 +365,25 @@ export interface PublishPullCorrectionResult {
  * Verifies company containment (fail-closed), well containment (fail-closed),
  * and driver containment (fail-closed with canonical UUID <-> legacy hash resolution).
  * Enforces idempotency (no-op if revision matches) and monotonic CAS ordering
- * (rejects older out-of-order revisions from overwriting newer ones).
+ * (rejects older out-of-order revisions from overwriting newer ones, with sequence tie-break).
  */
 export async function publishPullCorrectionToDispatches(
   firestore: admin.firestore.Firestore,
   options: PublishPullCorrectionOptions,
 ): Promise<PublishPullCorrectionResult> {
   if (!options.dispatchIds || options.dispatchIds.length === 0) {
-    return { ok: false, revision: options.signal.revision, updatedDispatchIds: [], skipped: 'no_dispatch_ids' };
+    return {
+      ok: false,
+      revision: options.signal.revision,
+      updatedDispatchIds: [],
+      failedDispatchIds: [],
+      skipped: 'no_dispatch_ids',
+    };
   }
 
   const patch = buildDispatchCorrectionPatch(options.signal, options.serverTimestamp);
   const updatedDispatchIds: string[] = [];
+  const failedDispatchIds: string[] = [];
   const results: Record<string, { ok: boolean; applied?: boolean; reason?: string }> = {};
 
   for (const did of options.dispatchIds) {
@@ -413,11 +430,25 @@ export async function publishPullCorrectionToDispatches(
 
       // 5. Monotonic ordering / CAS check: prevent out-of-order overwrite
       const existingPublishedMs = Number(data.lastPullCorrection?.publishedAtMs || 0);
-      if (existingPublishedMs > 0 && options.signal.publishedAtMs < existingPublishedMs) {
+      const incomingPublishedMs = Number(options.signal.publishedAtMs || 0);
+      const existingSequence = Number(data.lastPullCorrection?.sequence || 0);
+      const incomingSequence = Number(options.signal.sequence || 0);
+
+      if (existingPublishedMs > 0 && incomingPublishedMs < existingPublishedMs) {
         console.warn(
-          `[pullCorrectionSignal] dispatch ${did} has newer revision (${existingPublishedMs} > ${options.signal.publishedAtMs}); skipping out-of-order replay`,
+          `[pullCorrectionSignal] dispatch ${did} has newer revision (${existingPublishedMs} > ${incomingPublishedMs}); skipping out-of-order replay`,
         );
         return { ok: true, applied: false, reason: 'superseded_by_newer_revision' };
+      }
+
+      // Equal-clock tie-break: compare sequence
+      if (existingPublishedMs > 0 && incomingPublishedMs === existingPublishedMs) {
+        if (existingSequence > 0 && incomingSequence > 0 && incomingSequence < existingSequence) {
+          console.warn(
+            `[pullCorrectionSignal] dispatch ${did} equal timestamp but older sequence (${existingSequence} > ${incomingSequence}); skipping replay`,
+          );
+          return { ok: true, applied: false, reason: 'superseded_by_newer_revision' };
+        }
       }
 
       // 6. Apply patch
@@ -460,17 +491,22 @@ export async function publishPullCorrectionToDispatches(
       }
     } catch (err) {
       console.warn(`[pullCorrectionSignal] error updating dispatch ${did}:`, err);
-      results[did] = { ok: false, reason: (err as any)?.message || String(err) };
-      throw err;
+      const errMsg = (err as any)?.message || String(err);
+      results[did] = { ok: false, reason: errMsg };
+      failedDispatchIds.push(did);
     }
   }
 
+  const hasFailures = failedDispatchIds.length > 0;
+  const firstError = failedDispatchIds.map(id => results[id]?.reason).filter(Boolean)[0];
   return {
-    ok: updatedDispatchIds.length > 0,
+    ok: !hasFailures && updatedDispatchIds.length > 0,
     revision: options.signal.revision,
     updatedDispatchIds,
-    skipped: updatedDispatchIds.length === 0 ? 'all_dispatches_filtered_or_missing' : undefined,
+    failedDispatchIds,
+    skipped: updatedDispatchIds.length === 0 && !hasFailures ? 'all_dispatches_filtered_or_missing' : undefined,
     results,
+    error: hasFailures ? (firstError || `Failed to update ${failedDispatchIds.length} dispatch(es)`) : undefined,
   };
 }
 
@@ -527,6 +563,7 @@ export async function reconcilePendingPullCorrectionSignal(
   const signal: PullCorrectionSignal = {
     packetId: pid,
     revision,
+    sequence: pkt.editCount || 0,
     bottomLevel: bottom,
     pullDateTimeUTC: time,
     flowRate: flow,
@@ -536,13 +573,24 @@ export async function reconcilePendingPullCorrectionSignal(
     driverId,
   };
 
-  const dispatchIds = await findDispatchIdsForPull(firestore, {
-    dispatchId: pkt.dispatchId,
-    packetId: pid,
-    companyId,
-    wellName,
-    driverId,
-  });
+  let dispatchIds: string[];
+  try {
+    dispatchIds = await findDispatchIdsForPull(firestore, {
+      dispatchId: pkt.dispatchId,
+      packetId: pid,
+      companyId,
+      wellName,
+      driverId,
+    });
+  } catch (err) {
+    const errMsg = (err as any)?.message || String(err);
+    await rtdb.ref(`packets/processed/${pid}`).update({
+      dispatchSignalPending: true,
+      dispatchSignalPendingRevision: revision,
+      dispatchSignalError: errMsg,
+    });
+    return { ok: false, status: 'failed', revision, reason: errMsg };
+  }
 
   if (dispatchIds.length === 0) {
     await rtdb.ref(`packets/processed/${pid}`).update({
@@ -579,6 +627,14 @@ export async function reconcilePendingPullCorrectionSignal(
         revision,
         updatedDispatchIds: pubResult.updatedDispatchIds,
       };
+    } else if (pubResult.failedDispatchIds && pubResult.failedDispatchIds.length > 0) {
+      const errMsg = pubResult.error || 'Failed to update dispatches';
+      await rtdb.ref(`packets/processed/${pid}`).update({
+        dispatchSignalPending: true,
+        dispatchSignalPendingRevision: revision,
+        dispatchSignalError: errMsg,
+      });
+      return { ok: false, status: 'failed', revision, reason: errMsg };
     } else {
       await rtdb.ref(`packets/processed/${pid}`).update({
         lastPullDeliveredRevision: revision,
