@@ -4,6 +4,12 @@ import {
   buildDispatchCorrectionPatch,
   findDispatchIdsForPull,
   publishPullCorrectionToDispatches,
+  reconcilePendingPullCorrectionSignal,
+  docBelongsToTenant,
+  normalizeWellName,
+  extractDispatchDriverCandidates,
+  areDriverIdentitiesEquivalent,
+  matchDriverIdentity,
   type PullCorrectionSignal,
   type EvaluatePullCorrectionInput,
 } from '../pullCorrectionSignal';
@@ -16,6 +22,88 @@ describe('Confirmed pull correction signal — acceptance suite', () => {
   const BOTTOM_LEVEL = '4\'2"';
   const PULL_TIME = '2026-09-29T12:00:00.000Z';
   const FLOW_RATE = '0:05:00';
+
+  function createMockRtdb(initialData: Record<string, any> = {}) {
+    const store: Record<string, any> = JSON.parse(JSON.stringify(initialData));
+    return {
+      _data: store,
+      ref: (path: string = '') => ({
+        once: async (_event: string) => ({
+          exists: () => store[path] !== undefined,
+          val: () => store[path],
+        }),
+        update: async (patch: Record<string, any>) => {
+          store[path] = { ...(store[path] || {}), ...patch };
+        },
+        set: async (val: any) => {
+          store[path] = val;
+        },
+        remove: async () => {
+          delete store[path];
+        },
+      }),
+    } as any;
+  }
+
+  function createMockFirestore(
+    docs: Record<string, any> = {},
+    options: { withTransaction?: boolean } = {},
+  ) {
+    const store: Record<string, any> = JSON.parse(JSON.stringify(docs));
+    const updates: Record<string, any[]> = {};
+
+    const getDoc = (id: string) => ({
+      id,
+      exists: store[id] !== undefined,
+      data: () => store[id],
+    });
+
+    const updateDoc = async (id: string, patch: Record<string, any>) => {
+      if (!updates[id]) updates[id] = [];
+      updates[id].push(patch);
+      store[id] = { ...(store[id] || {}), ...patch };
+    };
+
+    const fs: any = {
+      _store: store,
+      _updates: updates,
+      collection: (coll: string) => ({
+        doc: (id: string) => ({
+          id,
+          get: async () => getDoc(id),
+          update: async (patch: any) => updateDoc(id, patch),
+        }),
+        where: (field: string, op: string, val: any) => ({
+          get: async () => {
+            const matched = Object.entries(store)
+              .filter(([_, d]) => {
+                if (op === '==') return d[field] === val;
+                if (op === 'array-contains') return Array.isArray(d[field]) && d[field].includes(val);
+                return false;
+              })
+              .map(([id, _]) => ({ id }));
+            return {
+              forEach: (cb: any) => matched.forEach(cb),
+            };
+          },
+        }),
+      }),
+    };
+
+    if (options.withTransaction !== false) {
+      fs.runTransaction = async (txFn: (tx: any) => Promise<any>) => {
+        const tx = {
+          get: async (docRef: any) => getDoc(docRef.id),
+          update: (docRef: any, patch: any) => {
+            updateDoc(docRef.id, patch);
+          },
+        };
+        return await txFn(tx);
+      };
+    }
+
+    return fs;
+  }
 
   describe('1. Outgoing write failure emits no signal (simulated rejection)', () => {
     test('skips publication when outgoingUpdated is false', () => {
@@ -71,6 +159,34 @@ describe('Confirmed pull correction signal — acceptance suite', () => {
         expect(unknownFlow.reason).toBe('invalid_measurements');
       }
     });
+
+    test('re-attempt on retry: transitions from skip to publish when outgoing succeeds', () => {
+      const firstAttempt = evaluatePullCorrectionPublication({
+        isLatestPull: true,
+        outgoingUpdated: false, // first attempt fails
+        packetId: PACKET_ID,
+        wellName: WELL_NAME,
+        companyId: COMPANY_ID,
+        driverId: DRIVER_ID,
+        bottomLevel: BOTTOM_LEVEL,
+        pullDateTimeUTC: PULL_TIME,
+        flowRate: FLOW_RATE,
+      });
+      expect(firstAttempt.action).toBe('skip');
+
+      const retryAttempt = evaluatePullCorrectionPublication({
+        isLatestPull: true,
+        outgoingUpdated: true, // retry succeeds
+        packetId: PACKET_ID,
+        wellName: WELL_NAME,
+        companyId: COMPANY_ID,
+        driverId: DRIVER_ID,
+        bottomLevel: BOTTOM_LEVEL,
+        pullDateTimeUTC: PULL_TIME,
+        flowRate: FLOW_RATE,
+      });
+      expect(retryAttempt.action).toBe('publish');
+    });
   });
 
   describe('2. Duplicate / replayed edit emits no new revision (identical digest)', () => {
@@ -105,24 +221,13 @@ describe('Confirmed pull correction signal — acceptance suite', () => {
     test('publisher no-ops when dispatch document already carries the revision', async () => {
       const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
       const mockDoc = {
-        exists: true,
-        data: () => ({
-          companyId: COMPANY_ID,
-          driverHash: DRIVER_ID,
-          wellName: WELL_NAME,
-          lastPullRevision: rev, // already matches
-        }),
+        companyId: COMPANY_ID,
+        driverId: DRIVER_ID,
+        wellName: WELL_NAME,
+        lastPullRevision: rev, // already matches
       };
 
-      const mockUpdate = jest.fn();
-      const mockFirestore: any = {
-        collection: () => ({
-          doc: () => ({
-            get: async () => mockDoc,
-            update: mockUpdate,
-          }),
-        }),
-      };
+      const mockFirestore = createMockFirestore({ 'disp-1': mockDoc });
 
       const signal: PullCorrectionSignal = {
         packetId: PACKET_ID,
@@ -142,7 +247,12 @@ describe('Confirmed pull correction signal — acceptance suite', () => {
       });
 
       expect(pubResult.ok).toBe(true);
-      expect(mockUpdate).not.toHaveBeenCalled(); // No-op: update was skipped due to idempotency
+      expect(pubResult.results?.['disp-1']).toEqual({
+        ok: true,
+        applied: false,
+        reason: 'already_at_revision',
+      });
+      expect(mockFirestore._updates['disp-1']).toBeUndefined(); // No write made
     });
   });
 
@@ -231,202 +341,607 @@ describe('Confirmed pull correction signal — acceptance suite', () => {
     });
   });
 
-  describe('4. Stale / other company or driver cannot receive/apply it (tenant mismatch rejected)', () => {
-    test('publisher filters out dispatches with mismatched companyId', async () => {
-      const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
-      const mockDoc = {
-        exists: true,
-        data: () => ({
-          companyId: 'other-company',
-          driverHash: DRIVER_ID,
+  describe('4. Tenant, well, and driver containment (fail closed)', () => {
+    describe('Company scoping & docBelongsToTenant', () => {
+      test('rejects mismatched companyId', async () => {
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        const mockFirestore = createMockFirestore({
+          'disp-mismatch-company': {
+            companyId: 'other-company',
+            driverId: DRIVER_ID,
+            wellName: WELL_NAME,
+          },
+        });
+
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
           wellName: WELL_NAME,
-        }),
-      };
-      const mockUpdate = jest.fn();
-      const mockFirestore: any = {
-        collection: () => ({
-          doc: () => ({
-            get: async () => mockDoc,
-            update: mockUpdate,
-          }),
-        }),
-      };
+          companyId: COMPANY_ID, // liquid-gold
+          driverId: DRIVER_ID,
+        };
 
-      const signal: PullCorrectionSignal = {
-        packetId: PACKET_ID,
-        revision: rev,
-        bottomLevel: BOTTOM_LEVEL,
-        pullDateTimeUTC: PULL_TIME,
-        flowRate: FLOW_RATE,
-        publishedAtMs: Date.now(),
-        wellName: WELL_NAME,
-        companyId: COMPANY_ID, // liquid-gold
-        driverId: DRIVER_ID,
-      };
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-mismatch-company'],
+          signal,
+        });
 
-      const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
-        dispatchIds: ['disp-mismatch-company'],
-        signal,
+        expect(pubResult.ok).toBe(false);
+        expect(pubResult.skipped).toBe('all_dispatches_filtered_or_missing');
+        expect(pubResult.results?.['disp-mismatch-company']).toEqual({
+          ok: false,
+          reason: 'company_mismatch',
+        });
       });
 
-      expect(pubResult.ok).toBe(false);
-      expect(pubResult.skipped).toBe('all_dispatches_filtered_or_missing');
-      expect(mockUpdate).not.toHaveBeenCalled();
+      test('rejects unstamped dispatch if signal company is not liquid-gold', async () => {
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        const mockFirestore = createMockFirestore({
+          'disp-no-company': {
+            // No companyId stamped
+            driverId: DRIVER_ID,
+            wellName: WELL_NAME,
+          },
+        });
+
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
+          wellName: WELL_NAME,
+          companyId: 'home-hauling', // Scoped tenant
+          driverId: DRIVER_ID,
+        };
+
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-no-company'],
+          signal,
+        });
+
+        expect(pubResult.ok).toBe(false);
+        expect(pubResult.results?.['disp-no-company']?.reason).toBe('company_mismatch');
+      });
+
+      test('allows unstamped dispatch if signal company is liquid-gold (legacy single-tenant data)', async () => {
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        const mockFirestore = createMockFirestore({
+          'disp-legacy-lg': {
+            // No companyId stamped — legacy Liquid Gold record
+            driverId: DRIVER_ID,
+            wellName: WELL_NAME,
+          },
+        });
+
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
+          wellName: WELL_NAME,
+          companyId: 'liquid-gold',
+          driverId: DRIVER_ID,
+        };
+
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-legacy-lg'],
+          signal,
+        });
+
+        expect(pubResult.ok).toBe(true);
+        expect(pubResult.updatedDispatchIds).toEqual(['disp-legacy-lg']);
+      });
+
+      test('docBelongsToTenant pure unit check', () => {
+        expect(docBelongsToTenant('c1', 'c1')).toBe(true);
+        expect(docBelongsToTenant('c1', 'c2')).toBe(false);
+        expect(docBelongsToTenant(null, 'liquid-gold')).toBe(true);
+        expect(docBelongsToTenant(null, 'other-tenant')).toBe(false);
+        expect(docBelongsToTenant('c1', undefined)).toBe(false);
+      });
     });
 
-    test('publisher filters out dispatches with mismatched driverId', async () => {
-      const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
-      const mockDoc = {
-        exists: true,
-        data: () => ({
-          companyId: COMPANY_ID,
-          driverHash: 'another-driver-999',
+    describe('Well scoping & normalization', () => {
+      test('rejects dispatch with missing well', async () => {
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        const mockFirestore = createMockFirestore({
+          'disp-missing-well': {
+            companyId: COMPANY_ID,
+            driverId: DRIVER_ID,
+            // wellName is missing
+          },
+        });
+
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
           wellName: WELL_NAME,
-        }),
-      };
-      const mockUpdate = jest.fn();
-      const mockFirestore: any = {
-        collection: () => ({
-          doc: () => ({
-            get: async () => mockDoc,
-            update: mockUpdate,
-          }),
-        }),
-      };
+          companyId: COMPANY_ID,
+          driverId: DRIVER_ID,
+        };
 
-      const signal: PullCorrectionSignal = {
-        packetId: PACKET_ID,
-        revision: rev,
-        bottomLevel: BOTTOM_LEVEL,
-        pullDateTimeUTC: PULL_TIME,
-        flowRate: FLOW_RATE,
-        publishedAtMs: Date.now(),
-        wellName: WELL_NAME,
-        companyId: COMPANY_ID,
-        driverId: DRIVER_ID,
-      };
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-missing-well'],
+          signal,
+        });
 
-      const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
-        dispatchIds: ['disp-mismatch-driver'],
-        signal,
+        expect(pubResult.ok).toBe(false);
+        expect(pubResult.results?.['disp-missing-well']).toEqual({
+          ok: false,
+          reason: 'well_mismatch',
+        });
       });
 
-      expect(pubResult.ok).toBe(false);
-      expect(mockUpdate).not.toHaveBeenCalled();
+      test('rejects dispatch with mismatched well', async () => {
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        const mockFirestore = createMockFirestore({
+          'disp-diff-well': {
+            companyId: COMPANY_ID,
+            driverId: DRIVER_ID,
+            wellName: 'Different Well 4',
+          },
+        });
+
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
+          wellName: WELL_NAME,
+          companyId: COMPANY_ID,
+          driverId: DRIVER_ID,
+        };
+
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-diff-well'],
+          signal,
+        });
+
+        expect(pubResult.ok).toBe(false);
+        expect(pubResult.results?.['disp-diff-well']).toEqual({
+          ok: false,
+          reason: 'well_mismatch',
+        });
+      });
+
+      test('accepts normalized well variations (Gabriel 1 vs Gabriel-1 vs gabriel_1)', async () => {
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        const mockFirestore = createMockFirestore({
+          'disp-hyphen-well': {
+            companyId: COMPANY_ID,
+            driverId: DRIVER_ID,
+            wellName: 'Gabriel-1',
+          },
+        });
+
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
+          wellName: 'Gabriel 1',
+          companyId: COMPANY_ID,
+          driverId: DRIVER_ID,
+        };
+
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-hyphen-well'],
+          signal,
+        });
+
+        expect(pubResult.ok).toBe(true);
+        expect(normalizeWellName('Gabriel 1')).toBe('gabriel1');
+        expect(normalizeWellName('Gabriel-1')).toBe('gabriel1');
+        expect(normalizeWellName('gabriel_1')).toBe('gabriel1');
+      });
     });
 
-    test('publisher filters out dispatches with mismatched wellName', async () => {
-      const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
-      const mockDoc = {
-        exists: true,
-        data: () => ({
-          companyId: COMPANY_ID,
-          driverHash: DRIVER_ID,
-          wellName: 'Different Well 4',
-        }),
-      };
-      const mockUpdate = jest.fn();
-      const mockFirestore: any = {
-        collection: () => ({
-          doc: () => ({
-            get: async () => mockDoc,
-            update: mockUpdate,
-          }),
-        }),
-      };
+    describe('Driver scoping & identity equivalence', () => {
+      test('rejects dispatch with missing driver assignment', async () => {
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        const mockFirestore = createMockFirestore({
+          'disp-no-driver': {
+            companyId: COMPANY_ID,
+            wellName: WELL_NAME,
+            // No driverId, driverHash, or assignedDrivers
+          },
+        });
 
-      const signal: PullCorrectionSignal = {
-        packetId: PACKET_ID,
-        revision: rev,
-        bottomLevel: BOTTOM_LEVEL,
-        pullDateTimeUTC: PULL_TIME,
-        flowRate: FLOW_RATE,
-        publishedAtMs: Date.now(),
-        wellName: WELL_NAME,
-        companyId: COMPANY_ID,
-        driverId: DRIVER_ID,
-      };
-
-      const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
-        dispatchIds: ['disp-mismatch-well'],
-        signal,
-      });
-
-      expect(pubResult.ok).toBe(false);
-      expect(mockUpdate).not.toHaveBeenCalled();
-    });
-
-    test('publisher accepts matching dispatch and applies atomic patch with arrayUnion', async () => {
-      const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
-      const mockDoc = {
-        exists: true,
-        data: () => ({
-          companyId: COMPANY_ID,
-          driverHash: DRIVER_ID,
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
           wellName: WELL_NAME,
-          lastPullRevision: 'older_rev',
-        }),
-      };
-      const mockUpdate = jest.fn().mockResolvedValue(undefined);
-      const mockFirestore: any = {
-        collection: () => ({
-          doc: () => ({
-            get: async () => mockDoc,
-            update: mockUpdate,
-          }),
-        }),
-      };
+          companyId: COMPANY_ID,
+          driverId: DRIVER_ID,
+        };
 
-      const signal: PullCorrectionSignal = {
-        packetId: PACKET_ID,
-        revision: rev,
-        bottomLevel: BOTTOM_LEVEL,
-        pullDateTimeUTC: PULL_TIME,
-        flowRate: FLOW_RATE,
-        publishedAtMs: Date.now(),
-        wellName: WELL_NAME,
-        companyId: COMPANY_ID,
-        driverId: DRIVER_ID,
-      };
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-no-driver'],
+          signal,
+        });
 
-      const arrayUnionFn = jest.fn((val) => ({ union: val }));
-      const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
-        dispatchIds: ['disp-valid'],
-        signal,
-        serverTimestamp: '2026-09-29T12:00:00Z',
-        arrayUnion: arrayUnionFn,
+        expect(pubResult.ok).toBe(false);
+        expect(pubResult.results?.['disp-no-driver']).toEqual({
+          ok: false,
+          reason: 'driver_missing',
+        });
       });
 
-      expect(pubResult.ok).toBe(true);
-      expect(pubResult.updatedDispatchIds).toEqual(['disp-valid']);
-      expect(mockUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          lastPullPacketId: PACKET_ID,
-          lastPullRevision: rev,
-          lastPullBottomLevel: BOTTOM_LEVEL,
-          pullPacketIds: { union: PACKET_ID },
-        }),
-      );
+      test('matches direct driverId, driverHash, or assignedDriverId', async () => {
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        const mockFirestore = createMockFirestore({
+          'disp-by-id': { companyId: COMPANY_ID, wellName: WELL_NAME, driverId: DRIVER_ID },
+          'disp-by-hash': { companyId: COMPANY_ID, wellName: WELL_NAME, driverHash: DRIVER_ID },
+          'disp-by-assigned': { companyId: COMPANY_ID, wellName: WELL_NAME, assignedDriverId: DRIVER_ID },
+        });
+
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
+          wellName: WELL_NAME,
+          companyId: COMPANY_ID,
+          driverId: DRIVER_ID,
+        };
+
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-by-id', 'disp-by-hash', 'disp-by-assigned'],
+          signal,
+        });
+
+        expect(pubResult.ok).toBe(true);
+        expect(pubResult.updatedDispatchIds).toEqual(['disp-by-id', 'disp-by-hash', 'disp-by-assigned']);
+      });
+
+      test('matches driver in assignedDrivers array (strings or objects)', () => {
+        const candidates = extractDispatchDriverCandidates({
+          assignedDrivers: [
+            'other-driver',
+            { driverId: 'uuid-123' },
+            { driverHash: 'legacy-hash-456' },
+          ],
+        });
+        expect(candidates).toContain('other-driver');
+        expect(candidates).toContain('uuid-123');
+        expect(candidates).toContain('legacy-hash-456');
+      });
+
+      test('resolves canonical UUID <-> legacy approved hash equivalence via RTDB identityBindings', async () => {
+        const canonicalUuid = 'c0a80101-0000-4000-8000-000000000001';
+        const legacyHash = 'legacy_approved_hash_123456';
+
+        const mockRtdb = createMockRtdb({
+          [`drivers/identityBindings/byDriver/${canonicalUuid}`]: {
+            driverId: canonicalUuid,
+            approvedKey: legacyHash,
+            status: 'active',
+          },
+          [`drivers/identityBindings/byApproved/${legacyHash}`]: {
+            driverId: canonicalUuid,
+            approvedKey: legacyHash,
+            status: 'active',
+          },
+        });
+
+        const equivalent = await areDriverIdentitiesEquivalent(canonicalUuid, legacyHash, mockRtdb);
+        expect(equivalent).toBe(true);
+
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        // Dispatch carries legacyHash, but pull signal carries canonicalUuid
+        const mockFirestore = createMockFirestore({
+          'disp-bound-driver': {
+            companyId: COMPANY_ID,
+            wellName: WELL_NAME,
+            driverHash: legacyHash,
+          },
+        });
+
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
+          wellName: WELL_NAME,
+          companyId: COMPANY_ID,
+          driverId: canonicalUuid, // canonical UUID matches legacyHash via binding
+        };
+
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-bound-driver'],
+          signal,
+          rtdb: mockRtdb,
+        });
+
+        expect(pubResult.ok).toBe(true);
+        expect(pubResult.updatedDispatchIds).toEqual(['disp-bound-driver']);
+      });
+
+      test('rejects unmapped driver when equivalence lookup fails', async () => {
+        const canonicalUuid = 'c0a80101-0000-4000-8000-000000000001';
+        const unmappedHash = 'totally_unrelated_driver_hash';
+
+        const mockRtdb = createMockRtdb({}); // Empty RTDB — no binding
+        const equivalent = await areDriverIdentitiesEquivalent(canonicalUuid, unmappedHash, mockRtdb);
+        expect(equivalent).toBe(false);
+
+        const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+        const mockFirestore = createMockFirestore({
+          'disp-unmapped': {
+            companyId: COMPANY_ID,
+            wellName: WELL_NAME,
+            driverHash: unmappedHash,
+          },
+        });
+
+        const signal: PullCorrectionSignal = {
+          packetId: PACKET_ID,
+          revision: rev,
+          bottomLevel: BOTTOM_LEVEL,
+          pullDateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          publishedAtMs: Date.now(),
+          wellName: WELL_NAME,
+          companyId: COMPANY_ID,
+          driverId: canonicalUuid,
+        };
+
+        const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+          dispatchIds: ['disp-unmapped'],
+          signal,
+          rtdb: mockRtdb,
+        });
+
+        expect(pubResult.ok).toBe(false);
+        expect(pubResult.results?.['disp-unmapped']?.reason).toBe('driver_mismatch');
+      });
     });
   });
 
-  describe('5. Offline queue emits nothing until processing completes', () => {
-    test('ingestWbmEdit contract: returns queued: true, committed: false and touches no dispatches', () => {
-      // Offline queue intake operates exclusively on RTDB packets/incoming staging
-      // It does not evaluate publication or touch Firestore dispatches.
-      const simulatedIngestResponse = {
-        ok: true as const,
-        key: 'edit_key_123',
+  describe('5. Monotonic ordering & CAS on dispatches', () => {
+    test('skips update when dispatch has newer revision (out-of-order replay protection)', async () => {
+      const olderRev = computePullRevision(PACKET_ID, '4\'2"', PULL_TIME, FLOW_RATE);
+      const mockFirestore = createMockFirestore({
+        'disp-newer': {
+          companyId: COMPANY_ID,
+          wellName: WELL_NAME,
+          driverId: DRIVER_ID,
+          lastPullRevision: 'newer_rev_abc',
+          lastPullCorrection: {
+            publishedAtMs: 2000000, // Newer published timestamp
+          },
+        },
+      });
+
+      const signal: PullCorrectionSignal = {
         packetId: PACKET_ID,
-        idempotencyKey: 'edit_key_123',
-        duplicate: false,
-        queued: true as const,
-        committed: false as const,
+        revision: olderRev,
+        bottomLevel: '4\'2"',
+        pullDateTimeUTC: PULL_TIME,
+        flowRate: FLOW_RATE,
+        publishedAtMs: 1000000, // Older timestamp
+        wellName: WELL_NAME,
+        companyId: COMPANY_ID,
+        driverId: DRIVER_ID,
       };
 
-      expect(simulatedIngestResponse.queued).toBe(true);
-      expect(simulatedIngestResponse.committed).toBe(false);
-      // The dispatch signal is guarded by evaluatePullCorrectionPublication which requires outgoingUpdated: true
+      const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+        dispatchIds: ['disp-newer'],
+        signal,
+      });
+
+      expect(pubResult.ok).toBe(true);
+      expect(pubResult.results?.['disp-newer']).toEqual({
+        ok: true,
+        applied: false,
+        reason: 'superseded_by_newer_revision',
+      });
+      // Ensure Firestore update was NOT called
+      expect(mockFirestore._updates['disp-newer']).toBeUndefined();
+    });
+
+    test('applies update when incoming signal is newer than existing revision', async () => {
+      const newerRev = computePullRevision(PACKET_ID, '4\'8"', PULL_TIME, FLOW_RATE);
+      const mockFirestore = createMockFirestore({
+        'disp-older': {
+          companyId: COMPANY_ID,
+          wellName: WELL_NAME,
+          driverId: DRIVER_ID,
+          lastPullRevision: 'older_rev_xyz',
+          lastPullCorrection: {
+            publishedAtMs: 1000000, // Older timestamp
+          },
+        },
+      });
+
+      const signal: PullCorrectionSignal = {
+        packetId: PACKET_ID,
+        revision: newerRev,
+        bottomLevel: '4\'8"',
+        pullDateTimeUTC: PULL_TIME,
+        flowRate: FLOW_RATE,
+        publishedAtMs: 2000000, // Newer timestamp
+        wellName: WELL_NAME,
+        companyId: COMPANY_ID,
+        driverId: DRIVER_ID,
+      };
+
+      const pubResult = await publishPullCorrectionToDispatches(mockFirestore, {
+        dispatchIds: ['disp-older'],
+        signal,
+      });
+
+      expect(pubResult.ok).toBe(true);
+      expect(pubResult.results?.['disp-older']).toEqual({
+        ok: true,
+        applied: true,
+      });
+      expect(mockFirestore._updates['disp-older']).toBeDefined();
+      expect(mockFirestore._store['disp-older'].lastPullRevision).toBe(newerRev);
+    });
+  });
+
+  describe('6. Durable retry & reconciliation (reconcilePendingPullCorrectionSignal)', () => {
+    test('returns not_pending when packet is already delivered', async () => {
+      const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+      const mockRtdb = createMockRtdb({
+        [`packets/processed/${PACKET_ID}`]: {
+          outgoingCommittedRevision: rev,
+          lastPullDeliveredRevision: rev, // matches
+          dispatchSignalPending: false,
+        },
+      });
+      const mockFirestore = createMockFirestore({});
+
+      const result = await reconcilePendingPullCorrectionSignal(mockFirestore, mockRtdb, PACKET_ID);
+      expect(result.ok).toBe(true);
+      expect(result.status).toBe('not_pending');
+      expect(result.revision).toBe(rev);
+    });
+
+    test('reconciles pending signal when outgoing was committed but dispatch delivery was pending', async () => {
+      const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+      const mockRtdb = createMockRtdb({
+        [`packets/processed/${PACKET_ID}`]: {
+          wellName: WELL_NAME,
+          companyId: COMPANY_ID,
+          driverId: DRIVER_ID,
+          tankAfterFeet: BOTTOM_LEVEL,
+          dateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          outgoingCommittedRevision: rev,
+          lastPullDeliveredRevision: null, // not yet delivered
+          dispatchSignalPending: true,
+          dispatchSignalPendingRevision: rev,
+          dispatchSignalError: 'network timeout',
+        },
+      });
+
+      const mockFirestore = createMockFirestore({
+        'disp-target-1': {
+          companyId: COMPANY_ID,
+          wellName: WELL_NAME,
+          driverId: DRIVER_ID,
+          lastPullPacketId: PACKET_ID,
+        },
+      });
+
+      const result = await reconcilePendingPullCorrectionSignal(mockFirestore, mockRtdb, PACKET_ID);
+
+      expect(result.ok).toBe(true);
+      expect(result.status).toBe('reconciled');
+      expect(result.revision).toBe(rev);
+      expect(result.updatedDispatchIds).toEqual(['disp-target-1']);
+
+      // Check RTDB state was updated
+      const updatedPkt = mockRtdb._data[`packets/processed/${PACKET_ID}`];
+      expect(updatedPkt.lastPullDeliveredRevision).toBe(rev);
+      expect(updatedPkt.lastPullRevision).toBe(rev);
+      expect(updatedPkt.dispatchSignalPending).toBeNull();
+      expect(updatedPkt.dispatchSignalError).toBeNull();
+
+      // Check dispatch document in Firestore was updated
+      expect(mockFirestore._store['disp-target-1'].lastPullRevision).toBe(rev);
+    });
+
+    test('safely skips when no target dispatches are found for the pull', async () => {
+      const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+      const mockRtdb = createMockRtdb({
+        [`packets/processed/${PACKET_ID}`]: {
+          wellName: WELL_NAME,
+          companyId: COMPANY_ID,
+          driverId: DRIVER_ID,
+          tankAfterFeet: BOTTOM_LEVEL,
+          dateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          outgoingCommittedRevision: rev,
+          lastPullDeliveredRevision: null,
+          dispatchSignalPending: true,
+        },
+      });
+
+      const mockFirestore = createMockFirestore({}); // No dispatches match
+
+      const result = await reconcilePendingPullCorrectionSignal(mockFirestore, mockRtdb, PACKET_ID);
+
+      expect(result.ok).toBe(true);
+      expect(result.status).toBe('skipped');
+      expect(result.reason).toBe('no_target_dispatches');
+
+      // RTDB cleared pending and marked delivered
+      const updatedPkt = mockRtdb._data[`packets/processed/${PACKET_ID}`];
+      expect(updatedPkt.lastPullDeliveredRevision).toBe(rev);
+      expect(updatedPkt.dispatchSignalPending).toBeNull();
+    });
+
+    test('records error and returns failed status when Firestore throws error during publication', async () => {
+      const rev = computePullRevision(PACKET_ID, BOTTOM_LEVEL, PULL_TIME, FLOW_RATE);
+      const mockRtdb = createMockRtdb({
+        [`packets/processed/${PACKET_ID}`]: {
+          wellName: WELL_NAME,
+          companyId: COMPANY_ID,
+          driverId: DRIVER_ID,
+          tankAfterFeet: BOTTOM_LEVEL,
+          dateTimeUTC: PULL_TIME,
+          flowRate: FLOW_RATE,
+          outgoingCommittedRevision: rev,
+          lastPullDeliveredRevision: null,
+          dispatchSignalPending: true,
+        },
+      });
+
+      const mockFirestore = createMockFirestore({
+        'disp-err': {
+          companyId: COMPANY_ID,
+          wellName: WELL_NAME,
+          driverId: DRIVER_ID,
+          lastPullPacketId: PACKET_ID,
+        },
+      });
+      // Force Firestore transaction to throw
+      mockFirestore.runTransaction = async () => {
+        throw new Error('Firestore unavailable (simulated 503)');
+      };
+
+      const result = await reconcilePendingPullCorrectionSignal(mockFirestore, mockRtdb, PACKET_ID);
+
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe('failed');
+      expect(result.reason).toContain('Firestore unavailable');
+
+      // RTDB recorded the error and kept pending true
+      const updatedPkt = mockRtdb._data[`packets/processed/${PACKET_ID}`];
+      expect(updatedPkt.dispatchSignalPending).toBe(true);
+      expect(updatedPkt.dispatchSignalError).toContain('Firestore unavailable');
+    });
+  });
+
+  describe('7. Offline queue & older pull edge cases', () => {
+    test('offline queue returns queued: true, committed: false and touches no dispatches', () => {
       const earlyEval = evaluatePullCorrectionPublication({
         isLatestPull: true,
         outgoingUpdated: false, // queued, not committed
@@ -439,11 +954,12 @@ describe('Confirmed pull correction signal — acceptance suite', () => {
         flowRate: FLOW_RATE,
       });
       expect(earlyEval.action).toBe('skip');
+      if (earlyEval.action === 'skip') {
+        expect(earlyEval.reason).toBe('outgoing_not_updated');
+      }
     });
-  });
 
-  describe('6. Older pull edit that does not change current outgoing emits nothing', () => {
-    test('skips publication when isLatestPull is false', () => {
+    test('older pull edit that does not change current outgoing emits nothing', () => {
       const result = evaluatePullCorrectionPublication({
         isLatestPull: false, // Older historical pull edited
         outgoingUpdated: true,
@@ -463,9 +979,9 @@ describe('Confirmed pull correction signal — acceptance suite', () => {
     });
   });
 
-  describe('Dispatch identity resolution (findDispatchIdsForPull)', () => {
+  describe('8. Dispatch identity resolution (findDispatchIdsForPull)', () => {
     test('resolves explicit dispatchId hint first', async () => {
-      const mockFirestore: any = {};
+      const mockFirestore = createMockFirestore({});
       const ids = await findDispatchIdsForPull(mockFirestore, {
         dispatchId: 'explicit-disp-123',
         packetId: PACKET_ID,
@@ -474,7 +990,7 @@ describe('Confirmed pull correction signal — acceptance suite', () => {
     });
 
     test('resolves ticketDispatchId or invoiceDispatchId if dispatchId is absent', async () => {
-      const mockFirestore: any = {};
+      const mockFirestore = createMockFirestore({});
       const idsFromTicket = await findDispatchIdsForPull(mockFirestore, {
         ticketDispatchId: 'disp-from-ticket',
         packetId: PACKET_ID,
@@ -489,24 +1005,11 @@ describe('Confirmed pull correction signal — acceptance suite', () => {
     });
 
     test('queries by lastPullPacketId when hints are empty', async () => {
-      const mockDocs = [{ id: 'disp-matched-by-last-pull' }];
-      const mockFirestore: any = {
-        collection: (coll: string) => {
-          expect(coll).toBe('dispatches');
-          return {
-            where: (field: string, op: string, val: string) => {
-              expect(field).toBe('lastPullPacketId');
-              expect(op).toBe('==');
-              expect(val).toBe(PACKET_ID);
-              return {
-                get: async () => ({
-                  forEach: (cb: any) => mockDocs.forEach(cb),
-                }),
-              };
-            },
-          };
+      const mockFirestore = createMockFirestore({
+        'disp-matched-by-last-pull': {
+          lastPullPacketId: PACKET_ID,
         },
-      };
+      });
 
       const ids = await findDispatchIdsForPull(mockFirestore, {
         packetId: PACKET_ID,

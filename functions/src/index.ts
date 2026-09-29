@@ -46,6 +46,7 @@ import {
   evaluatePullCorrectionPublication,
   findDispatchIdsForPull,
   publishPullCorrectionToDispatches,
+  reconcilePendingPullCorrectionSignal,
 } from './security/operational/pullCorrectionSignal';
 
 
@@ -1865,6 +1866,46 @@ export const processEditRequest = functionsV1.database
       return null;
     }
 
+    // ── Check for pending confirmed pull correction signal on retry / replay ──
+    if (
+      origPacket.dispatchSignalPending === true ||
+      (origPacket.outgoingCommittedRevision &&
+        origPacket.outgoingCommittedRevision !== origPacket.lastPullDeliveredRevision)
+    ) {
+      const pendingRev =
+        origPacket.dispatchSignalPendingRevision || origPacket.outgoingCommittedRevision;
+      console.log(
+        `Edit: Detected pending pull correction signal for ${originalPacketId} (rev=${pendingRev}). Retrying dispatch publication directly...`,
+      );
+
+      const reconcileResult = await reconcilePendingPullCorrectionSignal(
+        admin.firestore(),
+        db,
+        originalPacketId,
+        {
+          serverTimestamp: admin.firestore.FieldValue.serverTimestamp(),
+          arrayUnion: (val) => admin.firestore.FieldValue.arrayUnion(val),
+        },
+      );
+
+      if (reconcileResult.ok) {
+        console.log(
+          `Edit: Successfully reconciled pending pull correction signal for ${originalPacketId}:`,
+          reconcileResult,
+        );
+        await removeIncomingPacket(db.ref(), context.params.packetId);
+        return null;
+      } else {
+        console.error(
+          `Edit: Reconciling pending signal failed for ${originalPacketId}:`,
+          reconcileResult.reason,
+        );
+        throw new Error(
+          `Failed to reconcile pull correction signal: ${reconcileResult.reason}`,
+        );
+      }
+    }
+
     // ── 7/25 normalized no-op: identical milestone revisions ─────────────
     // WB-T sends the complete canonical state on every Depart / Close /
     // Split / History save. When no MATERIAL field differs (top, BBLs,
@@ -2119,13 +2160,13 @@ export const processEditRequest = functionsV1.database
       ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
     };
 
-    // Atomic multi-path: processed summary + immutable history event + consume incoming
+    // Multi-path: processed summary + immutable history event
+    // NOTE: incoming packet is consumed ONLY after outgoing write AND dispatch signal succeed!
     await db.ref().update({
       ...Object.fromEntries(
         Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
       ),
       ...historyPaths,
-      [`packets/incoming/${context.params.packetId}`]: null,
     });
 
     // Update well down status if this is the latest packet (authority-gated)
@@ -2312,10 +2353,12 @@ export const processEditRequest = functionsV1.database
         outgoingUpdatedSuccessfully = false;
       }
 
-      if (newRevision) {
+      if (outgoingUpdatedSuccessfully && newRevision) {
         await db.ref(`packets/processed/${originalPacketId}`).update({
-          lastPullRevision: newRevision,
+          outgoingCommittedRevision: newRevision,
         });
+      } else if (!outgoingUpdatedSuccessfully) {
+        throw new Error(`Failed to update outgoing response for well ${wellName} (packet ${originalPacketId})`);
       }
 
       // Update well_config AFR
@@ -2623,6 +2666,7 @@ export const processEditRequest = functionsV1.database
 
     // ── Governed confirmed pull correction signal on dispatches ──
     // Published ONLY after packets/outgoing update has completed.
+    let dispatchPublishSucceeded = false;
     try {
       const targetCompanyId = outgoingCompanyId(config);
       const targetDriverId = origPacket.driverId || (data as any).driverId || null;
@@ -2636,7 +2680,7 @@ export const processEditRequest = functionsV1.database
         bottomLevel: newBottomLevelStr,
         pullDateTimeUTC: newDateTimeUTC,
         flowRate: newFlowRateStr,
-        existingRevision: origPacket.lastPullRevision || null,
+        existingRevision: origPacket.lastPullDeliveredRevision || null,
       });
 
       if (evalResult.action === 'publish') {
@@ -2665,21 +2709,53 @@ export const processEditRequest = functionsV1.database
           const pubResult = await publishPullCorrectionToDispatches(admin.firestore(), {
             dispatchIds: targetDispatchIds,
             signal: evalResult.signal,
+            rtdb: db,
             serverTimestamp: admin.firestore.FieldValue.serverTimestamp(),
             arrayUnion: (val) => admin.firestore.FieldValue.arrayUnion(val),
           });
-          console.log(`Edit: Confirmed pull correction published to dispatches [${targetDispatchIds.join(', ')}]: revision=${evalResult.revision} (ok=${pubResult.ok})`);
+          if (pubResult.ok) {
+            dispatchPublishSucceeded = true;
+            console.log(
+              `Edit: Confirmed pull correction published to dispatches [${targetDispatchIds.join(', ')}]: revision=${evalResult.revision} (ok=true)`,
+            );
+          } else {
+            console.warn(
+              `Edit: Confirmed pull correction dispatch update filtered or missed [${targetDispatchIds.join(', ')}]: ${pubResult.skipped}`,
+            );
+            dispatchPublishSucceeded = true;
+          }
         } else {
-          console.log(`Edit: Confirmed pull correction skipped — no matching dispatches found for ${originalPacketId}`);
+          console.log(
+            `Edit: Confirmed pull correction skipped — no matching dispatches found for ${originalPacketId}`,
+          );
+          dispatchPublishSucceeded = true;
+        }
+
+        if (dispatchPublishSucceeded) {
+          await db.ref(`packets/processed/${originalPacketId}`).update({
+            lastPullDeliveredRevision: evalResult.revision,
+            lastPullRevision: evalResult.revision,
+            dispatchSignalPending: null,
+            dispatchSignalPendingRevision: null,
+            dispatchSignalError: null,
+          });
         }
       } else {
         console.log(`Edit: Confirmed pull correction skipped: ${evalResult.reason}`);
+        dispatchPublishSucceeded = true;
       }
     } catch (signalErr) {
       console.warn('Edit: Error publishing confirmed pull correction signal:', signalErr);
+      const errMsg = (signalErr as any)?.message || String(signalErr);
+      await db.ref(`packets/processed/${originalPacketId}`).update({
+        dispatchSignalPending: true,
+        dispatchSignalPendingRevision: newRevision,
+        dispatchSignalError: errMsg,
+      });
+      throw signalErr;
     }
 
-    // Delete the edit request
+    // Delete the edit request ONLY after outgoing write AND dispatch signal complete
     await snapshot.ref.remove();
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
