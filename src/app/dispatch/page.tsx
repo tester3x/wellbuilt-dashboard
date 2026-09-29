@@ -1228,6 +1228,21 @@ function DispatchPageInner() {
     setDisposalResults([]);
   }
 
+  function cancelPWDispatch() {
+    cancelScopedCreation('assign-modal');
+    cancelScopedCreation('multi-assign-modal');
+    setSelectedWells(new Map());
+    setAssignTarget(null);
+    setAssignDriverHash('');
+    setAssignNotes('');
+    setAssignLoadCount(1);
+    setAssignDisposal('');
+    setAssignDisposalWell(null);
+    setAssignWellSearch('');
+    setDisposalSearch('');
+    setDisposalResults([]);
+  }
+
   async function submitPWDispatch() {
     if (!assignTarget || !assignDriverHash) return;
     setAssigning(true);
@@ -2379,14 +2394,48 @@ function DispatchPageInner() {
 
             {/* Height-first actionable counts (time-first Overdue/Soon chips removed). */}
             <div className="flex items-center gap-1.5 flex-shrink-0 text-xs">
-              <span className="px-2 py-0.5 rounded bg-red-600 text-white font-bold whitespace-nowrap">
+              <button
+                type="button"
+                onClick={() => setQueueView('needs-pull')}
+                aria-pressed={queueView === 'needs-pull'}
+                aria-label={`View Pull Now queue (${queueReady ? needsPullSplit.total : 0} wells)`}
+                className={`px-2 py-0.5 rounded bg-red-600 text-white font-bold whitespace-nowrap cursor-pointer transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-1 focus-visible:ring-offset-gray-900 ${
+                  queueView === 'needs-pull'
+                    ? 'ring-2 ring-white shadow-md'
+                    : 'opacity-85 hover:opacity-100 hover:brightness-110'
+                }`}
+              >
                 {queueReady ? needsPullSplit.total : '—'} Pull Now
                 {queueReady && needsPullSplit.assigned > 0 && (
                   <span className="font-medium opacity-90"> · {needsPullSplit.unassigned} Unassigned · {needsPullSplit.assigned} Assigned</span>
                 )}
-              </span>
-              <span className="px-2 py-0.5 rounded bg-yellow-600 text-black font-bold">{queueReady ? viewCounts['next-24h'] : '—'} Next 24h</span>
-              <span className="px-2 py-0.5 rounded bg-amber-600 text-white font-bold">{queueReady ? viewCounts['needs-data'] : '—'} Needs Data</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setQueueView('next-24h')}
+                aria-pressed={queueView === 'next-24h'}
+                aria-label={`View Next 24h queue (${queueReady ? viewCounts['next-24h'] : 0} wells)`}
+                className={`px-2 py-0.5 rounded bg-yellow-600 text-black font-bold cursor-pointer transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-1 focus-visible:ring-offset-gray-900 ${
+                  queueView === 'next-24h'
+                    ? 'ring-2 ring-white shadow-md'
+                    : 'opacity-85 hover:opacity-100 hover:brightness-110'
+                }`}
+              >
+                {queueReady ? viewCounts['next-24h'] : '—'} Next 24h
+              </button>
+              <button
+                type="button"
+                onClick={() => setQueueView('needs-data')}
+                aria-pressed={queueView === 'needs-data'}
+                aria-label={`View Needs Data queue (${queueReady ? viewCounts['needs-data'] : 0} wells)`}
+                className={`px-2 py-0.5 rounded bg-amber-600 text-white font-bold cursor-pointer transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-1 focus-visible:ring-offset-gray-900 ${
+                  queueView === 'needs-data'
+                    ? 'ring-2 ring-white shadow-md'
+                    : 'opacity-85 hover:opacity-100 hover:brightness-110'
+                }`}
+              >
+                {queueReady ? viewCounts['needs-data'] : '—'} Needs Data
+              </button>
             </div>
 
             <span className="flex-1" />
@@ -2593,18 +2642,28 @@ function DispatchPageInner() {
                           placeholder="Special instructions..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
                       </div>
                     </div>
-                    {/* Dispatch — routes to bulk or single based on mode */}
-                    {selectedWells.size > 0 ? (
-                      <button onClick={submitBulkDispatch} disabled={!assignDriverHash || assigning}
-                        className="w-full px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
-                        {assigning ? 'Sending...' : `Dispatch ${totalSelectedLoads} Load${totalSelectedLoads !== 1 ? 's' : ''}`}
+                    {/* Bottom Action Row: Clear + Dispatch */}
+                    <div className="flex gap-2 mt-2 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={cancelPWDispatch}
+                        disabled={assigning}
+                        className="px-3 py-1.5 border border-gray-600 hover:border-gray-500 text-gray-300 text-xs rounded transition-colors"
+                      >
+                        Clear
                       </button>
-                    ) : (
-                      <button onClick={submitPWDispatch} disabled={!assignTarget || !assignDriverHash || assigning}
-                        className="w-full px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
-                        {assigning ? 'Sending...' : assignLoadCount > 1 ? `Dispatch ${assignLoadCount} Loads` : 'Dispatch'}
-                      </button>
-                    )}
+                      {selectedWells.size > 0 ? (
+                        <button onClick={submitBulkDispatch} disabled={!assignDriverHash || assigning}
+                          className="flex-1 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                          {assigning ? 'Sending...' : `Dispatch ${totalSelectedLoads} Load${totalSelectedLoads !== 1 ? 's' : ''}`}
+                        </button>
+                      ) : (
+                        <button onClick={submitPWDispatch} disabled={!assignTarget || !assignDriverHash || assigning}
+                          className="flex-1 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                          {assigning ? 'Sending...' : assignLoadCount > 1 ? `Dispatch ${assignLoadCount} Loads` : 'Dispatch'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -2871,7 +2930,7 @@ function DispatchPageInner() {
               {/* ── Projects Tab ── */}
               {builderTab === 'projects' && (
                 <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                  {/* NPB Sub-tabs + Create Project */}
+                  {/* NPB Sub-tabs */}
                   <div className="flex items-center gap-1 mb-3 border-b border-gray-700 pb-2">
                     {([
                       { key: 'details' as const, label: 'Details', badge: newProjectName ? newProjectWells.length > 0 ? '✓' : '' : '' },
@@ -2884,20 +2943,6 @@ function DispatchPageInner() {
                         {tab.badge && <span className="ml-1.5 px-1 py-0.5 bg-emerald-600/20 text-emerald-400 text-[9px] rounded font-bold">{tab.badge}</span>}
                       </button>
                     ))}
-                    <span className="flex-1" />
-                    <button
-                      type="button"
-                      onClick={cancelProject}
-                      disabled={creatingProject}
-                      className="px-3 py-1 border border-gray-600 hover:border-gray-500 text-gray-300 text-xs rounded transition-colors"
-                    >
-                      Clear
-                    </button>
-                    <button onClick={createProject}
-                      disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
-                      className="px-4 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
-                      {creatingProject ? 'Creating...' : 'Create Project'}
-                    </button>
                   </div>
                 {/* Details tab */}
                 {npbTab === 'details' && (
@@ -3087,6 +3132,24 @@ function DispatchPageInner() {
                       className="w-full flex-1 min-h-[180px] sm:min-h-[240px] px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-y" />
                   </div>
                 )}
+                {/* Bottom Action Row: Clear + Create Project */}
+                <div className="flex gap-2 mt-2 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={cancelProject}
+                    disabled={creatingProject}
+                    className="px-3 py-1.5 border border-gray-600 hover:border-gray-500 text-gray-300 text-xs rounded transition-colors"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    onClick={createProject}
+                    disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
+                    className="flex-1 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+                  >
+                    {creatingProject ? 'Creating...' : 'Create Project'}
+                  </button>
+                </div>
                 </div>
               )}{/* end Projects tab */}
             </div>{/* end Tabbed Builder panel */}
