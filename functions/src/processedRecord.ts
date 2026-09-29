@@ -24,6 +24,7 @@ export interface ProcessedComputedFields {
   estTimeToPull: string;
   estDateTimePull: string;
   processedAt: string;
+  lastPullRevision?: string | null;
 }
 
 /** Client-only trail helpers that must NOT be persisted on the processed pull. */

@@ -27,3 +27,14 @@ export {
   sendChatMessage,
 } from './invoiceOps';
 export { getPublicClientMeta } from './publicMeta';
+export {
+  computePullRevision,
+  evaluatePullCorrectionPublication,
+  buildDispatchCorrectionPatch,
+  findDispatchIdsForPull,
+  publishPullCorrectionToDispatches,
+  type PullCorrectionSignal,
+  type EvaluatePullCorrectionInput,
+  type EvaluatePullCorrectionResult,
+  type DispatchLookupHints,
+} from './pullCorrectionSignal';

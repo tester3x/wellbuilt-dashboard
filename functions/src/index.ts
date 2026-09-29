@@ -41,6 +41,12 @@ import {
   markPullClaimApplied,
   shouldApplyCrossKeyGuard,
 } from './security/operational/crossKeyPullClaim';
+import {
+  computePullRevision,
+  evaluatePullCorrectionPublication,
+  findDispatchIdsForPull,
+  publishPullCorrectionToDispatches,
+} from './security/operational/pullCorrectionSignal';
 
 
 admin.initializeApp();
@@ -395,6 +401,7 @@ interface OutgoingResponse {
   lastPullDriverId?: string | null;
   lastPullDriverName?: string | null;
   lastPullPacketId?: string | null;
+  lastPullRevision?: string | null;
   companyId?: string;
 }
 
@@ -1208,6 +1215,12 @@ export const processIncomingPull = functionsV1.database
       estDateTimePull = data.dateTimeUTC;
     }
 
+    const initialFlowRate = afr > 0 ? daysToHMMSS(afr) : 'Unknown';
+    const initialBottomFI = inchesToFeetInches(tankAfterInches);
+    const initialRevision = afr > 0
+      ? computePullRevision(packetId, initialBottomFI, data.dateTimeUTC, initialFlowRate)
+      : null;
+
     // Build processed packet with all calculated fields, then strip client
     // trail-only helpers — extracted to buildProcessedRecord (behavior-
     // preserving). The `...data` spread preserves passthrough fields, incl.
@@ -1216,7 +1229,7 @@ export const processIncomingPull = functionsV1.database
       packetId,
       tankTopInches,
       tankAfterInches,
-      tankAfterFeet: inchesToFeetInches(tankAfterInches),
+      tankAfterFeet: initialBottomFI,
       timeDif,
       timeDifDays,
       recoveryInches,
@@ -1226,6 +1239,7 @@ export const processIncomingPull = functionsV1.database
       estTimeToPull,
       estDateTimePull,
       processedAt: new Date().toISOString(),
+      lastPullRevision: initialRevision,
     });
     await db.ref(`packets/processed/${packetId}`).set(processedClean);
 
@@ -1249,7 +1263,7 @@ export const processIncomingPull = functionsV1.database
     const outgoingResponse: OutgoingResponse = {
       wellName,
       currentLevel: inchesToFeetInches(currentLevelInches),
-      flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
+      flowRate: initialFlowRate,
       bbls24hrs,
       timeTillPull: nextIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
       nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
@@ -1258,10 +1272,11 @@ export const processIncomingPull = functionsV1.database
       lastPullDateTimeUTC: data.dateTimeUTC,
       lastPullBbls: data.bblsTaken.toString(),
       lastPullTopLevel: inchesToFeetInches(tankTopInches),
-      lastPullBottomLevel: inchesToFeetInches(tankAfterInches),
+      lastPullBottomLevel: initialBottomFI,
       lastPullDriverId: data.driverId || null,
       lastPullDriverName: data.driverName || null,
       lastPullPacketId: packetId,
+      lastPullRevision: initialRevision,
       wellDown: nextIsDown,
       companyId: outgoingCompanyId(config),
       status: 'success',
@@ -1562,13 +1577,32 @@ export const processIncomingPull = functionsV1.database
       if (ctxDispatchId) {
         try {
           const fs = admin.firestore();
-          await fs.collection('dispatches').doc(ctxDispatchId).update({
+          const dispPatch: Record<string, any> = {
             lastPullPacketId: packetId,
             lastPullPacketAt: admin.firestore.FieldValue.serverTimestamp(),
             canonicalJobId: result.canonicalJobId,
             // Multi-load history — arrayUnion is idempotent on reprocess.
             pullPacketIds: admin.firestore.FieldValue.arrayUnion(packetId),
-          });
+          };
+          if (initialRevision) {
+            dispPatch.lastPullRevision = initialRevision;
+            dispPatch.lastPullBottomLevel = initialBottomFI;
+            dispPatch.lastPullDateTimeUTC = data.dateTimeUTC;
+            dispPatch.flowRate = initialFlowRate;
+            dispPatch.lastPullCorrection = {
+              packetId,
+              revision: initialRevision,
+              bottomLevel: initialBottomFI,
+              pullDateTimeUTC: data.dateTimeUTC,
+              flowRate: initialFlowRate,
+              publishedAt: admin.firestore.FieldValue.serverTimestamp(),
+              publishedAtMs: Date.now(),
+              wellName,
+              companyId: driverCompanyId,
+              driverId: data.driverId || null,
+            };
+          }
+          await fs.collection('dispatches').doc(ctxDispatchId).update(dispPatch);
           await logCanonicalDiag({
             level: 'info',
             source: 'cf',
@@ -2171,6 +2205,11 @@ export const processEditRequest = functionsV1.database
       isLatestPull = true;
     }
 
+    let outgoingUpdatedSuccessfully = false;
+    let newBottomLevelStr = '';
+    let newFlowRateStr = '';
+    let newRevision: string | null = null;
+
     if (isLatestPull && afr > 0) {
       // Recalculate outgoing response fields
       const pullHeightInches = (pullBbls / bblPerFoot) * 12;
@@ -2192,64 +2231,91 @@ export const processEditRequest = functionsV1.database
 
       const bbls24 = (1 / afr) * bblPerFoot;
       const bbls24hrs = Math.round(bbls24).toString();
+      newBottomLevelStr = inchesToFeetInches(newTankAfterInches);
+      newFlowRateStr = daysToHMMSS(afr);
+      newRevision = computePullRevision(
+        originalPacketId,
+        newBottomLevelStr,
+        newDateTimeUTC,
+        newFlowRateStr,
+      );
 
-      if (hasOutgoing) {
-        // Update existing outgoing response
-        outgoingSnap.forEach((child) => {
-          child.ref.update({
-            currentLevel: inchesToFeetInches(newTankAfterInches),
-            flowRate: daysToHMMSS(afr),
+      try {
+        if (hasOutgoing) {
+          // Update existing outgoing response — await all updates
+          const outgoingPromises: Promise<void>[] = [];
+          outgoingSnap.forEach((child) => {
+            outgoingPromises.push(
+              child.ref.update({
+                currentLevel: newBottomLevelStr,
+                flowRate: newFlowRateStr,
+                bbls24hrs,
+                lastPullTopLevel: inchesToFeetInches(newTankTopInches),
+                lastPullBottomLevel: newBottomLevelStr,
+                lastPullBbls: newBblsTaken.toString(),
+                lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
+                lastPullDateTimeUTC: newDateTimeUTC,
+                timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+                nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+                nextPullTimeUTC: estDateTimePull,
+                isEdit: true,
+                originalPacketId,
+                wellDown: nextEditIsDown,
+                lastPullDriverId: origPacket.driverId || null,
+                lastPullDriverName: origPacket.driverName || null,
+                lastPullPacketId: originalPacketId,
+                lastPullRevision: newRevision,
+                windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
+                overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
+                companyId: outgoingCompanyId(config),
+              }),
+            );
+          });
+          await Promise.all(outgoingPromises);
+          outgoingUpdatedSuccessfully = true;
+        } else {
+          // No outgoing response exists — create one
+          const responseTimestamp = new Date();
+          const responseId = `response_${responseTimestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
+          await db.ref(`packets/outgoing/${responseId}`).set({
+            wellName,
+            currentLevel: newBottomLevelStr,
+            flowRate: newFlowRateStr,
             bbls24hrs,
             lastPullTopLevel: inchesToFeetInches(newTankTopInches),
-            lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
+            lastPullBottomLevel: newBottomLevelStr,
             lastPullBbls: newBblsTaken.toString(),
             lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
             lastPullDateTimeUTC: newDateTimeUTC,
             timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
             nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
             nextPullTimeUTC: estDateTimePull,
+            wellDown: nextEditIsDown,
+            status: 'success',
+            timestamp: responseTimestamp.toISOString(),
+            timestampUTC: responseTimestamp.toISOString(),
             isEdit: true,
             originalPacketId,
-            wellDown: nextEditIsDown,
             lastPullDriverId: origPacket.driverId || null,
             lastPullDriverName: origPacket.driverName || null,
             lastPullPacketId: originalPacketId,
+            lastPullRevision: newRevision,
             windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
             overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
             companyId: outgoingCompanyId(config),
           });
+          outgoingUpdatedSuccessfully = true;
+          console.log(`Edit: Created new outgoing response for ${wellName} (none existed)`);
+        }
+      } catch (outgoingErr) {
+        console.error(`Edit: Failed to update outgoing for ${wellName}:`, outgoingErr);
+        outgoingUpdatedSuccessfully = false;
+      }
+
+      if (newRevision) {
+        await db.ref(`packets/processed/${originalPacketId}`).update({
+          lastPullRevision: newRevision,
         });
-      } else {
-        // No outgoing response exists — create one
-        const responseTimestamp = new Date();
-        const responseId = `response_${responseTimestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-        await db.ref(`packets/outgoing/${responseId}`).set({
-          wellName,
-          currentLevel: inchesToFeetInches(newTankAfterInches),
-          flowRate: daysToHMMSS(afr),
-          bbls24hrs,
-          lastPullTopLevel: inchesToFeetInches(newTankTopInches),
-          lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
-          lastPullBbls: newBblsTaken.toString(),
-          lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
-          lastPullDateTimeUTC: newDateTimeUTC,
-          timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-          nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-          nextPullTimeUTC: estDateTimePull,
-          wellDown: nextEditIsDown,
-          status: 'success',
-          timestamp: responseTimestamp.toISOString(),
-          timestampUTC: responseTimestamp.toISOString(),
-          isEdit: true,
-          originalPacketId,
-          lastPullDriverId: origPacket.driverId || null,
-          lastPullDriverName: origPacket.driverName || null,
-          lastPullPacketId: originalPacketId,
-          windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
-          overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
-          companyId: outgoingCompanyId(config),
-        });
-        console.log(`Edit: Created new outgoing response for ${wellName} (none existed)`);
       }
 
       // Update well_config AFR
@@ -2325,6 +2391,7 @@ export const processEditRequest = functionsV1.database
           bblsTaken: newBblsTaken,
           driverName: origPacket.driverName || '',
           packetId: originalPacketId,
+          revision: newRevision,
         },
         calculated: {
           flowRate: daysToHMMSS(afr),
@@ -2363,6 +2430,11 @@ export const processEditRequest = functionsV1.database
       } catch {}
     };
 
+    let invoiceRef: any = null;
+    let invoiceData: any = null;
+    let ticketRef: any = null;
+    let resolvedVia: string | null = null;
+
     try {
       const firestore = admin.firestore();
       const newTopFI = inchesToFeetInches(newTankTopInches);
@@ -2372,11 +2444,6 @@ export const processEditRequest = functionsV1.database
       await editDiag('edit.firestoreResolve.start', 'ok', 'resolving exact Firestore identity', {
         invoiceDocIdOnPacket: origPacket.invoiceDocId || null,
       });
-
-      let invoiceRef: any = null;
-      let invoiceData: any = null;
-      let ticketRef: any = null;
-      let resolvedVia: string | null = null;
 
       // Resolve the ticket doc WITHIN a known invoice via its ticketSummaries.
       const resolveTicketFromInvoice = async (invRef: any, invData: any): Promise<any> => {
@@ -2552,6 +2619,64 @@ export const processEditRequest = functionsV1.database
     } catch (fsErr) {
       // Non-blocking — RTDB is already updated, Firestore cascade is best-effort
       console.error(`Edit: Firestore cascade error (non-blocking):`, fsErr);
+    }
+
+    // ── Governed confirmed pull correction signal on dispatches ──
+    // Published ONLY after packets/outgoing update has completed.
+    try {
+      const targetCompanyId = outgoingCompanyId(config);
+      const targetDriverId = origPacket.driverId || (data as any).driverId || null;
+      const evalResult = evaluatePullCorrectionPublication({
+        isLatestPull,
+        outgoingUpdated: outgoingUpdatedSuccessfully,
+        packetId: originalPacketId,
+        wellName,
+        companyId: targetCompanyId,
+        driverId: targetDriverId,
+        bottomLevel: newBottomLevelStr,
+        pullDateTimeUTC: newDateTimeUTC,
+        flowRate: newFlowRateStr,
+        existingRevision: origPacket.lastPullRevision || null,
+      });
+
+      if (evalResult.action === 'publish') {
+        let ticketDispatchId: string | null = null;
+        if (ticketRef) {
+          try {
+            const tSnap = await ticketRef.get();
+            if (tSnap.exists) {
+              ticketDispatchId = tSnap.data()?.dispatchId || null;
+            }
+          } catch {}
+        }
+        const invoiceDispatchId = invoiceData?.dispatchId || null;
+
+        const targetDispatchIds = await findDispatchIdsForPull(admin.firestore(), {
+          dispatchId: origPacket.dispatchId || (data as any).dispatchId || null,
+          ticketDispatchId,
+          invoiceDispatchId,
+          packetId: originalPacketId,
+          companyId: targetCompanyId,
+          wellName,
+          driverId: targetDriverId,
+        });
+
+        if (targetDispatchIds.length > 0) {
+          const pubResult = await publishPullCorrectionToDispatches(admin.firestore(), {
+            dispatchIds: targetDispatchIds,
+            signal: evalResult.signal,
+            serverTimestamp: admin.firestore.FieldValue.serverTimestamp(),
+            arrayUnion: (val) => admin.firestore.FieldValue.arrayUnion(val),
+          });
+          console.log(`Edit: Confirmed pull correction published to dispatches [${targetDispatchIds.join(', ')}]: revision=${evalResult.revision} (ok=${pubResult.ok})`);
+        } else {
+          console.log(`Edit: Confirmed pull correction skipped — no matching dispatches found for ${originalPacketId}`);
+        }
+      } else {
+        console.log(`Edit: Confirmed pull correction skipped: ${evalResult.reason}`);
+      }
+    } catch (signalErr) {
+      console.warn('Edit: Error publishing confirmed pull correction signal:', signalErr);
     }
 
     // Delete the edit request
