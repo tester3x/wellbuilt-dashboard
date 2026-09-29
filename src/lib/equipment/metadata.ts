@@ -5,7 +5,6 @@
 
 export type ActorRef =
   | { type: 'driver'; driverHash: string; displayName?: string }
-  | { type: 'canonical_driver'; driverId: string; displayName?: string }
   | { type: 'dashboard'; uid: string; displayName?: string }
   | { type: 'system'; reason?: string };
 
