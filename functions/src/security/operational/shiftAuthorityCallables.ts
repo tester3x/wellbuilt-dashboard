@@ -30,6 +30,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
+import { parseReturnAttempt, returnAttemptState, type ReturnEventType } from './returnAttemptContract';
 import {
   loadCanonicalDriverAuthority,
   productionCanonicalDriverReaders,
@@ -73,7 +74,7 @@ const CLAIM_KEYS = ['periodId', 'originLocalDate'];
  *  odometer and the authoritative logout atomic — they describe the same
  *  moment, and two separate unauthenticated writes is what we are replacing. */
 const CLOSE_KEYS = ['periodId', 'odometerMiles'];
-const DEPART_RETURN_KEYS = ['periodId'];
+const DEPART_RETURN_KEYS = ['periodId', 'attemptId'];
 
 function requireExactKeys(data: unknown, allowed: string[]): Record<string, unknown> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
@@ -363,10 +364,15 @@ export const closeDriverShift = httpsV2.onCall(
  * only guarantees the event is attributed to the open period. Close remains
  * a separate authenticated call the client makes after Post-Trip.
  */
-export const recordDepartReturn = httpsV2.onCall(
-  SHIFT_AUTHORITY_OPTIONS,
-  async (request) => {
+export function createReturnEventHandler(type: ReturnEventType) {
+  return async (request: httpsV2.CallableRequest<unknown>) => {
     const d = requireExactKeys(request.data ?? {}, DEPART_RETURN_KEYS);
+    let attemptId: string | undefined;
+    try {
+      ({ attemptId } = parseReturnAttempt(d, type));
+    } catch (err) {
+      throw new httpsV2.HttpsError('invalid-argument', (err as Error).message);
+    }
     const who = await resolveSubject(request);
     if (!isPeriodId(d.periodId)) {
       throw new httpsV2.HttpsError('invalid-argument', 'malformed_period');
@@ -395,11 +401,14 @@ export const recordDepartReturn = httpsV2.onCall(
       const events = daySnap.exists && Array.isArray(daySnap.data()?.events)
         ? (daySnap.data()!.events as unknown[])
         : [];
-      const alreadyPresent = events.some((e) => {
-        if (!e || typeof e !== 'object') return false;
-        const ev = e as { type?: unknown; shiftId?: unknown };
-        return ev.type === 'depart_return' && ev.shiftId === requestedPeriodId;
-      });
+      const state = returnAttemptState(events, requestedPeriodId, attemptId);
+      if (type === 'return_abandoned' && !state.departed) {
+        throw new httpsV2.HttpsError('failed-precondition', 'return_not_started');
+      }
+      if (type === 'depart_return' && attemptId && state.abandoned) {
+        throw new httpsV2.HttpsError('failed-precondition', 'return_attempt_closed');
+      }
+      const alreadyPresent = type === 'depart_return' ? state.departed : state.abandoned;
 
       const decision = decideOperationalEvent(record, requestedPeriodId, who, alreadyPresent);
       if (decision.action !== 'append') return decision;
@@ -411,7 +420,8 @@ export const recordDepartReturn = httpsV2.onCall(
         date: decision.originLocalDate,
         updatedAt: FieldValue.serverTimestamp(),
         events: FieldValue.arrayUnion(
-          buildLifecycleEvent('depart_return', decision.periodId, serverIsoNow),
+          { type, shiftId: decision.periodId, timestamp: serverIsoNow, source: 'server',
+            ...(attemptId ? { attemptId } : {}) },
         ),
       }, { merge: true });
       return decision;
@@ -428,5 +438,8 @@ export const recordDepartReturn = httpsV2.onCall(
       periodId: outcome.periodId,
       recorded: outcome.action === 'append',
     };
-  },
-);
+  };
+}
+
+export const recordDepartReturn = httpsV2.onCall(SHIFT_AUTHORITY_OPTIONS, createReturnEventHandler('depart_return'));
+export const recordReturnAbandoned = httpsV2.onCall(SHIFT_AUTHORITY_OPTIONS, createReturnEventHandler('return_abandoned'));

@@ -68,6 +68,7 @@ export {
   claimDriverShift,
   closeDriverShift,
   recordDepartReturn,
+  recordReturnAbandoned,
   submitJsaRecord,
   updateDriverProfile,
   signalDriverLogout,

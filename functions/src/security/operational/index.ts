@@ -10,6 +10,7 @@ export {
   claimDriverShift,
   closeDriverShift,
   recordDepartReturn,
+  recordReturnAbandoned,
 } from './shiftAuthorityCallables';
 export { submitJsaRecord } from './jsaWrite';
 export { updateDriverProfile, signalDriverLogout } from './profileWrite';
