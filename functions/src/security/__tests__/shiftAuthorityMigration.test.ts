@@ -24,7 +24,11 @@ import {
   retroCloseDryRunHandler,
   retroCloseExecuteHandler,
 } from '../operational/shiftAuthorityMigrationHandler';
-import { resolveSubject } from '../operational/shiftAuthorityCallables';
+import {
+  createReturnEventHandler,
+  resolveSubject,
+  RETURN_ATTEMPT_KEYS,
+} from '../operational/shiftAuthorityCallables';
 import {
   decideClaim,
   decideClose,
@@ -523,7 +527,7 @@ describe('resolveSubject — canonical authority, not the claim', () => {
 });
 
 describe('driver callables expose no driver/company selector', () => {
-  it('accepts no driverId or companyId field on any shift callable', () => {
+  it('accepts no driverId or companyId field on any shift callable', async () => {
     const src = require('node:fs').readFileSync(
       require('node:path').join(__dirname, '..', 'operational', 'shiftAuthorityCallables.ts'), 'utf8',
     ) as string;
@@ -533,7 +537,24 @@ describe('driver callables expose no driver/company selector', () => {
     // odometerMiles rides on close (period-scoped, captured at close time);
     // it is a bounded value, not a driver/company selector.
     expect(src).toMatch(/const CLOSE_KEYS = \['periodId', 'odometerMiles'\];/);
-    expect(src).toMatch(/const DEPART_RETURN_KEYS = \['periodId'\];/);
+    expect(src).toMatch(/export const RETURN_ATTEMPT_KEYS = \['periodId', 'attemptId'\];/);
+    expect(RETURN_ATTEMPT_KEYS).toEqual(['periodId', 'attemptId']);
+
+    // Exercise production validation and the real handlers directly:
+    const depart = createReturnEventHandler('depart_return');
+    const abandon = createReturnEventHandler('return_abandoned');
+
+    // Reject driverId injection on both endpoints
+    await expect(depart({ data: { periodId: PERIOD, attemptId: 'attempt-1', driverId: DRIVER } } as any))
+      .rejects.toMatchObject({ code: 'invalid-argument', message: 'unknown_fields:driverId' });
+    await expect(abandon({ data: { periodId: PERIOD, attemptId: 'attempt-1', driverId: DRIVER } } as any))
+      .rejects.toMatchObject({ code: 'invalid-argument', message: 'unknown_fields:driverId' });
+
+    // Reject companyId injection on both endpoints
+    await expect(depart({ data: { periodId: PERIOD, attemptId: 'attempt-1', companyId: COMPANY } } as any))
+      .rejects.toMatchObject({ code: 'invalid-argument', message: 'unknown_fields:companyId' });
+    await expect(abandon({ data: { periodId: PERIOD, attemptId: 'attempt-1', companyId: COMPANY } } as any))
+      .rejects.toMatchObject({ code: 'invalid-argument', message: 'unknown_fields:companyId' });
   });
 });
 
