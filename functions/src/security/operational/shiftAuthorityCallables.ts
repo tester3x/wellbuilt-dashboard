@@ -74,7 +74,8 @@ const CLAIM_KEYS = ['periodId', 'originLocalDate'];
  *  odometer and the authoritative logout atomic — they describe the same
  *  moment, and two separate unauthenticated writes is what we are replacing. */
 const CLOSE_KEYS = ['periodId', 'odometerMiles'];
-const DEPART_RETURN_KEYS = ['periodId', 'attemptId'];
+export const DEPART_RETURN_KEYS = ['periodId'];
+const RETURN_ATTEMPT_KEYS = ['periodId', 'attemptId'];
 
 function requireExactKeys(data: unknown, allowed: string[]): Record<string, unknown> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
@@ -366,7 +367,7 @@ export const closeDriverShift = httpsV2.onCall(
  */
 export function createReturnEventHandler(type: ReturnEventType) {
   return async (request: httpsV2.CallableRequest<unknown>) => {
-    const d = requireExactKeys(request.data ?? {}, DEPART_RETURN_KEYS);
+    const d = requireExactKeys(request.data ?? {}, RETURN_ATTEMPT_KEYS);
     let attemptId: string | undefined;
     try {
       ({ attemptId } = parseReturnAttempt(d, type));
