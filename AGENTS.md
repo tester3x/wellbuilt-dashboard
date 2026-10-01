@@ -35,7 +35,7 @@ Report each separately; never conflate them:
 - Deploy only through a canonical `release/dashboard-*` branch and the certified
   preflight (`scripts/preflight-hosting-deploy.cjs`): canonical branch + clean tree
   + descends from the proven UI baseline (`576fb63b`) + fresh build + guardrails.
-- **Do not deploy merely to establish policy, docs, or test coverage.**
+- A policy, docs, or test-only change does not itself trigger a Hosting release; carry user-requested product code changes through the verified, scoped release path under the current workspace policy.
 - Before a release, run the previously approved regression checks
   (`tools/test-header-navigation-guardrails.mjs`, `tools/test-photo-review-contract.mjs`,
   `tools/test-render-all-authenticated-routes.mjs`, plus the `src/lib/__tests__`
