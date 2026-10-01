@@ -8,6 +8,7 @@ import {
   parseDispatchId,
   parsePacketRef,
   requireCompleteBinding,
+  resolveAuthoritativeWell,
   stampDispatchBinding,
   verifyDispatchPinsAgainstEnvelope,
   type DispatchBinding,
@@ -76,13 +77,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Authoritative execution context from the stored dispatch only.
+ * Authoritative execution context from the stored dispatch, or authoritative server well catalog.
  * Stored field `jobType` is the canonical job-type id (response `jobTypeId`).
  * Stored `wellName` and `ndicWellName` are preserved as distinct plain strings.
- * Caller input, packet text, and catalog guesses are never used.
+ * Caller input, packet text, and display-name fallbacks are never used.
  */
 export function readDispatchExecutionContext(
   job: Record<string, unknown>,
+  authoritativeIdentity?: { wellName?: string; ndicWellName?: string },
 ): StoreResult<{ execution: DispatchExecutionContext }> {
   let jobTypeId = '';
   if (Object.prototype.hasOwnProperty.call(job, 'jobTypeId') && job.jobTypeId !== undefined && job.jobTypeId !== null) {
@@ -99,15 +101,22 @@ export function readDispatchExecutionContext(
   if (!Object.prototype.hasOwnProperty.call(job, 'wellName')) {
     return fail('missing_well_identity', 'wellName');
   }
-  if (!Object.prototype.hasOwnProperty.call(job, 'ndicWellName')) {
+  if (typeof job.wellName !== 'string') return fail('malformed_well_identity', 'wellName');
+  const wellName = job.wellName.trim();
+  if (!wellName) return fail('partial_well_identity', 'wellName');
+
+  let ndicWellName = '';
+  if (Object.prototype.hasOwnProperty.call(job, 'ndicWellName')) {
+    if (typeof job.ndicWellName !== 'string') return fail('malformed_well_identity', 'ndicWellName');
+    ndicWellName = job.ndicWellName.trim();
+    if (!ndicWellName) return fail('partial_well_identity', 'ndicWellName');
+  } else if (authoritativeIdentity && typeof authoritativeIdentity.ndicWellName === 'string') {
+    ndicWellName = authoritativeIdentity.ndicWellName.trim();
+    if (!ndicWellName) return fail('missing_well_identity', 'ndicWellName');
+  } else {
     return fail('missing_well_identity', 'ndicWellName');
   }
-  if (typeof job.wellName !== 'string') return fail('malformed_well_identity', 'wellName');
-  if (typeof job.ndicWellName !== 'string') return fail('malformed_well_identity', 'ndicWellName');
-  const wellName = job.wellName.trim();
-  const ndicWellName = job.ndicWellName.trim();
-  if (!wellName) return fail('partial_well_identity', 'wellName');
-  if (!ndicWellName) return fail('partial_well_identity', 'ndicWellName');
+
   return { ok: true, execution: { jobTypeId, wellName, ndicWellName } };
 }
 
@@ -132,6 +141,7 @@ export async function runResolveExecutionBinding(input: {
   getDispatch: (id: string) => Promise<Record<string, unknown> | null>;
   getRevision: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
   getCompany?: (id: string) => Promise<Record<string, unknown> | null>;
+  getWellCatalog?: () => Promise<unknown>;
   writes?: unknown[];
 }): Promise<StoreResult<ExecutionBindingResult>> {
   if (input.writes) input.writes.length = 0;
@@ -194,7 +204,20 @@ export async function runResolveExecutionBinding(input: {
   if (!effectsSnap.ok) return effectsSnap;
   if (!Array.isArray(effectsSnap.value)) return fail('effects_must_be_array', 'implementedEffects');
   const implementedEffects = (effectsSnap.value as unknown[]).map((e) => String(e));
-  const executionRead = readDispatchExecutionContext(existing);
+  let recoveredWell: { wellName: string; ndicWellName: string } | undefined;
+  if (!Object.prototype.hasOwnProperty.call(existing, 'ndicWellName') && input.getWellCatalog) {
+    if (typeof existing.wellName === 'string' && existing.wellName.trim()) {
+      const rawCatalog = await input.getWellCatalog();
+      const authWell = resolveAuthoritativeWell(rawCatalog, { wellName: existing.wellName }, companyId);
+      if (authWell.ok && authWell.well.ndicWellName) {
+        recoveredWell = {
+          wellName: authWell.well.wellName,
+          ndicWellName: authWell.well.ndicWellName,
+        };
+      }
+    }
+  }
+  const executionRead = readDispatchExecutionContext(existing, recoveredWell);
   if (!executionRead.ok) return executionRead;
   const executionSnap = snapshotPlain(executionRead.execution, 'execution');
   if (!executionSnap.ok) return executionSnap;

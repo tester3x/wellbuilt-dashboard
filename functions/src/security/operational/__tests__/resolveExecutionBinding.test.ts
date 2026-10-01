@@ -532,3 +532,267 @@ describe('G-015 authoritative execution context', () => {
     expect(callable).not.toMatch(/INDEX_COLLECTION/);
   });
 });
+
+describe('legacy dispatch authoritative well recovery (G-015 compatibility)', () => {
+  const wellCatalog = {
+    'Gabriel 1': {
+      wellName: 'Gabriel 1',
+      ndicName: 'GABRIEL 1-36-25H',
+      route: 'Gabriels',
+    },
+    'Python': {
+      wellName: 'Python',
+      ndicName: 'Python  1-4H',
+      route: 'Montana',
+    },
+    'Gab 1': {
+      wellName: 'Gab 1',
+      route: 'Test Route',
+      // Explicitly NO ndicName / empty ndicName - exact shape of live Gab 1 test well
+    },
+    'CrossTenant': {
+      wellName: 'CrossTenant',
+      ndicName: 'CROSS TENANT 1',
+      companyId: OTHER,
+    },
+    'Ambig 1': {
+      wellName: 'Ambiguous Well',
+      ndicName: 'AMBIG 1',
+    },
+    'Ambig 2': {
+      wellName: 'Ambiguous Well',
+      ndicName: 'AMBIG 2',
+    },
+  };
+
+  it('1. valid authorized pickup on legacy dispatch missing ndicWellName recovers canonical NDIC from well_config', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const legacyDispatch = dispatchFrom(rev, { wellName: 'Gabriel 1' });
+    const { ndicWellName, ...noNdic } = legacyDispatch;
+    void ndicWellName;
+
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => noNdic,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getWellCatalog: async () => wellCatalog,
+    });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.execution).toEqual({
+      jobTypeId: 'pw',
+      wellName: 'Gabriel 1',
+      ndicWellName: 'GABRIEL 1-36-25H',
+    });
+    expect(r.execution.ndicWellName).not.toBe(r.execution.wellName);
+  });
+
+  it('2. exact Gab 1 legacy shape without ndicName in well_config strictly fails closed with missing_well_identity', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const gab1Dispatch = dispatchFrom(rev, { wellName: 'Gab 1' });
+    const { ndicWellName, ...noNdic } = gab1Dispatch;
+    void ndicWellName;
+
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => noNdic,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getWellCatalog: async () => wellCatalog,
+    });
+
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('missing_well_identity');
+    expect(r.field).toBe('ndicWellName');
+  });
+
+  it('3. legacy dispatch with ambiguous well identity in catalog fails closed with missing_well_identity', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const ambigDispatch = dispatchFrom(rev, { wellName: 'Ambiguous Well' });
+    const { ndicWellName, ...noNdic } = ambigDispatch;
+    void ndicWellName;
+
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => noNdic,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getWellCatalog: async () => wellCatalog,
+    });
+
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('missing_well_identity');
+    expect(r.field).toBe('ndicWellName');
+  });
+
+  it('4. legacy dispatch with unknown well identity fails closed with missing_well_identity', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const unknownDispatch = dispatchFrom(rev, { wellName: 'Unknown Mystery Well' });
+    const { ndicWellName, ...noNdic } = unknownDispatch;
+    void ndicWellName;
+
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => noNdic,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getWellCatalog: async () => wellCatalog,
+    });
+
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('missing_well_identity');
+    expect(r.field).toBe('ndicWellName');
+  });
+
+  it('5. legacy dispatch matching cross-tenant well in catalog fails closed with missing_well_identity', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const crossDispatch = dispatchFrom(rev, { wellName: 'CrossTenant' });
+    const { ndicWellName, ...noNdic } = crossDispatch;
+    void ndicWellName;
+
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => noNdic,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getWellCatalog: async () => wellCatalog,
+    });
+
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('missing_well_identity');
+    expect(r.field).toBe('ndicWellName');
+  });
+
+  it('6. legacy dispatch with wrong owner / caller fails closed before well recovery', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const legacyDispatch = dispatchFrom(rev, { wellName: 'Gabriel 1' });
+    const { ndicWellName, ...noNdic } = legacyDispatch;
+    void ndicWellName;
+
+    const otherDriverRes = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: OTHER_DRIVER, companyId: COMPANY },
+      getDispatch: async () => noNdic,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getWellCatalog: async () => wellCatalog,
+    });
+    expect(otherDriverRes).toMatchObject({ ok: false, reason: 'other_driver' });
+
+    const otherCompanyRes = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: OTHER },
+      getDispatch: async () => noNdic,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getWellCatalog: async () => wellCatalog,
+    });
+    expect(otherCompanyRes).toMatchObject({ ok: false, reason: 'wrong_company' });
+  });
+
+  it('7. unbound legacy dispatch fails closed with unbound_dispatch:binding', async () => {
+    const store = new MemoryStore();
+    await publishRevision(store);
+    const unboundLegacy = {
+      companyId: COMPANY,
+      driverId: DRIVER,
+      status: 'accepted',
+      jobType: 'pw',
+      wellName: 'Gabriel 1',
+    };
+
+    const r = await runResolveExecutionBinding({
+      jobId: 'd-unbound',
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => unboundLegacy,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getWellCatalog: async () => wellCatalog,
+    });
+    expect(r).toMatchObject({ ok: false, reason: 'unbound_dispatch', field: 'binding' });
+  });
+
+  it('8. recovered legacy dispatch denies ungranted capability and preserves definition scope', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store, {
+      capabilities: [
+        { capabilityId: 'lifecycle', moduleVersion: 1, configuration: {} },
+        { capabilityId: 'pickup', moduleVersion: 1, configuration: { unit: 'bbl' } },
+        { capabilityId: 'dropoff', moduleVersion: 1, configuration: { unit: 'bbl' } },
+      ],
+      definition: {
+        schemaVersion: 1,
+        packetId: 'water-hauling',
+        industryId: 'oil-gas',
+        segmentId: 'produced-water',
+        label: 'Water Hauling',
+        capabilities: [
+          { capabilityId: 'lifecycle' },
+          { capabilityId: 'pickup' },
+          { capabilityId: 'dropoff' },
+        ],
+      },
+    });
+    const legacyDispatch = dispatchFrom(rev, { wellName: 'Gabriel 1' });
+    const { ndicWellName, ...noNdic } = legacyDispatch;
+    void ndicWellName;
+
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => noNdic,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getWellCatalog: async () => wellCatalog,
+    });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const caps = (r.definition.capabilities as Array<{ capabilityId: string }>).map((c) => c.capabilityId);
+    expect(caps).toContain('lifecycle');
+    expect(caps).toContain('pickup');
+    expect(caps).not.toContain('dropoff');
+    expect(caps).not.toContain('splitTicket');
+  });
+
+  it('9. production callable wires getWellCatalog from well_config', () => {
+    const callableSrc = readFileSync(join(ROOT, 'functions', 'src', 'security', 'resolveExecutionBindingCallable.ts'), 'utf8');
+    expect(callableSrc).toMatch(/getWellCatalog:\s*async\s*\(\)\s*=>/);
+    expect(callableSrc).toMatch(/ref\('well_config'\)/);
+  });
+});

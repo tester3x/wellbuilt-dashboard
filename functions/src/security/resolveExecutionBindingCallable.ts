@@ -57,6 +57,10 @@ export const resolveExecutionBinding = httpsV2.onCall(
         const snap = await fs.collection('companies').doc(id).get();
         return snap.exists ? (snap.data() as Record<string, unknown>) : null;
       },
+      getWellCatalog: async () => {
+        const snap = await admin.database().ref('well_config').once('value');
+        return snap.exists() ? snap.val() : {};
+      },
     });
     if (!outcome.ok) throwFail(outcome);
     return {
