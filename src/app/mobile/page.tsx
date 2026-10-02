@@ -22,6 +22,8 @@ import { AddPullModal, type ApprovedDriver } from '@/components/AddPullModal';
 import { fetchTickets, type Ticket } from '@/lib/tickets';
 import { assignRouteColors } from '@/lib/routeColor';
 import { loadDisposals, type NdicWell } from '@/lib/firestoreWells';
+import { TicketDetailModal } from '@/components/TicketDetailModal';
+import { matchWellInPool } from '@/lib/wellPoolCore';
 
 type ViewMode = 'cards' | 'table';
 export default function MobilePage() {
@@ -66,6 +68,7 @@ export default function MobilePage() {
   // Edge case loads — tickets for wells not in well_config
   const [edgeCaseTickets, setEdgeCaseTickets] = useState<Ticket[]>([]);
   const [edgeCaseExpanded, setEdgeCaseExpanded] = useState(false);
+  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
 
   // Add Pull modal
   const [showAddPull, setShowAddPull] = useState(false);
@@ -102,28 +105,27 @@ export default function MobilePage() {
     });
   }, [routes, wells, dataLoading]);
 
-  // Load edge case tickets (submitted for wells not in well_config)
+  // Load tickets for unrouted and unconfigured wells (e.g. Slawson, Unrouted route)
   useEffect(() => {
-    if (wells.length === 0) return;
-    // Normalize: lowercase, strip # and special chars, collapse spaces
-    const normalize = (s: string) => s.toLowerCase().replace(/[#\-_.,()]/g, ' ').replace(/\s+/g, ' ').trim();
-    const wellNamesNorm = wells.map(w => normalize(w.wellName));
+    // Only exclude wells that are assigned to an active route (route other than 'Unrouted' or blank)
+    const routedWells = wells.filter(
+      (w) => w.route && w.route.trim() && w.route.trim().toLowerCase() !== 'unrouted'
+    );
 
-    fetchTickets(500).then(tickets => {
-      const unmatched = tickets.filter(t => {
-        if (!t.location) return false;
-        const locNorm = normalize(t.location);
-        // Check if any configured well name matches (normalized)
-        for (const wn of wellNamesNorm) {
-          if (wn === locNorm || wn.includes(locNorm) || locNorm.includes(wn)) return false;
-        }
-        return true;
+    fetchTickets(500, user?.companyId)
+      .then((tickets) => {
+        const unroutedTickets = tickets.filter((t) => {
+          if (!t.location || !t.location.trim()) return false;
+          // If it matches a well assigned to an active route, it is a routed load (exclude)
+          const isRouted = Boolean(matchWellInPool(routedWells, t.location));
+          return !isRouted;
+        });
+        setEdgeCaseTickets(unroutedTickets);
+      })
+      .catch((err) => {
+        console.warn('Unrouted/edge case tickets load failed:', err);
       });
-      setEdgeCaseTickets(unmatched);
-    }).catch(err => {
-      console.warn('Edge case tickets load failed:', err);
-    });
-  }, [wells]);
+  }, [wells, user?.companyId]);
 
   // Toggle route expansion and save to localStorage
   const toggleRoute = (route: string) => {
@@ -417,7 +419,7 @@ export default function MobilePage() {
           </div>
         )}
 
-        {/* Edge Case Loads — tickets for wells not in well_config */}
+        {/* Unrouted & Edge Case Loads — tickets performed at unrouted or unconfigured wells */}
         {edgeCaseTickets.length > 0 && (
           <div className="mt-8 bg-yellow-900/20 rounded-lg border border-yellow-700/50 overflow-hidden">
             <button
@@ -429,14 +431,14 @@ export default function MobilePage() {
                   {edgeCaseExpanded ? '▼' : '▶'}
                 </span>
                 <h3 className="text-lg font-semibold text-yellow-400">
-                  Edge Case Loads
+                  Tickets at Unrouted & Unconfigured Wells
                 </h3>
                 <span className="text-yellow-600 text-sm font-normal">
-                  {edgeCaseTickets.length} ticket{edgeCaseTickets.length !== 1 ? 's' : ''} for unconfigured wells
+                  {edgeCaseTickets.length} ticket{edgeCaseTickets.length !== 1 ? 's' : ''} outside active routes
                 </span>
               </div>
               <p className="text-yellow-700 text-xs mt-1 text-left pl-8">
-                Water tickets submitted for wells not configured in WB Mobile. Data is safe in Firestore.
+                Water tickets performed at unrouted wells or unconfigured locations (including Slawson wells). Click any row to view ticket details.
               </p>
             </button>
             {edgeCaseExpanded && (
@@ -457,8 +459,14 @@ export default function MobilePage() {
                   </thead>
                   <tbody>
                     {edgeCaseTickets.map((t) => (
-                      <tr key={t.id} className="border-t border-yellow-900/30 hover:bg-yellow-900/10">
-                        <td className="px-3 py-2 text-yellow-300 font-mono">{t.ticketNumber}</td>
+                      <tr
+                        key={t.id}
+                        onClick={() => setSelectedTicket(t)}
+                        className="border-t border-yellow-900/30 hover:bg-yellow-900/20 cursor-pointer transition-colors"
+                      >
+                        <td className="px-3 py-2 text-yellow-300 font-mono underline decoration-yellow-600/40 hover:text-yellow-200">
+                          {t.ticketNumber}
+                        </td>
                         <td className="px-3 py-2 text-gray-400 font-mono">{t.invoiceNumber || '—'}</td>
                         <td className="px-3 py-2 text-gray-300">{t.company || '—'}</td>
                         <td className="px-3 py-2 text-gray-300">{t.location || '—'}</td>
@@ -483,6 +491,13 @@ export default function MobilePage() {
           drivers={addPullDrivers}
           allDisposals={addPullDisposals}
           onClose={() => setShowAddPull(false)}
+        />
+      )}
+
+      {selectedTicket && (
+        <TicketDetailModal
+          ticket={selectedTicket}
+          onClose={() => setSelectedTicket(null)}
         />
       )}
     </div>

@@ -60,6 +60,7 @@ export interface ExecuteServiceWorkInput {
   userEmail?: string;
   tenantId?: string;
   userId?: string;
+  customJobTypes?: unknown[];
   onUiComplete?: () => Promise<void> | void;
 }
 
@@ -80,7 +81,10 @@ export interface ExecuteServiceWorkResult {
  * - 'flowback-water'
  * Custom job types (e.g. 'ground-water') slugify to their canonical identifier.
  */
-export function canonicalJobTypeIdForServiceType(rawType: string | null | undefined): string {
+export function canonicalJobTypeIdForServiceType(
+  rawType: string | null | undefined,
+  companyCustomJobTypes?: unknown[],
+): string {
   const trimmed = (rawType || '').trim();
   if (!trimmed) return 'service-work';
   const norm = trimmed.toLowerCase().replace(/[\s_-]+/g, '');
@@ -97,8 +101,24 @@ export function canonicalJobTypeIdForServiceType(rawType: string | null | undefi
   if (norm === 'servicework' || norm === 'service') {
     return 'service-work';
   }
-  // Custom job types slugify to match company.customJobTypes
-  return trimmed.toLowerCase().replace(/[\s_]+/g, '-');
+  // Check if rawType matches an approved company custom job type
+  if (Array.isArray(companyCustomJobTypes) && companyCustomJobTypes.length > 0) {
+    const slug = trimmed.toLowerCase().replace(/[\s_]+/g, '-');
+    for (const rawEntry of companyCustomJobTypes) {
+      if (!rawEntry) continue;
+      const entryObj = typeof rawEntry === 'object' && !Array.isArray(rawEntry) ? (rawEntry as Record<string, unknown>) : null;
+      const entryLabel = entryObj && typeof entryObj.label === 'string' ? entryObj.label.trim() : (typeof rawEntry === 'string' ? rawEntry.trim() : '');
+      const entrySlug = (entryObj && typeof entryObj.id === 'string' && entryObj.id.trim())
+        ? entryObj.id.trim()
+        : entryLabel.toLowerCase().replace(/[\s_]+/g, '-');
+      if (slug === entrySlug || trimmed.toLowerCase() === entryLabel.toLowerCase()) {
+        return entrySlug;
+      }
+    }
+  }
+  // All other service work subtypes (e.g. Hot Shot, Equipment Delivery, Tank Cleanout, Rig Move, Other)
+  // belong to the canonical governed 'service-work' jobTypeId.
+  return 'service-work';
 }
 
 /**
@@ -158,6 +178,7 @@ export async function executeServiceWorkWorkflow(
     userEmail,
     tenantId,
     userId,
+    customJobTypes,
     onUiComplete,
   } = input;
 
@@ -174,6 +195,7 @@ export async function executeServiceWorkWorkflow(
   };
   const assignedDrivers = selectedDrivers.length > 1 ? selectedDrivers.map(getFirstName) : undefined;
   const splitTotal = isSplitTicket ? 2 + (extraSplitLegs?.length || 0) : undefined;
+  const resolvedPackageId = (packageId && packageId !== 'custom') ? packageId : 'water-hauling';
 
   coordinator.beginAction({
     actionId: workflow.actionId,
@@ -194,8 +216,8 @@ export async function executeServiceWorkWorkflow(
       ...(onsiteBy ? { onsiteBy } : {}),
       jobType: 'service',
       serviceType: serviceType.trim(),
-      jobTypeId: canonicalJobTypeIdForServiceType(serviceType),
-      packageId: packageId || 'water-hauling',
+      jobTypeId: canonicalJobTypeIdForServiceType(serviceType, customJobTypes),
+      packageId: resolvedPackageId,
       packetRevision: 4,
       status: 'pending',
       notes: notes || '',

@@ -636,7 +636,10 @@ export function resetGlobalCreationCoordinator(options?: CoordinatorOptions): vo
  * - 'flowback-water'
  * Custom job types (e.g. 'ground-water') slugify to their canonical identifier.
  */
-export function canonicalJobTypeIdForServiceType(rawType: string | null | undefined): string {
+export function canonicalJobTypeIdForServiceType(
+  rawType: string | null | undefined,
+  companyCustomJobTypes?: unknown[],
+): string {
   const trimmed = (rawType || '').trim();
   if (!trimmed) return 'service-work';
   const norm = trimmed.toLowerCase().replace(/[\s_-]+/g, '');
@@ -653,8 +656,24 @@ export function canonicalJobTypeIdForServiceType(rawType: string | null | undefi
   if (norm === 'servicework' || norm === 'service') {
     return 'service-work';
   }
-  // Custom job types slugify to match company.customJobTypes
-  return trimmed.toLowerCase().replace(/[\s_]+/g, '-');
+  // Check if rawType matches an approved company custom job type
+  if (Array.isArray(companyCustomJobTypes) && companyCustomJobTypes.length > 0) {
+    const slug = trimmed.toLowerCase().replace(/[\s_]+/g, '-');
+    for (const rawEntry of companyCustomJobTypes) {
+      if (!rawEntry) continue;
+      const entryObj = typeof rawEntry === 'object' && !Array.isArray(rawEntry) ? (rawEntry as Record<string, unknown>) : null;
+      const entryLabel = entryObj && typeof entryObj.label === 'string' ? entryObj.label.trim() : (typeof rawEntry === 'string' ? rawEntry.trim() : '');
+      const entrySlug = (entryObj && typeof entryObj.id === 'string' && entryObj.id.trim())
+        ? entryObj.id.trim()
+        : entryLabel.toLowerCase().replace(/[\s_]+/g, '-');
+      if (slug === entrySlug || trimmed.toLowerCase() === entryLabel.toLowerCase()) {
+        return entrySlug;
+      }
+    }
+  }
+  // All other service work subtypes (e.g. Hot Shot, Equipment Delivery, Tank Cleanout, Rig Move, Other)
+  // belong to the canonical governed 'service-work' jobTypeId.
+  return 'service-work';
 }
 
 /**
@@ -674,9 +693,8 @@ export function buildCreatePayload(record: Record<string, unknown>): Record<stri
     record.dispatchId = dispatchId;
   }
 
-  const packageId = typeof safe.packageId === 'string' && safe.packageId.trim()
-    ? safe.packageId.trim()
-    : 'water-hauling';
+  const rawPkg = typeof safe.packageId === 'string' && safe.packageId.trim() ? safe.packageId.trim() : '';
+  const packageId = (rawPkg && rawPkg !== 'custom') ? rawPkg : 'water-hauling';
   const revision = typeof safe.packetRevision === 'number' && Number.isInteger(safe.packetRevision) && safe.packetRevision > 0
     ? safe.packetRevision
     : (packageId === 'water-hauling' ? 4 : 1);

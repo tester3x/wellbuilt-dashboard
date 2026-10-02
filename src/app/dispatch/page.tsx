@@ -480,6 +480,8 @@ function DispatchPageInner() {
   const [swExtraLegDraft, setSwExtraLegDraft] = useState<{ disposal: string; bbls: string; notes: string } | null>(null);
   const [swDriverETAs, setSwDriverETAs] = useState<Map<string, DriverEtaResult>>(new Map());
   const [swEtaLoading, setSwEtaLoading] = useState(false);
+  const [swError, setSwError] = useState<string | null>(null);
+  const [customJobTypesList, setCustomJobTypesList] = useState<any[]>([]);
 
   // Calculate driver ETAs when SW onsiteBy + well are set
   useEffect(() => {
@@ -806,8 +808,10 @@ function DispatchPageInner() {
         });
 
         // Also load custom job types from company config
+        const collectedCustomTypes: any[] = [];
         const mergeCustomTypes = (rawTypes: any[]) => {
           for (const ct of rawTypes) {
+            collectedCustomTypes.push(ct);
             // Support both old string format and new { label, packages } format
             const label = typeof ct === 'string' ? ct : ct?.label;
             if (label && !allJobTypes.includes(label)) {
@@ -829,6 +833,7 @@ function DispatchPageInner() {
             }
           });
         }
+        setCustomJobTypesList(collectedCustomTypes);
 
         if (allJobTypes.length > 0) {
           // Always include "Other" as escape hatch
@@ -1325,24 +1330,43 @@ function DispatchPageInner() {
   async function submitServiceWork() {
     if (!swWellName.trim() || !swServiceType.trim() || swDriverHashes.size === 0) return;
     setSwSubmitting(true);
+    setSwError(null);
     try {
       const firestore = getFirestoreDb();
       const selectedDrivers = drivers.filter(d => swDriverHashes.has(d.key));
       if (selectedDrivers.length === 0) throw new Error('No drivers found');
 
-      // Look up NDIC name from wells list
-      const matchedWell = wells.find(w => w.wellName === swWellName.trim() || w.ndicName === swWellName.trim());
-      const swNdicName = matchedWell?.ndicName || swWellName.trim();
+      // Look up NDIC name from wells list or operator wells
+      const trimmedTarget = swWellName.trim();
+      const trimmedTargetLower = trimmedTarget.toLowerCase();
+      const matchedWell = wells.find(w =>
+        (w.wellName && w.wellName.toLowerCase() === trimmedTargetLower) ||
+        (w.ndicName && w.ndicName.toLowerCase() === trimmedTargetLower)
+      );
+      const matchedOperatorWell = !matchedWell
+        ? allOperatorWells.find(w =>
+            (w.well_name && w.well_name.toLowerCase() === trimmedTargetLower) ||
+            (w.well_name && w.well_name.toLowerCase().includes(trimmedTargetLower))
+          )
+        : undefined;
+
+      const swResolvedWellName = matchedWell?.wellName || matchedOperatorWell?.well_name || trimmedTarget;
+      const swNdicName = matchedWell?.ndicName || matchedOperatorWell?.well_name || swResolvedWellName;
+
+      const trimmedServiceType = swServiceType.trim();
+      const mappedPkgId = jobTypeToPackageId[trimmedServiceType];
+      const swPackageId = (mappedPkgId && mappedPkgId !== 'custom') ? mappedPkgId : 'water-hauling';
 
       await executeServiceWorkWorkflow({
         workflow: swWorkflow,
         coordinator,
         invoke: getDispatchCallableInvoker(),
         selectedDrivers,
-        wellName: matchedWell?.wellName || swWellName.trim(),
+        wellName: swResolvedWellName,
         ndicWellName: swNdicName,
-        serviceType: swServiceType.trim(),
-        packageId: jobTypeToPackageId[swServiceType.trim()] || undefined,
+        serviceType: trimmedServiceType,
+        packageId: swPackageId,
+        customJobTypes: customJobTypesList,
         dropoff: swDropoff.trim() || undefined,
         onsiteBy: swOnsiteBy || undefined,
         notes: swNotes || undefined,
@@ -1356,7 +1380,7 @@ function DispatchPageInner() {
         onUiComplete: async () => {
           // Track job type usage for R&D pipeline (non-blocking)
           const compId = user?.companyId || selectedDrivers[0]?.companyId || 'unknown';
-          trackJobTypeUsage(swServiceType.trim(), compId, jobTypeToPackageId[swServiceType.trim()] || 'custom');
+          trackJobTypeUsage(trimmedServiceType, compId, jobTypeToPackageId[trimmedServiceType] || 'custom');
 
           // Auto-create group chat thread for multi-driver SW jobs
           if (selectedDrivers.length > 1 && swWorkflow.serviceGroupId) {
@@ -1368,9 +1392,9 @@ function DispatchPageInner() {
               selectedDrivers.forEach(d => {
                 participantNames[`driver:${d.key}`] = d.legalName || d.displayName;
               });
-              const threadTitle = `${swServiceType.trim()} — ${matchedWell?.wellName || swWellName.trim()}`;
+              const threadTitle = `${trimmedServiceType} — ${swResolvedWellName}`;
               const crewNames = selectedDrivers.map(d => (d.legalName || d.displayName).split(' ')[0]).join(', ');
-              const sysText = `Service work dispatched: ${swServiceType.trim()} at ${matchedWell?.wellName || swWellName.trim()}\nCrew: ${crewNames}${swNotes ? `\nNotes: ${swNotes}` : ''}${swDropoff.trim() ? `\nDrop-off: ${swDropoff.trim()}` : ''}`;
+              const sysText = `Service work dispatched: ${trimmedServiceType} at ${swResolvedWellName}\nCrew: ${crewNames}${swNotes ? `\nNotes: ${swNotes}` : ''}${swDropoff.trim() ? `\nDrop-off: ${swDropoff.trim()}` : ''}`;
               const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
                 type: 'service_group',
                 serviceGroupId: swWorkflow.serviceGroupId,
@@ -1395,6 +1419,7 @@ function DispatchPageInner() {
 
           const names = selectedDrivers.map(d => d.legalName || d.displayName).join(', ');
           setMessage(`Service work dispatched to ${names}`);
+          setSwError(null);
           setSwWellName('');
           setSwDropoff('');
           setSwServiceType('');
@@ -1412,7 +1437,9 @@ function DispatchPageInner() {
         },
       });
     } catch (err: any) {
-      setMessage(`Error: ${err.message}`);
+      const errMsg = err?.message || 'Failed to dispatch service work';
+      setSwError(errMsg);
+      setMessage(`Error: ${errMsg}`);
       setTimeout(() => setMessage(''), 5000);
     } finally {
       setSwSubmitting(false);
@@ -1421,6 +1448,7 @@ function DispatchPageInner() {
 
   function cancelServiceWork() {
     cancelServiceWorkWorkflow(swWorkflow, coordinator);
+    setSwError(null);
     setSwWellName('');
     setSwDropoff('');
     setSwServiceType('');
@@ -2908,6 +2936,20 @@ function DispatchPageInner() {
                       </div>
                     </div>{/* end bottom row */}
                   </div>{/* end SW body */}
+                  {/* Error banner */}
+                  {swError && (
+                    <div className="mt-2 p-2 bg-red-950/80 border border-red-500 rounded text-red-200 text-xs flex items-center justify-between">
+                      <span className="truncate mr-2">{swError}</span>
+                      <button
+                        type="button"
+                        onClick={() => setSwError(null)}
+                        className="text-red-400 hover:text-white font-bold px-1"
+                        aria-label="Dismiss error"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
                   {/* Dispatch button */}
                   <div className="flex gap-2 mt-2 flex-shrink-0">
                     <button
