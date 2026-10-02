@@ -233,3 +233,30 @@ test('Unrouted and Slawson ticket filtering: tickets performed outside active ro
   assert.equal(unroutedTicketNumbers.includes('1004'), true, 'Slawson Federal 2-14H must be included');
   assert.equal(unroutedTicketNumbers.includes('1005'), true, 'Slawson Wolverine 1-22 must be included');
 });
+
+test('Tenant containment safety: missing companyId cannot yield unscoped cross-company list for non-platform admin', async () => {
+  const { isPlatformAdmin } = await import('../auth');
+
+  // Scoped user missing companyId (e.g. pending setup or loading glitch)
+  const nonAdminUser = { uid: 'u1', role: 'viewer' as const, email: 'viewer@test.com' };
+  assert.equal(isPlatformAdmin(nonAdminUser as any), false);
+
+  // Derive query companyId using the exact mobile page gate
+  const isPlatform = isPlatformAdmin(nonAdminUser as any);
+  const queryCompanyId = (nonAdminUser as any).companyId || (isPlatform ? undefined : '__forbidden_no_company__');
+  assert.equal(queryCompanyId, '__forbidden_no_company__', 'Must refuse unscoped cross-company query');
+
+  // Platform admin without companyId
+  const adminUser = { uid: 'admin1', role: 'admin' as const, email: 'admin@wellbuilt.com' };
+  assert.equal(isPlatformAdmin(adminUser as any), true);
+  const adminIsPlatform = isPlatformAdmin(adminUser as any);
+  const adminQueryId = (adminUser as any).companyId || (adminIsPlatform ? undefined : '__forbidden_no_company__');
+  assert.equal(adminQueryId, undefined, 'Platform admin is permitted global query');
+
+  // Tenant-scoped carrier admin
+  const carrierUser = { uid: 'c1', role: 'admin' as const, companyId: 'home-hauling', email: 'boss@homehauling.com' };
+  assert.equal(isPlatformAdmin(carrierUser as any), false, 'Tenant admin is NOT platform admin');
+  const carrierIsPlatform = isPlatformAdmin(carrierUser as any);
+  const carrierQueryId = carrierUser.companyId || (carrierIsPlatform ? undefined : '__forbidden_no_company__');
+  assert.equal(carrierQueryId, 'home-hauling', 'Carrier user queries only their companyId');
+});

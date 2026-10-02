@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { hasCapability } from '@/lib/auth';
+import { hasCapability, isPlatformAdmin } from '@/lib/auth';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import { WellPoolEmptyState } from '@/components/WellPoolEmptyState';
 import { WellResponse } from '@/lib/wells';
@@ -69,6 +69,9 @@ export default function MobilePage() {
   const [edgeCaseTickets, setEdgeCaseTickets] = useState<Ticket[]>([]);
   const [edgeCaseExpanded, setEdgeCaseExpanded] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [ticketLimit, setTicketLimit] = useState(500);
+  const [hasMoreTickets, setHasMoreTickets] = useState(false);
+  const [ticketsLoading, setTicketsLoading] = useState(false);
 
   // Add Pull modal
   const [showAddPull, setShowAddPull] = useState(false);
@@ -107,13 +110,31 @@ export default function MobilePage() {
 
   // Load tickets for unrouted and unconfigured wells (e.g. Slawson, Unrouted route)
   useEffect(() => {
+    if (!user) return;
+    const isPlatform = isPlatformAdmin(user);
+    if (!user.companyId && !isPlatform) {
+      // Scoped non-admin user missing companyId must NEVER query cross-company
+      setEdgeCaseTickets([]);
+      setHasMoreTickets(false);
+      return;
+    }
+
     // Only exclude wells that are assigned to an active route (route other than 'Unrouted' or blank)
     const routedWells = wells.filter(
       (w) => w.route && w.route.trim() && w.route.trim().toLowerCase() !== 'unrouted'
     );
 
-    fetchTickets(500, user?.companyId)
+    const queryCompanyId = user.companyId || (isPlatform ? undefined : '__forbidden_no_company__');
+    if (queryCompanyId === '__forbidden_no_company__') {
+      setEdgeCaseTickets([]);
+      setHasMoreTickets(false);
+      return;
+    }
+
+    setTicketsLoading(true);
+    fetchTickets(ticketLimit, queryCompanyId)
       .then((tickets) => {
+        setHasMoreTickets(tickets.length >= ticketLimit);
         const unroutedTickets = tickets.filter((t) => {
           if (!t.location || !t.location.trim()) return false;
           // If it matches a well assigned to an active route, it is a routed load (exclude)
@@ -124,8 +145,11 @@ export default function MobilePage() {
       })
       .catch((err) => {
         console.warn('Unrouted/edge case tickets load failed:', err);
+      })
+      .finally(() => {
+        setTicketsLoading(false);
       });
-  }, [wells, user?.companyId]);
+  }, [wells, user, ticketLimit]);
 
   // Toggle route expansion and save to localStorage
   const toggleRoute = (route: string) => {
@@ -479,6 +503,24 @@ export default function MobilePage() {
                     ))}
                   </tbody>
                 </table>
+                {hasMoreTickets && (
+                  <div className="p-3 bg-yellow-900/10 border-t border-yellow-900/30 flex items-center justify-between">
+                    <button
+                      type="button"
+                      disabled={ticketsLoading}
+                      onClick={() => setTicketLimit(prev => prev + 500)}
+                      className="px-3 py-1.5 bg-yellow-800/40 hover:bg-yellow-800/60 text-yellow-200 text-xs rounded transition-colors disabled:opacity-50"
+                    >
+                      {ticketsLoading ? 'Loading...' : `Load more historical tickets (+500, currently ${ticketLimit})`}
+                    </button>
+                    <Link
+                      href="/tickets"
+                      className="text-xs text-yellow-400 hover:text-yellow-300 underline"
+                    >
+                      View full ticket archive →
+                    </Link>
+                  </div>
+                )}
               </div>
             )}
           </div>
