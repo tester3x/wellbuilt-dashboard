@@ -107,6 +107,12 @@ check(
 );
 
 check(
+  'payroll.ts: lookupRate rejects subtype-only entries as primary rate (no fallback to entries with primaryJobType)',
+  payrollSrc.includes('operatorRates.find(r => r.jobType === jobType && !r.primaryJobType)') &&
+  !payrollSrc.includes('baseEntry = operatorRates.find(r => r.jobType === jobType) || null;')
+);
+
+check(
   'payroll.ts: fetchPayrollInvoices extracts subjob from d.subjob || d.serviceType',
   /const subjob\s*=\s*\(d\.subjob\s*as\s*string\)\s*\|\|\s*\(d\.serviceType\s*as\s*string\)\s*\|\|\s*'';/.test(payrollSrc)
 );
@@ -197,6 +203,36 @@ const mockRateSheets = {
       rate: 2.75,
     },
   ],
+  // Operator with ONLY an associated subtype entry (primaryJobType: 'Service Work')
+  'AssociatedStandbyOnly': [
+    {
+      jobType: 'Standby',
+      method: 'hourly',
+      rate: 80.00,
+      primaryJobType: 'Service Work',
+    },
+  ],
+  // Operator with both a genuine primary Standby entry AND an associated Standby entry
+  'GenuineAndAssociatedStandby': [
+    {
+      jobType: 'Service Work',
+      method: 'hourly',
+      rate: 155.00,
+    },
+    // Genuine primary entry for Standby (rate: $70/hr)
+    {
+      jobType: 'Standby',
+      method: 'hourly',
+      rate: 70.00,
+    },
+    // Associated Standby subtype entry for Service Work (rate: $80/hr)
+    {
+      jobType: 'Standby',
+      method: 'hourly',
+      rate: 80.00,
+      primaryJobType: 'Service Work',
+    },
+  ],
 };
 
 // Regression Case 1: Service Work / Standby configured $80/hr
@@ -284,6 +320,31 @@ const mockRateSheets = {
 
   const upper = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'STANDBY');
   check('Case 7b: Uppercase "STANDBY" matches ($80.00)', upper?.rate === 80.00);
+}
+
+// Regression Case 8: Rejection of subtype-only rate entries as primary Payroll rates
+{
+  // 8a: Operator with ONLY an associated Standby entry (primaryJobType: 'Service Work')
+  // Passing primary jobType 'Standby' must NOT resolve a rate (must return null)
+  const onlyAssoc = lookupRate(mockRateSheets, 'AssociatedStandbyOnly', 'Standby');
+  check('Case 8a: Primary jobType "Standby" on operator with only associated Standby returns null', onlyAssoc === null);
+
+  const onlyAssocWithSub = lookupRate(mockRateSheets, 'AssociatedStandbyOnly', 'Standby', 'Standby');
+  check('Case 8b: Primary jobType "Standby" with subjob "Standby" on subtype-only entry returns null', onlyAssocWithSub === null);
+
+  // 8c: Separate genuine primary Standby entry exists ($70/hr) alongside associated Standby entry ($80/hr)
+  const genuinePrimary = lookupRate(mockRateSheets, 'GenuineAndAssociatedStandby', 'Standby');
+  check('Case 8c: Genuine primary Standby entry resolves intentionally configured rate ($70.00)', genuinePrimary?.rate === 70.00);
+  check('Case 8c: Genuine primary Standby preserves hourly method', genuinePrimary?.method === 'hourly');
+
+  // 8d: Existing Service Work / Standby exception continues to work ($80/hr)
+  const swStandby = lookupRate(mockRateSheets, 'GenuineAndAssociatedStandby', 'Service Work', 'Standby');
+  check('Case 8d: Service Work / Standby exception continues to resolve correctly ($80.00)', swStandby?.rate === 80.00);
+  check('Case 8d: Service Work / Standby preserves hourly method', swStandby?.method === 'hourly');
+
+  // 8e: Service Work base rate without subtype exception continues to resolve ($155/hr)
+  const swBase = lookupRate(mockRateSheets, 'GenuineAndAssociatedStandby', 'Service Work');
+  check('Case 8e: Service Work base rate resolves full rate ($155.00)', swBase?.rate === 155.00);
 }
 
 console.log('\n--- Timesheet Re-rate Path: applyRatesToTimesheet ---');

@@ -256,11 +256,8 @@ export function lookupRate(
   // 1. Primary job type is required. Rate resolution must start from a valid primary job type/alias.
   if (!jobType || !jobType.trim()) return null;
 
-  // Direct match first for the primary commodityType (prefer primary entries over standalone subtype entries)
+  // Direct match for the primary commodityType (primary entries only; reject subtype-only entries with primaryJobType)
   let baseEntry: RateEntry | null = operatorRates.find(r => r.jobType === jobType && !r.primaryJobType) || null;
-  if (!baseEntry) {
-    baseEntry = operatorRates.find(r => r.jobType === jobType) || null;
-  }
 
   // Try alias match (legacy rate sheet entries → current commodity types)
   if (!baseEntry) {
