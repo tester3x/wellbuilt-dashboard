@@ -3,12 +3,16 @@
  *
  * Verifies Dashboard Payroll subtype rate logic and source contracts:
  * 1. commodityType (primary jobType) and subjob operate as separate variables.
- * 2. Full hourly rate applies when subjob is absent, empty, or unmatched.
- * 3. Configured subtype rate exception applies when subjob matches subtypeRates (e.g. Standby at $80/hr).
- * 4. Subtype matching is case-insensitive.
- * 5. Subtype exceptions are configurable per company/operator.
- * 6. applyRatesToTimesheet applies subtype rate exceptions to rows containing subjob.
- * 7. Source contracts verified in companySettings.ts, payroll.ts, billing.ts, and RateSheetsCard.tsx.
+ * 2. Primary job type governs rate resolution: rate resolution starts from a valid primary job type/alias.
+ * 3. Missing or unknown primary job type with Standby returns null (no rate selected solely by subjob).
+ * 4. Full hourly rate applies when subjob is absent, empty, or unconfigured.
+ * 5. Configured subtype rate exception applies when explicitly associated with that primary entry (e.g. Standby at $80/hr).
+ * 6. Primary entry's method is strictly preserved (a per-BBL primary is never converted to hourly by a subtype).
+ * 7. Two primary families using different Standby exceptions for the same operator are resolved independently.
+ * 8. Standalone subtype entries require an explicit primaryJobType association; generic entries are not applied across families.
+ * 9. Subtype matching is case-insensitive.
+ * 10. applyRatesToTimesheet re-rate path applies subtype rate exceptions to rows containing subjob.
+ * 11. Source contracts verified in companySettings.ts, payroll.ts, billing.ts, and RateSheetsCard.tsx.
  *
  * Run: node tools/test-payrollSubtypeRates.mjs
  *      or npx tsx tools/test-payrollSubtypeRates.mjs
@@ -64,13 +68,15 @@ const billingSrc = readFileSync(join(ROOT, 'src/lib/billing.ts'), 'utf8');
 const rateSheetsCardSrc = readFileSync(join(ROOT, 'src/components/settings/RateSheetsCard.tsx'), 'utf8');
 
 check(
-  'companySettings.ts: RateEntry defines optional subtypeRates map',
-  /subtypeRates\?:\s*Record<string,\s*number>;/.test(companySettingsSrc)
+  'companySettings.ts: RateEntry defines optional subtypeRates and primaryJobType',
+  /subtypeRates\?:\s*Record<string,\s*number>;/.test(companySettingsSrc) &&
+  /primaryJobType\?:\s*string;/.test(companySettingsSrc)
 );
 
 check(
-  'payroll.ts: RateEntry defines optional subtypeRates map',
-  /subtypeRates\?:\s*Record<string,\s*number>;/.test(payrollSrc)
+  'payroll.ts: RateEntry defines optional subtypeRates and primaryJobType',
+  /subtypeRates\?:\s*Record<string,\s*number>;/.test(payrollSrc) &&
+  /primaryJobType\?:\s*string;/.test(payrollSrc)
 );
 
 check(
@@ -84,9 +90,20 @@ check(
 );
 
 check(
+  'payroll.ts: lookupRate requires non-empty primary jobType',
+  payrollSrc.includes('if (!jobType || !jobType.trim()) return null;')
+);
+
+check(
   'payroll.ts: lookupRate checks baseEntry.subtypeRates before returning',
   payrollSrc.includes('baseEntry.subtypeRates') &&
   payrollSrc.includes('cleanSubLower')
+);
+
+check(
+  'payroll.ts: lookupRate checks standalone entry explicit primaryJobType association',
+  payrollSrc.includes('r.primaryJobType') &&
+  payrollSrc.includes('baseJobNormalized')
 );
 
 check(
@@ -121,12 +138,14 @@ check(
   rateSheetsCardSrc.includes('updateSubtypeRate')
 );
 
-console.log('\n--- Runtime Logic: lookupRate Behavioral Tests ---');
+console.log('\n--- Governed Acceptance Regressions: lookupRate ---');
 
-// Mock company rate sheets
+// Mock company rate sheets with governed multi-family configuration
 const mockRateSheets = {
   'Chord Energy': [
+    // Primary family 1: Production % (per_bbl)
     { jobType: 'Production %', method: 'per_bbl', rate: 2.50 },
+    // Primary family 2: Service Work (hourly) with Standby exception $80/hr
     {
       jobType: 'Service Work',
       method: 'hourly',
@@ -136,6 +155,34 @@ const mockRateSheets = {
         Inspection: 110.00,
       },
     },
+    // Primary family 3: Rig Work (hourly) with different Standby exception $95/hr
+    {
+      jobType: 'Rig Work',
+      method: 'hourly',
+      rate: 180.00,
+      subtypeRates: {
+        Standby: 95.00,
+      },
+    },
+    // Primary family 4: Vac Work (hourly) with base rate $140/hr
+    {
+      jobType: 'Vac Work',
+      method: 'hourly',
+      rate: 140.00,
+    },
+    // Standalone subtype entry with EXPLICIT primary association to Vac Work
+    {
+      jobType: 'Standby',
+      method: 'hourly',
+      rate: 85.00,
+      primaryJobType: 'Vac Work',
+    },
+    // Standalone UNASSOCIATED entry (must never be selected as cross-family override)
+    {
+      jobType: 'GenericStandby',
+      method: 'hourly',
+      rate: 50.00,
+    },
   ],
   'Civitas': [
     {
@@ -144,93 +191,111 @@ const mockRateSheets = {
       rate: 160.00,
       // Civitas has no standby exception configured
     },
-  ],
-  'Continental': [
     {
-      jobType: 'Service Work',
-      method: 'hourly',
-      rate: 150.00,
-    },
-    // Continental configured Standby as an explicit operator-level rate entry
-    {
-      jobType: 'Standby',
-      method: 'hourly',
-      rate: 75.00,
+      jobType: 'Production Water',
+      method: 'per_bbl',
+      rate: 2.75,
     },
   ],
 };
 
-// 1. Standard primary job without subjob -> returns full rate
-{
-  const entry = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work');
-  check('Absent subjob returns base hourly rate ($155.00)', entry?.rate === 155.00);
-}
-
-// 2. Empty string subjob -> returns full rate
-{
-  const entry = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', '');
-  check('Empty subjob returns base hourly rate ($155.00)', entry?.rate === 155.00);
-}
-
-// 3. Null subjob -> returns full rate
-{
-  const entry = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', null);
-  check('Null subjob returns base hourly rate ($155.00)', entry?.rate === 155.00);
-}
-
-// 4. Unmatched subjob -> returns full rate
-{
-  const entry = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'Rig Wash');
-  check('Unmatched subjob falls back to base hourly rate ($155.00)', entry?.rate === 155.00);
-}
-
-// 5. Configured subtype rate exception matched (exact case) -> returns subtype rate
+// Regression Case 1: Service Work / Standby configured $80/hr
 {
   const entry = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'Standby');
-  check('Matched subjob "Standby" returns subtype rate ($80.00)', entry?.rate === 80.00);
-  check('Subtype entry preserves method hourly', entry?.method === 'hourly');
+  check('Case 1: Service Work / Standby resolves configured exception ($80.00)', entry?.rate === 80.00);
+  check('Case 1: Service Work / Standby preserves hourly method', entry?.method === 'hourly');
 }
 
-// 6. Configured subtype rate exception matched (case-insensitive lowercase)
+// Regression Case 2: Service Work / unconfigured subtype full hourly ($155/hr)
 {
-  const entry = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'standby');
-  check('Lowercase subjob "standby" matches case-insensitively ($80.00)', entry?.rate === 80.00);
+  const entryNoSub = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work');
+  check('Case 2a: Service Work with absent subtype resolves full hourly rate ($155.00)', entryNoSub?.rate === 155.00);
+  check('Case 2a: preserves hourly method', entryNoSub?.method === 'hourly');
+
+  const entryEmpty = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', '');
+  check('Case 2b: Service Work with empty subtype resolves full hourly rate ($155.00)', entryEmpty?.rate === 155.00);
+
+  const entryNull = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', null);
+  check('Case 2c: Service Work with null subtype resolves full hourly rate ($155.00)', entryNull?.rate === 155.00);
+
+  const entryUnmatched = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'Rig Wash');
+  check('Case 2d: Service Work with unmatched subtype "Rig Wash" falls back to full rate ($155.00)', entryUnmatched?.rate === 155.00);
+
+  const entryCivitas = lookupRate(mockRateSheets, 'Civitas', 'Service Work', 'Standby');
+  check('Case 2e: Civitas Service Work (no Standby configured) falls back to full rate ($160.00)', entryCivitas?.rate === 160.00);
 }
 
-// 7. Configured subtype rate exception matched (case-insensitive uppercase)
+// Regression Case 3: Missing or unknown primary with Standby -> returns null
 {
-  const entry = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'STANDBY');
-  check('Uppercase subjob "STANDBY" matches case-insensitively ($80.00)', entry?.rate === 80.00);
+  const entryMissing = lookupRate(mockRateSheets, 'Chord Energy', '', 'Standby');
+  check('Case 3a: Empty primary jobType with Standby returns null', entryMissing === null);
+
+  const entryWhitespace = lookupRate(mockRateSheets, 'Chord Energy', '   ', 'Standby');
+  check('Case 3b: Whitespace primary jobType with Standby returns null', entryWhitespace === null);
+
+  const entryUnknown = lookupRate(mockRateSheets, 'Chord Energy', 'NonExistentJob', 'Standby');
+  check('Case 3c: Unknown primary jobType with Standby returns null', entryUnknown === null);
+
+  const entryGenericSubOnly = lookupRate(mockRateSheets, 'Chord Energy', '', 'GenericStandby');
+  check('Case 3d: Standalone unassociated entry is NOT selected when primary is missing', entryGenericSubOnly === null);
 }
 
-// 8. Another subtype rate exception (Inspection)
+// Regression Case 4: Production % / Standby when only Service Work has a Standby exception
 {
-  const entry = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'Inspection');
-  check('Matched subjob "Inspection" returns subtype rate ($110.00)', entry?.rate === 110.00);
+  const entryProd = lookupRate(mockRateSheets, 'Chord Energy', 'Production %', 'Standby');
+  check('Case 4a: Production % with Standby does NOT adopt Service Work standby rate ($2.50/bbl)', entryProd?.rate === 2.50);
+  check('Case 4b: Production % strictly keeps per_bbl method (not converted to hourly)', entryProd?.method === 'per_bbl');
+
+  // Also test legacy alias matching: 'Production Water' matches 'Production %'
+  const entryProdAlias = lookupRate(mockRateSheets, 'Chord Energy', 'Production Water', 'Standby');
+  check('Case 4c: Production Water alias with Standby keeps per_bbl rate ($2.50/bbl)', entryProdAlias?.rate === 2.50);
+  check('Case 4d: Production Water alias keeps per_bbl method', entryProdAlias?.method === 'per_bbl');
 }
 
-// 9. Operator-specific configurability: Civitas does not configure Standby exception
+// Regression Case 5: Two primary families using different Standby exceptions for the same operator
 {
-  const entry = lookupRate(mockRateSheets, 'Civitas', 'Service Work', 'Standby');
-  check('Civitas (no Standby exception) falls back to base rate ($160.00)', entry?.rate === 160.00);
+  const entrySW = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'Standby');
+  const entryRig = lookupRate(mockRateSheets, 'Chord Energy', 'Rig Work', 'Standby');
+  check('Case 5a: Same operator Service Work / Standby resolves $80.00', entrySW?.rate === 80.00);
+  check('Case 5b: Same operator Rig Work / Standby resolves $95.00', entryRig?.rate === 95.00);
+  check('Case 5c: Service Work and Rig Work Standby exceptions remain distinct', entrySW?.rate !== entryRig?.rate);
 }
 
-// 10. Operator explicit subjob entry fallback: Continental
+// Regression Case 6: Explicit standalone association (primaryJobType)
 {
-  const entry = lookupRate(mockRateSheets, 'Continental', 'Service Work', 'Standby');
-  check('Continental explicit Standby entry matched ($75.00)', entry?.rate === 75.00);
+  // Vac Work has a standalone entry with primaryJobType: 'Vac Work' -> $85.00
+  const entryVac = lookupRate(mockRateSheets, 'Chord Energy', 'Vac Work', 'Standby');
+  check('Case 6a: Vac Work matches standalone entry with explicit primary association ($85.00)', entryVac?.rate === 85.00);
+  check('Case 6b: Vac Work preserves method hourly', entryVac?.method === 'hourly');
+
+  // Service Work does NOT adopt Vac Work's standalone entry
+  const entrySW_unmatched = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'UnmatchedSub');
+  check('Case 6c: Service Work does not adopt Vac Work standalone entry ($155.00)', entrySW_unmatched?.rate === 155.00);
+
+  // GenericStandby has no primaryJobType: must never override Service Work
+  const entrySW_generic = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'GenericStandby');
+  check('Case 6d: Generic unassociated standalone entry does not override Service Work ($155.00)', entrySW_generic?.rate === 155.00);
 }
 
-console.log('\n--- Runtime Logic: applyRatesToTimesheet Behavioral Tests ---');
+// Case 7: Case-insensitive matching
+{
+  const lower = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'standby');
+  check('Case 7a: Lowercase "standby" matches ($80.00)', lower?.rate === 80.00);
 
-// Mock timesheet summary
+  const upper = lookupRate(mockRateSheets, 'Chord Energy', 'Service Work', 'STANDBY');
+  check('Case 7b: Uppercase "STANDBY" matches ($80.00)', upper?.rate === 80.00);
+}
+
+console.log('\n--- Timesheet Re-rate Path: applyRatesToTimesheet ---');
+
+// Mock timesheet summary with multi-family rows
 const mockSummary = {
-  driverName: 'John Doe',
+  driverName: 'Jane Smith',
   companyId: 'comp-1',
-  truckNumber: '101',
+  truckNumber: '202',
   totalLoads: 4,
-  totalHours: 18.0,
-  totalBBLs: 100,
+  totalHours: 19.0,
+  totalBBLs: 120,
   grossBilled: 0,
   employeePay: 0,
   deductions: 0,
@@ -241,11 +306,11 @@ const mockSummary = {
     {
       id: 'row-1',
       date: '2026-10-01',
-      invoiceNumber: 'INV-101',
+      invoiceNumber: 'INV-201',
       operator: 'Chord Energy',
-      wellName: 'Kahuna 1',
+      wellName: 'Well A',
       jobType: 'Service Work',
-      subjob: undefined, // no subjob
+      subjob: undefined, // no subjob -> $155/hr
       bbls: 0,
       hours: 4.0,
       rate: 0,
@@ -253,16 +318,16 @@ const mockSummary = {
       detentionPay: 0,
       swdWaitMinutes: 0,
       employeeTake: 0,
-      tickets: ['20511'],
+      tickets: ['3001'],
     },
     {
       id: 'row-2',
       date: '2026-10-01',
-      invoiceNumber: 'INV-102',
+      invoiceNumber: 'INV-202',
       operator: 'Chord Energy',
-      wellName: 'Kahuna 2',
+      wellName: 'Well B',
       jobType: 'Service Work',
-      subjob: 'Standby', // standby subtype exception -> $80/hr
+      subjob: 'Standby', // Standby exception -> $80/hr
       bbls: 0,
       hours: 5.0,
       rate: 0,
@@ -270,41 +335,41 @@ const mockSummary = {
       detentionPay: 0,
       swdWaitMinutes: 0,
       employeeTake: 0,
-      tickets: ['20512'],
+      tickets: ['3002'],
     },
     {
       id: 'row-3',
       date: '2026-10-01',
-      invoiceNumber: 'INV-103',
+      invoiceNumber: 'INV-203',
       operator: 'Chord Energy',
-      wellName: 'Kahuna 3',
-      jobType: 'Service Work',
-      subjob: 'UnmatchedSpecial', // unmatched subjob -> falls back to $155/hr
+      wellName: 'Well C',
+      jobType: 'Rig Work',
+      subjob: 'Standby', // Rig Work Standby exception -> $95/hr
       bbls: 0,
-      hours: 3.0,
+      hours: 4.0,
       rate: 0,
       amountBilled: 0,
       detentionPay: 0,
       swdWaitMinutes: 0,
       employeeTake: 0,
-      tickets: ['20513'],
+      tickets: ['3003'],
     },
     {
       id: 'row-4',
       date: '2026-10-01',
-      invoiceNumber: 'INV-104',
+      invoiceNumber: 'INV-204',
       operator: 'Chord Energy',
-      wellName: 'Kahuna 4',
+      wellName: 'Well D',
       jobType: 'Production %',
-      subjob: undefined,
-      bbls: 100,
+      subjob: 'Standby', // Production % with Standby -> remains per_bbl $2.50/bbl (120 bbls = $300)
+      bbls: 120,
       hours: 6.0,
       rate: 0,
       amountBilled: 0,
       detentionPay: 0,
       swdWaitMinutes: 0,
       employeeTake: 0,
-      tickets: ['20514'],
+      tickets: ['3004'],
     },
   ],
 };
@@ -313,33 +378,33 @@ const updated = applyRatesToTimesheet(mockSummary, mockRateSheets, 0.25);
 
 // Check row 1: 4 hrs * $155/hr = $620, employeeTake = $155 (25%)
 const r1 = updated.rows.find(r => r.id === 'row-1');
-check('Row 1 (no subjob): rate is $155/hr', r1?.rate === 155.00);
-check('Row 1 (no subjob): amountBilled is $620.00', r1?.amountBilled === 620.00);
-check('Row 1 (no subjob): employeeTake is $155.00 (25%)', r1?.employeeTake === 155.00);
+check('Row 1 (Service Work, no subjob): rate $155/hr', r1?.rate === 155.00);
+check('Row 1 amountBilled $620.00', r1?.amountBilled === 620.00);
+check('Row 1 employeeTake $155.00', r1?.employeeTake === 155.00);
 
 // Check row 2: 5 hrs * $80/hr = $400, employeeTake = $100 (25%)
 const r2 = updated.rows.find(r => r.id === 'row-2');
-check('Row 2 (Standby subjob): rate is $80/hr', r2?.rate === 80.00);
-check('Row 2 (Standby subjob): amountBilled is $400.00', r2?.amountBilled === 400.00);
-check('Row 2 (Standby subjob): employeeTake is $100.00 (25%)', r2?.employeeTake === 100.00);
+check('Row 2 (Service Work, Standby): rate $80/hr', r2?.rate === 80.00);
+check('Row 2 amountBilled $400.00', r2?.amountBilled === 400.00);
+check('Row 2 employeeTake $100.00', r2?.employeeTake === 100.00);
 
-// Check row 3: 3 hrs * $155/hr = $465, employeeTake = $116.25 (25%)
+// Check row 3: 4 hrs * $95/hr = $380, employeeTake = $95 (25%)
 const r3 = updated.rows.find(r => r.id === 'row-3');
-check('Row 3 (unmatched subjob): rate is $155/hr', r3?.rate === 155.00);
-check('Row 3 (unmatched subjob): amountBilled is $465.00', r3?.amountBilled === 465.00);
-check('Row 3 (unmatched subjob): employeeTake is $116.25 (25%)', r3?.employeeTake === 116.25);
+check('Row 3 (Rig Work, Standby): rate $95/hr', r3?.rate === 95.00);
+check('Row 3 amountBilled $380.00', r3?.amountBilled === 380.00);
+check('Row 3 employeeTake $95.00', r3?.employeeTake === 95.00);
 
-// Check row 4: 100 bbls * $2.50 = $250, employeeTake = $62.50 (25%)
+// Check row 4: 120 bbls * $2.50 = $300, employeeTake = $75.00 (25%)
 const r4 = updated.rows.find(r => r.id === 'row-4');
-check('Row 4 (Production % per_bbl): rate is $2.50/bbl', r4?.rate === 2.50);
-check('Row 4 (Production % per_bbl): amountBilled is $250.00', r4?.amountBilled === 250.00);
-check('Row 4 (Production % per_bbl): employeeTake is $62.50 (25%)', r4?.employeeTake === 62.50);
+check('Row 4 (Production %, Standby): rate $2.50/bbl', r4?.rate === 2.50);
+check('Row 4 amountBilled $300.00 (per_bbl, not hourly)', r4?.amountBilled === 300.00);
+check('Row 4 employeeTake $75.00', r4?.employeeTake === 75.00);
 
 // Summary totals
-const expectedGross = 620.00 + 400.00 + 465.00 + 250.00; // 1735.00
-const expectedEmployeePay = 155.00 + 100.00 + 116.25 + 62.50; // 433.75
-check('Summary grossBilled calculates correctly ($1735.00)', updated.grossBilled === expectedGross);
-check('Summary employeePay calculates correctly ($433.75)', updated.employeePay === expectedEmployeePay);
+// Gross: 620 + 400 + 380 + 300 = 1700.00
+// Employee Pay: 155 + 100 + 95 + 75 = 425.00
+check('Summary grossBilled calculates correctly ($1700.00)', updated.grossBilled === 1700.00);
+check('Summary employeePay calculates correctly ($425.00)', updated.employeePay === 425.00);
 
 console.log(`\n========================================`);
 console.log(`Total checks: ${pass + fail} | Passed: ${pass} | Failed: ${fail}`);

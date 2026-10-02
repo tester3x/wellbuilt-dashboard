@@ -23,6 +23,7 @@ export interface RateEntry {
   frostRate?: number;
   frostRates?: Record<string, number>;
   subtypeRates?: Record<string, number>;
+  primaryJobType?: string;
 }
 
 // ─── Frost Season Helper ────────────────────────────────────────────────────
@@ -252,12 +253,19 @@ export function lookupRate(
   const operatorRates = rateSheets[operator];
   if (!operatorRates) return null;
 
-  // 1. Direct match first for the primary commodityType
-  let baseEntry: RateEntry | null = operatorRates.find(r => r.jobType === jobType) || null;
+  // 1. Primary job type is required. Rate resolution must start from a valid primary job type/alias.
+  if (!jobType || !jobType.trim()) return null;
+
+  // Direct match first for the primary commodityType (prefer primary entries over standalone subtype entries)
+  let baseEntry: RateEntry | null = operatorRates.find(r => r.jobType === jobType && !r.primaryJobType) || null;
+  if (!baseEntry) {
+    baseEntry = operatorRates.find(r => r.jobType === jobType) || null;
+  }
 
   // Try alias match (legacy rate sheet entries → current commodity types)
   if (!baseEntry) {
     for (const entry of operatorRates) {
+      if (entry.primaryJobType) continue; // Standalone subtype entries do not match primary job type aliases
       const normalizedEntry = JOB_TYPE_ALIASES[entry.jobType] || entry.jobType;
       const normalizedJob = JOB_TYPE_ALIASES[jobType] || jobType;
       if (normalizedEntry === jobType || entry.jobType === normalizedJob || normalizedEntry === normalizedJob) {
@@ -267,44 +275,45 @@ export function lookupRate(
     }
   }
 
-  // Fallback: if jobType was empty/unmatched, try matching subjob directly as jobType
-  if (!baseEntry && subjob && subjob.trim()) {
-    const subClean = subjob.trim().toLowerCase();
-    const directSub = operatorRates.find(r => r.jobType.toLowerCase() === subClean);
-    if (directSub) return directSub;
-  }
-
+  // A missing or unmatched primary must NOT select a rate solely by subjob
   if (!baseEntry) return null;
 
-  // 2. If subjob is present, check for configured subtype rate exception
+  // 2. If subjob is present, check for configured subtype rate exception explicitly associated with this primary entry
   if (subjob && subjob.trim()) {
     const cleanSub = subjob.trim();
     const cleanSubLower = cleanSub.toLowerCase();
 
-    // 2a. Check entry-level subtypeRates (e.g. { "standby": 80 })
+    // 2a. Check entry-level subtypeRates (e.g. { "standby": 80 }) on this primary entry
     if (baseEntry.subtypeRates) {
       for (const [k, r] of Object.entries(baseEntry.subtypeRates)) {
         if (k.trim().toLowerCase() === cleanSubLower && typeof r === 'number' && r > 0) {
           return {
             ...baseEntry,
-            rate: r,
+            rate: r, // Keep baseEntry.method strictly intact
           };
         }
       }
     }
 
-    // 2b. Check operator-level explicit entry matching this subjob
-    const explicitSub = operatorRates.find(r => r.jobType.toLowerCase() === cleanSubLower);
+    // 2b. Check standalone operator entry with an explicit primary association
+    // (e.g. entry.jobType == 'Standby' AND entry.primaryJobType matches baseEntry.jobType or its alias)
+    const baseJobNormalized = (JOB_TYPE_ALIASES[baseEntry.jobType] || baseEntry.jobType).toLowerCase();
+    const explicitSub = operatorRates.find(r => {
+      if (r.jobType.toLowerCase() !== cleanSubLower) return false;
+      if (!r.primaryJobType) return false;
+      const rPrimaryNorm = (JOB_TYPE_ALIASES[r.primaryJobType] || r.primaryJobType).toLowerCase();
+      return rPrimaryNorm === baseJobNormalized;
+    });
+
     if (explicitSub && typeof explicitSub.rate === 'number' && explicitSub.rate > 0) {
       return {
         ...baseEntry,
-        method: explicitSub.method || baseEntry.method,
-        rate: explicitSub.rate,
+        rate: explicitSub.rate, // Keep baseEntry.method strictly intact
       };
     }
   }
 
-  // 3. Subjob absent or unmatched: return baseEntry with full hourly/bbl rate
+  // 3. Subjob absent, empty, or unconfigured: return baseEntry with full primary rate
   return baseEntry;
 }
 
