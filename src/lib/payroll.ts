@@ -22,6 +22,7 @@ export interface RateEntry {
   rate: number;
   frostRate?: number;
   frostRates?: Record<string, number>;
+  subtypeRates?: Record<string, number>;
 }
 
 // ─── Frost Season Helper ────────────────────────────────────────────────────
@@ -134,6 +135,7 @@ export interface DriverTimesheetRow {
   operator: string;
   wellName: string;
   jobType: string;       // commodityType / product
+  subjob?: string;       // separate variable for subtype (e.g. Standby)
   bbls: number;
   hours: number;
   rate: number;
@@ -244,27 +246,66 @@ export interface CompanyRateSheets {
 export function lookupRate(
   rateSheets: CompanyRateSheets,
   operator: string,
-  jobType: string
+  jobType: string,
+  subjob?: string | null,
 ): RateEntry | null {
   const operatorRates = rateSheets[operator];
   if (!operatorRates) return null;
 
-  // Direct match first
-  const direct = operatorRates.find(r => r.jobType === jobType);
-  if (direct) return direct;
+  // 1. Direct match first for the primary commodityType
+  let baseEntry: RateEntry | null = operatorRates.find(r => r.jobType === jobType) || null;
 
   // Try alias match (legacy rate sheet entries → current commodity types)
-  // Check both directions: invoice jobType might match an alias key, or
-  // rate sheet entry might use a legacy name that aliases to the invoice jobType
-  for (const entry of operatorRates) {
-    const normalizedEntry = JOB_TYPE_ALIASES[entry.jobType] || entry.jobType;
-    const normalizedJob = JOB_TYPE_ALIASES[jobType] || jobType;
-    if (normalizedEntry === jobType || entry.jobType === normalizedJob || normalizedEntry === normalizedJob) {
-      return entry;
+  if (!baseEntry) {
+    for (const entry of operatorRates) {
+      const normalizedEntry = JOB_TYPE_ALIASES[entry.jobType] || entry.jobType;
+      const normalizedJob = JOB_TYPE_ALIASES[jobType] || jobType;
+      if (normalizedEntry === jobType || entry.jobType === normalizedJob || normalizedEntry === normalizedJob) {
+        baseEntry = entry;
+        break;
+      }
     }
   }
 
-  return null;
+  // Fallback: if jobType was empty/unmatched, try matching subjob directly as jobType
+  if (!baseEntry && subjob && subjob.trim()) {
+    const subClean = subjob.trim().toLowerCase();
+    const directSub = operatorRates.find(r => r.jobType.toLowerCase() === subClean);
+    if (directSub) return directSub;
+  }
+
+  if (!baseEntry) return null;
+
+  // 2. If subjob is present, check for configured subtype rate exception
+  if (subjob && subjob.trim()) {
+    const cleanSub = subjob.trim();
+    const cleanSubLower = cleanSub.toLowerCase();
+
+    // 2a. Check entry-level subtypeRates (e.g. { "standby": 80 })
+    if (baseEntry.subtypeRates) {
+      for (const [k, r] of Object.entries(baseEntry.subtypeRates)) {
+        if (k.trim().toLowerCase() === cleanSubLower && typeof r === 'number' && r > 0) {
+          return {
+            ...baseEntry,
+            rate: r,
+          };
+        }
+      }
+    }
+
+    // 2b. Check operator-level explicit entry matching this subjob
+    const explicitSub = operatorRates.find(r => r.jobType.toLowerCase() === cleanSubLower);
+    if (explicitSub && typeof explicitSub.rate === 'number' && explicitSub.rate > 0) {
+      return {
+        ...baseEntry,
+        method: explicitSub.method || baseEntry.method,
+        rate: explicitSub.rate,
+      };
+    }
+  }
+
+  // 3. Subjob absent or unmatched: return baseEntry with full hourly/bbl rate
+  return baseEntry;
 }
 
 // ─── Fetch Payroll Data ──────────────────────────────────────────────────────
@@ -314,6 +355,7 @@ export async function fetchPayrollInvoices(
     const invoiceCompanyId = d.companyId || '';
     const operator = d.operator || '';
     const jobType = d.commodityType || d.jobType || '';
+    const subjob = (d.subjob as string) || (d.serviceType as string) || '';
     const wellName = d.wellName || '';
 
     // Look up county from well name (for frost rate calculation)
@@ -327,7 +369,7 @@ export async function fetchPayrollInvoices(
     const rateSheets = company?.rateSheets || {};
     const split = company?.payConfig?.defaultSplit || 0;
 
-    const rateEntry = lookupRate(rateSheets, operator, jobType);
+    const rateEntry = lookupRate(rateSheets, operator, jobType, subjob);
     const swdWaitMinutes = d.swdWaitMinutes || 0;
     let detentionPay = 0;
     // BBLs: try totalBBL first, then fall back to ticket-level fields (s_t mode may not write totalBBL)
@@ -364,6 +406,7 @@ export async function fetchPayrollInvoices(
       operator,
       wellName: d.wellName || '',
       jobType,
+      subjob: subjob || undefined,
       bbls,
       hours: d.totalHours || 0,
       rate,
@@ -434,7 +477,7 @@ export function applyRatesToTimesheet(
   wellCountyMap?: Map<string, string>
 ): DriverTimesheetSummary {
   const updatedRows = summary.rows.map(row => {
-    const rateEntry = lookupRate(rateSheets, row.operator, row.jobType);
+    const rateEntry = lookupRate(rateSheets, row.operator, row.jobType, row.subjob);
     if (!rateEntry) return row;
 
     const county = wellCountyMap?.get(row.wellName.toLowerCase()) || '';

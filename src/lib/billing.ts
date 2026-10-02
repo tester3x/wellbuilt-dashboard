@@ -315,6 +315,7 @@ export async function fetchBillingData(
     if (companyId && invoiceCompanyId && invoiceCompanyId !== companyId) return;
 
     const jobType = d.commodityType || d.jobType || '';
+    const subjob = (d.subjob as string) || (d.serviceType as string) || '';
     const bbls = d.totalBBL || 0;
     const hours = d.totalHours || 0;
     const fuelMinutes = d.fuelMinutes || 0;
@@ -330,7 +331,7 @@ export async function fetchBillingData(
     const timeline = invoiceCompanyId ? dieselTimelines.get(invoiceCompanyId) : undefined;
     const currentDiesel = (timeline && invoiceDate ? getDieselPriceForDate(timeline, invoiceDate) : undefined) ?? company?.currentDieselPrice;
 
-    const rateEntry = lookupRate(rateSheets, operator, jobType);
+    const rateEntry = lookupRate(rateSheets, operator, jobType, subjob);
     const rateMethod = rateEntry?.method || 'per_bbl';
     const wellName = d.wellName || '';
     const county = d.county || wellCountyMap?.get(wellName.toLowerCase()) || '';

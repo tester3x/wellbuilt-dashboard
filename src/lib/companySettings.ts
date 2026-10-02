@@ -34,6 +34,7 @@ export interface RateEntry {
   rate: number;
   frostRate?: number;         // legacy single frost rate (backward compat)
   frostRates?: Record<string, number>;  // per-county frost rates: { "McKenzie": 3, "Mountrail": 4 }
+  subtypeRates?: Record<string, number>; // configured subtype rates: { "standby": 80 }
 }
 
 export interface FrostSeason {

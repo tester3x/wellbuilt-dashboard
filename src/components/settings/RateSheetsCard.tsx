@@ -106,6 +106,28 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
     return '';
   };
 
+  /** Format subtype rates display for summary */
+  const formatSubtypeRates = (r: RateEntry): string => {
+    if (r.subtypeRates && Object.keys(r.subtypeRates).length > 0) {
+      const sorted = Object.entries(r.subtypeRates);
+      return ' (' + sorted.map(([s, v]) => `${s}: $${v}/hr`).join(', ') + ')';
+    }
+    return '';
+  };
+
+  const updateSubtypeRate = (idx: number, subtype: string, value: number) => {
+    setEntries(prev => prev.map((entry, i) => {
+      if (i !== idx) return entry;
+      const subtypeRates = { ...(entry.subtypeRates || {}) };
+      if (value > 0) {
+        subtypeRates[subtype] = value;
+      } else {
+        delete subtypeRates[subtype];
+      }
+      return { ...entry, subtypeRates: Object.keys(subtypeRates).length > 0 ? subtypeRates : undefined };
+    }));
+  };
+
   if (operators.length === 0) return null;
 
   return (
@@ -137,7 +159,7 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
                     <span className="text-green-400 text-xs truncate">
                       {rates!.length} rate{rates!.length !== 1 ? 's' : ''}
                       {' · '}
-                      {rates!.map(r => `${r.jobType}: $${r.rate}${r.method === 'per_bbl' ? '/bbl' : '/hr'}${formatFrostRates(r)}`).join(', ')}
+                      {rates!.map(r => `${r.jobType}: $${r.rate}${r.method === 'per_bbl' ? '/bbl' : '/hr'}${formatFrostRates(r)}${formatSubtypeRates(r)}`).join(', ')}
                     </span>
                   ) : (
                     <span className="text-gray-500 text-xs">No rates set</span>
@@ -233,6 +255,69 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {/* Subtype rates — for hourly entries (e.g. Service Work Standby) */}
+                  {entry.method === 'hourly' && (
+                    <div className="mt-2 pl-1 border-t border-gray-600/40 pt-2">
+                      <div className="text-amber-300 text-xs font-medium mb-1">
+                        Subjob Exceptions (e.g. Standby):
+                      </div>
+                      {entry.subtypeRates && Object.keys(entry.subtypeRates).length > 0 && (
+                        <div className="flex items-center gap-2 flex-wrap mb-2">
+                          {Object.entries(entry.subtypeRates).map(([sub, val]) => (
+                            <div key={sub} className="flex items-center gap-1 bg-gray-800/80 px-2 py-1 rounded text-xs">
+                              <span className="text-gray-300">{sub}:</span>
+                              <span className="text-green-400 font-mono">${val}/hr</span>
+                              <button
+                                type="button"
+                                onClick={() => updateSubtypeRate(idx, sub, 0)}
+                                className="text-red-400 hover:text-red-300 ml-1"
+                                title="Remove subtype rate"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="Subjob name (e.g. Standby)"
+                          id={`new-sub-name-${idx}`}
+                          className="px-2 py-1 bg-gray-700 text-white rounded text-xs flex-1"
+                        />
+                        <div className="relative w-24">
+                          <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">$</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Rate"
+                            id={`new-sub-rate-${idx}`}
+                            className="w-full pl-5 pr-1 py-1 bg-gray-700 text-white rounded text-xs"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nameEl = document.getElementById(`new-sub-name-${idx}`) as HTMLInputElement | null;
+                            const rateEl = document.getElementById(`new-sub-rate-${idx}`) as HTMLInputElement | null;
+                            const name = nameEl?.value.trim();
+                            const val = parseFloat(rateEl?.value || '0');
+                            if (name && val > 0) {
+                              updateSubtypeRate(idx, name, val);
+                              if (nameEl) nameEl.value = '';
+                              if (rateEl) rateEl.value = '';
+                            }
+                          }}
+                          className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium"
+                        >
+                          + Add Subtype
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
