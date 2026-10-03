@@ -68,7 +68,6 @@ export function reviewPulls(rows: PullImportRow[], configs: JsonRecord, history:
     if (typeof bbls !== 'number' || !Number.isFinite(bbls) || bbls <= 0 || bbls > 1000) issues.push('Barrels must be between 0 and 1,000');
     const afterFeet = top !== null && bbls !== null && bank ? top - bbls / bank : null;
     if (afterFeet !== null && afterFeet < 0) issues.push('Load exceeds water below the reported top');
-    if (afterFeet !== null && original.bottomLevelFeet !== null && Math.abs(afterFeet - original.bottomLevelFeet) > 0.75 && !acknowledged.has(original.id)) issues.push('Reported bottom differs from calibrated removal by over 9 inches; check setup or gauge');
     const packetId = 'import_' + digest([wellName, Number.isFinite(ts) ? new Date(ts).toISOString() : '', top, bbls]);
     const existing = historyCache.get(wellName) || canonicalHistory(history[wellName] || {});
     historyCache.set(wellName, existing);

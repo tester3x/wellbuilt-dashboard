@@ -53,3 +53,5 @@ test('a different full NDIC identifier is not silently assigned to the short wel
 });
 
 test('nearby native pull with matching top but differing barrels is held',()=>{const row=pulls()[0];const history={'Kahuna 5':{native:{...row,bblsTaken:140,dateTimeUTC:'2026-09-20T20:02:00Z'}}};expect(reviewPulls([row],config,history,{},new Set())[0].status).toBe('review');});
+
+test('reported bottom is reference only and missing bottom does not block import',()=>{for(const bottom of [null,1,12]){const row=pulls()[0];row.bottomLevelFeet=bottom;const reviewed=reviewPulls([row],config,{}, {},new Set());expect(reviewed[0].status).toBe('ready');expect(reviewed[0].afterFeet).toBe(7);const packet=Object.values(buildHistoricalPackets(reviewed,{},'batch','staff','company'))[0];expect(packet.tankAfterInches).toBe(84);expect(packet.historicalImport.reportedBottomFeet).toBe(bottom);}});

@@ -144,7 +144,6 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       if (!segment.well) issues.push('Choose the well for this shorthand message');
       if (top === null) issues.push('Invalid top level');
       if (!(bbls && bbls > 0)) issues.push('Missing barrels');
-      if (top !== null && low !== null && low > top) issues.push('Bottom is higher than top');
       const date = `${message.date.split('/')[2]?.padStart(4, '20')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 1 : 0]?.padStart(2, '0')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 0 : 1]?.padStart(2, '0')}`;
       const excluded = !!((options.startDate && date < options.startDate) || (options.endDate && date > options.endDate));
       rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded });

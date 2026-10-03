@@ -29,7 +29,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const rows=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',defaultBbls:channel.defaultBbls===165?165:undefined});
  const row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
  if(Date.parse(row.postedAt)<policy.enabledAt||Date.parse(row.dateTimeUTC)<policy.enabledAt) {res.json({ok:true,status:'before_activation'});return;}
- if(findPullChatNotices(body.chat).length||row.issues.length||row.bottomLevelFeet===null) {res.json({ok:true,status:'review',issues:row.issues.length?row.issues:['Bottom level or tank setup needs review']});return;}
+ if(findPullChatNotices(body.chat).length||row.issues.length) {res.json({ok:true,status:'review',issues:row.issues.length?row.issues:['Tank setup needs review']});return;}
  const db=admin.database();const configs=(await db.ref('well_config').once('value')).val()||{};
  const mapped=reviewPulls([row],configs,{}, {},new Set())[0];
  if(!channel.wells?.includes(mapped.wellName)||configs[mapped.wellName]?.companyId&&configs[mapped.wellName].companyId!=='liquid-gold')throw Error('well_not_allowed');
@@ -40,11 +40,12 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const entryRef=admin.firestore().collection(root).doc(identity);
  const prior=(await entryRef.get()).data();
  if(!prior&&checked.status!=='ready'){res.json({ok:true,status:checked.status,issues:checked.issues});return;}
+ if(prior){res.json({ok:true,status:'queued',identity,packetId:prior.packetId});return;}
  const stamp=new Date(row.dateTimeUTC).toISOString().replace(/[-:]/g,'').slice(0,15).replace('T','_');
  const packetId=stamp+'_'+mapped.wellName.replace(/\s+/g,'')+'_'+identity.slice(0,6);
- const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:null,driverName:null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity}};
+ const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:null,driverName:null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank}};
  const payloadDigest=digest(packet);
- await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('payload_conflict');return;}tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:row.tankLevelFeet,bottom:row.bottomLevelFeet,bbl:row.bblsTaken,principalId:'laptop-watchdog-v2',messageHash:sha(body.chatId+':'+body.messageId),createdAt:Date.now()});});
+ await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('payload_conflict');return;}tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:row.tankLevelFeet,bottom:checked.afterFeet,bbl:row.bblsTaken,principalId:'laptop-watchdog-v2',messageHash:sha(body.chatId+':'+body.messageId),createdAt:Date.now()});});
  const done=await db.ref('packets/processed/'+packetId).once('value');
  if(!done.exists()){const transaction=await db.ref('packets/incoming/'+packetId).transaction(current=>{if(current){if(digest(current)!==payloadDigest)return;return current;}return packet;});if(!transaction.committed)throw Error('incoming_conflict');}
  res.json({ok:true,status:'queued',identity,packetId});
