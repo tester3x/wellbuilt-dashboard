@@ -17,7 +17,26 @@ let channels=existsSync(configFile)?JSON.parse(readFileSync(configFile,'utf8')):
 let client=null,qr='',state='Stopped',paused=true,error='',chats=[],loadingGroups=false;
 async function loadGroups(){if(loadingGroups||!client||!['Connected','Syncing WhatsApp'].includes(state))throw Error('WhatsApp is not connected yet. Current state: '+state);loadingGroups=true;try{let available;try{available=await Promise.race([client.getChats(),new Promise((_,reject)=>setTimeout(()=>reject(Error('Chat list timed out')),8000))]);}catch{available=await client.pupPage.evaluate(()=>window.require('WAWebCollections').Chat.getModelsArray().filter(c=>c.id?.server==='g.us').map(c=>({id:{_serialized:c.id._serialized},name:c.name||c.formattedTitle||c.id._serialized,isGroup:true})));}chats=available.filter(c=>c.isGroup||c.id?._serialized?.endsWith('@g.us')).map(c=>({id:c.id._serialized,name:c.name||c.id._serialized}));error=chats.length?'':'WhatsApp is syncing groups; retrying shortly.';}catch(e){error='Group list is not ready; retrying shortly. '+String(e?.message||e);}finally{loadingGroups=false;}}
 const groupRetry=setInterval(()=>{if(['Connected','Syncing WhatsApp'].includes(state)&&!chats.length)void loadGroups().catch(e=>{error=e.message;});},10000);groupRetry.unref();
-function status(){return {state,paused,error,qr,channels,chats,...queue.snapshot()};}
+let polling=false,lastReceiverCheck='',receiverMode='Starting';
+async function pollReceiver(){
+ if(polling||!client||!['Syncing WhatsApp','Connected'].includes(state))return;
+ polling=true;
+ try{
+ const result=await client.pupPage.evaluate(ids=>{
+  const connection=window.AuthStore?.AppState?.state;
+  if(connection!=='CONNECTED')throw Error('WhatsApp connection: '+connection);
+  const models=window.require('WAWebCollections').Chat.getModelsArray();
+  const groups=models.filter(c=>c.id?.server==='g.us');
+  const messages=groups.filter(c=>ids.includes(c.id._serialized)).flatMap(c=>c.msgs.getModelsArray().filter(m=>!m.isNotification&&m.id?._serialized&&Number.isFinite(m.t)).slice(-100).map(m=>({id:m.id._serialized,channel:c.id._serialized,timestamp:m.t,author:m.author?._serialized||m.from?._serialized||'Driver',body:typeof m.body==='string'?m.body:'',deleted:m.type==='revoked'})));
+  return {groups:groups.map(c=>({id:c.id._serialized,name:c.name||c.formattedTitle||c.id._serialized})),messages};
+ },paused?[]:channels.map(c=>c.id));
+ chats=result.groups;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
+ if(!paused)for(const m of result.messages){const selected=channels.find(c=>c.id===m.channel);if(selected)queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:selected.options,deleted:m.deleted});}
+ }catch(e){error='Receiver not ready: '+String(e?.message||e);if(state==='Connected'){state='Syncing WhatsApp';paused=true;}}
+ finally{polling=false;}
+}
+const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
+function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
@@ -49,7 +68,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/connect'){await connect();return respond(res,200,{ok:true});}
  if(url.pathname==='/stop'){paused=true;state='Stopped';if(client){const old=client;client=null;await old.destroy();}return respond(res,200,{ok:true});}
  if(url.pathname==='/pause'){paused=true;return respond(res,200,{ok:true});}
- if(url.pathname==='/resume'){if(!client||state!=='Connected')throw Error('Connect WhatsApp first');if(!channels.length)throw Error('Choose channels first');paused=false;try{for(const configured of channels){const chat=await client.getChatById(configured.id);const messages=await chat.fetchMessages({limit:100});for(const m of messages.sort((a,b)=>a.timestamp-b.timestamp))await capture(m);}}catch(e){paused=true;throw e;}return respond(res,200,{ok:true});}
+ if(url.pathname==='/resume'){if(!client||state!=='Connected')throw Error('Connect WhatsApp first');if(!channels.length)throw Error('Choose channels first');paused=false;await pollReceiver();if(paused)throw Error(error||'Receiver not ready');return respond(res,200,{ok:true});}
  if(url.pathname==='/channels'){const value=JSON.parse(bytes);if(!Array.isArray(value)||value.length>20)throw Error('Invalid channels');channels=value.map(c=>{if(!chats.some(chat=>chat.id===c.id))throw Error('Choose an available group');return {id:c.id,name:chats.find(chat=>chat.id===c.id).name,options:{defaultWell:typeof c.defaultWell==='string'?c.defaultWell:'',defaultBbls:c.defaultBbls===165?165:undefined}};});writeFileSync(configFile,JSON.stringify(channels),{mode:0o600});return respond(res,200,{ok:true});}
  if(url.pathname==='/replay'){let text;if(bytes[0]===80&&bytes[1]===75){let total=0,count=0;const entries=unzipSync(bytes,{filter:f=>{count++;total+=f.originalSize;if(count>1000||total>2000000)throw Error('Export exceeds 2 MB expanded size');return /\.txt$/i.test(f.name);}});const values=Object.values(entries);if(values.length!==1)throw Error('ZIP needs exactly one TXT chat');text=strFromU8(values[0]);}else text=bytes.toString('utf8');if(text.length>2000000)throw Error('Chat exceeds 2 MB');const channel=url.searchParams.get('channel')||'Sample';const options={defaultWell:url.searchParams.get('well')||'',defaultBbls:url.searchParams.get('default165')==='true'?165:undefined};let added=0,duplicates=0;for(const m of splitChat(text)){const chat=`[${m.date}, ${m.time}] ${m.author}: ${m.body}`;const result=queue.ingest({channel,id:'export:'+hash(chat),chat,options});result.duplicate?duplicates++:added++;}return respond(res,200,{added,duplicates});}
  return respond(res,404,{error:'Not found'});
