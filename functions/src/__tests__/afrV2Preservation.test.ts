@@ -79,7 +79,7 @@ describe('calculateAFR wired to v2; v1 island removed from index', () => {
   });
 
   it('all three recompute paths pass bblPerFoot + companyId + observation timestamp to calculateAFR', () => {
-    expect(indexSrc).toContain('await calculateAFR(wellName, flowRateDays, bblPerFoot, hwCompanyId, new Date(data.dateTimeUTC).getTime())'); // incoming
+    expect(indexSrc).toContain('await calculateAFR(wellName, flowRateDays, bblPerFoot, hwCompanyId, new Date(data.dateTimeUTC).getTime(), {...data, timeDifDays})'); // incoming
     expect(indexSrc).toContain('await calculateAFR(wellName, flowRateDays, bblPerFoot, (origPacket as { companyId?: string }).companyId, new Date(origPacket.dateTimeUTC).getTime())'); // edit
     expect(indexSrc).toContain('await calculateAFR(wellName, latestPacket.flowRateDays || 0, tanks * 20, (latestPacket as { companyId?: string }).companyId, new Date(latestPacket.dateTimeUTC).getTime())'); // delete
   });

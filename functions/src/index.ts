@@ -1,3 +1,4 @@
+import { buildAfrIntervals } from './afr/buildAfrIntervals';
 import { resolveTankBblPerFoot } from './tankCalibration';
 import * as functionsV1 from 'firebase-functions/v1';
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
@@ -9,7 +10,6 @@ import { ANTHROPIC_API_KEY, logRedacted, toSafeProviderError } from './secrets';
 import { createAnthropicClient } from './ai/anthropicClient';
 import { AFR_V2_POLICY } from './afr/afrV2Policy';
 import { computeAfrAuto } from './afr/afrAutoTransient';
-import type { AfrInterval } from './afr/afrTypes';
 import { buildProcessedRecord } from './processedRecord';
 import {
   ambiguousEditVerdict,
@@ -712,6 +712,7 @@ async function calculateAFR(
   bblPerFoot?: number,
   companyId?: string,
   observationMs?: number,
+  incomingContext?: Record<string, unknown>,
 ): Promise<number> {
 
   // Get recent processed packets for this well
@@ -724,65 +725,11 @@ async function calculateAFR(
     .equalTo(wellName)
     .once('value');
 
-  // Collect rates with timestamps + the level/haul the AFR-v2 validity pass
-  // needs. Sort by actual time; the window/anomaly handling now lives in
-  // computeAfrV2 (validity → confidence → change-point → weighted EMA).
-  const rateEntries: { key: string; timestamp: number; rate: number; topLevelFeet?: number; bblsTaken?: number }[] = [];
-
-  snapshot.forEach((child) => {
-    const data = child.val();
-    const key = child.key || '';
-    // Skip edit/delete/history packets
-    if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_')) return;
-    if (data.flowRateDays && data.flowRateDays > 0) {
-      // Sort by timestamp. Prefer dateTimeUTC (always a valid ISO string) over
-      // dateTime (locale-formatted by the WB M client and sometimes malformed,
-      // e.g. "4/11/2026 3 PM" with no minutes — parses to NaN and corrupts sort).
-      let ts = data.dateTimeUTC ? new Date(data.dateTimeUTC).getTime()
-        : data.gaugeTime ? new Date(data.gaugeTime).getTime()
-        : data.dateTime ? new Date(data.dateTime).getTime()
-        : 0;
-      if (isNaN(ts)) ts = 0;
-      rateEntries.push({
-        key,
-        timestamp: ts,
-        rate: data.flowRateDays,
-        topLevelFeet: typeof data.tankLevelFeet === 'number' ? data.tankLevelFeet : undefined,
-        bblsTaken: typeof data.bblsTaken === 'number' ? data.bblsTaken : undefined,
-      });
-    }
-  });
-
-  // Sort by timestamp ascending (oldest first) and take the most recent 15.
-  rateEntries.sort((a, b) => a.timestamp - b.timestamp);
-  const recent = rateEntries.slice(-AFR_V2_POLICY.windowSize);
-
-  // Build derived-interval inputs. Confidence attaches per interval; validity
-  // sees level/haul (for the ~7-ft artifact) when the packet carried them.
-  const intervals: AfrInterval[] = recent.map((e, i) => {
-    const prev = i > 0 ? recent[i - 1] : undefined;
-    return {
-      key: e.key,
-      timestamp: e.timestamp,
-      flowRateDays: e.rate,
-      intervalMs: prev ? e.timestamp - prev.timestamp : undefined,
-      topLevelFeet: e.topLevelFeet,
-      priorTopLevelFeet: prev?.topLevelFeet,
-      bblsTaken: e.bblsTaken,
-      bblPerFoot,
-    };
-  });
-
-  // Append the just-arrived pull's rate (its level/haul context isn't needed
-  // here; validity still rejects an impossible new rate). Not persisted.
-  if (newFlowRateDays > 0) {
-    const last = recent[recent.length - 1];
-    intervals.push({
-      key: '__incoming__',
-      timestamp: last ? last.timestamp + 1 : 1,
+  const intervals = buildAfrIntervals(snapshot.val() || {}, bblPerFoot,
+    newFlowRateDays > 0 && observationMs ? {
+      ...incomingContext, key: '__incoming__', timestamp: observationMs,
       flowRateDays: newFlowRateDays,
-    });
-  }
+    } : undefined);
 
   if (intervals.length === 0) return 0;
 
@@ -791,9 +738,8 @@ async function calculateAFR(
   // data — each well is judged only against its OWN robust history. Unified
   // confidence: 1.0 stable / 0.8 weak-timing / 0.4 disturbed-recovery / 0.1 major
   // anomaly / 0.0 invalid. Contract UNCHANGED — returns the afr number the mobile/
-  // API clients already consume (no AFR-specific rebuild). companyId/observationMs
-  // are retained in the signature for callers but no longer steer the calculation.
-  void companyId; void observationMs;
+  // API clients already consume (no AFR-specific rebuild). companyId does not steer the calculation; observationMs identifies the actual incoming observation.
+  void companyId;
   const result = computeAfrAuto(intervals, AFR_V2_POLICY);
   console.log(`[AFR] ${wellName}: ${result.mode} afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals${result.regimeAccepted ? ' [regime-change]' : ''}`);
   return result.afr;
@@ -1127,7 +1073,7 @@ export const processIncomingPull = functionsV1.database
     }
 
     // Calculate AFR
-    const afr = await calculateAFR(wellName, flowRateDays, bblPerFoot, hwCompanyId, new Date(data.dateTimeUTC).getTime());
+    const afr = await calculateAFR(wellName, flowRateDays, bblPerFoot, hwCompanyId, new Date(data.dateTimeUTC).getTime(), {...data, timeDifDays});
 
     // Calculate window-averaged and overnight bbls/day
     // Use the same calibrated bank rate for all derived production metrics.

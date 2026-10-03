@@ -13,6 +13,11 @@ import type { AfrV2Policy } from './afrV2Policy';
 export function decideValidity(iv: AfrInterval, policy: AfrV2Policy): ValidityVerdict {
   const v = policy.validity;
 
+  // A confirmed shutdown boundary cannot measure continuous production.
+  if (iv.wellDown === true || iv.priorWellDown === true) {
+    return { valid: false, reason: 'shutdown_interval' };
+  }
+
   // Impossible rate: non-finite, non-positive, or beyond the physical sanity cap.
   if (!Number.isFinite(iv.flowRateDays) || iv.flowRateDays <= 0) {
     return { valid: false, reason: 'impossible_rate' };
@@ -36,7 +41,7 @@ export function decideValidity(iv: AfrInterval, policy: AfrV2Policy): ValidityVe
     }
   }
 
-  // Unexplained ~7-ft top-level change: only provable when BOTH levels and the
+  // Unexplained ~7-ft downward top-level change: only provable when BOTH levels and the
   // haul (with a conversion) are present. A big level jump that the recorded
   // haul cannot account for is the corrupt artifact → invalid. Missing any of
   // these inputs = not provable = valid.
@@ -51,7 +56,7 @@ export function decideValidity(iv: AfrInterval, policy: AfrV2Policy): ValidityVe
     const haulDropFeet = iv.bblsTaken / iv.bblPerFoot;
     const unexplained = Math.abs(observedDropFeet - haulDropFeet);
     if (
-      Math.abs(observedDropFeet) >= v.unexplainedLevelJumpFeet &&
+      observedDropFeet >= v.unexplainedLevelJumpFeet &&
       unexplained > v.haulMatchToleranceFeet
     ) {
       return { valid: false, reason: 'unexplained_level_jump' };

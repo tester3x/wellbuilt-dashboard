@@ -140,6 +140,7 @@ export function computeAfrAuto(intervalsIn: AfrInterval[], policy: AfrV2Policy):
   const runIdx: number[] = [];   // their positions in `out`
 
   const out: AutoIntervalResult[] = [];
+  let emaResetIndex = -1;
 
   const baselineOf = (): { med: number | null; scale: number } => {
     if (stableRates.length < at.minBaseline) return { med: null, scale: 0 };
@@ -191,6 +192,7 @@ export function computeAfrAuto(intervalsIn: AfrInterval[], policy: AfrV2Policy):
         for (const j of runIdx) { out[j].weight = policy.regime.acceptedConfidence; out[j].reason = 'accepted-regime-change'; out[j].state = 'REGIME'; }
         state = 'REGIME';
         stableRates = [...runRates];
+        emaResetIndex = runIdx[0];
         transientCount = 0; returnCount = 0;
         return true;
       }
@@ -264,11 +266,12 @@ export function computeAfrAuto(intervalsIn: AfrInterval[], policy: AfrV2Policy):
   for (let i = 0; i < intervals.length; i++) {
     const r = out[i];
     if (!r.valid || r.weight <= 0) continue;
+    if (i === emaResetIndex) ema = null;
     ema = ema == null ? r.rate : ema + policy.emaAlpha * r.weight * (r.rate - ema);
   }
   if (ema == null) {
     const lastValid = [...out].reverse().find((r) => r.valid);
-    ema = lastValid ? lastValid.rate : intervals[intervals.length - 1].flowRateDays;
+    ema = lastValid ? lastValid.rate : 0;
   }
 
   const regimeAccepted = out.some((r) => r.reason === 'accepted-regime-change');

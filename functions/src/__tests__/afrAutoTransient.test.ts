@@ -221,3 +221,22 @@ describe('computeAfrAuto — automatic per-well transient detection (no events)'
     expect(computeAfrAuto.length).toBe(2);
   });
 });
+
+
+describe('targeted AFR recovery repairs', () => {
+  it.each([0.2, 2])('reseeds the EMA after three consistent intervals at %s', rate => {
+    const result = computeAfrAuto(series([0.5, 0.5, 0.5, 0.5, rate, rate, rate]), P);
+    expect(result.regimeAccepted).toBe(true);
+    expect(result.afr).toBeCloseTo(rate, 12);
+  });
+  it('retains a large upward recovery over a day', () => {
+    const result = computeAfrAuto(series([0.2], {0: {topLevelFeet: 16, priorTopLevelFeet: 3.25, bblsTaken: 170, bblPerFoot: 20}}), P);
+    expect(result.perInterval[0].valid).toBe(true);
+  });
+  it('excludes confirmed shutdown-spanning intervals without rejecting zero-haul gauges', () => {
+    const result = computeAfrAuto(series([0.5, 2, 0.5], {1: {priorWellDown: true}, 2: {bblsTaken: 0}}), P);
+    expect(result.perInterval[1].weight).toBe(0);
+    expect(result.perInterval[1].validityReason).toBe('shutdown_interval');
+    expect(result.perInterval[2].valid).toBe(true);
+  });
+});

@@ -18,6 +18,7 @@ export interface AfrInterval {
   bblsTaken?: number;          // haul volume on this pull
   bblPerFoot?: number;         // barrels per foot (level <-> bbls conversion)
   wellDown?: boolean;
+  priorWellDown?: boolean;
   enteredAtMs?: number;        // when entered/edited (late-entry timing quality)
   jobType?: string;            // commodity hauled — NOT a washout marker
 }
@@ -28,6 +29,7 @@ export type ValidityReason =
   | 'corrupt_timing'           // no parseable time / non-positive interval
   | 'short_gap_duplicate'      // interval below the minimum plausible gap
   | 'unexplained_level_jump'   // ~7-ft top-level change with no explaining haul
+  | 'shutdown_interval'
   | 'missing_haul';            // haul required but missing/unknown
 
 export interface ValidityVerdict {
