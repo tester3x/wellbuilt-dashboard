@@ -1,0 +1,1 @@
+{"name":"wellbuilt-whatsapp-watchdog","private":true,"version":"0.1.0","type":"module","scripts":{"start":"node server.mjs","test":"node --test test.mjs"},"dependencies":{"whatsapp-web.js":"1.34.7","qrcode":"1.5.4","fflate":"0.8.3"}}
