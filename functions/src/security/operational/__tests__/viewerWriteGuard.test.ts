@@ -1,0 +1,2 @@
+import {assertWbmWriter} from '../viewerWriteGuard';
+test('viewers are refused even with stale driver claims or legacy flag',()=>{for(const [p,r] of [[{isViewer:true},['driver']],[{roles:['viewer']},['driver']],[{},['viewer']]])expect(()=>assertWbmWriter(p as Record<string,unknown>,r as string[])).toThrow('viewer_read_only');expect(()=>assertWbmWriter({roles:['driver']},['driver'])).not.toThrow();});

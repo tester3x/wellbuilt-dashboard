@@ -1,3 +1,4 @@
+import { assertWbmWriter } from './viewerWriteGuard';
 /**
  * Governed WB-M edit ingest. Authenticated driver only. Writes the
  * deterministic packets/incoming/edit_* key so live processEditRequest
@@ -65,6 +66,7 @@ export const ingestWbmEdit = httpsV2.onCall(
       throw new httpsV2.HttpsError('failed-precondition', 'profile_missing');
     }
     const profile = (profSnap.val() || {}) as Record<string, unknown>;
+    assertWbmWriter(profile, driver.roles);
     const wellConfig = wellSnap.exists() ? (wellSnap.val() as Record<string, unknown>) : {};
     const original = origSnap.exists() ? (origSnap.val() as Record<string, unknown>) : null;
 

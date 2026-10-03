@@ -1,3 +1,4 @@
+import { assertWbmWriter } from './viewerWriteGuard';
 /**
  * Dedicated canonical WB-M pull ingest. Does not alter ingestDriverPacket.
  * Allowlisted packet only. RTDB transaction for idempotency.
@@ -39,6 +40,7 @@ export const ingestWbmPull = httpsV2.onCall(
       throw new httpsV2.HttpsError('failed-precondition', 'profile_missing');
     }
     const profile = (profSnap.val() || {}) as Record<string, unknown>;
+    assertWbmWriter(profile, driver.roles);
 
     const wellSnap = await admin.database().ref('well_config').once('value');
     const wellConfig = wellSnap.exists() ? (wellSnap.val() as Record<string, unknown>) : {};
