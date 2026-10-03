@@ -14,7 +14,9 @@ const directory=process.env.WBC_WATCHDOG_DATA||path.join(process.env.LOCALAPPDAT
 const queue=new Queue(directory), token=randomBytes(32).toString('hex');
 const configFile=path.join(directory,'channels.json');
 let channels=existsSync(configFile)?JSON.parse(readFileSync(configFile,'utf8')):[];
-let client=null,qr='',state='Stopped',paused=true,error='',chats=[];
+let client=null,qr='',state='Stopped',paused=true,error='',chats=[],loadingGroups=false;
+async function loadGroups(){if(loadingGroups||!client||state!=='Connected')return;loadingGroups=true;try{const available=await client.getChats();chats=available.filter(c=>c.isGroup||c.id?._serialized?.endsWith('@g.us')).map(c=>({id:c.id._serialized,name:c.name||c.id._serialized}));error=chats.length?'':'WhatsApp is syncing groups; retrying shortly.';}catch(e){error='Group list is not ready; retrying shortly. '+String(e?.message||e);}finally{loadingGroups=false;}}
+const groupRetry=setInterval(()=>{if(state==='Connected'&&!chats.length)void loadGroups();},10000);groupRetry.unref();
 function status(){return {state,paused,error,qr,channels,chats,...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted});}
@@ -22,7 +24,7 @@ async function connect(){if(client)return;const {Client,LocalAuth}=require('what
  client=new Client({authStrategy:new LocalAuth({dataPath:path.join(directory,'session')}),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
  state='Connecting';error='';
  client.on('qr',async code=>{qr=await QRCode.toDataURL(code);state='Scan QR';});
- client.on('ready',async()=>{qr='';state='Connected';try{chats=(await client.getChats()).filter(c=>c.isGroup).map(c=>({id:c.id._serialized,name:c.name}));}catch(e){error=e.message;}});
+ client.on('ready',async()=>{qr='';state='Connected';await loadGroups();});
  client.on('auth_failure',()=>{state='Authentication failed';error='Relink WhatsApp using QR.';});
  client.on('disconnected',()=>{state='Disconnected';paused=true;qr='';});
  const receive=m=>capture(m).catch(e=>{error=e.message;paused=true;});
@@ -42,6 +44,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(req.method!=='POST')return respond(res,404,{error:'Not found'});
  if(req.headers.origin&&req.headers.origin!=='http://127.0.0.1:8791'&&req.headers.origin!=='http://localhost:8791')return respond(res,403,{error:'Invalid origin'});
  let chunks=[],length=0;for await(const chunk of req){length+=chunk.length;if(length>10000000)return respond(res,413,{error:'File exceeds 10 MB'});chunks.push(chunk);}const bytes=Buffer.concat(chunks);
+ if(url.pathname==='/refresh-groups'){await loadGroups();return respond(res,200,{ok:true});}
  if(url.pathname==='/connect'){await connect();return respond(res,200,{ok:true});}
  if(url.pathname==='/stop'){paused=true;state='Stopped';if(client){const old=client;client=null;await old.destroy();}return respond(res,200,{ok:true});}
  if(url.pathname==='/pause'){paused=true;return respond(res,200,{ok:true});}
