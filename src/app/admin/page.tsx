@@ -23,6 +23,7 @@ import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import { isPlatformAdmin, hasCapability } from '@/lib/auth';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
+import { HistoricalPullImportTab } from '@/components/admin/HistoricalPullImportTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
 import dynamic from 'next/dynamic';
 import { useVerifiedAdmin } from '@/lib/useVerifiedAdmin';
@@ -168,7 +169,7 @@ export default function AdminPage() {
   const updateWellInflightRef = useRef(false);
   const addWellNdicRef = useRef<HTMLDivElement | null>(null);
   const addWellActionRef = useRef<HTMLDivElement | null>(null);
-  type AdminTab = 'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment' | 'plans' | 'adminaudit';
+  type AdminTab = 'routes' | 'wells' | 'imports' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment' | 'plans' | 'adminaudit';
   const [activeTab, setActiveTabState] = useState<AdminTab>('wells');
   const setActiveTab = (tab: AdminTab) => {
     setActiveTabState(tab);
@@ -188,7 +189,7 @@ export default function AdminPage() {
     const restoreTab = () => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const validTabs = ['routes', 'wells', 'drivers', 'companies', 'gpsroutes', 'equipment', 'plans', 'adminaudit'];
+    const validTabs = ['routes', 'wells', 'imports', 'drivers', 'companies', 'gpsroutes', 'equipment', 'plans', 'adminaudit'];
     if (tab && validTabs.includes(tab)) {
       setActiveTabState(tab as AdminTab);
     }
@@ -219,7 +220,7 @@ export default function AdminPage() {
     // Default tab is 'wells' and ?tab= can deep-link into a gated tab —
     // route scoped users to their Companies tab instead.
     if (user && !canManageGlobalWellConfig &&
-        (activeTab === 'wells' || activeTab === 'routes' || activeTab === 'gpsroutes')) {
+        (activeTab === 'imports' || activeTab === 'wells' || activeTab === 'routes' || activeTab === 'gpsroutes')) {
       setActiveTab('companies');
     }
   }, [user, canManageGlobalWellConfig, activeTab]);
@@ -1032,7 +1033,7 @@ export default function AdminPage() {
 
         {/* Section Title */}
         <h2 className="text-xl font-bold text-white mb-3">
-          {activeTab === 'wells' ? 'Well Configuration' :
+          {activeTab === 'imports' ? 'Historical Pull Import' : activeTab === 'wells' ? 'Well Configuration' :
            activeTab === 'routes' ? 'Route Groups' :
            activeTab === 'gpsroutes' ? 'GPS Route Recording' :
            activeTab === 'drivers' ? 'Employee Management' :
@@ -1065,6 +1066,7 @@ export default function AdminPage() {
               >
                 GPS Routes
               </button>
+              {canManageWells && <button onClick={() => setActiveTab('imports')} className={`px-4 py-2 rounded ${activeTab === 'imports' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Import Pulls</button>}
               <div className="w-px bg-gray-600 mx-1 self-stretch" />
             </>
           )}
@@ -1091,6 +1093,7 @@ export default function AdminPage() {
               server re-authorizes every call regardless. */}
           {adminSession.status === 'verified' && (
             <>
+              {canManageWells && <button onClick={() => setActiveTab('imports')} className={`px-4 py-2 rounded ${activeTab === 'imports' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Import Pulls</button>}
               <div className="w-px bg-gray-600 mx-1 self-stretch" />
               <button
                 onClick={() => setActiveTab('plans')}
@@ -1111,7 +1114,7 @@ export default function AdminPage() {
         {/* Gated well-config fallback (tenant containment) — normally
             unreachable thanks to the redirect effect; covers direct ?tab=
             deep links in the same render before the effect fires. */}
-        {!canManageGlobalWellConfig && (activeTab === 'wells' || activeTab === 'routes' || activeTab === 'gpsroutes') && (
+        {!canManageGlobalWellConfig && (activeTab === 'imports' || activeTab === 'wells' || activeTab === 'routes' || activeTab === 'gpsroutes') && (
           <div className="bg-gray-800 border border-gray-700 rounded-lg py-16 px-6 text-center">
             <div className="text-white text-lg font-semibold mb-2">Well configuration is not available for this company yet</div>
             <p className="text-gray-400 text-sm max-w-md mx-auto">Contact WellBuilt to set up tenant-specific routes.</p>
@@ -2128,6 +2131,8 @@ export default function AdminPage() {
         )}
 
         {/* GPS Routes Tab */}
+        {activeTab === 'imports' && canManageGlobalWellConfig && canManageWells && <HistoricalPullImportTab configs={configs} />}
+
         {activeTab === 'gpsroutes' && canManageGlobalWellConfig && (
           <GpsRoutesTab />
         )}
@@ -2172,3 +2177,4 @@ export default function AdminPage() {
     </div>
   );
 }
+

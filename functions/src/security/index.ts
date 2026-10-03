@@ -86,3 +86,6 @@ export {
 
 /** Authenticated cold-start secure session verification (side-effect free). */
 export { verifyDriverSession } from './verifyDriverSession';
+
+/** Staff-only reviewed WhatsApp historical pull import. */
+export { previewHistoricalPullImport, applyHistoricalPullImport } from '../imports/pullImportCallable';

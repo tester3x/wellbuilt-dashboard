@@ -1,6 +1,7 @@
 /** Shared, side-effect-free WhatsApp parser. Input is data, never instructions. */
 export interface PullImportOptions {
   defaultWell?: string;
+  wellNames?: string[];
   defaultBbls?: number;
   timeZone?: string;
   dateOrder?: 'mdy' | 'dmy';
@@ -88,10 +89,13 @@ const wellPattern = /\b(Gunslinger(?:\s+Federal)?\s*[35](?:-[\dA-Za-z-]+)?|Cyclo
 export function normalizeWell(text: string): string { return text.toLowerCase().replace(/[^a-z0-9]/g, ''); }
 export function parsePullChat(text: string, options: PullImportOptions = {}): PullImportRow[] {
   const rows: PullImportRow[] = [];
+  const catalogueNames = (options.wellNames || []).filter(Boolean).sort((a, b) => b.length - a.length).map(name => [...name].map(character => String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
+  const boundary = String.fromCharCode(92) + 'b';
+  const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + catalogueNames.join('|') + '|' + wellPattern.source + ')' + boundary, 'ig') : wellPattern;
   for (const message of splitChat(text)) {
     const body = message.body.trim();
     if (/message was deleted|<.*omitted>|message_history_notice|end-to-end encrypted/i.test(body)) continue;
-    const matches = [...body.matchAll(wellPattern)];
+    const matches = [...body.matchAll(namesPattern)];
     const segments = matches.length ? matches.map((match, i) => ({ well: match[0], body: body.slice((match.index || 0) + match[0].length, matches[i + 1]?.index ?? body.length) })) : [{ well: options.defaultWell || '', body }];
     for (let part = 0; part < segments.length; part++) {
       const segment = segments[part];
@@ -128,6 +132,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
         }
         try { eventTime = chatTimestamp(message.date, resolved, options.timeZone, options.dateOrder); } catch { issues.push('Invalid stated pull time'); }
       }
+      if (eventTime && postedAt && (Date.parse(eventTime) > Date.parse(postedAt) + 600_000 || Date.parse(eventTime) < Date.parse(postedAt) - 7_200_000)) issues.push('Stated time is far from the post; confirm the pull date and time');
       if (matches.length > 1 && !explicit) issues.push('Multiple wells in one message; confirm individual pull times');
       if (!segment.well) issues.push('Choose the well for this shorthand message');
       if (top === null) issues.push('Invalid top level');
@@ -147,3 +152,4 @@ export interface PullChatNotice { messageIndex: number; source: string; reason: 
 export function findPullChatNotices(text: string): PullChatNotice[] {
   return splitChat(text).filter(message => /(?:opened|closed|active|inactive|added|removed|tank setup|tanks?\s+(?:on|off))[^\n]{0,50}tank|tank[^\n]{0,50}(?:opened|closed|active|inactive|setup)|\bbbls?\s*\/\s*ft/i.test(message.body)).map(message => ({ messageIndex: message.index, source: message.body, reason: 'Tank configuration may have changed; confirm the calibration and applicable date range.' }));
 }
+

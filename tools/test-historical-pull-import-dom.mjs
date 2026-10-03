@@ -1,0 +1,51 @@
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { createRequire } from 'node:module';
+import assert from 'node:assert/strict';
+import { chromium } from 'playwright';
+import { zipSync, strToU8 } from 'fflate';
+const require = createRequire(import.meta.url);
+const webpack = require('next/dist/compiled/webpack/webpack').webpack;
+const repo = process.cwd();
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'wbm-import-dom-'));
+fs.writeFileSync(path.join(scratch,'loader.cjs'), `const ts=require(${JSON.stringify(require.resolve('typescript'))});module.exports=function(source){return ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.ReactJSX}}).outputText};`);
+fs.writeFileSync(path.join(scratch,'firebase.cjs'), 'exports.getFirebaseFunctions=()=>({});');
+fs.writeFileSync(path.join(scratch,'callable.cjs'), `exports.httpsCallable=(_functions,name)=>async data=>{
+ window.calls.push({name,data});
+ if(name==='previewHistoricalPullImport') return {data:{batchId:'test-preview',expiresAt:Date.now()+1200000,counts:{ready:1,duplicate:1,review:0},calibration:[],rows:data.rows.map((row,index)=>({...row,status:index===0?'ready':'duplicate',packetId:'id-'+index,bank:180,afterFeet:7}))}};
+ return {data:{imported:1,duplicates:0,modelResults:[]}};
+};`);
+fs.writeFileSync(path.join(scratch,'entry.tsx'), `import React from 'react';import {createRoot} from 'react-dom/client';import {HistoricalPullImportTab} from ${JSON.stringify(path.join(repo,'src/components/admin/HistoricalPullImportTab'))};window.calls=[];createRoot(document.getElementById('root')).render(<HistoricalPullImportTab configs={{'Kahuna 5':{bblPerFoot:180,tankHeight:20}}}/>);`);
+await new Promise((resolve,reject)=>webpack({mode:'development',context:repo,entry:path.join(scratch,'entry.tsx'),output:{path:scratch,filename:'bundle.js',hashFunction:'sha256'},resolve:{extensions:['.tsx','.ts','.js'],modules:[path.join(repo,'node_modules')],alias:{'@/lib/firebase':path.join(scratch,'firebase.cjs'),'firebase/functions':path.join(scratch,'callable.cjs'),'@':path.join(repo,'src')}},module:{rules:[{test:/\.tsx?$/,exclude:/node_modules/,use:[path.join(scratch,'loader.cjs')]}]}},(error,stats)=>error||stats.hasErrors()?reject(error||new Error(stats.toString({all:false,errors:true}))):resolve()));
+const server=http.createServer((req,res)=>{res.setHeader('Content-Type',req.url==='/bundle.js'?'application/javascript':'text/html');res.end(req.url==='/bundle.js'?fs.readFileSync(path.join(scratch,'bundle.js')):'<html><body><div id="root"></div><script src="/bundle.js"></script></body></html>');});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const browser=await chromium.launch({headless:true});
+try{
+ const page=await browser.newPage();await page.goto(`http://127.0.0.1:${server.address().port}`);
+ const chat='[9/20/26, 3:00 PM] Driver: Kahuna 5- 8.0/7.0\n180 bbls\n[9/20/26, 5:00 PM] Driver: Kahuna 5- 8.0/7.0\n180 bbls';
+ await page.getByLabel('WhatsApp export').setInputFiles({name:'sample.zip',mimeType:'application/zip',buffer:Buffer.from(zipSync({'chat.txt':strToU8(chat),'chat.md':strToU8('duplicate representation')}))});
+ await page.getByText('2 entries',{exact:true}).waitFor();
+ assert.equal(await page.locator('tbody tr').count(),2);
+ assert.equal(await page.getByLabel('Time 0:0',{exact:true}).inputValue(),'2026-09-20T15:00');
+ await page.getByRole('checkbox',{name:/I checked that the tank/}).check();
+ await page.getByRole('button',{name:'Check saved history and preview',exact:true}).click();
+ await page.getByRole('button',{name:'Import 1 checked pulls',exact:true}).waitFor();
+ assert.equal(await page.getByLabel('Select 0:0',{exact:true}).isChecked(),true);
+ assert.equal(await page.getByLabel('Select 1:0',{exact:true}).isEnabled(),false);
+ await page.getByLabel('Top 0:0',{exact:true}).fill('8.5');
+ assert.equal(await page.getByRole('button',{name:'Import 1 checked pulls',exact:true}).count(),0);
+ await page.getByRole('button',{name:'Check saved history and preview',exact:true}).click();
+ await page.getByRole('button',{name:'Import 1 checked pulls',exact:true}).waitFor();
+ const requests=await page.evaluate(()=>window.calls);
+ assert.equal(requests.at(-1).data.rows[0].tankLevelFeet,8.5);
+ assert.equal(Object.hasOwn(requests.at(-1).data.rows[0],'afterFeet'),false);
+ await page.getByRole('button',{name:'Import 1 checked pulls',exact:true}).click();
+ await page.getByText('Imported 1 pulls; skipped 0 already saved.',{exact:true}).waitFor();
+ const applied=await page.evaluate(()=>window.calls.at(-1));assert.deepEqual(applied.data.selectedIds,['0:0']);
+ await page.setViewportSize({width:390,height:844});
+ assert.equal(await page.getByRole('button',{name:'Download import report'}).isVisible(),true);
+ console.log('PASS importer DOM: ZIP/TXT selection, Central time, duplicate exclusion, edit invalidation, clean re-preview payload, selected-only apply, mobile report access. Firebase callables mocked; actual component/parser/ZIP reader rendered.');
+}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
+
