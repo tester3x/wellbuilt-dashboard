@@ -20,26 +20,28 @@ let channels=existsSync(configFile)?JSON.parse(readFileSync(configFile,'utf8')):
 let client=null,qr='',state='Stopped',paused=true,error='',chats=[],loadingGroups=false;
 async function loadGroups(){if(loadingGroups||!client||!['Connected','Syncing WhatsApp'].includes(state))throw Error('WhatsApp is not connected yet. Current state: '+state);loadingGroups=true;try{let available;try{available=await Promise.race([client.getChats(),new Promise((_,reject)=>setTimeout(()=>reject(Error('Chat list timed out')),8000))]);}catch{available=await client.pupPage.evaluate(()=>window.require('WAWebCollections').Chat.getModelsArray().filter(c=>c.id?.server==='g.us').map(c=>({id:{_serialized:c.id._serialized},name:c.name||c.formattedTitle||c.id._serialized,isGroup:true})));}chats=available.filter(c=>c.isGroup||c.id?._serialized?.endsWith('@g.us')).map(c=>({id:c.id._serialized,name:c.name||c.id._serialized}));error=chats.length?'':'WhatsApp is syncing groups; retrying shortly.';}catch(e){error='Group list is not ready; retrying shortly. '+String(e?.message||e);}finally{loadingGroups=false;}}
 const groupRetry=setInterval(()=>{if(['Connected','Syncing WhatsApp'].includes(state)&&!chats.length)void loadGroups().catch(e=>{error=e.message;});},10000);groupRetry.unref();
-let polling=false,lastReceiverCheck='',receiverMode='Starting';
+let polling=false,lastReceiverCheck='',receiverMode='Starting',receiverGroups=[];
 async function pollReceiver(){
  if(polling||!client||!['Syncing WhatsApp','Connected'].includes(state))return;
  polling=true;
  try{
- const result=await client.pupPage.evaluate(ids=>{
+ const result=await client.pupPage.evaluate(async ids=>{
   const connection=window.AuthStore?.AppState?.state;
   if(connection!=='CONNECTED')throw Error('WhatsApp connection: '+connection);
   const models=window.require('WAWebCollections').Chat.getModelsArray();
   const groups=models.filter(c=>c.id?.server==='g.us');
-  const messages=groups.filter(c=>ids.includes(c.id._serialized)).flatMap(c=>c.msgs.getModelsArray().filter(m=>!m.isNotification&&m.id?._serialized&&Number.isFinite(m.t)).slice(-100).map(m=>({id:m.id._serialized,channel:c.id._serialized,timestamp:m.t,author:m.notifyName||m.author?._serialized||m.from?._serialized||'Driver',body:typeof m.body==='string'?m.body:'',deleted:m.type==='revoked'})));
-  return {groups:groups.map(c=>({id:c.id._serialized,name:c.name||c.formattedTitle||c.id._serialized})),messages};
+  for(const chat of groups.filter(c=>ids.includes(c.id._serialized))){if(!chat.msgs.getModelsArray().some(m=>typeof m.body==='string'&&m.body.length)){await window.require('WAWebChatLoadMessages').loadEarlierMsgs({chat});}}
+  const diagnostics=groups.filter(c=>ids.includes(c.id._serialized)).map(c=>({id:c.id._serialized,loaded:c.msgs.getModelsArray().length,eligible:c.msgs.getModelsArray().filter(m=>!m.isNotification&&m.id?._serialized&&Number.isFinite(Number(m.t))).length}));
+  const messages=groups.filter(c=>ids.includes(c.id._serialized)).flatMap(c=>c.msgs.getModelsArray().filter(m=>!m.isNotification&&m.id?._serialized&&Number.isFinite(Number(m.t))).slice(-100).map(m=>({id:m.id._serialized,channel:c.id._serialized,timestamp:Number(m.t),author:m.notifyName||m.author?._serialized||m.from?._serialized||'Driver',body:typeof m.body==='string'?m.body:'',deleted:m.type==='revoked'})));
+  return {diagnostics,groups:groups.map(c=>({id:c.id._serialized,name:c.name||c.formattedTitle||c.id._serialized})),messages};
  },paused?[]:channels.map(c=>c.id));
- chats=result.groups;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
+ chats=result.groups;receiverGroups=result.diagnostics;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
  if(!paused)for(const m of result.messages){const selected=channels.find(c=>c.id===m.channel);if(selected)queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:selected.options,deleted:m.deleted});}
  }catch(e){error='Receiver not ready: '+String(e?.message||e);if(state==='Connected'){state='Syncing WhatsApp';paused=true;}}
  finally{polling=false;}
 }
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
-function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,transportStatus:transport.status,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
+function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
