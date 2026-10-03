@@ -39,11 +39,15 @@ test('calibrated recovery accounts for previous removal and preserves source pro
   expect(packets[1].driverId).toBeUndefined(); expect(packets[1].invoiceDocId).toBeUndefined();
 });
 test('negative recovery does not invent production', () => {
-  const rows=pulls(); rows[1].tankLevelFeet=6;
+  const rows=pulls(); rows[1].tankLevelFeet=6; rows[1].bottomLevelFeet=5;
   const packets=Object.values(buildHistoricalPackets(reviewPulls(rows,config,{}, {},new Set()),{},'batch','staff','company'));
   expect(packets[1].flowRateDays).toBe(0);
 });
 test('a sustained rate change resets the adaptive average', () => {
   expect(historicalAverage([1,1,1,1,3,3,3])).toBe(3);
   expect(historicalAverage([1,1,1,1,1,9,1])).toBeCloseTo(1);
+});
+
+test('a different full NDIC identifier is not silently assigned to the short well',()=>{
+ const rows=pulls();rows[0].wellName='Kahuna 5-99-99H';expect(reviewPulls(rows,config,{}, {},new Set())[0].status).toBe('review');
 });

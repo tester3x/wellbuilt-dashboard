@@ -17,7 +17,7 @@ export function resolveWell(name: string, configs: JsonRecord): string | null {
   if (found.length === 1) return found[0];
   // Long NDIC names must identify a unique short catalogue key, never fuzzy-match.
   const short = /^(gunslinger(?:federal)?[35]|cyclone[2-5]|kahuna5)(?:\d.*)?$/.exec(normalized);
-  if (!short) return null;
+  if (!short || short[1] !== normalized) return null;
   const target = short[1].replace('federal', '');
   const canonical = Object.keys(configs).filter(key => normalizeWell(key).replace('federal', '') === target);
   return canonical.length === 1 ? canonical[0] : null;

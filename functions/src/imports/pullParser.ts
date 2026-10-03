@@ -85,13 +85,13 @@ export function parseFeet(text: string): number | null {
   const decimal = /^(\d{1,2}(?:\.\d+)?)\s*(?:feet|ft)?$/i.exec(value);
   return decimal ? Number(decimal[1]) : null;
 }
-const wellPattern = /\b(Gunslinger(?:\s+Federal)?\s*[35](?:-[\dA-Za-z-]+)?|Cyclone\s*[2-5](?:-[\dA-Za-z-]+)?|Kahuna\s*5(?:-[\dA-Za-z-]+)?)/ig;
+const wellPattern = /\b(Gunslinger(?:\s+Federal)?\s*[35](?:-\d+(?:-\d+)*[Hh])?|Cyclone\s*[2-5](?:-\d+(?:-\d+)*[Hh])?|Kahuna\s*5(?:-\d+(?:-\d+)*[Hh])?)/ig;
 export function normalizeWell(text: string): string { return text.toLowerCase().replace(/[^a-z0-9]/g, ''); }
 export function parsePullChat(text: string, options: PullImportOptions = {}): PullImportRow[] {
   const rows: PullImportRow[] = [];
   const catalogueNames = (options.wellNames || []).filter(Boolean).sort((a, b) => b.length - a.length).map(name => [...name].map(character => String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
   const boundary = String.fromCharCode(92) + 'b';
-  const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + catalogueNames.join('|') + '|' + wellPattern.source + ')' + boundary, 'ig') : wellPattern;
+  const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + wellPattern.source + '|' + catalogueNames.join('|') + ')' + boundary, 'ig') : wellPattern;
   for (const message of splitChat(text)) {
     const body = message.body.trim();
     if (/message was deleted|<.*omitted>|message_history_notice|end-to-end encrypted/i.test(body)) continue;
