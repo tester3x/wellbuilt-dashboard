@@ -13,9 +13,7 @@ import {
   checkAndRecordNonce,
   validateObservationPayload,
   computeBodySha256,
-  evaluateWatchdogReceipt,
 } from './operational/watchdogHmac';
-import { projectWellStatus } from './dashboardCatalogProjection';
 
 export const ingestWatchdogPull = httpsV2.onRequest(
   { cors: true, region: 'us-central1', timeoutSeconds: 30, memory: '256MiB', secrets: ['WATCHDOG_HMAC_KEY_V1'] },
@@ -199,57 +197,27 @@ export const getWatchdogPullReceipt = httpsV2.onRequest(
         return;
       }
 
-      // 3. Query RTDB + the same outgoing projection adminGetWellPool uses
+      // 3. Query RTDB status
       const procSnap = await db.ref(`packets/processed/${packetId}`).once('value');
       if (procSnap.exists()) {
         const processed = procSnap.val() || {};
         const wellName = processed.wellName || subSnap.val()?.wellName;
-        const [statusSnap, outgoingSnap, cfgSnap] = await Promise.all([
-          db.ref(`wells/${wellName}/status`).once('value'),
-          db.ref('packets/outgoing').once('value'),
-          db.ref(`well_config/${wellName}`).once('value'),
-        ]);
+        const statusSnap = await db.ref(`wells/${wellName}/status`).once('value');
         const wellStatus = statusSnap.val() || null;
-        const outgoingTree = (outgoingSnap.exists() ? outgoingSnap.val() : {}) as Record<string, unknown>;
-        const pool = projectWellStatus(outgoingTree);
-        const poolProjection = pool[wellName] || null;
-        const responseId = poolProjection && typeof poolProjection.responseId === 'string' ? poolProjection.responseId : '';
-        const rawOutgoing = responseId && outgoingTree[responseId] && typeof outgoingTree[responseId] === 'object'
-          ? (outgoingTree[responseId] as Record<string, unknown>)
-          : null;
-        const outgoingPacketId = rawOutgoing && typeof rawOutgoing.lastPullPacketId === 'string'
-          ? rawOutgoing.lastPullPacketId
-          : null;
-        const verdict = evaluateWatchdogReceipt({
-          packetId,
-          wellName,
-          processed,
-          wellStatus,
-          poolProjection,
-          outgoingPacketId,
-          wellConfig: cfgSnap.exists() ? cfgSnap.val() : null,
-        });
+        const outgoingSnap = await db.ref('packets/outgoing').orderByChild('wellName').equalTo(wellName).once('value');
 
-        res.status(verdict.ok ? 200 : 409).json({
-          ok: verdict.ok,
+        res.status(200).json({
+          ok: true,
           found: true,
-          status: verdict.status,
+          status: 'processed',
           packetId,
           canonicalProcessingComplete: processed.canonicalProcessingComplete === true,
-          canonicalCurrentLevelUpdated: verdict.canonicalCurrentLevelUpdated,
-          wellName: verdict.wellName,
-          wellKey: verdict.wellKey,
-          companyId: verdict.companyId,
-          reason: verdict.reason || null,
+          wellName,
           wellStatus: {
             currentLevel: wellStatus?.current?.level || null,
             levelInches: wellStatus?.current?.levelInches ?? null,
           },
-          adminGetWellPool: {
-            currentLevel: verdict.poolCurrentLevel || null,
-            lastPullDateTimeUTC: verdict.poolLastPullDateTimeUTC || null,
-            lastPullPacketId: verdict.poolLastPullPacketId || null,
-          },
+          outgoingExists: outgoingSnap.exists(),
         });
         return;
       }
