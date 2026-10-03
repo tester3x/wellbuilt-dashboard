@@ -7,11 +7,14 @@ import {createRequire} from 'node:module';
 import {unzipSync,strFromU8} from 'fflate';
 import QRCode from 'qrcode';
 import {Queue,header,hash} from './core.mjs';
+import {Transport} from './transport.mjs';
 const require=createRequire(import.meta.url);
 const {splitChat}=require('../../functions/lib/imports/pullParser.js');
 const root=path.dirname(fileURLToPath(import.meta.url));
 const directory=process.env.WBC_WATCHDOG_DATA||path.join(process.env.LOCALAPPDATA||process.cwd(),'WellBuilt','WhatsAppWatchdog');
-const queue=new Queue(directory), token=randomBytes(32).toString('hex');
+const queue=new Queue(directory);const transport=new Transport(queue);transport.configure();
+const deliveryTimer=setInterval(()=>void transport.tick(paused),10000);deliveryTimer.unref();
+const token=randomBytes(32).toString('hex');
 const configFile=path.join(directory,'channels.json');
 let channels=existsSync(configFile)?JSON.parse(readFileSync(configFile,'utf8')):[];
 let client=null,qr='',state='Stopped',paused=true,error='',chats=[],loadingGroups=false;
@@ -36,7 +39,7 @@ async function pollReceiver(){
  finally{polling=false;}
 }
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
-function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,...queue.snapshot()};}
+function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,transportStatus:transport.status,deliveries:queue.data.deliveries||{},...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
