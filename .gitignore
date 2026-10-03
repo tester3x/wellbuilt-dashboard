@@ -81,3 +81,6 @@ firestore-debug.log
 database-debug.log
 tools/billing-fold-shots/
 /screenshots/
+
+# Firebase CLI deployment diagnostics can contain sensitive runtime metadata.
+firebase-debug.log*
