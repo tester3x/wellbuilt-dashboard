@@ -65,13 +65,17 @@ export default function MobilePage() {
   const UNROUTED_PAGE_SIZE = 20;
   const [unroutedShowAll, setUnroutedShowAll] = useState(false);
 
-  // Edge case loads — tickets for wells not in well_config
-  const [edgeCaseTickets, setEdgeCaseTickets] = useState<Ticket[]>([]);
-  const [edgeCaseExpanded, setEdgeCaseExpanded] = useState(false);
+  // Keep fetched tickets separate from route classification. The well pool arrives
+  // after auth, so classifying against its initial empty array makes every ticket
+  // appear briefly and then disappear when routes finish loading.
+  const [fetchedTickets, setFetchedTickets] = useState<Ticket[]>([]);
+  const [ticketScope, setTicketScope] = useState<string | null>(null);
+  const [edgeCaseExpanded, setEdgeCaseExpanded] = useState(true);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [ticketLimit, setTicketLimit] = useState(500);
   const [hasMoreTickets, setHasMoreTickets] = useState(false);
   const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [ticketLoadError, setTicketLoadError] = useState<string | null>(null);
 
   // Add Pull modal
   const [showAddPull, setShowAddPull] = useState(false);
@@ -108,48 +112,67 @@ export default function MobilePage() {
     });
   }, [routes, wells, dataLoading]);
 
-  // Load tickets for unrouted and unconfigured wells (e.g. Slawson, Unrouted route)
+  // Fetch the company's tickets independently of the changing well pool. Ignore
+  // responses from an old auth/limit request so they cannot replace newer data.
   useEffect(() => {
-    if (!user) return;
+    if (loading) return;
+    if (!user) {
+      setFetchedTickets([]);
+      setTicketScope(null);
+      setHasMoreTickets(false);
+      setTicketsLoading(false);
+      return;
+    }
     const isPlatform = isPlatformAdmin(user);
     if (!user.companyId && !isPlatform) {
-      // Scoped non-admin user missing companyId must NEVER query cross-company
-      setEdgeCaseTickets([]);
+      setFetchedTickets([]);
+      setTicketScope(null);
       setHasMoreTickets(false);
+      setTicketsLoading(false);
+      setTicketLoadError('Company access is unavailable. Tickets were not loaded.');
       return;
     }
-
-    // Only exclude wells that are assigned to an active route (route other than 'Unrouted' or blank)
-    const routedWells = wells.filter(
-      (w) => w.route && w.route.trim() && w.route.trim().toLowerCase() !== 'unrouted'
-    );
-
-    const queryCompanyId = user.companyId || (isPlatform ? undefined : '__forbidden_no_company__');
-    if (queryCompanyId === '__forbidden_no_company__') {
-      setEdgeCaseTickets([]);
-      setHasMoreTickets(false);
-      return;
-    }
-
+    const queryCompanyId = user.companyId || undefined;
+    const scope = queryCompanyId || '__platform__';
+    let cancelled = false;
+    setTicketLoadError(null);
     setTicketsLoading(true);
     fetchTickets(ticketLimit, queryCompanyId)
       .then((tickets) => {
+        if (cancelled) return;
         setHasMoreTickets(tickets.length >= ticketLimit);
-        const unroutedTickets = tickets.filter((t) => {
-          if (!t.location || !t.location.trim()) return false;
-          // If it matches a well assigned to an active route, it is a routed load (exclude)
-          const isRouted = Boolean(matchWellInPool(routedWells, t.location));
-          return !isRouted;
-        });
-        setEdgeCaseTickets(unroutedTickets);
+        setFetchedTickets(tickets);
+        setTicketScope(scope);
       })
       .catch((err) => {
+        if (cancelled) return;
         console.warn('Unrouted/edge case tickets load failed:', err);
+        setTicketLoadError('Tickets could not be loaded. Please try again.');
       })
       .finally(() => {
-        setTicketsLoading(false);
+        if (!cancelled) setTicketsLoading(false);
       });
-  }, [wells, user, ticketLimit]);
+    return () => { cancelled = true; };
+  }, [loading, user, ticketLimit]);
+
+  // Only classify after the governed routes are ready. A pool read failure is
+  // not an empty route list; showing all tickets then would be misleading.
+  const currentTicketScope = user?.companyId || (isPlatformAdmin(user) ? '__platform__' : null);
+  const visibleFetchedTickets = useMemo(
+    () => ticketScope === currentTicketScope ? fetchedTickets : [],
+    [ticketScope, currentTicketScope, fetchedTickets],
+  );
+  const visibleHasMoreTickets = ticketScope === currentTicketScope && hasMoreTickets;
+  const ticketPoolReady = !dataLoading && !statusUnavailable;
+  const edgeCaseTickets = useMemo(() => {
+    if (!ticketPoolReady) return [];
+    const routedWells = wells.filter(
+      (w) => w.route && w.route.trim() && w.route.trim().toLowerCase() !== 'unrouted'
+    );
+    return visibleFetchedTickets.filter((ticket) =>
+      Boolean(ticket.location?.trim()) && !matchWellInPool(routedWells, ticket.location)
+    );
+  }, [visibleFetchedTickets, ticketPoolReady, wells]);
 
   // Toggle route expansion and save to localStorage
   const toggleRoute = (route: string) => {
@@ -379,6 +402,106 @@ export default function MobilePage() {
           </div>
         </div>
 
+        {/* Worked tickets are a separate list, always visible above the well routes. */}
+        <section className="mb-6 bg-yellow-900/20 rounded-lg border border-yellow-700/50 overflow-hidden">
+            <button
+              onClick={() => setEdgeCaseExpanded(prev => !prev)}
+              className="w-full px-4 py-3 bg-yellow-900/30 border-b border-yellow-700/50 hover:bg-yellow-900/40 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-yellow-500 text-lg">
+                  {edgeCaseExpanded ? '▼' : '▶'}
+                </span>
+                <h3 className="text-lg font-semibold text-yellow-400">
+                  Tickets at Unrouted & Unconfigured Wells
+                </h3>
+                <span className="text-yellow-600 text-sm font-normal">
+                  {(ticketsLoading && visibleFetchedTickets.length === 0) || !ticketPoolReady
+                    ? 'Loading worked tickets...'
+                    : `${edgeCaseTickets.length} ticket${edgeCaseTickets.length !== 1 ? 's' : ''} outside active routes${ticketsLoading ? ' (loading older tickets...)' : ''}`}
+                </span>
+              </div>
+              <p className="text-yellow-700 text-xs mt-1 text-left pl-8">
+                Water tickets performed at unrouted wells or unconfigured locations (including Slawson wells). Click any row to view ticket details.
+              </p>
+            </button>
+            {edgeCaseExpanded && (
+              <div className="overflow-x-auto">
+                {statusUnavailable && (
+                  <p className="px-4 py-3 text-yellow-300">Well routes are unavailable, so tickets cannot be classified yet.</p>
+                )}
+                {ticketLoadError && <p className="px-4 py-3 text-red-300">{ticketLoadError}</p>}
+                {!statusUnavailable && !ticketPoolReady && (
+                  <p className="px-4 py-3 text-yellow-300">Loading well routes before classifying tickets...</p>
+                )}
+                {ticketPoolReady && ticketsLoading && visibleFetchedTickets.length === 0 && (
+                  <p className="px-4 py-3 text-yellow-300">Loading company tickets...</p>
+                )}
+                {ticketPoolReady && (!ticketsLoading || visibleFetchedTickets.length > 0) && !ticketLoadError && edgeCaseTickets.length === 0 && (
+                  <p className="px-4 py-3 text-yellow-300">
+                    No unrouted-work tickets found in the latest {visibleFetchedTickets.length} tickets.
+                    {visibleHasMoreTickets ? ' Load older tickets to keep searching.' : ''}
+                  </p>
+                )}
+                {edgeCaseTickets.length > 0 && (
+                  <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-yellow-900/20 text-yellow-500 text-xs">
+                      <th className="px-3 py-2 text-left">Ticket #</th>
+                      <th className="px-3 py-2 text-left">Invoice #</th>
+                      <th className="px-3 py-2 text-left">Company</th>
+                      <th className="px-3 py-2 text-left">Location</th>
+                      <th className="px-3 py-2 text-left">Drop-off</th>
+                      <th className="px-3 py-2 text-left">Type</th>
+                      <th className="px-3 py-2 text-right">BBL</th>
+                      <th className="px-3 py-2 text-left">Driver</th>
+                      <th className="px-3 py-2 text-left">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {edgeCaseTickets.map((t) => (
+                      <tr
+                        key={t.id}
+                        onClick={() => setSelectedTicket(t)}
+                        className="border-t border-yellow-900/30 hover:bg-yellow-900/20 cursor-pointer transition-colors"
+                      >
+                        <td className="px-3 py-2 text-yellow-300 font-mono underline decoration-yellow-600/40 hover:text-yellow-200">
+                          {t.ticketNumber}
+                        </td>
+                        <td className="px-3 py-2 text-gray-400 font-mono">{t.invoiceNumber || '—'}</td>
+                        <td className="px-3 py-2 text-gray-300">{t.company || '—'}</td>
+                        <td className="px-3 py-2 text-gray-300">{t.location || '—'}</td>
+                        <td className="px-3 py-2 text-gray-400">{t.hauledTo || '—'}</td>
+                        <td className="px-3 py-2 text-gray-400">{t.type || '—'}</td>
+                        <td className="px-3 py-2 text-right text-gray-300">{t.qty || '—'}</td>
+                        <td className="px-3 py-2 text-gray-400">{t.driver || '—'}</td>
+                        <td className="px-3 py-2 text-gray-500">{t.date || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  </table>
+                )}
+                {ticketPoolReady && visibleHasMoreTickets && (
+                  <div className="p-3 bg-yellow-900/10 border-t border-yellow-900/30 flex items-center justify-between">
+                    <button
+                      type="button"
+                      disabled={ticketsLoading}
+                      onClick={() => setTicketLimit(prev => prev + 500)}
+                      className="px-3 py-1.5 bg-yellow-800/40 hover:bg-yellow-800/60 text-yellow-200 text-xs rounded transition-colors disabled:opacity-50"
+                    >
+                      {ticketsLoading ? 'Loading...' : `Load more historical tickets (+500, currently ${ticketLimit})`}
+                    </button>
+                    <Link
+                      href="/tickets"
+                      className="text-xs text-yellow-400 hover:text-yellow-300 underline"
+                    >
+                      View full ticket archive →
+                    </Link>
+                  </div>
+                )}
+              </div>
+            )}
+        </section>
         {dataLoading ? (
           <div className="text-gray-400">Loading well data...</div>
         ) : statusUnavailable ? (
@@ -443,88 +566,6 @@ export default function MobilePage() {
           </div>
         )}
 
-        {/* Unrouted & Edge Case Loads — tickets performed at unrouted or unconfigured wells */}
-        {edgeCaseTickets.length > 0 && (
-          <div className="mt-8 bg-yellow-900/20 rounded-lg border border-yellow-700/50 overflow-hidden">
-            <button
-              onClick={() => setEdgeCaseExpanded(prev => !prev)}
-              className="w-full px-4 py-3 bg-yellow-900/30 border-b border-yellow-700/50 hover:bg-yellow-900/40 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <span className="text-yellow-500 text-lg">
-                  {edgeCaseExpanded ? '▼' : '▶'}
-                </span>
-                <h3 className="text-lg font-semibold text-yellow-400">
-                  Tickets at Unrouted & Unconfigured Wells
-                </h3>
-                <span className="text-yellow-600 text-sm font-normal">
-                  {edgeCaseTickets.length} ticket{edgeCaseTickets.length !== 1 ? 's' : ''} outside active routes
-                </span>
-              </div>
-              <p className="text-yellow-700 text-xs mt-1 text-left pl-8">
-                Water tickets performed at unrouted wells or unconfigured locations (including Slawson wells). Click any row to view ticket details.
-              </p>
-            </button>
-            {edgeCaseExpanded && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-yellow-900/20 text-yellow-500 text-xs">
-                      <th className="px-3 py-2 text-left">Ticket #</th>
-                      <th className="px-3 py-2 text-left">Invoice #</th>
-                      <th className="px-3 py-2 text-left">Company</th>
-                      <th className="px-3 py-2 text-left">Location</th>
-                      <th className="px-3 py-2 text-left">Drop-off</th>
-                      <th className="px-3 py-2 text-left">Type</th>
-                      <th className="px-3 py-2 text-right">BBL</th>
-                      <th className="px-3 py-2 text-left">Driver</th>
-                      <th className="px-3 py-2 text-left">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {edgeCaseTickets.map((t) => (
-                      <tr
-                        key={t.id}
-                        onClick={() => setSelectedTicket(t)}
-                        className="border-t border-yellow-900/30 hover:bg-yellow-900/20 cursor-pointer transition-colors"
-                      >
-                        <td className="px-3 py-2 text-yellow-300 font-mono underline decoration-yellow-600/40 hover:text-yellow-200">
-                          {t.ticketNumber}
-                        </td>
-                        <td className="px-3 py-2 text-gray-400 font-mono">{t.invoiceNumber || '—'}</td>
-                        <td className="px-3 py-2 text-gray-300">{t.company || '—'}</td>
-                        <td className="px-3 py-2 text-gray-300">{t.location || '—'}</td>
-                        <td className="px-3 py-2 text-gray-400">{t.hauledTo || '—'}</td>
-                        <td className="px-3 py-2 text-gray-400">{t.type || '—'}</td>
-                        <td className="px-3 py-2 text-right text-gray-300">{t.qty || '—'}</td>
-                        <td className="px-3 py-2 text-gray-400">{t.driver || '—'}</td>
-                        <td className="px-3 py-2 text-gray-500">{t.date || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {hasMoreTickets && (
-                  <div className="p-3 bg-yellow-900/10 border-t border-yellow-900/30 flex items-center justify-between">
-                    <button
-                      type="button"
-                      disabled={ticketsLoading}
-                      onClick={() => setTicketLimit(prev => prev + 500)}
-                      className="px-3 py-1.5 bg-yellow-800/40 hover:bg-yellow-800/60 text-yellow-200 text-xs rounded transition-colors disabled:opacity-50"
-                    >
-                      {ticketsLoading ? 'Loading...' : `Load more historical tickets (+500, currently ${ticketLimit})`}
-                    </button>
-                    <Link
-                      href="/tickets"
-                      className="text-xs text-yellow-400 hover:text-yellow-300 underline"
-                    >
-                      View full ticket archive →
-                    </Link>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
       </main>
 
       {showAddPull && (
