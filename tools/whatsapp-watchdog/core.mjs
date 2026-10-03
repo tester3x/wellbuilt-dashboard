@@ -26,3 +26,5 @@ export class Queue{
  liveFeed(channels){const selected=new Set(channels),counts=new Map();return Object.values(this.data.messages).filter(m=>selected.has(m.channel)&&!m.id.startsWith('export:')).sort((a,b)=>Date.parse(b.postedAt||b.updatedAt)-Date.parse(a.postedAt||a.updatedAt)).filter(m=>{const count=counts.get(m.channel)||0;counts.set(m.channel,count+1);return count<100;});}
  export(channel){return Object.values(this.data.messages).filter(m=>m.channel===channel&&!m.deleted&&(m.rows.length||m.notices.length)).sort((a,b)=>Date.parse(a.rows[0]?.postedAt||a.updatedAt)-Date.parse(b.rows[0]?.postedAt||b.updatedAt)).map(m=>m.chat).join('\n');}
 }
+
+export function newestReceiverMessages(messages,limit=100){const unique=new Map();for(const m of messages)unique.set(m.channel+'\0'+m.id,m);const counts=new Map();return [...unique.values()].sort((a,b)=>b.timestamp-a.timestamp).filter(m=>{const count=counts.get(m.channel)||0;counts.set(m.channel,count+1);return count<limit;});}

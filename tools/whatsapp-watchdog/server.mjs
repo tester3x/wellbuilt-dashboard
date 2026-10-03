@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import {unzipSync,strFromU8} from 'fflate';
 import QRCode from 'qrcode';
-import {Queue,header,hash} from './core.mjs';
+import {Queue,header,hash,newestReceiverMessages} from './core.mjs';
 import {Transport} from './transport.mjs';
 const require=createRequire(import.meta.url);
 const {splitChat,parsePullChat}=require('../../functions/lib/imports/pullParser.js');
@@ -39,12 +39,12 @@ async function pollReceiver(){
   const extra=new Map();
   for(const chat of groups.filter(c=>ids.includes(c.id._serialized))){if(!window.__wellBuiltBackfilled?.includes(chat.id._serialized)||!chat.msgs.getModelsArray().some(m=>typeof m.body==='string'&&m.body.length)){window.__wellBuiltBackfilled??=[];window.__wellBuiltBackfilled.push(chat.id._serialized);const loaded=await window.require('WAWebChatLoadMessages').loadEarlierMsgs({chat});extra.set(chat.id._serialized,Array.isArray(loaded)?loaded:[]);}}
   const diagnostics=groups.filter(c=>ids.includes(c.id._serialized)).map(c=>({id:c.id._serialized,loaded:c.msgs.getModelsArray().length,extra:(extra.get(c.id._serialized)||[]).length,eligible:[...c.msgs.getModelsArray(),...received.filter(m=>m.id?.remote?._serialized===c.id._serialized),...(extra.get(c.id._serialized)||[])].filter(m=>typeof m.body==='string'&&(m.id?._serialized||m.id?.id)&&Number.isFinite(Number(m.t))).length}));
-  const messages=groups.filter(c=>ids.includes(c.id._serialized)).flatMap(c=>[...c.msgs.getModelsArray(),...received.filter(m=>m.id?.remote?._serialized===c.id._serialized),...(extra.get(c.id._serialized)||[])].filter(m=>typeof m.body==='string'&&(m.id?._serialized||m.id?.id)&&Number.isFinite(Number(m.t))).slice(-100).map(m=>({id:m.id._serialized||m.id.id,channel:c.id._serialized,timestamp:Number(m.t),author:m.notifyName||m.author?._serialized||m.from?._serialized||'Driver',body:typeof m.body==='string'?m.body:'',deleted:m.type==='revoked'})));
+  const messages=groups.filter(c=>ids.includes(c.id._serialized)).flatMap(c=>[...c.msgs.getModelsArray(),...received.filter(m=>m.id?.remote?._serialized===c.id._serialized),...(extra.get(c.id._serialized)||[])].filter(m=>typeof m.body==='string'&&(m.id?._serialized||m.id?.id)&&Number.isFinite(Number(m.t))).map(m=>({id:m.id._serialized||m.id.id,channel:c.id._serialized,timestamp:Number(m.t),author:m.notifyName||m.author?._serialized||m.from?._serialized||'Driver',body:typeof m.body==='string'?m.body:'',deleted:m.type==='revoked'})));
   return {diagnostics,groups:groups.map(c=>({id:c.id._serialized,name:c.name||c.formattedTitle||c.id._serialized})),messages};
  },paused?[]:channels.map(c=>c.id));
  chats=result.groups;receiverGroups=result.diagnostics;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
- if(!paused)for(const m of result.messages){const selected=channels.find(c=>c.id===m.channel);if(selected)queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:selected.options,deleted:m.deleted});}
- }catch(e){error='Receiver not ready: '+String(e?.message||e);if(state==='Connected'){state='Syncing WhatsApp';paused=true;}}
+ if(!paused)for(const m of newestReceiverMessages(result.messages)){const selected=channels.find(c=>c.id===m.channel);if(selected)queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:selected.options,deleted:m.deleted});}
+ }catch(e){error='Receiver not ready: '+String(e?.message||e);if(state==='Connected')state='Syncing WhatsApp';}
  finally{polling=false;}
 }
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
