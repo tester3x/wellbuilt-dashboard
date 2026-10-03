@@ -50,6 +50,8 @@ export function canonicalHistory(tree: JsonRecord): JsonRecord[] {
 }
 export function reviewPulls(rows: PullImportRow[], configs: JsonRecord, history: JsonRecord, banks: Record<string, number>, acknowledged: Set<string>, now = Date.now()): ReviewedPull[] {
   const seen = new Set<string>();
+  const historyCache = new Map<string, JsonRecord[]>();
+  const previousByWell = new Map<string, ReviewedPull>();
   const result: ReviewedPull[] = [];
   for (const original of rows) {
     const wellName = resolveWell(original.wellName, configs) || original.wellName;
@@ -68,14 +70,16 @@ export function reviewPulls(rows: PullImportRow[], configs: JsonRecord, history:
     if (afterFeet !== null && afterFeet < 0) issues.push('Load exceeds water below the reported top');
     if (afterFeet !== null && original.bottomLevelFeet !== null && Math.abs(afterFeet - original.bottomLevelFeet) > 0.75 && !acknowledged.has(original.id)) issues.push('Reported bottom differs from calibrated removal by over 9 inches; check setup or gauge');
     const packetId = 'import_' + digest([wellName, Number.isFinite(ts) ? new Date(ts).toISOString() : '', top, bbls]);
-    const existing = canonicalHistory(history[wellName] || {});
+    const existing = historyCache.get(wellName) || canonicalHistory(history[wellName] || {});
+    historyCache.set(wellName, existing);
     const equivalent = (row: JsonRecord, maxMs: number) => Math.abs(Date.parse(row.dateTimeUTC || row.gaugeTime || row.dateTime) - ts) <= maxMs && Math.abs(Number(row.tankLevelFeet) - Number(top)) <= 1 / 12 && Number(row.bblsTaken) === bbls;
     const duplicate = !!history[wellName]?.[packetId] || seen.has(packetId) || existing.some(row => equivalent(row, 90_000));
     if (!duplicate && existing.some(row => equivalent(row, 1_800_000)) && !acknowledged.has(original.id)) issues.push('Possible existing pull within 30 minutes; confirm or exclude');
-    const prev = result.filter(row => row.wellName === wellName && !row.excluded).slice(-1)[0];
+    const prev = previousByWell.get(wellName);
     if (prev && Math.abs(Date.parse(prev.dateTimeUTC) - ts) < 300_000 && !acknowledged.has(original.id)) issues.push('Pulls less than five minutes apart; confirm actual pull times');
     seen.add(packetId);
     result.push({ ...original, wellName, issues: [...new Set(issues)], status: original.excluded ? 'excluded' : duplicate ? 'duplicate' : issues.length ? 'review' : 'ready', packetId, bank, afterFeet });
+    if (!original.excluded) previousByWell.set(wellName, result[result.length - 1]);
   }
   return result;
 }

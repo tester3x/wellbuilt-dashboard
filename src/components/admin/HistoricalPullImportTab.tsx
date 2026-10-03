@@ -52,9 +52,12 @@ export function HistoricalPullImportTab({ configs }: { configs: Record<string, {
     invalidate(); setBusy(true); const token = generation.current;
     try {
       const fn = httpsCallable(getFirebaseFunctions(), 'previewHistoricalPullImport', { timeout: 120000 });
-      const response = await fn({ rows, banks, acknowledged: [...acknowledged], calibrationConfirmed: confirmed, sourceName });
+      const response = await fn({ rows: rows.filter(row => !row.excluded), banks, acknowledged: [...acknowledged], calibrationConfirmed: confirmed, sourceName });
       if (token !== generation.current) return;
       const data = response.data as Preview;
+      const excluded = rows.filter(row => row.excluded).map(row => ({ ...row, status: 'excluded' as const, packetId: '', bank: 0, afterFeet: null }));
+      data.rows = [...data.rows, ...excluded];
+      data.counts.excluded = excluded.length;
       setPreview(data); setRows(data.rows.map(({ status, packetId, bank, afterFeet, ...row }) => row));
       setSelected(new Set(data.rows.filter(row => row.status === 'ready').map(row => row.id))); setPage(0);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -96,7 +99,7 @@ export function HistoricalPullImportTab({ configs }: { configs: Record<string, {
       {!!rows.length && <>
         <div className="grid sm:grid-cols-2 gap-3">{usedWells.map(well => <label key={well}>{well}: barrels per foot across active tanks<input aria-label={`${well} calibration`} className={inputClass} type="number" min="0.01" max="1000" step="any" placeholder={String(configs[well].bblPerFoot || 'Required if missing')} value={banks[well] ?? ''} onChange={e => { invalidate(); const value = e.target.value; setBanks(previous => { const next = { ...previous }; if (value) next[well] = Number(value); else delete next[well]; return next; }); setConfirmed(false); }} /></label>)}</div>
         <label className="block text-sm"><input type="checkbox" checked={confirmed} onChange={e => { invalidate(); setConfirmed(e.target.checked); }} /> I checked that the tank calibration was valid for this date range. I understand this adds history and seeds the average without changing the last live pull.</label>
-        <button disabled={!confirmed || !rows.length || parsedSettings !== settingsKey} onClick={runPreview} className="bg-blue-600 rounded px-3 py-2 disabled:opacity-40">Check saved history and preview</button>{parsedSettings !== settingsKey && <p className="text-amber-300 text-sm">Settings changed. Click “Parse with these settings” before previewing.</p>}
+        <button disabled={!confirmed || !rows.some(row => !row.excluded) || parsedSettings !== settingsKey} onClick={runPreview} className="bg-blue-600 rounded px-3 py-2 disabled:opacity-40">Check saved history and preview</button>{parsedSettings !== settingsKey && <p className="text-amber-300 text-sm">Settings changed. Click “Parse with these settings” before previewing.</p>}
       </>}
       {!!rows.length && <>
         <div className="flex flex-wrap items-center gap-3"><span>{rows.length} entries</span><select aria-label="Row filter" className="bg-gray-800 border border-gray-600 p-1" value={filter} onChange={e => { setFilter(e.target.value); setPage(0); }}><option value="all">All</option><option value="review">Needs review</option><option value="ready">Ready</option><option value="duplicate">Already saved</option><option value="excluded">Excluded</option></select>{preview && <span className="text-sm">{Object.entries(preview.counts).map(([key, value]) => `${value} ${key}`).join(' · ')}</span>}</div>

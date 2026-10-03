@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { zipSync, strToU8 } from 'fflate';
+const require=createRequire(import.meta.url);
+const ts=require('typescript');
+const exports={};new Function('require','exports',ts.transpileModule(readFileSync('src/lib/pullImportFile.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText)(require,exports);
+const file=(name,bytes)=>({name,size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+const text='[9/20/26, 3:00 PM] Driver: Kahuna 5- 8.0/7.0\n180 bbls';
+assert.equal(await exports.readPullExport(file('chat.zip',zipSync({'chat.txt':strToU8(text),'chat.md':strToU8('duplicate')}))),text);
+assert.equal(await exports.readPullExport(file('chat.txt',strToU8(text))),text);
+await assert.rejects(()=>exports.readPullExport(file('two.zip',zipSync({'a.txt':strToU8(text),'b.txt':strToU8(text)}))),/exactly one/);
+await assert.rejects(()=>exports.readPullExport(file('bomb.zip',zipSync({'chat.txt':strToU8('a'.repeat(2_000_001))}))),/Uncompressed/);
+await assert.rejects(()=>exports.readPullExport(file('bad.zip',strToU8('not a zip'))));
+await assert.rejects(()=>exports.readPullExport(file('big.zip',new Uint8Array(10_000_001))),/10 MB/);
+await assert.rejects(()=>exports.readPullExport(file('script.exe',strToU8(text))),/ZIP or TXT/);
+console.log('PASS bounded export reader: text, ZIP, duplicate TXT, decompression limit, corrupt archive, upload limit, unsupported format.');

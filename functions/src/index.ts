@@ -4052,3 +4052,6 @@ export {
 // whole-codebase deploy would have pruned them.
 export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance';
 export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
+
+// Reviewed historical imports: deployed independently from the live pull processor.
+export { previewHistoricalPullImport, applyHistoricalPullImport } from './imports/pullImportCallable';

@@ -143,7 +143,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded });
     }
   }
-  if (rows.length > 2000) throw new Error('More than 2,000 pulls; split the export into smaller batches.');
+  if (rows.filter(row => !row.excluded).length > 2000) throw new Error('More than 2,000 pulls; split the export into smaller batches.');
   return rows;
 }
 
