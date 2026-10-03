@@ -1093,7 +1093,6 @@ export default function AdminPage() {
               server re-authorizes every call regardless. */}
           {adminSession.status === 'verified' && (
             <>
-              {canManageWells && <button onClick={() => setActiveTab('imports')} className={`px-4 py-2 rounded ${activeTab === 'imports' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Import Pulls</button>}
               <div className="w-px bg-gray-600 mx-1 self-stretch" />
               <button
                 onClick={() => setActiveTab('plans')}
