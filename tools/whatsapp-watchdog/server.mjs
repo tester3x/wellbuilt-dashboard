@@ -30,7 +30,7 @@ async function pollReceiver(){
   if(connection!=='CONNECTED')throw Error('WhatsApp connection: '+connection);
   const models=window.require('WAWebCollections').Chat.getModelsArray();
   const groups=models.filter(c=>c.id?.server==='g.us');
-  const messages=groups.filter(c=>ids.includes(c.id._serialized)).flatMap(c=>c.msgs.getModelsArray().filter(m=>!m.isNotification&&m.id?._serialized&&Number.isFinite(m.t)).slice(-100).map(m=>({id:m.id._serialized,channel:c.id._serialized,timestamp:m.t,author:m.author?._serialized||m.from?._serialized||'Driver',body:typeof m.body==='string'?m.body:'',deleted:m.type==='revoked'})));
+  const messages=groups.filter(c=>ids.includes(c.id._serialized)).flatMap(c=>c.msgs.getModelsArray().filter(m=>!m.isNotification&&m.id?._serialized&&Number.isFinite(m.t)).slice(-100).map(m=>({id:m.id._serialized,channel:c.id._serialized,timestamp:m.t,author:m.notifyName||m.author?._serialized||m.from?._serialized||'Driver',body:typeof m.body==='string'?m.body:'',deleted:m.type==='revoked'})));
   return {groups:groups.map(c=>({id:c.id._serialized,name:c.name||c.formattedTitle||c.id._serialized})),messages};
  },paused?[]:channels.map(c=>c.id));
  chats=result.groups;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
@@ -39,7 +39,7 @@ async function pollReceiver(){
  finally{polling=false;}
 }
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
-function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,transportStatus:transport.status,deliveries:queue.data.deliveries||{},...queue.snapshot()};}
+function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,transportStatus:transport.status,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
