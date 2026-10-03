@@ -15,7 +15,8 @@ async function authenticate(req:any,endpoint:string){
  const verified=verifyHmacHeaders({endpointName:endpoint,method:'POST',headers:req.headers,rawBody:raw});
  if(!verified.ok)throw Error(verified.error||'authentication_failed');
  const nonce=admin.firestore().collection('watchdog_v2_nonces').doc(req.headers['x-watchdog-nonce']);
- await admin.firestore().runTransaction(async tx=>{if((await tx.get(nonce)).exists)throw Error('replay_detected');tx.create(nonce,{createdAt:Date.now()});});
+ const rate=admin.firestore().doc('watchdog_v2_rates/'+Math.floor(Date.now()/3600000));
+ await admin.firestore().runTransaction(async tx=>{const [seen,bucket]=await Promise.all([tx.get(nonce),tx.get(rate)]);if(seen.exists)throw Error('replay_detected');const count=Number(bucket.data()?.count||0);if(count>=10000)throw Error('rate_limit');tx.create(nonce,{createdAt:Date.now()});tx.set(rate,{count:count+1});});
 }
 export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  try{

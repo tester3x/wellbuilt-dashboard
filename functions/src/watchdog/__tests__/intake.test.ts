@@ -4,7 +4,7 @@ const snap=(value:any)=>({val:()=>value,exists:()=>value!==undefined});
 const doc=(key:string)=>({key,get:async()=>({exists:documents.has(key),data:()=>documents.get(key)})});
 jest.mock('firebase-functions/v2/https',()=>({onRequest:(_opts:any,fn:any)=>fn}));
 jest.mock('firebase-admin',()=>({
- firestore:()=>({doc,collection:(p:string)=>({doc:(id:string)=>doc(p+'/'+id)}),runTransaction:async(fn:any)=>fn({get:(ref:any)=>ref.get(),create:(ref:any,value:any)=>{if(documents.has(ref.key))throw Error('exists');documents.set(ref.key,value);}})}),
+ firestore:()=>({doc,collection:(p:string)=>({doc:(id:string)=>doc(p+'/'+id)}),runTransaction:async(fn:any)=>fn({get:(ref:any)=>ref.get(),set:(ref:any,value:any)=>documents.set(ref.key,value),create:(ref:any,value:any)=>{if(documents.has(ref.key))throw Error('exists');documents.set(ref.key,value);}})}),
  database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
 }));
 import {ingestWatchdogPullV2,getWatchdogPullReceiptV2} from '../intake';
