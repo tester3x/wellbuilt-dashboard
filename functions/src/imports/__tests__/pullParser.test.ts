@@ -48,3 +48,6 @@ describe('historical pull parser', () => {
     expect(row.dateTimeUTC).toBe('2026-09-20T20:41:00.000Z');
   });
 });
+
+test('inline bottom-level clock and punctuation preserve driver shorthand',()=>{const [r]=parsePullChat('[10/2/26, 10:29:52 PM] Driver: Gunslinger 3\n13 4\n10 10.          1029p',{defaultBbls:165});expect(r.tankLevelFeet).toBeCloseTo(13+4/12);expect(r.bottomLevelFeet).toBeCloseTo(10+10/12);expect(r.bblsTaken).toBe(165);expect(r.dateTimeUTC).toBe('2026-10-03T03:29:00.000Z');expect(r.issues).toEqual([]);});
+test('T/B gauge abbreviations and written barrels are pulls',()=>{const [r]=parsePullChat('[10/2/26, 11:26 PM] Driver: Gunslinger 5\nT 13.0\nB 10.5\n170 bbl',{defaultBbls:165});expect(r.tankLevelFeet).toBe(13);expect(r.bottomLevelFeet).toBe(10.5);expect(r.bblsTaken).toBe(170);expect(r.issues).toEqual([]);});

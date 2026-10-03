@@ -51,3 +51,5 @@ test('a sustained rate change resets the adaptive average', () => {
 test('a different full NDIC identifier is not silently assigned to the short well',()=>{
  const rows=pulls();rows[0].wellName='Kahuna 5-99-99H';expect(reviewPulls(rows,config,{}, {},new Set())[0].status).toBe('review');
 });
+
+test('nearby native pull with matching top but differing barrels is held',()=>{const row=pulls()[0];const history={'Kahuna 5':{native:{...row,bblsTaken:140,dateTimeUTC:'2026-09-20T20:02:00Z'}}};expect(reviewPulls([row],config,history,{},new Set())[0].status).toBe('review');});

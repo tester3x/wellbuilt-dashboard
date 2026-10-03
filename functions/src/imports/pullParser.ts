@@ -38,6 +38,8 @@ export function splitChat(text: string): ChatMessage[] {
 }
 function clock(text: string): { hour: number; minute: number; second: number } | null {
   const value = text.trim().replace(/[\u202f\u00a0]/g, ' ');
+  const hourOnly = /^(\d{1,2})\s*([ap](?:m)?)$/i.exec(value);
+  if(hourOnly){const h=Number(hourOnly[1]);return h>=1&&h<=12?{hour:h%12+(hourOnly[2].toLowerCase().startsWith('p')?12:0),minute:0,second:0}:null;}
   const match = /^(\d{1,2})(?::(\d{2}))(?::(\d{2}))?\s*([ap](?:m)?)?$/i.exec(value) || /^(\d{1,2})(\d{2})\s*([ap](?:m)?)?$/i.exec(value);
   if (!match) return null;
   const compact = !value.includes(':');
@@ -99,7 +101,12 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
     const segments = matches.length ? matches.map((match, i) => ({ well: match[0], body: body.slice((match.index || 0) + match[0].length, matches[i + 1]?.index ?? body.length) })) : [{ well: options.defaultWell || '', body }];
     for (let part = 0; part < segments.length; part++) {
       const segment = segments[part];
-      const lines = segment.body.split('\n').map(line => line.trim()).filter(Boolean);
+      let inlineTime = '';
+      const lines = segment.body.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+        const suffix = /\s+(\d{1,4}(?::\d{2})?\s*[ap](?:m)?)$/i.exec(line);
+        if (suffix && clock(suffix[1])) { inlineTime = suffix[1]; line = line.slice(0, suffix.index).trim(); }
+        return line.replace(/^(?:T|B)\s+(?=\d)/i, '').replace(/\.(?!\d)$/, '').trim();
+      });
       const labelled = /\btop\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
       const bottom = /\bbottom\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
       const pair = /^\s*[-:]?\s*(\d+(?:\.\d+)?|\d+['’]\d*)\s*\/\s*(\d+(?:\.\d+)?|\d+['’]\d*)\s*(?:\n|$)/.exec(segment.body);
@@ -112,14 +119,14 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       const bbls = amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : options.defaultBbls || null;
       // A routing instruction containing a well and barrels is not a pull.
       if (!labelled && !pair && !unlabelled) {
-        if (matches.length && /\btop\b|\d+\.\d+\s*[/.]\s*\d+\.\d+/.test(segment.body)) rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: '', dateTimeUTC: '', tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false });
+        if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s+)?\d/i.test(segment.body)) rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: '', dateTimeUTC: '', tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false });
         continue;
       }
       const issues: string[] = [];
       let postedAt = '';
       try { postedAt = chatTimestamp(message.date, message.time, options.timeZone, options.dateOrder); } catch (error) { issues.push(String(error)); }
       let eventTime = postedAt;
-      const explicit = lines.find((line, index) => index >= (pair ? 2 : unlabelled ? 3 : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
+      const explicit = inlineTime || lines.find((line, index) => index >= (pair ? 2 : unlabelled ? 3 : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
       if (explicit && clock(explicit)) {
         let resolved = explicit;
         // Bare 1:30 can mean AM or PM. Choose nearest post only within two hours.

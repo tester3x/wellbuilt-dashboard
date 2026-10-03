@@ -74,7 +74,7 @@ export function reviewPulls(rows: PullImportRow[], configs: JsonRecord, history:
     historyCache.set(wellName, existing);
     const equivalent = (row: JsonRecord, maxMs: number) => Math.abs(Date.parse(row.dateTimeUTC || row.gaugeTime || row.dateTime) - ts) <= maxMs && Math.abs(Number(row.tankLevelFeet) - Number(top)) <= 1 / 12 && Number(row.bblsTaken) === bbls;
     const duplicate = !!history[wellName]?.[packetId] || seen.has(packetId) || existing.some(row => equivalent(row, 90_000));
-    if (!duplicate && existing.some(row => equivalent(row, 1_800_000)) && !acknowledged.has(original.id)) issues.push('Possible existing pull within 30 minutes; confirm or exclude');
+    if (!duplicate && existing.some(row => Math.abs(Date.parse(row.dateTimeUTC || row.gaugeTime || row.dateTime) - ts) <= 1_800_000 && Math.abs(Number(row.tankLevelFeet) - Number(top)) <= 1 / 12) && !acknowledged.has(original.id)) issues.push('Possible existing pull within 30 minutes; check time and barrels, then confirm or exclude');
     const prev = previousByWell.get(wellName);
     if (prev && Math.abs(Date.parse(prev.dateTimeUTC) - ts) < 300_000 && !acknowledged.has(original.id)) issues.push('Pulls less than five minutes apart; confirm actual pull times');
     seen.add(packetId);
