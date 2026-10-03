@@ -30,9 +30,10 @@ async function pollReceiver(){
   if(connection!=='CONNECTED')throw Error('WhatsApp connection: '+connection);
   const models=window.require('WAWebCollections').Chat.getModelsArray();
   const groups=models.filter(c=>c.id?.server==='g.us');
-  for(const chat of groups.filter(c=>ids.includes(c.id._serialized))){if(!chat.msgs.getModelsArray().some(m=>typeof m.body==='string'&&m.body.length)){await window.require('WAWebChatLoadMessages').loadEarlierMsgs({chat});}}
-  const diagnostics=groups.filter(c=>ids.includes(c.id._serialized)).map(c=>({id:c.id._serialized,loaded:c.msgs.getModelsArray().length,eligible:c.msgs.getModelsArray().filter(m=>!m.isNotification&&m.id?._serialized&&Number.isFinite(Number(m.t))).length}));
-  const messages=groups.filter(c=>ids.includes(c.id._serialized)).flatMap(c=>c.msgs.getModelsArray().filter(m=>!m.isNotification&&m.id?._serialized&&Number.isFinite(Number(m.t))).slice(-100).map(m=>({id:m.id._serialized,channel:c.id._serialized,timestamp:Number(m.t),author:m.notifyName||m.author?._serialized||m.from?._serialized||'Driver',body:typeof m.body==='string'?m.body:'',deleted:m.type==='revoked'})));
+  const extra=new Map();
+  for(const chat of groups.filter(c=>ids.includes(c.id._serialized))){if(!chat.msgs.getModelsArray().some(m=>typeof m.body==='string'&&m.body.length)){const loaded=await window.require('WAWebChatLoadMessages').loadEarlierMsgs({chat});extra.set(chat.id._serialized,Array.isArray(loaded)?loaded:[]);}}
+  const diagnostics=groups.filter(c=>ids.includes(c.id._serialized)).map(c=>({id:c.id._serialized,loaded:c.msgs.getModelsArray().length,extra:(extra.get(c.id._serialized)||[]).length,eligible:[...c.msgs.getModelsArray(),...(extra.get(c.id._serialized)||[])].filter(m=>typeof m.body==='string'&&(m.id?._serialized||m.id?.id)&&Number.isFinite(Number(m.t))).length}));
+  const messages=groups.filter(c=>ids.includes(c.id._serialized)).flatMap(c=>[...c.msgs.getModelsArray(),...(extra.get(c.id._serialized)||[])].filter(m=>typeof m.body==='string'&&(m.id?._serialized||m.id?.id)&&Number.isFinite(Number(m.t))).slice(-100).map(m=>({id:m.id._serialized||m.id.id,channel:c.id._serialized,timestamp:Number(m.t),author:m.notifyName||m.author?._serialized||m.from?._serialized||'Driver',body:typeof m.body==='string'?m.body:'',deleted:m.type==='revoked'})));
   return {diagnostics,groups:groups.map(c=>({id:c.id._serialized,name:c.name||c.formattedTitle||c.id._serialized})),messages};
  },paused?[]:channels.map(c=>c.id));
  chats=result.groups;receiverGroups=result.diagnostics;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
@@ -43,7 +44,7 @@ async function pollReceiver(){
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
 function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
-async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted});}
+async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
  client=new Client({authStrategy:new LocalAuth({dataPath:path.join(directory,'session')}),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
  state='Connecting';error='';
