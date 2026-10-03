@@ -1,10 +1,11 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState, type FormEvent } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
-import { Ticket, fetchTickets } from '@/lib/tickets';
+import { isPlatformAdmin } from '@/lib/auth';
+import { Ticket, fetchTickets, searchTicketsArchive } from '@/lib/tickets';
 import { TicketDetailModal } from '@/components/TicketDetailModal';
 
 export default function TicketsPage() {
@@ -23,6 +24,9 @@ function TicketsPageInner() {
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState(searchParams.get('search') || '');
+  const [submittedSearch, setSubmittedSearch] = useState((searchParams.get('search') || '').trim());
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [scannedTickets, setScannedTickets] = useState(0);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
 
   useEffect(() => {
@@ -32,49 +36,52 @@ function TicketsPageInner() {
   }, [user, loading, router]);
 
   useEffect(() => {
-    if (!user) return;
-    loadTickets();
-  }, [user]);
-
-  const loadTickets = async () => {
-    try {
+    if (loading || !user) return;
+    let cancelled = false;
+    const loadTickets = async () => {
+      const companyId = user.companyId?.trim();
+      if (!companyId && !isPlatformAdmin(user)) {
+        setTickets([]);
+        setDataLoading(false);
+        setError('Company access is unavailable. Tickets were not loaded.');
+        return;
+      }
       setDataLoading(true);
+      setTickets([]);
+      setScannedTickets(0);
       setError(null);
-      // Tenant containment (7/9): scoped users see only their company's
-      // tickets (docs carry companyId; filtered in fetchTickets).
-      const data = await fetchTickets(200, user?.companyId);
-      setTickets(data);
-    } catch (err: any) {
-      console.error('Failed to fetch tickets:', err);
-      setError(err?.message || 'Failed to load tickets');
-    } finally {
-      setDataLoading(false);
-    }
+      try {
+        const data = submittedSearch
+          ? await searchTicketsArchive(submittedSearch, companyId || undefined, (count) => {
+              if (!cancelled) setScannedTickets(count);
+            }, () => cancelled)
+          : await fetchTickets(200, companyId || undefined);
+        if (!cancelled) {
+          setTickets(data);
+          if (submittedSearch && submittedSearch === searchParams.get('search')?.trim() && data.length === 1) {
+            setSelectedTicket(data[0]);
+          }
+        }
+      } catch (err: unknown) {
+        if (!cancelled) {
+          console.error('Failed to fetch tickets:', err);
+          setError(err instanceof Error ? err.message : 'Failed to load tickets');
+        }
+      } finally {
+        if (!cancelled) setDataLoading(false);
+      }
+    };
+    void loadTickets();
+    return () => { cancelled = true; };
+  }, [user, loading, submittedSearch, refreshToken, searchParams]);
+
+  const submitSearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmittedSearch(search.trim());
+    setRefreshToken((previous) => previous + 1);
   };
 
-  // Client-side search filter
-  const filtered = search.trim()
-    ? tickets.filter((t) => {
-        const q = search.toLowerCase();
-        return (
-          t.ticketNumber?.toString().includes(q) ||
-          t.invoiceNumber?.toLowerCase().includes(q) ||
-          t.company?.toLowerCase().includes(q) ||
-          t.location?.toLowerCase().includes(q) ||
-          t.hauledTo?.toLowerCase().includes(q) ||
-          t.driver?.toLowerCase().includes(q) ||
-          t.type?.toLowerCase().includes(q) ||
-          t.date?.toLowerCase().includes(q)
-        );
-      })
-    : tickets;
-
-  // Auto-open ticket detail when URL search matches exactly one result
-  useEffect(() => {
-    if (!dataLoading && searchParams.get('search') && filtered.length === 1 && !selectedTicket) {
-      setSelectedTicket(filtered[0]);
-    }
-  }, [dataLoading, filtered.length]);
+  const filtered = tickets;
 
   if (loading) {
     return (
@@ -96,11 +103,11 @@ function TicketsPageInner() {
           <h2 className="text-xl font-semibold text-white">
             Tickets
             <span className="text-gray-400 text-base font-normal ml-2">
-              ({filtered.length}{search ? ` of ${tickets.length}` : ''})
+              ({filtered.length}{submittedSearch ? ' matching tickets' : ' recent tickets'})
             </span>
           </h2>
 
-          <div className="flex items-center gap-4">
+          <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-3">
             <input
               type="text"
               placeholder="Search tickets..."
@@ -109,13 +116,34 @@ function TicketsPageInner() {
               className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white placeholder-gray-500 text-sm focus:outline-none focus:border-blue-500 w-64"
             />
             <button
-              onClick={loadTickets}
+              type="submit"
+              disabled={!search.trim()}
+              className="px-4 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50"
+            >
+              Search all tickets
+            </button>
+            {submittedSearch && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  setSubmittedSearch('');
+                  setRefreshToken((previous) => previous + 1);
+                }}
+                className="px-3 py-2 text-gray-300 hover:text-white text-sm"
+              >
+                Clear search
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setRefreshToken((previous) => previous + 1)}
               disabled={dataLoading}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors text-sm disabled:opacity-50"
             >
               Refresh
             </button>
-          </div>
+          </form>
         </div>
 
         {error && (
@@ -123,9 +151,11 @@ function TicketsPageInner() {
         )}
 
         {dataLoading ? (
-          <div className="text-gray-400">Loading tickets...</div>
-        ) : filtered.length === 0 ? (
-          <div className="text-gray-400">{search ? 'No tickets match your search' : 'No tickets found'}</div>
+          <div className="text-gray-400">
+            {submittedSearch ? `Searching the full ticket archive... ${scannedTickets} tickets checked.` : 'Loading recent tickets...'}
+          </div>
+        ) : error ? null : filtered.length === 0 ? (
+          <div className="text-gray-400">{submittedSearch ? `No tickets match “${submittedSearch}” in the full archive.` : 'No tickets found'}</div>
         ) : (
           <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
             <div className="overflow-x-auto">

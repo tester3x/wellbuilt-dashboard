@@ -1,5 +1,5 @@
 import { getFirestoreDb } from './firebase';
-import { collection, getDocs, getDoc, doc, query, orderBy, limit, where } from 'firebase/firestore';
+import { collection, getDocs, getDoc, doc, query, orderBy, limit, where, documentId, startAfter, type QueryDocumentSnapshot } from 'firebase/firestore';
 import { invoiceBelongsToCompany, planInvoiceLookup } from './ticketCompanyLookup';
 
 export interface Ticket {
@@ -162,6 +162,53 @@ export async function fetchTickets(limitCount = 200, companyId?: string): Promis
       );
   const snapshot = await getDocs(q);
   return scope(snapshot.docs.map(mapTicketDoc));
+}
+
+/** Search every ticket in the authorized archive, including records without createdAt. */
+export async function searchTicketsArchive(
+  search: string,
+  companyId?: string,
+  onProgress?: (scanned: number) => void,
+  isCancelled?: () => boolean,
+): Promise<Ticket[]> {
+  const term = search.trim().toLowerCase();
+  if (!term) return [];
+
+  const db = getFirestoreDb();
+  const ticketsRef = collection(db, 'tickets');
+  // The company predicate is sent to Firestore, not applied only after a global
+  // read. The document-ID cursor also reaches older tickets without createdAt.
+  const scopedQuery = companyId
+    ? query(ticketsRef, where('companyId', '==', companyId), orderBy(documentId()))
+    : query(ticketsRef, orderBy(documentId()));
+  const pageSize = 250;
+  let cursor: QueryDocumentSnapshot | undefined;
+  let scanned = 0;
+  const matches: Ticket[] = [];
+
+  while (!isCancelled?.()) {
+    const page = await getDocs(query(scopedQuery, ...(cursor ? [startAfter(cursor)] : []), limit(pageSize)));
+    for (const ticketDoc of page.docs) {
+      const ticket = mapTicketDoc(ticketDoc);
+      // Defensive containment if a backend or rule configuration changes.
+      if (companyId && ticket.companyId !== companyId) continue;
+      const haystack = [
+        ticket.ticketNumber, ticket.invoiceNumber, ticket.company, ticket.location,
+        ticket.hauledTo, ticket.driver, ticket.type, ticket.date, ticket.apiNo,
+        ticket.truck, ticket.operator, ticket.notes,
+      ].join('\n').toLowerCase();
+      if (haystack.includes(term)) matches.push(ticket);
+    }
+    scanned += page.size;
+    onProgress?.(scanned);
+    if (page.size < pageSize) break;
+    cursor = page.docs[page.docs.length - 1];
+  }
+
+  return matches.sort((a, b) => {
+    const time = (ticket: Ticket) => ticket.createdAt?.getTime() || Date.parse(ticket.date) || 0;
+    return time(b) - time(a);
+  });
 }
 
 /** Fetch the parent invoice for a ticket (docId first, then companyId + invoiceNumber). */
