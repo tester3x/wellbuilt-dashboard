@@ -15,7 +15,7 @@ const queue=new Queue(directory), token=randomBytes(32).toString('hex');
 const configFile=path.join(directory,'channels.json');
 let channels=existsSync(configFile)?JSON.parse(readFileSync(configFile,'utf8')):[];
 let client=null,qr='',state='Stopped',paused=true,error='',chats=[],loadingGroups=false;
-async function loadGroups(){if(loadingGroups||!client||state!=='Connected')return;loadingGroups=true;try{const available=await client.getChats();chats=available.filter(c=>c.isGroup||c.id?._serialized?.endsWith('@g.us')).map(c=>({id:c.id._serialized,name:c.name||c.id._serialized}));error=chats.length?'':'WhatsApp is syncing groups; retrying shortly.';}catch(e){error='Group list is not ready; retrying shortly. '+String(e?.message||e);}finally{loadingGroups=false;}}
+async function loadGroups(){if(loadingGroups||!client||state!=='Connected')return;loadingGroups=true;try{let available;try{available=await client.getChats();}catch{available=await client.pupPage.evaluate(()=>window.require('WAWebCollections').Chat.getModelsArray().filter(c=>c.id?.server==='g.us').map(c=>({id:{_serialized:c.id._serialized},name:c.name||c.formattedTitle||c.id._serialized,isGroup:true})));}chats=available.filter(c=>c.isGroup||c.id?._serialized?.endsWith('@g.us')).map(c=>({id:c.id._serialized,name:c.name||c.id._serialized}));error=chats.length?'':'WhatsApp is syncing groups; retrying shortly.';}catch(e){error='Group list is not ready; retrying shortly. '+String(e?.message||e);}finally{loadingGroups=false;}}
 const groupRetry=setInterval(()=>{if(state==='Connected'&&!chats.length)void loadGroups();},10000);groupRetry.unref();
 function status(){return {state,paused,error,qr,channels,chats,...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
@@ -24,6 +24,7 @@ async function connect(){if(client)return;const {Client,LocalAuth}=require('what
  client=new Client({authStrategy:new LocalAuth({dataPath:path.join(directory,'session')}),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
  state='Connecting';error='';
  client.on('qr',async code=>{qr=await QRCode.toDataURL(code);state='Scan QR';});
+ client.on('authenticated',()=>{state='Syncing WhatsApp';});
  client.on('ready',async()=>{qr='';state='Connected';await loadGroups();});
  client.on('auth_failure',()=>{state='Authentication failed';error='Relink WhatsApp using QR.';});
  client.on('disconnected',()=>{state='Disconnected';paused=true;qr='';});

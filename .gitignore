@@ -84,3 +84,5 @@ tools/billing-fold-shots/
 
 # Firebase CLI deployment diagnostics can contain sensitive runtime metadata.
 firebase-debug.log*
+
+.wwebjs_cache/
