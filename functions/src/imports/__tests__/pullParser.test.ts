@@ -60,3 +60,10 @@ test.each(['10 3/9.3','10.3/9.3','10 3/9 3'])('slash pair accepts supported leve
  expect(row.bblsTaken).toBe(165);
  expect(row.issues).toEqual([]);
 });
+
+test('bare compact time attached to bottom resolves against post without consuming spaced inches',()=>{
+ const [row]=parsePullChat('[10/4/2026, 4:21:08 PM] Driver: Kahuna 5\n12\n11.    420\n185 bbls');
+ expect(row.tankLevelFeet).toBe(12);expect(row.bottomLevelFeet).toBe(11);expect(row.bblsTaken).toBe(185);expect(row.dateTimeUTC).toBe('2026-10-04T21:20:00.000Z');expect(row.issues).toEqual([]);
+ const [spaced]=parsePullChat('[10/4/2026, 4:21:08 PM] Driver: Kahuna 5\n12 3\n11 4\n185 bbls');expect(spaced.tankLevelFeet).toBe(12.25);expect(spaced.bottomLevelFeet).toBeCloseTo(11+4/12);expect(spaced.dateTimeUTC).toBe(spaced.postedAt);
+ const [far]=parsePullChat('[10/4/2026, 10:21:08 PM] Driver: Kahuna 5\n12\n11.    420\n185 bbls');expect(far.issues).toContain('Pull time lacks AM/PM; confirm');
+});

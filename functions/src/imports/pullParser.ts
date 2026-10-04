@@ -103,8 +103,9 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       const segment = segments[part];
       let inlineTime = '';
       const lines = segment.body.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
-        const suffix = /\s+(\d{1,4}(?::\d{2})?\s*[ap](?:m)?)$/i.exec(line);
-        if (suffix && clock(suffix[1])) { inlineTime = suffix[1]; line = line.slice(0, suffix.index).trim(); }
+        const suffix = /\s+(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
+        const prefix = suffix ? line.slice(0,suffix.index).trim().replace(/^(?:T|B)\s+/i,'').replace(/\.(?!\d)$/,'') : '';
+        if (suffix && clock(suffix[1]) && (/[ap]/i.test(suffix[1]) || parseFeet(prefix)!==null)) { inlineTime = suffix[1]; line = line.slice(0, suffix.index).trim(); }
         return line.replace(/^(?:T|B)\s+(?=\d)/i, '').replace(/\.(?!\d)$/, '').trim();
       });
       const labelled = /\btop\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
