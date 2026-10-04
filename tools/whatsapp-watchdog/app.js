@@ -47,7 +47,7 @@ function reviewControls(row,post,card){
 }
 
 function renderBarrelTest(){
- const entries=(current.livePosts||[]).flatMap(post=>post.rows.map(row=>({post,row,delivery:current.deliveries?.[row.id]}))).filter(e=>/^Gunslinger (3|5)$/.test(e.row.wellName)).sort((a,b)=>Date.parse(b.row.dateTimeUTC)-Date.parse(a.row.dateTimeUTC));
+ const entries=(current.livePosts||[]).flatMap(post=>post.rows.map(row=>({post,row,delivery:current.deliveries?.[row.id]}))).filter(e=>/^Gunslinger (3|5)$/.test(e.row.wellName)&&(e.delivery?.estimate||Date.parse(e.post.postedAt)>Date.now()-86400000)).sort((a,b)=>Date.parse(b.row.dateTimeUTC)-Date.parse(a.row.dateTimeUTC));
  const body=$('barrel-test-rows');const signature=JSON.stringify(entries);if(body.dataset.signature===signature)return;body.dataset.signature=signature;body.replaceChildren();
  $('barrel-test-summary').textContent=entries.length?entries.length+' captured pulls · '+entries.filter(e=>e.delivery?.estimate).length+' estimates · updates every four seconds. Missing estimates are shown explicitly; older pulls are not resent.':'Waiting for the next Gunslinger pull processed with the estimator. Older completed pulls are not changed or resent.';
  for(const {post,row,delivery:d} of entries){const e=d?.estimate,tr=node('tr','',body);if(!e){const parsed=Date.parse(row.dateTimeUTC);for(const value of [Number.isFinite(parsed)?new Date(parsed).toLocaleString('en-US',{timeZone:'America/Chicago'}):'Time needs review',row.wellName+' / '+(post.author||row.author||'Driver'),row.bblsTaken==null?'Missing barrels':row.bblsTaken+' bbl (source not recorded)', '—','No estimate recorded','—','—',d?.status||'waiting'])node('td',value,tr);continue;}const point=e.estimatedBbls;const diff=point==null?null:point-row.bblsTaken;
