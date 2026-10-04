@@ -22,12 +22,19 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  try{
  await authenticate(req,'ingestWatchdogPullV2');
  const body=req.body as JsonRecord;
- if(!body||Object.keys(body).some(k=>!['chatId','messageId','chat','rowIndex'].includes(k))||typeof body.chatId!=='string'||typeof body.messageId!=='string'||typeof body.chat!=='string'||body.chat.length>6000||!Number.isInteger(body.rowIndex)||body.rowIndex<0||body.rowIndex>10)throw Error('invalid_observation');
+ if(!body||Object.keys(body).some(k=>!['chatId','messageId','chat','rowIndex','review'].includes(k))||typeof body.chatId!=='string'||typeof body.messageId!=='string'||typeof body.chat!=='string'||body.chat.length>6000||!Number.isInteger(body.rowIndex)||body.rowIndex<0||body.rowIndex>10)throw Error('invalid_observation');
  const policy=(await admin.firestore().doc('watchdog_v2_config/laptop').get()).data();
  if(!policy?.enabled)throw Error('transport_disabled');
  const channel=policy.channels?.[body.chatId];if(!channel)throw Error('channel_not_allowed');
  const rows=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',defaultBbls:channel.defaultBbls===165?165:undefined});
  const row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
+ const originalTime=row.dateTimeUTC;
+ const review=body.review;
+ if(review){
+   if(Object.keys(review).some(k=>!['dateTimeUTC','reason','confirmed'].includes(k))||review.confirmed!==true||typeof review.reason!=='string'||review.reason.trim().length<3||review.reason.length>300||typeof review.dateTimeUTC!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(review.dateTimeUTC)||!Number.isFinite(Date.parse(review.dateTimeUTC)))throw Error('invalid_review');
+   row.dateTimeUTC=review.dateTimeUTC;
+ }
+
  if(Date.parse(row.postedAt)<policy.enabledAt||Date.parse(row.dateTimeUTC)<policy.enabledAt) {res.json({ok:true,status:'before_activation'});return;}
  if(findPullChatNotices(body.chat).length||row.issues.length) {res.json({ok:true,status:'review',issues:row.issues.length?row.issues:['Tank setup needs review']});return;}
  const db=admin.database();const configs=(await db.ref('well_config').once('value')).val()||{};
@@ -36,6 +43,11 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const [processed,incoming]=await Promise.all([db.ref('packets/processed').orderByChild('wellName').equalTo(mapped.wellName).once('value'),db.ref('packets/incoming').orderByChild('wellName').equalTo(mapped.wellName).once('value')]);
  const history={[mapped.wellName]:{...(processed.val()||{}),...(incoming.val()||{})}};
  const checked=reviewPulls([row],configs,history,{},new Set())[0];
+ if(review&&checked.status==='review'){
+   checked.issues=checked.issues.filter(issue=>issue!=='Possible existing pull within 30 minutes; check time and barrels, then confirm or exclude');
+   if(!checked.issues.length)checked.status='ready';
+ }
+
  const identity=digest([mapped.wellName,row.dateTimeUTC,row.tankLevelFeet,row.bottomLevelFeet,row.bblsTaken]);
  const entryRef=admin.firestore().collection(root).doc(identity);
  const prior=(await entryRef.get()).data();
@@ -43,7 +55,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  if(prior){res.json({ok:true,status:'queued',identity,packetId:prior.packetId});return;}
  const stamp=new Date(row.dateTimeUTC).toISOString().replace(/[-:]/g,'').slice(0,15).replace('T','_');
  const packetId=stamp+'_'+mapped.wellName.replace(/\s+/g,'')+'_'+identity.slice(0,6);
- const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:null,driverName:null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank}};
+ const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:null,driverName:null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(review?{review:{originalTime,correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
  const payloadDigest=digest(packet);
  await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('payload_conflict');return;}tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:row.tankLevelFeet,bottom:checked.afterFeet,bbl:row.bblsTaken,principalId:'laptop-watchdog-v2',messageHash:sha(body.chatId+':'+body.messageId),createdAt:Date.now()});});
  const done=await db.ref('packets/processed/'+packetId).once('value');

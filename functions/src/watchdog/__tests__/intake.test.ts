@@ -16,3 +16,16 @@ test('queues once, retries preserve packet, and receipt requires exact bottom an
 test('accepts missing bottom and suppresses activation history',async()=>{expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chat:observation().chat.replace('Bottom 11.125\n','')})).result.status).toBe('queued');documents.get('watchdog_v2_config/laptop').enabledAt=Date.now()+1000;expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation())).result.status).toBe('before_activation');});
 
 test('reported bottom never overrides calibrated bottom, and impossible removal is held',async()=>{const request={...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 20')};const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request);expect(answer.result.status).toBe('queued');const packet=database.get('packets/incoming/'+answer.result.packetId);expect(packet.bottomLevelFeet).toBe(11.125);expect(packet.watchdogProvenance.reportedBottomFeet).toBe(20);const invalid=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),messageId:'other',chat:observation().chat.replace('Top 12.5','Top 1')});expect(invalid.result.status).toBe('review');expect(invalid.result.issues).toContain('Load exceeds water below the reported top');});
+test('review retains corrected time and audit but cannot bypass invalid top or future time',async()=>{
+ const body=observation();const corrected=new Date(Date.now()-600000).toISOString();const review={confirmed:true,dateTimeUTC:corrected,reason:'Driver confirmed actual measurement'};
+ const accepted=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review});expect(accepted.result.status).toBe('queued');const packet=database.get('packets/incoming/'+accepted.result.packetId);expect(packet.dateTimeUTC).toBe(corrected);expect(packet.watchdogProvenance.review.correctedTime).toBe(corrected);expect(packet.watchdogProvenance.review.originalTime).not.toBe(corrected);
+ const invalid=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,chat:body.chat.replace('Top 12.5','Top 30'),review});expect(invalid.result.status).toBe('review');
+ const future=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review:{...review,dateTimeUTC:new Date(Date.now()+3600000).toISOString()}});expect(future.result.status).toBe('review');
+});
+test('explicit review clears only nearby-pull warning, never exact duplicates',async()=>{
+ const body=observation();const now=Date.now();database.set('packets/processed/previous',{packetId:'previous',wellName:'Kahuna 5',dateTimeUTC:new Date(now-600000).toISOString(),tankLevelFeet:12.5,bblsTaken:165});
+ const held=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(held.result.status).toBe('review');
+ const review={confirmed:true,dateTimeUTC:new Date(now).toISOString(),reason:'Confirmed separate load'};
+ const accepted=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review});expect(accepted.result.status).toBe('queued');
+ const duplicate=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review:{...review,dateTimeUTC:new Date(now-600000).toISOString()}});expect(duplicate.result.status).toBe('duplicate');
+});

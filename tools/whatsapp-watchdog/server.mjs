@@ -9,7 +9,7 @@ import QRCode from 'qrcode';
 import {Queue,header,hash,newestReceiverMessages} from './core.mjs';
 import {Transport} from './transport.mjs';
 const require=createRequire(import.meta.url);
-const {splitChat,parsePullChat}=require('../../functions/lib/imports/pullParser.js');
+const {splitChat,parsePullChat,chatTimestamp}=require('../../functions/lib/imports/pullParser.js');
 const root=path.dirname(fileURLToPath(import.meta.url));
 const directory=process.env.WBC_WATCHDOG_DATA||path.join(process.env.LOCALAPPDATA||process.cwd(),'WellBuilt','WhatsAppWatchdog');
 const queue=new Queue(directory);const transport=new Transport(queue);transport.configure();
@@ -78,6 +78,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(req.method!=='POST')return respond(res,404,{error:'Not found'});
  if(req.headers.origin&&req.headers.origin!=='http://127.0.0.1:8791'&&req.headers.origin!=='http://localhost:8791')return respond(res,403,{error:'Invalid origin'});
  let chunks=[],length=0;for await(const chunk of req){length+=chunk.length;if(length>10000000)return respond(res,413,{error:'File exceeds 10 MB'});chunks.push(chunk);}const bytes=Buffer.concat(chunks);
+ if(url.pathname==='/review'){const value=JSON.parse(bytes);if(typeof value.rowId!=='string'||!['confirm','exclude'].includes(value.decision)||typeof value.reason!=='string'||value.reason.trim().length<3||value.reason.length>300)throw Error('Enter a review reason');let at;if(value.decision==='confirm'){if(typeof value.time!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.time))throw Error('Choose a valid measurement time');const [date,time]=value.time.split('T');const [y,m,d]=date.split('-');at=chatTimestamp(m+'/'+d+'/'+y,time);}await transport.review(value.rowId,value.decision,at,value.reason.trim());return respond(res,200,{ok:true});}
  if(url.pathname==='/refresh-groups'){await loadGroups();return respond(res,200,{ok:true});}
  if(url.pathname==='/connect'){await connect();return respond(res,200,{ok:true});}
  if(url.pathname==='/stop'){paused=true;state='Stopped';if(client){const old=client;client=null;await old.destroy();}return respond(res,200,{ok:true});}

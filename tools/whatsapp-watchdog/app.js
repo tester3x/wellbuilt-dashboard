@@ -17,7 +17,7 @@ refresh().catch(e=>$('notice').textContent=e.message);setInterval(()=>refresh().
 function renderLiveFeed(){
  const filter=$('live-filter');const groupSignature=JSON.stringify(current.channels.map(c=>[c.id,c.name]));if(filter.dataset.signature!==groupSignature){const selected=filter.value;filter.replaceChildren();const all=node('option','All watched groups',filter);all.value='';for(const c of current.channels){const option=node('option',c.name,filter);option.value=c.id;}filter.value=selected;filter.dataset.signature=groupSignature;}
  $('live-health').textContent=`${current.paused?'Capture paused':'Checking every four seconds'} · Last receiver check: ${current.lastReceiverCheck?new Date(current.lastReceiverCheck).toLocaleTimeString('en-US',{timeZone:'America/Chicago'}):'waiting'}${feedFrozen?' · Display frozen; capture continues':''}`;
- if(feedFrozen)return;
+ if(feedFrozen||$('live-feed').contains(document.activeElement))return;
  const groups=current.channels.filter(c=>!filter.value||c.id===filter.value);
  const container=$('live-feed');const layout=JSON.stringify(groups.map(c=>[c.id,c.name]));
  if(container.dataset.layout!==layout){container.replaceChildren();container.dataset.layout=layout;for(const group of groups){const panel=node('section','',container);panel.className='live-group';panel.dataset.channel=group.id;node('h3',group.name,panel);const list=node('div','',panel);list.className='group-posts';list.setAttribute('role','log');list.setAttribute('aria-live','polite');list.setAttribute('aria-label',group.name+' live posts');list.tabIndex=0;}}
@@ -25,9 +25,17 @@ function renderLiveFeed(){
  for(const panel of container.children){const posts=(current.livePosts||[]).filter(m=>m.channel===panel.dataset.channel).slice(0,25);const list=panel.querySelector('.group-posts');const signature=JSON.stringify(posts.map(post=>[post,post.rows.map(row=>current.deliveries?.[row.id])]));if(list.dataset.signature===signature)continue;list.dataset.signature=signature;const oldTop=list.scrollTop,oldHeight=list.scrollHeight;list.replaceChildren();
  if(!posts.length)node('p','Waiting for live posts from this group.',list);
  for(const post of posts){const card=node('article','',list);node('p',(post.author||'Driver')+' · '+new Date(post.postedAt||post.updatedAt).toLocaleString('en-US',{timeZone:'America/Chicago'})+(post.edited?' · Edited':'')+(post.deleted?' · Deleted':''),card).className='post-meta';node('pre',post.deleted?'Post deleted':post.body||post.chat,card);const statuses=post.rows.map(row=>current.deliveries?.[row.id]?.status||((current.enabledAt&&(Date.parse(row.postedAt)<current.enabledAt||Date.parse(row.dateTimeUTC)<current.enabledAt))?'before activation · not sent':(row.issues.length)?'review':'waiting'));const reasons=post.rows.flatMap(row=>current.deliveries?.[row.id]?.issues||row.issues||[]);
- node('p',post.deleted?'Held: deleted post':post.edited?'Held: edited post needs review':statuses.length?'WB M: '+[...new Set(statuses)].join(', '):post.notices.length?'Tank setup notice: review':'Chat post · not a pull',card).className='post-status';if(reasons.length)node('p',[...new Set(reasons)].join('; '),card).className='warn';}
+ node('p',post.deleted?'Held: deleted post':post.edited?'Held: edited post needs review':statuses.length?'WB M: '+[...new Set(statuses)].join(', '):post.notices.length?'Tank setup notice: review':'Chat post · not a pull',card).className='post-status';if(reasons.length)node('p',[...new Set(reasons)].join('; '),card).className='warn';for(const row of post.rows)reviewControls(row,post,card);}
  list.scrollTop=oldTop>0?Math.max(0,oldTop+list.scrollHeight-oldHeight):0;
  }
 
 }
 $('live-filter').onchange=()=>renderLiveFeed();$('freeze-feed').onclick=()=>{feedFrozen=!feedFrozen;$('freeze-feed').textContent=feedFrozen?'Resume feed':'Freeze feed';renderLiveFeed();};
+
+function reviewControls(row,post,card){
+ const delivery=current.deliveries?.[row.id];if(delivery?.status!=='review'||delivery.identity||post.deleted||post.edited)return;
+ const box=node('div','',card);node('p',row.wellName+' · Review measurement time (Central)',box);
+ const time=node('input','',box);time.type='datetime-local';const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(row.dateTimeUTC)).map(p=>[p.type,p.value]));time.value=parts.year+'-'+parts.month+'-'+parts.day+'T'+parts.hour+':'+parts.minute;time.setAttribute('aria-label','Measurement time for '+row.wellName);
+ const reason=node('input','',box);reason.placeholder='Reason for confirmation or exclusion';reason.maxLength=300;reason.setAttribute('aria-label','Review reason for '+row.wellName);
+ for(const [decision,label] of [['confirm','Confirm and send'],['exclude','Exclude']]){const button=node('button',label,box);button.onclick=()=>action(()=>api('/review',JSON.stringify({rowId:row.id,decision,time:time.value,reason:reason.value})),button,decision==='confirm'?'Review submitted. Check the WB M status.':'Entry excluded; nothing sent.');}
+}
