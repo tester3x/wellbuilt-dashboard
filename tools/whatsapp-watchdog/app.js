@@ -1,5 +1,5 @@
-const token='__TOKEN__';const $=id=>document.getElementById(id);let current;let busy=false;let feedFrozen=false;
-async function api(url,body,method=body===undefined?'GET':'POST'){const response=await fetch(url,{method,headers:{'x-watchdog-token':token},body:body===undefined?undefined:body});const data=await response.json();if(!response.ok)throw Error(data.error);return data;}
+let token='__TOKEN__';const $=id=>document.getElementById(id);let current;let busy=false;let feedFrozen=false;
+async function api(url,body,method=body===undefined?'GET':'POST'){const request=()=>fetch(url,{method,headers:{'x-watchdog-token':token},body:body===undefined?undefined:body});let response=await request();if(response.status===403){const source=await(await fetch('/app.js',{cache:'no-store'})).text();const fresh=/let token='([^']+)'/.exec(source);if(fresh&&fresh[1]!==token){token=fresh[1];response=await request();}}const data=await response.json();if(!response.ok)throw Error(data.error);return data;}
 function node(tag,text,parent){const el=document.createElement(tag);el.textContent=text;parent.append(el);return el;}
 async function refresh(){current=await api('/status');$('status').textContent=`${current.state} · ${current.receiverMode||''} · WB M: ${current.transportStatus||'Not configured'} · ${current.paused?'Paused':'Watching'} · ${current.pullCount} parsed pulls · ${current.messageCount} captured messages${current.error?' · '+current.error:''}`;$('qr').hidden=!current.qr;if(current.qr)$('qr').src=current.qr;
  renderLiveFeed();
