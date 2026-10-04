@@ -42,3 +42,4 @@ test('stop archives only the selected well, queues an idempotent authoritative c
  expect((await call(getWatchdogWellLifecycleV2,'getWatchdogWellLifecycleV2',{})).result.wells[0].state).toBe('archived');
  expect((await call(stopWatchdogWellV2,'stopWatchdogWellV2',{wellName:'Other',reason:body.reason})).code).toBe(400);
 });
+test('stop uses explicit well allowlist for legacy configs without company, but rejects another company',async()=>{database.set('well_config/Kahuna 5',{tanks:3});expect((await call(stopWatchdogWellV2,'stopWatchdogWellV2',{wellName:'Kahuna 5',reason:'Hauling ended'})).code).toBe(200);database.set('well_config/Kahuna 5',{companyId:'another-company'});expect((await call(stopWatchdogWellV2,'stopWatchdogWellV2',{wellName:'Kahuna 5',reason:'Hauling ended'})).code).toBe(400);});

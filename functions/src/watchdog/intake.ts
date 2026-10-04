@@ -94,7 +94,7 @@ export const stopWatchdogWellV2=https.onRequest(options,async(req,res)=>{
  try{await authenticate(req,'stopWatchdogWellV2');const {wellName,reason}=req.body||{};
  if(Object.keys(req.body||{}).some(k=>!['wellName','reason'].includes(k))||typeof wellName!=='string'||/[.#$\[\]\/]/.test(wellName)||typeof reason!=='string'||reason.trim().length<3||reason.length>300)throw Error('invalid_stop');
  const ref=admin.firestore().doc('watchdog_v2_config/laptop');const db=admin.database();const config=(await db.ref('well_config/'+wellName).once('value')).val();
- if(!config||config.companyId!=='liquid-gold')throw Error('well_not_allowed');
+ if(!config||(config.companyId&&config.companyId!=='liquid-gold'))throw Error('well_not_allowed');
  const archive=await admin.firestore().runTransaction(async tx=>{const policy=(await tx.get(ref)).data();if(!policy?.enabled||!Object.values(policy.channels||{}).some((c:any)=>c.wells?.includes(wellName)))throw Error('well_not_allowed');if(policy.archivedWells?.[wellName])return policy.archivedWells[wellName];
  const at=new Date().toISOString();const packetId='watchdog_stop_'+sha(wellName+':'+at).slice(0,24);const value={packetId,at,reason:reason.trim(),principalId:'laptop-watchdog-v2'};tx.set(ref,{...policy,archivedWells:{...(policy.archivedWells||{}),[wellName]:value}});return value;});
  const packet={packetId:archive.packetId,idempotencyKey:archive.packetId,requestType:'pull',wellName,tankLevelFeet:0,bblsTaken:0,dateTimeUTC:archive.at,timezone:'America/Chicago',companyId:'liquid-gold',wellDown:true,wellDownIsAuthoritative:true,source:'whatsapp_watchdog_stop',watchdogProvenance:{principalId:'laptop-watchdog-v2',reason:archive.reason,lifecycle:'archive'}};
