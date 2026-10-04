@@ -1,3 +1,4 @@
+import { barrelEstimate } from './barrelEstimate';
 import * as https from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import {createHash} from 'crypto';
@@ -43,6 +44,15 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const [processed,incoming]=await Promise.all([db.ref('packets/processed').orderByChild('wellName').equalTo(mapped.wellName).once('value'),db.ref('packets/incoming').orderByChild('wellName').equalTo(mapped.wellName).once('value')]);
  const history={[mapped.wellName]:{...(processed.val()||{}),...(incoming.val()||{})}};
  const checked=reviewPulls([row],configs,history,{},new Set())[0];
+ let estimate: ReturnType<typeof barrelEstimate> = null;
+ let barrelSource: 'written' | 'default' = 'written';
+ if(/^Gunslinger (3|5)$/.test(mapped.wellName)) {
+   const noDefault=parsePullChat(body.chat,{defaultWell:channel.defaultWell||''})[body.rowIndex];
+   barrelSource=noDefault?.bblsTaken == null ? 'default' : 'written';
+   const status=(await db.ref('wells/'+mapped.wellName+'/status').once('value')).val();
+   estimate=barrelEstimate({top:row.tankLevelFeet,bottom:row.bottomLevelFeet,bank:checked.bank,rateMinutesPerFoot:Number(status?.calculated?.flowRateMinutes),isDown:status?.isDown!==false,rateMeasuredAt:status?.lastPull?.dateTimeUTC||'',measuredAt:row.dateTimeUTC});
+ }
+
  if(review&&checked.status==='review'){
    checked.issues=checked.issues.filter(issue=>issue!=='Possible existing pull within 30 minutes; check time and barrels, then confirm or exclude');
    if(!checked.issues.length)checked.status='ready';
@@ -51,16 +61,16 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const identity=digest([mapped.wellName,row.dateTimeUTC,row.tankLevelFeet,row.bottomLevelFeet,row.bblsTaken]);
  const entryRef=admin.firestore().collection(root).doc(identity);
  const prior=(await entryRef.get()).data();
- if(!prior&&checked.status!=='ready'){res.json({ok:true,status:checked.status,issues:checked.issues});return;}
- if(prior){res.json({ok:true,status:'queued',identity,packetId:prior.packetId});return;}
+ if(!prior&&checked.status!=='ready'){res.json({ok:true,status:checked.status,issues:checked.issues,estimate,barrelSource});return;}
+ if(prior){res.json({ok:true,status:'queued',identity,packetId:prior.packetId,estimate:prior.estimate,barrelSource:prior.barrelSource});return;}
  const stamp=new Date(row.dateTimeUTC).toISOString().replace(/[-:]/g,'').slice(0,15).replace('T','_');
  const packetId=stamp+'_'+mapped.wellName.replace(/\s+/g,'')+'_'+identity.slice(0,6);
- const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:null,driverName:null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(review?{review:{originalTime,correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
+ const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:null,driverName:null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(estimate?{barrelEstimate:estimate,barrelSource}:{}),...(review?{review:{originalTime,correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
  const payloadDigest=digest(packet);
- await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('payload_conflict');return;}tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:row.tankLevelFeet,bottom:checked.afterFeet,bbl:row.bblsTaken,principalId:'laptop-watchdog-v2',messageHash:sha(body.chatId+':'+body.messageId),createdAt:Date.now()});});
+ await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('payload_conflict');return;}tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:row.tankLevelFeet,bottom:checked.afterFeet,bbl:row.bblsTaken,principalId:'laptop-watchdog-v2',messageHash:sha(body.chatId+':'+body.messageId),estimate,barrelSource,createdAt:Date.now()});});
  const done=await db.ref('packets/processed/'+packetId).once('value');
  if(!done.exists()){const transaction=await db.ref('packets/incoming/'+packetId).transaction(current=>{if(current){if(digest(current)!==payloadDigest)return;return current;}return packet;});if(!transaction.committed)throw Error('incoming_conflict');}
- res.json({ok:true,status:'queued',identity,packetId});
+ res.json({ok:true,status:'queued',identity,packetId,estimate,barrelSource});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });
 export const getWatchdogPullReceiptV2=https.onRequest(options,async(req,res)=>{
@@ -68,6 +78,6 @@ export const getWatchdogPullReceiptV2=https.onRequest(options,async(req,res)=>{
  const entry=(await admin.firestore().collection(root).doc(identity).get()).data();if(!entry||entry.principalId!=='laptop-watchdog-v2')throw Error('receipt_not_owned');
  const db=admin.database();const packet=(await db.ref('packets/processed/'+entry.packetId).once('value')).val();
  const matched=packet&&packet.wellName===entry.wellName&&packet.dateTimeUTC===entry.dateTimeUTC&&Number(packet.tankLevelFeet)===entry.top&&Number(packet.bblsTaken)===entry.bbl&&Math.abs(Number(packet.tankAfterInches)-entry.bottom*12)<0.01;
- res.json({ok:true,identity,packetId:entry.packetId,status:matched&&packet.canonicalProcessingComplete===true?'complete':packet?'incomplete':'queued'});
+ res.json({ok:true,identity,packetId:entry.packetId,estimate:entry.estimate,barrelSource:entry.barrelSource,status:matched&&packet.canonicalProcessingComplete===true?'complete':packet?'incomplete':'queued'});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });

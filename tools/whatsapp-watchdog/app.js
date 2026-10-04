@@ -33,6 +33,8 @@ function renderLiveFeed(){
 $('live-filter').onchange=()=>renderLiveFeed();$('freeze-feed').onclick=()=>{feedFrozen=!feedFrozen;$('freeze-feed').textContent=feedFrozen?'Resume feed':'Freeze feed';renderLiveFeed();};
 
 function reviewControls(row,post,card){
+ const diagnostic=current.deliveries?.[row.id];if(diagnostic?.estimate){const e=diagnostic.estimate;node('p',`Barrels: ${row.bblsTaken} (${diagnostic.barrelSource==='default'?'assumed default':'written'}). Level estimate: ${e.estimatedBbls!==null?e.estimatedBbls+' bbl; range ':''}${e.lowBbls}${e.highBbls!==null?'–'+e.highBbls:''} bbl. Comparison only; assuming 20-minute loading (range 10–30 min).`,card);}
+
  const delivery=current.deliveries?.[row.id];if(delivery?.status!=='review'||delivery.identity||post.deleted||post.edited)return;
  const box=node('div','',card);node('p',row.wellName+' · Review measurement time (Central)',box);
  const time=node('input','',box);time.type='datetime-local';const parsed=Date.parse(delivery.review?.dateTimeUTC||row.dateTimeUTC);const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(Number.isFinite(parsed)?parsed:Date.now())).map(p=>[p.type,p.value]));time.value=Number.isFinite(parsed)?parts.year+'-'+parts.month+'-'+parts.day+'T'+parts.hour+':'+parts.minute:'';time.setAttribute('aria-label','Measurement time for '+row.wellName);
