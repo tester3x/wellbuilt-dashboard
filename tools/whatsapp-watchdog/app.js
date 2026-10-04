@@ -19,11 +19,14 @@ function renderLiveFeed(){
  const filter=$('live-filter');const groupSignature=JSON.stringify(current.channels.map(c=>[c.id,c.name]));if(filter.dataset.signature!==groupSignature){const selected=filter.value;filter.replaceChildren();const all=node('option','All watched groups',filter);all.value='';for(const c of current.channels){const option=node('option',c.name,filter);option.value=c.id;}filter.value=selected;filter.dataset.signature=groupSignature;}
  $('live-health').textContent=`${current.paused?'Capture paused':'Checking every four seconds'} · Last receiver check: ${current.lastReceiverCheck?new Date(current.lastReceiverCheck).toLocaleTimeString('en-US',{timeZone:'America/Chicago'}):'waiting'}${feedFrozen?' · Display frozen; capture continues':''}`;
  if(feedFrozen||$('live-feed').contains(document.activeElement))return;
- const groups=current.channels.filter(c=>!filter.value||c.id===filter.value);
+ const selectedGroups=current.channels.filter(c=>!filter.value||c.id===filter.value);
+ const lifecycle=current.wellLifecycle||[];const archived=new Set(lifecycle.filter(w=>w.archive).map(w=>w.wellName));
+ const groups=selectedGroups.filter(c=>{const wells=lifecycle.filter(w=>w.channels?.includes(c.id));return !wells.length||wells.some(w=>!w.archive);});
+ const archives=$('archived-wells');const archiveSignature=JSON.stringify(lifecycle);if(!archives.contains(document.activeElement)&&archives.dataset.signature!==archiveSignature){archives.dataset.signature=archiveSignature;archives.replaceChildren();if(archived.size){const details=node('details','',archives);node('summary','Archived wells ('+archived.size+')',details);for(const w of lifecycle.filter(w=>w.archive)){const group=current.channels.find(c=>w.channels?.includes(c.id));if(group){const panel=node('section','',details);panel.className='live-group';node('h3',w.wellName+' · '+group.name,panel);renderWellControls(panel,group,w.wellName);}}}}
  const container=$('live-feed');const layout=JSON.stringify([groups.map(c=>[c.id,c.name]),current.wellLifecycle]);
  if(container.dataset.layout!==layout){container.replaceChildren();container.dataset.layout=layout;for(const group of groups){const panel=node('section','',container);panel.className='live-group';panel.dataset.channel=group.id;node('h3',group.name,panel);renderWellControls(panel,group);const list=node('div','',panel);list.className='group-posts';list.setAttribute('role','log');list.setAttribute('aria-live','polite');list.setAttribute('aria-label',group.name+' live posts');list.tabIndex=0;}}
- if(!groups.length){container.textContent='Choose watched groups to see their live posts.';return;}
- for(const panel of container.children){const posts=(current.livePosts||[]).filter(m=>m.channel===panel.dataset.channel).slice(0,25);const list=panel.querySelector(':scope > .group-posts');const signature=JSON.stringify(posts.map(post=>[post,post.rows.map(row=>current.deliveries?.[row.id])]));if(list.dataset.signature===signature)continue;list.dataset.signature=signature;const oldTop=list.scrollTop,oldHeight=list.scrollHeight;list.replaceChildren();
+ if(!groups.length){container.textContent=selectedGroups.length?'No active wells in this group. Saved posts are in Archived wells.':'Choose watched groups to see their live posts.';return;}
+ for(const panel of container.children){const posts=(current.livePosts||[]).filter(m=>m.channel===panel.dataset.channel&&(!m.rows.length||m.rows.some(r=>!archived.has(r.wellName)))).slice(0,25);const list=panel.querySelector(':scope > .group-posts');const signature=JSON.stringify(posts.map(post=>[post,post.rows.map(row=>current.deliveries?.[row.id])]));if(list.dataset.signature===signature)continue;list.dataset.signature=signature;const oldTop=list.scrollTop,oldHeight=list.scrollHeight;list.replaceChildren();
  if(!posts.length)node('p','Waiting for live posts from this group.',list);
  for(const post of posts){const card=node('article','',list);node('p',(post.author||'Driver')+' · '+new Date(post.postedAt||post.updatedAt).toLocaleString('en-US',{timeZone:'America/Chicago'})+(post.edited?' · Edited':'')+(post.deleted?' · Deleted':''),card).className='post-meta';node('pre',post.deleted?'Post deleted':post.body||post.chat,card);const statuses=post.rows.map(row=>current.deliveries?.[row.id]?.status||((current.enabledAt&&(Date.parse(row.postedAt)<current.enabledAt||Date.parse(row.dateTimeUTC)<current.enabledAt))?'before activation · not sent':(row.issues.length)?'review':'waiting'));const reasons=post.rows.flatMap(row=>current.deliveries?.[row.id]?.issues||row.issues||[]);
  node('p',post.deleted?'Held: deleted post':post.edited?'Held: edited post needs review':statuses.length?'WB M: '+[...new Set(statuses)].join(', '):post.notices.length?'Tank setup notice: review':'Chat post · not a pull',card).className='post-status';if(reasons.length)node('p',[...new Set(reasons)].join('; '),card).className='warn';for(const row of post.rows)reviewControls(row,post,card);}
@@ -54,8 +57,8 @@ function renderBarrelTest(){
 }
 
 
-function renderWellControls(panel,group){
- const wells=(current.wellLifecycle||[]).filter(w=>w.channels?.includes(group.id));
+function renderWellControls(panel,group,archivedWell){
+ const wells=(current.wellLifecycle||[]).filter(w=>w.channels?.includes(group.id)&&(archivedWell?w.wellName===archivedWell:!w.archive));
  const box=node('div','',panel);box.className='well-controls';
  node('p','Ending monitoring stops WB M’s predicted inflow; it does not mean the well stopped producing.',box);
  const select=node('select','',box);select.setAttribute('aria-label','Well to manage in '+group.name);
