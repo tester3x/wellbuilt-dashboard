@@ -4056,4 +4056,4 @@ export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCa
 // Reviewed historical imports: deployed independently from the live pull processor.
 export { previewHistoricalPullImport, applyHistoricalPullImport } from './imports/pullImportCallable';
 
-export { ingestWatchdogPullV2, getWatchdogPullReceiptV2 } from './watchdog/intake';
+export { ingestWatchdogPullV2, getWatchdogPullReceiptV2, stopWatchdogWellV2, getWatchdogWellLifecycleV2 } from './watchdog/intake';

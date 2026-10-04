@@ -20,8 +20,8 @@ function renderLiveFeed(){
  $('live-health').textContent=`${current.paused?'Capture paused':'Checking every four seconds'} · Last receiver check: ${current.lastReceiverCheck?new Date(current.lastReceiverCheck).toLocaleTimeString('en-US',{timeZone:'America/Chicago'}):'waiting'}${feedFrozen?' · Display frozen; capture continues':''}`;
  if(feedFrozen||$('live-feed').contains(document.activeElement))return;
  const groups=current.channels.filter(c=>!filter.value||c.id===filter.value);
- const container=$('live-feed');const layout=JSON.stringify(groups.map(c=>[c.id,c.name]));
- if(container.dataset.layout!==layout){container.replaceChildren();container.dataset.layout=layout;for(const group of groups){const panel=node('section','',container);panel.className='live-group';panel.dataset.channel=group.id;node('h3',group.name,panel);const list=node('div','',panel);list.className='group-posts';list.setAttribute('role','log');list.setAttribute('aria-live','polite');list.setAttribute('aria-label',group.name+' live posts');list.tabIndex=0;}}
+ const container=$('live-feed');const layout=JSON.stringify([groups.map(c=>[c.id,c.name]),current.wellLifecycle]);
+ if(container.dataset.layout!==layout){container.replaceChildren();container.dataset.layout=layout;for(const group of groups){const panel=node('section','',container);panel.className='live-group';panel.dataset.channel=group.id;node('h3',group.name,panel);renderWellControls(panel,group);const list=node('div','',panel);list.className='group-posts';list.setAttribute('role','log');list.setAttribute('aria-live','polite');list.setAttribute('aria-label',group.name+' live posts');list.tabIndex=0;}}
  if(!groups.length){container.textContent='Choose watched groups to see their live posts.';return;}
  for(const panel of container.children){const posts=(current.livePosts||[]).filter(m=>m.channel===panel.dataset.channel).slice(0,25);const list=panel.querySelector('.group-posts');const signature=JSON.stringify(posts.map(post=>[post,post.rows.map(row=>current.deliveries?.[row.id])]));if(list.dataset.signature===signature)continue;list.dataset.signature=signature;const oldTop=list.scrollTop,oldHeight=list.scrollHeight;list.replaceChildren();
  if(!posts.length)node('p','Waiting for live posts from this group.',list);
@@ -51,4 +51,22 @@ function renderBarrelTest(){
  const cells=[new Date(d.review?.dateTimeUTC||row.dateTimeUTC).toLocaleString('en-US',{timeZone:'America/Chicago'}),row.wellName+' / '+(post.author||row.author||'Driver'),row.bblsTaken+' ('+(d.barrelSource==='default'?'assumed':'written')+')',e.observedDropBbls+' bbl',point==null?'AFR unavailable':point+' bbl',e.highBbls==null?'No production estimate':e.lowBbls+'–'+e.highBbls+' bbl',diff==null?'—':(diff>0?'+':'')+diff+' bbl',d.status];
  for(const value of cells)node('td',value,tr);
  }
+}
+
+
+function renderWellControls(panel,group){
+ const wells=(current.wellLifecycle||[]).filter(w=>w.channels?.includes(group.id));
+ const box=node('div','',panel);box.className='well-controls';
+ node('p','Ending monitoring stops WB M’s predicted inflow; it does not mean the well stopped producing.',box);
+ const select=node('select','',box);select.setAttribute('aria-label','Well to manage in '+group.name);
+ for(const w of wells){const option=node('option',w.wellName,select);option.value=w.wellName;}
+ const detail=node('div','',box);
+ const draw=()=>{detail.replaceChildren();const w=wells.find(w=>w.wellName===select.value);if(!w){node('p','Loading well controls…',detail);return;}
+ node('p',w.archive?'Monitoring ended · '+(w.state==='archived'?'WB M predicted inflow stopped':'WB M confirmation pending'):'Monitoring active',detail);
+ if(w.archive){node('p',w.archive.reason,detail);node('p','Archived '+new Date(w.archive.at).toLocaleString('en-US',{timeZone:'America/Chicago'}),detail);}
+ const reason=node('input','',detail);reason.placeholder='Reason for ending monitoring';reason.maxLength=300;reason.value=w.archive?.reason||'';reason.hidden=!!w.archive;reason.setAttribute('aria-label','Stop reason for '+w.wellName);
+ if(w.state!=='archived'){const button=node('button',w.archive?'Retry stop command':'Stop and archive',detail);button.setAttribute('aria-label','Stop and archive '+w.wellName);button.onclick=()=>action(()=>api('/stop-well',JSON.stringify({wellName:w.wellName,reason:reason.value})),button,'Monitoring ended; waiting for WB M to confirm predicted inflow stopped.');}
+ const archive=node('details','',detail);node('summary','Saved posts / archive for '+w.wellName,archive);const list=node('div','',archive);list.className='group-posts';
+ const posts=(current.messages||[]).filter(p=>p.channel===group.id&&p.rows.some(r=>r.wellName===w.wellName));node('p',posts.length+' saved posts. Starting again will require a new monitoring run; WB M stays marked down until manually unchecked.',list);for(const p of posts){const card=node('article','',list);node('pre',p.chat,card);}
+ };select.onchange=draw;draw();
 }

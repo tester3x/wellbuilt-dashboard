@@ -41,6 +41,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const db=admin.database();const configs=(await db.ref('well_config').once('value')).val()||{};
  const mapped=reviewPulls([row],configs,{}, {},new Set())[0];
  if(!channel.wells?.includes(mapped.wellName)||configs[mapped.wellName]?.companyId&&configs[mapped.wellName].companyId!=='liquid-gold')throw Error('well_not_allowed');
+ if(policy.archivedWells?.[mapped.wellName]){res.json({ok:true,status:'archived',issues:['Monitoring ended for this well']});return;}
  const [processed,incoming]=await Promise.all([db.ref('packets/processed').orderByChild('wellName').equalTo(mapped.wellName).once('value'),db.ref('packets/incoming').orderByChild('wellName').equalTo(mapped.wellName).once('value')]);
  const history={[mapped.wellName]:{...(processed.val()||{}),...(incoming.val()||{})}};
  const checked=reviewPulls([row],configs,history,{},new Set())[0];
@@ -79,5 +80,25 @@ export const getWatchdogPullReceiptV2=https.onRequest(options,async(req,res)=>{
  const db=admin.database();const packet=(await db.ref('packets/processed/'+entry.packetId).once('value')).val();
  const matched=packet&&packet.wellName===entry.wellName&&packet.dateTimeUTC===entry.dateTimeUTC&&Number(packet.tankLevelFeet)===entry.top&&Number(packet.bblsTaken)===entry.bbl&&Math.abs(Number(packet.tankAfterInches)-entry.bottom*12)<0.01;
  res.json({ok:true,identity,packetId:entry.packetId,estimate:entry.estimate,barrelSource:entry.barrelSource,status:matched&&packet.canonicalProcessingComplete===true?'complete':packet?'incomplete':'queued'});
+ }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
+});
+
+export const getWatchdogWellLifecycleV2=https.onRequest(options,async(req,res)=>{
+ try{await authenticate(req,'getWatchdogWellLifecycleV2');if(Object.keys(req.body||{}).length)throw Error('invalid_request');
+ const policy=(await admin.firestore().doc('watchdog_v2_config/laptop').get()).data();if(!policy?.enabled)throw Error('transport_disabled');
+ const names=[...new Set<string>(Object.values(policy.channels||{}).flatMap((c:any)=>c.wells||[]))];
+ const wells=await Promise.all(names.map(async wellName=>{const archive=policy.archivedWells?.[wellName]||null;let confirmed=false;if(archive){const db=admin.database();const [done,down]=await Promise.all([db.ref('packets/processed/'+archive.packetId).once('value'),db.ref('wells/'+wellName+'/status/isDown').once('value')]);confirmed=done.val()?.noLevel===true&&down.val()===true;}return {wellName,channels:Object.entries(policy.channels||{}).filter(([,c]:any)=>c.wells?.includes(wellName)).map(([id])=>id),archive,state:archive?(confirmed?'archived':'stopping'):'watching'};}));res.json({ok:true,wells});
+ }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
+});
+export const stopWatchdogWellV2=https.onRequest(options,async(req,res)=>{
+ try{await authenticate(req,'stopWatchdogWellV2');const {wellName,reason}=req.body||{};
+ if(Object.keys(req.body||{}).some(k=>!['wellName','reason'].includes(k))||typeof wellName!=='string'||/[.#$\[\]\/]/.test(wellName)||typeof reason!=='string'||reason.trim().length<3||reason.length>300)throw Error('invalid_stop');
+ const ref=admin.firestore().doc('watchdog_v2_config/laptop');const db=admin.database();const config=(await db.ref('well_config/'+wellName).once('value')).val();
+ if(!config||config.companyId!=='liquid-gold')throw Error('well_not_allowed');
+ const archive=await admin.firestore().runTransaction(async tx=>{const policy=(await tx.get(ref)).data();if(!policy?.enabled||!Object.values(policy.channels||{}).some((c:any)=>c.wells?.includes(wellName)))throw Error('well_not_allowed');if(policy.archivedWells?.[wellName])return policy.archivedWells[wellName];
+ const at=new Date().toISOString();const packetId='watchdog_stop_'+sha(wellName+':'+at).slice(0,24);const value={packetId,at,reason:reason.trim(),principalId:'laptop-watchdog-v2'};tx.set(ref,{...policy,archivedWells:{...(policy.archivedWells||{}),[wellName]:value}});return value;});
+ const packet={packetId:archive.packetId,idempotencyKey:archive.packetId,requestType:'pull',wellName,tankLevelFeet:0,bblsTaken:0,dateTimeUTC:archive.at,timezone:'America/Chicago',companyId:'liquid-gold',wellDown:true,wellDownIsAuthoritative:true,source:'whatsapp_watchdog_stop',watchdogProvenance:{principalId:'laptop-watchdog-v2',reason:archive.reason,lifecycle:'archive'}};
+ const done=await db.ref('packets/processed/'+archive.packetId).once('value');if(!done.exists()){const write=await db.ref('packets/incoming/'+archive.packetId).transaction(current=>current||packet);if(!write.committed)throw Error('stop_queue_failed');}
+ res.json({ok:true,state:'stopping',archive});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });

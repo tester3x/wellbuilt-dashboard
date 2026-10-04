@@ -7,7 +7,7 @@ jest.mock('firebase-admin',()=>({
  firestore:()=>({doc,collection:(p:string)=>({doc:(id:string)=>doc(p+'/'+id)}),runTransaction:async(fn:any)=>fn({get:(ref:any)=>ref.get(),set:(ref:any,value:any)=>documents.set(ref.key,value),create:(ref:any,value:any)=>{if(documents.has(ref.key))throw Error('exists');documents.set(ref.key,value);}})}),
  database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
 }));
-import {ingestWatchdogPullV2,getWatchdogPullReceiptV2} from '../intake';
+import {ingestWatchdogPullV2,getWatchdogPullReceiptV2,stopWatchdogWellV2,getWatchdogWellLifecycleV2} from '../intake';
 async function call(endpoint:any,name:string,body:any,tampered=false){const rawBody=Buffer.from(JSON.stringify(body)),timestamp=String(Date.now()),nonce=randomBytes(16).toString('hex');const signature=createHmac('sha256','synthetic-only-key').update(`v1:${name}:POST:${timestamp}:${nonce}:${createHash('sha256').update(rawBody).digest('hex')}`).digest('hex');const req={method:'POST',body,rawBody,headers:{'x-watchdog-key-id':'V1','x-watchdog-timestamp':timestamp,'x-watchdog-nonce':nonce,'x-watchdog-signature':tampered?'0'.repeat(64):signature}};let code=200,result:any;const res={status:(n:number)=>{code=n;return res;},json:(v:any)=>{result=v;return res;}};await (endpoint as any)(req,res);return {code,result};}
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});});
 const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
@@ -28,4 +28,17 @@ test('explicit review clears only nearby-pull warning, never exact duplicates',a
  const review={confirmed:true,dateTimeUTC:new Date(now).toISOString(),reason:'Confirmed separate load'};
  const accepted=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review});expect(accepted.result.status).toBe('queued');
  const duplicate=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review:{...review,dateTimeUTC:new Date(now-600000).toISOString()}});expect(duplicate.result.status).toBe('duplicate');
+});
+
+test('stop archives only the selected well, queues an idempotent authoritative command and waits for down confirmation',async()=>{
+ database.set('well_config/Kahuna 5',{companyId:'liquid-gold'});
+ const body={wellName:'Kahuna 5',reason:'Temporary hauling ended'};
+ const first=await call(stopWatchdogWellV2,'stopWatchdogWellV2',body);expect(first.code).toBe(200);
+ const packet=database.get('packets/incoming/'+first.result.archive.packetId);expect(packet.wellDownIsAuthoritative).toBe(true);expect(packet.wellDown).toBe(true);expect(packet.tankLevelFeet).toBe(0);expect(packet.bblsTaken).toBe(0);
+ expect((await call(stopWatchdogWellV2,'stopWatchdogWellV2',body)).result.archive.packetId).toBe(packet.packetId);
+ expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation())).result.status).toBe('archived');
+ expect((await call(getWatchdogWellLifecycleV2,'getWatchdogWellLifecycleV2',{})).result.wells[0].state).toBe('stopping');
+ database.set('packets/processed/'+packet.packetId,{...packet,noLevel:true});database.set('wells/Kahuna 5/status/isDown',true);
+ expect((await call(getWatchdogWellLifecycleV2,'getWatchdogWellLifecycleV2',{})).result.wells[0].state).toBe('archived');
+ expect((await call(stopWatchdogWellV2,'stopWatchdogWellV2',{wellName:'Other',reason:body.reason})).code).toBe(400);
 });

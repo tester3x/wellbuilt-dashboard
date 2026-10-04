@@ -50,7 +50,7 @@ async function pollReceiver(){
  finally{polling=false;}
 }
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
-function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,enabledAt:transport.config?.enabledAt,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
+function status(){return {state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,wellLifecycle:transport.wells||[],enabledAt:transport.config?.enabledAt,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
@@ -78,6 +78,8 @@ const server=http.createServer(async(req,res)=>{try{
  if(req.method!=='POST')return respond(res,404,{error:'Not found'});
  if(req.headers.origin&&req.headers.origin!=='http://127.0.0.1:8791'&&req.headers.origin!=='http://localhost:8791')return respond(res,403,{error:'Invalid origin'});
  let chunks=[],length=0;for await(const chunk of req){length+=chunk.length;if(length>10000000)return respond(res,413,{error:'File exceeds 10 MB'});chunks.push(chunk);}const bytes=Buffer.concat(chunks);
+ if(url.pathname==='/stop-well'){const value=JSON.parse(bytes);if(typeof value.wellName!=='string'||typeof value.reason!=='string')throw Error('Choose a well and enter a reason');const result=await transport.stopWell(value.wellName,value.reason);return respond(res,200,result);}
+ if(url.pathname==='/well-lifecycle'){return respond(res,200,await transport.lifecycle());}
  if(url.pathname==='/review'){const value=JSON.parse(bytes);if(typeof value.rowId!=='string'||!['confirm','exclude'].includes(value.decision)||typeof value.reason!=='string'||value.reason.trim().length<3||value.reason.length>300)throw Error('Enter a review reason');let at;if(value.decision==='confirm'){if(typeof value.time!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.time))throw Error('Choose a valid measurement time');const [date,time]=value.time.split('T');const [y,m,d]=date.split('-');at=chatTimestamp(m+'/'+d+'/'+y,time);}await transport.review(value.rowId,value.decision,at,value.reason.trim());return respond(res,200,{ok:true});}
  if(url.pathname==='/refresh-groups'){await loadGroups();return respond(res,200,{ok:true});}
  if(url.pathname==='/connect'){await connect();return respond(res,200,{ok:true});}
