@@ -109,7 +109,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       });
       const labelled = /\btop\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
       const bottom = /\bbottom\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
-      const pair = /^\s*[-:]?\s*(\d+(?:\.\d+)?|\d+['’]\d*)\s*\/\s*(\d+(?:\.\d+)?|\d+['’]\d*)\s*(?:\n|$)/.exec(segment.body);
+      const pair = /^\s*[-:]?\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*\/\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*(?:\n|$)/.exec(segment.body);
       const levelLines = lines.map(line => parseFeet(line));
       const unlabelled = !labelled && !pair && levelLines.length >= 2 && levelLines[0] !== null && levelLines[1] !== null;
       const top = labelled ? parseFeet(labelled[1]) : pair ? parseFeet(pair[1]) : unlabelled ? levelLines[0] : null;
