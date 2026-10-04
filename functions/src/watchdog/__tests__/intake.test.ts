@@ -5,7 +5,7 @@ const doc=(key:string)=>({key,get:async()=>({exists:documents.has(key),data:()=>
 jest.mock('firebase-functions/v2/https',()=>({onRequest:(_opts:any,fn:any)=>fn}));
 jest.mock('firebase-admin',()=>({
  firestore:()=>({doc,collection:(p:string)=>({doc:(id:string)=>doc(p+'/'+id)}),runTransaction:async(fn:any)=>fn({get:(ref:any)=>ref.get(),set:(ref:any,value:any)=>documents.set(ref.key,value),create:(ref:any,value:any)=>{if(documents.has(ref.key))throw Error('exists');documents.set(ref.key,value);}})}),
- database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
+ database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),set:async(value:any)=>{database.set(key,value);},orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
 }));
 import {ingestWatchdogPullV2,getWatchdogPullReceiptV2,stopWatchdogWellV2,getWatchdogWellLifecycleV2} from '../intake';
 async function call(endpoint:any,name:string,body:any,tampered=false){const rawBody=Buffer.from(JSON.stringify(body)),timestamp=String(Date.now()),nonce=randomBytes(16).toString('hex');const signature=createHmac('sha256','synthetic-only-key').update(`v1:${name}:POST:${timestamp}:${nonce}:${createHash('sha256').update(rawBody).digest('hex')}`).digest('hex');const req={method:'POST',body,rawBody,headers:{'x-watchdog-key-id':'V1','x-watchdog-timestamp':timestamp,'x-watchdog-nonce':nonce,'x-watchdog-signature':tampered?'0'.repeat(64):signature}};let code=200,result:any;const res={status:(n:number)=>{code=n;return res;},json:(v:any)=>{result=v;return res;}};await (endpoint as any)(req,res);return {code,result};}
@@ -34,7 +34,7 @@ test('stop archives only the selected well, queues an idempotent authoritative c
  database.set('well_config/Kahuna 5',{companyId:'liquid-gold'});
  const body={wellName:'Kahuna 5',reason:'Temporary hauling ended'};
  const first=await call(stopWatchdogWellV2,'stopWatchdogWellV2',body);expect(first.code).toBe(200);
- const packet=database.get('packets/incoming/'+first.result.archive.packetId);expect(packet.wellDownIsAuthoritative).toBe(true);expect(packet.wellDown).toBe(true);expect(packet.tankLevelFeet).toBe(0);expect(packet.bblsTaken).toBe(0);
+ const packet=database.get('packets/incoming/'+first.result.archive.packetId);expect(packet.wellDownIsAuthoritative).toBe(true);expect(packet.wellDown).toBe(true);expect(packet.tankLevelFeet).toBe(0);expect(packet.bblsTaken).toBe(0);expect(database.get('wells/Kahuna 5/status/isDown')).toBe(true);
  expect((await call(stopWatchdogWellV2,'stopWatchdogWellV2',body)).result.archive.packetId).toBe(packet.packetId);
  expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation())).result.status).toBe('archived');
  expect((await call(getWatchdogWellLifecycleV2,'getWatchdogWellLifecycleV2',{})).result.wells[0].state).toBe('stopping');
