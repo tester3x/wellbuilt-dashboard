@@ -4057,3 +4057,5 @@ export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCa
 export { previewHistoricalPullImport, applyHistoricalPullImport } from './imports/pullImportCallable';
 
 export { ingestWatchdogPullV2, getWatchdogPullReceiptV2, stopWatchdogWellV2, getWatchdogWellLifecycleV2 } from './watchdog/intake';
+
+export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';

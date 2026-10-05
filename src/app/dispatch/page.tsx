@@ -38,10 +38,11 @@ import { adminGetDashboardCatalog, adminGetWellPool, classifiedReadFailure } fro
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { DetachablePane } from '@/components/DetachablePane';
-import { getFirestoreDb } from '@/lib/firebase';
+import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
-import { loadCustomCatalogLocations, type CustomCatalogLocation, loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
+import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
 import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/driverEta';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
@@ -447,7 +448,7 @@ function DispatchPageInner() {
   const [disposalSearch, setDisposalSearch] = useState('');
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
   const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
-  const [customCatalogLocations, setCustomCatalogLocations] = useState<CustomCatalogLocation[]>([]);
+  const [customCatalogLocations, setCustomCatalogLocations] = useState<Array<{ locationName: string; company: string; latitude?: number; longitude?: number }>>([]);
   const [allOperatorWells, setAllOperatorWells] = useState<NdicWell[]>([]);
   const [assigning, setAssigning] = useState(false);
 
@@ -759,7 +760,7 @@ function DispatchPageInner() {
   useEffect(() => {
     if (!user || loading) return;
     loadDriversData();
-    loadDisposals().then(setAllDisposals).catch(() => {});
+
     loadOperators().then(setAllOperators).catch(console.error);
   }, [user, loading]);
 
@@ -782,6 +783,7 @@ function DispatchPageInner() {
     if (!user) return;
     let cancelled = false;
     setAllOperatorWells([]);
+    setAllDisposals([]);
     setCustomCatalogLocations([]);
     const loadPackageJobTypes = async () => {
       try {
@@ -801,14 +803,12 @@ function DispatchPageInner() {
 
           // The full operator catalog is separate from WB-M monitored route wells.
           // Replace it on scope changes; never retain another company's catalog.
-          const results = await Promise.all(
-            (companyConfig?.assignedOperators || []).map((op: string) => loadWellsForOperator(op))
-          );
+          const response = await httpsCallable(getFirebaseFunctions(), 'getDispatchLocationCatalog')({ companyId });
           if (cancelled) return;
-          setAllOperatorWells(results.flat());
-          const customRows = await loadCustomCatalogLocations();
-          if (cancelled) return;
-          setCustomCatalogLocations(customRows.filter(c => (companyConfig?.assignedOperators || []).includes(c.company)));
+          const catalog = response.data as { wells: NdicWell[]; disposals: NdicWell[]; customLocations: Array<{ locationName: string; company: string; latitude?: number; longitude?: number }> };
+          setAllOperatorWells(catalog.wells);
+          setAllDisposals(catalog.disposals);
+          setCustomCatalogLocations(catalog.customLocations);
           setReadErrors(prev => ({ ...prev, operatorCatalog: undefined }));
         }
 

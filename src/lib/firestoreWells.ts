@@ -60,9 +60,9 @@ export async function loadWellsForOperator(operatorName: string): Promise<NdicWe
     return wellsCacheByOperator[operatorName];
   }
 
-  // Catalog reads use the same authenticated callable as WB-T.
-  const res = await httpsCallable(getFirebaseFunctions(), 'getWellData')({ type: 'wells', operator: operatorName });
-  const wells = res.data as NdicWell[];
+  const db = getFirestoreDb();
+  const snapshot = await getDocs(query(collection(db, 'wells'), where('operator', '==', operatorName), orderBy('well_name')));
+  const wells = snapshot.docs.map(d => d.data() as NdicWell);
   wellsCacheByOperator[operatorName] = wells;
   console.log(`[firestoreWells] Loaded ${wells.length} wells for ${operatorName}`);
   return wells;
@@ -173,8 +173,9 @@ let disposalsCache: NdicWell[] | null = null;
 export async function loadDisposals(): Promise<NdicWell[]> {
   if (disposalsCache) return disposalsCache;
 
-  const res = await httpsCallable(getFirebaseFunctions(), 'getWellData')({ type: 'disposals' });
-  disposalsCache = res.data as NdicWell[];
+  const db = getFirestoreDb();
+  const snapshot = await getDocs(query(collection(db, 'disposals'), orderBy('well_name')));
+  disposalsCache = snapshot.docs.map(d => d.data() as NdicWell);
   console.log(`[firestoreWells] Loaded ${disposalsCache.length} disposals`);
   return disposalsCache;
 }
