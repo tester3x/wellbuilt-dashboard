@@ -2,7 +2,8 @@
 // Uses the same `wellbuilt-sync` Firestore that WB Tickets populates via scripts/importWellData.ts
 // Collections: operators (ND ~103 + MT), wells (ND ~19K + MT ~13K), disposals (ND ~1K + MT)
 
-import { getFirestoreDb } from './firebase';
+import { getFirestoreDb, getFirebaseFunctions } from './firebase';
+import { httpsCallable } from 'firebase/functions';
 import {
   collection,
   getDocs,
@@ -13,6 +14,7 @@ import {
 } from 'firebase/firestore';
 
 export interface NdicWell {
+  kind?: 'WELL' | 'SWD' | 'LOC';
   well_name: string;
   operator: string;
   api_no: string;
@@ -58,14 +60,9 @@ export async function loadWellsForOperator(operatorName: string): Promise<NdicWe
     return wellsCacheByOperator[operatorName];
   }
 
-  const db = getFirestoreDb();
-  const q = query(
-    collection(db, 'wells'),
-    where('operator', '==', operatorName),
-    orderBy('well_name'),
-  );
-  const snapshot = await getDocs(q);
-  const wells = snapshot.docs.map(d => d.data() as NdicWell);
+  // Catalog reads use the same authenticated callable as WB-T.
+  const res = await httpsCallable(getFirebaseFunctions(), 'getWellData')({ type: 'wells', operator: operatorName });
+  const wells = res.data as NdicWell[];
   wellsCacheByOperator[operatorName] = wells;
   console.log(`[firestoreWells] Loaded ${wells.length} wells for ${operatorName}`);
   return wells;
@@ -176,10 +173,8 @@ let disposalsCache: NdicWell[] | null = null;
 export async function loadDisposals(): Promise<NdicWell[]> {
   if (disposalsCache) return disposalsCache;
 
-  const db = getFirestoreDb();
-  const q = query(collection(db, 'disposals'), orderBy('well_name'));
-  const snapshot = await getDocs(q);
-  disposalsCache = snapshot.docs.map(d => d.data() as NdicWell);
+  const res = await httpsCallable(getFirebaseFunctions(), 'getWellData')({ type: 'disposals' });
+  disposalsCache = res.data as NdicWell[];
   console.log(`[firestoreWells] Loaded ${disposalsCache.length} disposals`);
   return disposalsCache;
 }
@@ -221,4 +216,15 @@ export function searchOperators(
   });
 
   return matches.slice(0, maxResults);
+}
+
+export interface CustomCatalogLocation {
+  locationName: string;
+  company: string;
+  latitude?: number;
+  longitude?: number;
+}
+export async function loadCustomCatalogLocations(): Promise<CustomCatalogLocation[]> {
+  const res = await httpsCallable(getFirebaseFunctions(), 'getCustomLocations')({});
+  return res.data as CustomCatalogLocation[];
 }

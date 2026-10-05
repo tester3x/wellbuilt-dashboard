@@ -56,3 +56,13 @@ test('disposal sub-label is SWD; operator sub falls back to NDIC', () => {
   const d = combinedLocationResults('stateline', sources);
   assert.equal(d[0].sub, 'SWD');
 });
+
+test('unmonitored operator wells and custom locations retain type and metadata', () => {
+  const catalog = { wells: [], operatorWells: [{ well_name: 'Mauser Federal 6', operator: 'Slawson', county: 'McKenzie' }], disposalMatches: [], customLocations: [{ locationName: 'Mauser Yard', company: 'Slawson' }] };
+  const rows = combinedLocationResults('mauser', catalog);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].kind, 'WELL');
+  assert.equal(rows[0].sub, 'Slawson');
+  assert.equal(rows[0].county, 'McKenzie');
+  assert.equal(rows[1].kind, 'LOC');
+});

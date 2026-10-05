@@ -10,15 +10,18 @@ export interface CombinedLocation {
   label: string;
   sub: string;
   value: string;
+  kind?: 'WELL' | 'SWD' | 'LOC';
+  county?: string;
 }
 
 export interface CombinedSearchSources {
   /** Governed well pool rows (need ndicName/wellName + route). */
   wells: Array<{ ndicName?: string; wellName: string; route?: string }>;
   /** Full company operator well universe (well_name + operator). */
-  operatorWells: Array<{ well_name: string; operator?: string }>;
+  operatorWells: Array<{ well_name: string; operator?: string; county?: string }>;
   /** SWD/disposal directory search result rows (well_name). */
-  disposalMatches: Array<{ well_name: string }>;
+  disposalMatches: Array<{ well_name: string; operator?: string; county?: string }>;
+  customLocations?: Array<{ locationName: string; company: string }>;
 }
 
 export const COMBINED_SEARCH_LIMIT = 15;
@@ -30,7 +33,8 @@ export function hasExactLocationMatch(query: string, s: CombinedSearchSources): 
   return (
     s.wells.some((w) => (w.ndicName || w.wellName).toLowerCase() === q) ||
     s.operatorWells.some((w) => w.well_name.toLowerCase() === q) ||
-    s.disposalMatches.some((d) => d.well_name.toLowerCase() === q)
+    s.disposalMatches.some((d) => d.well_name.toLowerCase() === q) ||
+    (s.customLocations || []).some(c => c.locationName.toLowerCase() === q)
   );
 }
 
@@ -48,16 +52,20 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
     .map((w) => {
       const name = w.ndicName || w.wellName;
       seen.add(name.toLowerCase());
-      return { label: name, sub: w.route || '', value: name };
+      const catalog = s.operatorWells.find(o => o.well_name.toLowerCase() === name.toLowerCase());
+      return { label: name, sub: catalog?.operator || w.route || '', county: catalog?.county, kind: 'WELL', value: name };
     });
   const operatorMatches: CombinedLocation[] = s.operatorWells
     .filter((w) => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
     .map((w) => {
       seen.add(w.well_name.toLowerCase());
-      return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name };
+      return { label: w.well_name, sub: w.operator || 'NDIC', county: w.county, kind: 'WELL', value: w.well_name };
     });
   const disposalMatches: CombinedLocation[] = s.disposalMatches
     .filter((d) => !seen.has(d.well_name.toLowerCase()))
-    .map((d) => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-  return [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, COMBINED_SEARCH_LIMIT);
+    .map((d): CombinedLocation => ({ label: d.well_name, sub: d.operator || 'SWD', county: d.county, kind: 'SWD', value: d.well_name }));
+  const customMatches: CombinedLocation[] = (s.customLocations || [])
+    .filter(c => c.locationName.toLowerCase().includes(q) && !seen.has(c.locationName.toLowerCase()))
+    .map(c => ({ label: c.locationName, sub: c.company, kind: 'LOC', value: c.locationName }));
+  return [...wellMatches, ...operatorMatches, ...disposalMatches, ...customMatches].slice(0, COMBINED_SEARCH_LIMIT);
 }

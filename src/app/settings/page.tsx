@@ -33,7 +33,7 @@ import { JobTypeRnDCard } from '@/components/settings/JobTypeRnDCard';
 import { RolesCard } from '@/components/settings/RolesCard';
 
 export default function SettingsPage() {
-  const { user, loading: authLoading, userCompany, authResolved } = useAuth();
+  const { user, loading: authLoading, userCompany, authResolved, operatingCompanyId, selectOperatingCompany } = useAuth();
   const router = useRouter();
 
   const [company, setCompany] = useState<CompanyConfig | null>(null);
@@ -69,11 +69,9 @@ export default function SettingsPage() {
           // WB admin: load all companies, show picker
           const companies = await loadAllCompanies();
           setAllCompanies(companies);
-          // Default to first company if available
-          if (companies.length > 0 && !selectedCompanyId) {
-            setSelectedCompanyId(companies[0].id);
-            setCompany(companies[0]);
-          }
+          const selected = companies.find(c => c.id === operatingCompanyId);
+          setSelectedCompanyId(selected?.id || null);
+          setCompany(selected || null);
         } else if (user.companyId) {
           // Hauler admin: load their company
           const comp = await loadCompanyById(user.companyId);
@@ -93,10 +91,11 @@ export default function SettingsPage() {
     };
 
     load();
-  }, [user, authLoading, isWbAdmin]);
+  }, [user, authLoading, isWbAdmin, operatingCompanyId]);
 
   // Handle company picker change
   const handleCompanyChange = async (companyId: string) => {
+    selectOperatingCompany(companyId);
     setSelectedCompanyId(companyId);
     setDataLoading(true);
     try {
@@ -156,23 +155,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* WB Admin: Company Picker */}
-          {isWbAdmin && allCompanies.length > 0 && (
-            <div className="mt-4">
-              <label className="text-gray-400 text-xs block mb-1">Select Company</label>
-              <select
-                value={selectedCompanyId || ''}
-                onChange={e => handleCompanyChange(e.target.value)}
-                className="px-3 py-2 bg-gray-700 text-white rounded text-sm w-72"
-              >
-                {allCompanies.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.name || c.id}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+
         </div>
 
         {/* Loading / Error / Content */}
