@@ -73,8 +73,14 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
 /** Match and ranking parity with WB-T: ignore location noise words; cap after ranking. */
 export function locationQueryMatches(query: string, text: string): boolean {
   const noise = new Set(['pad', 'well', 'site', 'loc', 'location', 'the', 'at', 'on', 'in']);
-  const words = query.toLowerCase().split(/\s+/).filter(w => w && !noise.has(w));
-  return words.length > 0 && words.every(w => text.toLowerCase().includes(w));
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const target = text.toLowerCase();
+  let matchedAny = false;
+  for (const word of words) {
+    if (target.includes(word)) matchedAny = true;
+    else if (!noise.has(word)) return false;
+  }
+  return matchedAny;
 }
 export function rankLocationRows<T>(rows: T[], query: string, getName: (row: T) => string, limit: number): T[] {
   const q = query.trim().toLowerCase();
