@@ -410,7 +410,7 @@ function DispatchPageInner() {
   const [shiftResolvedCompany, setShiftResolvedCompany] = useState<string | null>(null);
   const [shiftLoading, setShiftLoading] = useState(true);
   const [shiftError, setShiftError] = useState(false);
-  const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; dispatches?: string }>({});
+  const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; operatorCatalog?: string; dispatches?: string }>({});
   // True when the authoritative live-status read failed for the whole queue.
   // A failed read is a QUEUE-LEVEL UNAVAILABLE state — never 80 individual
   // Needs-Data classifications.
@@ -761,33 +761,33 @@ function DispatchPageInner() {
   }, []);
 
   // Load dynamic service types from job packages
-  // WB admin (no companyId): loads ALL packages so dispatch has full service type list
+  // WB admins resolve the operating company from the server-authorized catalog
   // Hauler admin: loads only their company's active packages
   useEffect(() => {
     if (!user) return;
+    let cancelled = false;
+    setAllOperatorWells([]);
     const loadPackageJobTypes = async () => {
       try {
-        // Use user's company, or for WB admin derive from first driver's company
-        let companyId: string | undefined = user.companyId;
-        if (!companyId && drivers.length > 0) {
-          companyId = drivers.find(d => d.companyId)?.companyId;
-        }
+        // Driver ordering is never authority for the operating company.
+        const companyId = user.companyId || (await adminGetDashboardCatalog()).companyId;
+        if (cancelled) return;
+        if (!companyId) throw new Error('Dispatch requires an authorized operating company');
         let activeFilter: string[] | null = null;
         let companyConfig: any = null;
 
         if (companyId) {
           companyConfig = await loadCompanyById(companyId);
-          if (!companyConfig?.activePackages?.length) return; // no packages — keep fallback
-          activeFilter = companyConfig.activePackages;
+          activeFilter = companyConfig?.activePackages || [];
 
-          // Load all operator wells for SW well search (not just route wells)
-          if (companyConfig.assignedOperators?.length && allOperatorWells.length === 0) {
-            Promise.all(
-              companyConfig.assignedOperators.map((op: string) => loadWellsForOperator(op))
-            ).then(results => {
-              setAllOperatorWells(results.flat());
-            }).catch(console.warn);
-          }
+          // The full operator catalog is separate from WB-M monitored route wells.
+          // Replace it on scope changes; never retain another company's catalog.
+          const results = await Promise.all(
+            (companyConfig?.assignedOperators || []).map((op: string) => loadWellsForOperator(op))
+          );
+          if (cancelled) return;
+          setAllOperatorWells(results.flat());
+          setReadErrors(prev => ({ ...prev, operatorCatalog: undefined }));
         }
 
         const firestore = getFirestoreDb();
@@ -835,6 +835,7 @@ function DispatchPageInner() {
             }
           });
         }
+        if (cancelled) return;
         setCustomJobTypesList(collectedCustomTypes);
 
         if (allJobTypes.length > 0) {
@@ -844,12 +845,15 @@ function DispatchPageInner() {
           setJobTypeToPackageId(pkgMap);
         }
       } catch (err) {
+        if (cancelled) return;
+        setReadErrors(prev => ({ ...prev, operatorCatalog: classifiedReadFailure('company operator catalog', err) }));
         console.error('Failed to load job package types:', err);
         // Keep fallback on error
       }
     };
     loadPackageJobTypes();
-  }, [user, drivers.length]);
+    return () => { cancelled = true; };
+  }, [user]);
 
   // Subscribe to active + completed dispatches in real-time.
   // Tenant containment (7/9): scoped users see only their company's
@@ -2477,11 +2481,12 @@ function DispatchPageInner() {
               {message}
             </div>
           )}
-          {(readErrors.dispatches || readErrors.drivers || readErrors.wells) && (
+          {(readErrors.dispatches || readErrors.drivers || readErrors.wells || readErrors.operatorCatalog) && (
             <div className="p-2.5 rounded text-sm mb-3 bg-red-900/50 text-red-200 space-y-1">
               {readErrors.dispatches && <div>{readErrors.dispatches}</div>}
               {readErrors.drivers && <div>{readErrors.drivers}</div>}
               {readErrors.wells && <div>{readErrors.wells}</div>}
+              {readErrors.operatorCatalog && <div>{readErrors.operatorCatalog}</div>}
             </div>
           )}
         </div>
