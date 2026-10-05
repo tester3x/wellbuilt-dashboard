@@ -11,4 +11,7 @@ Dashboard branch: `release/dashboard-reassignment-20261005`.
 
 WB-T branch `codex/wbt-current-20261004`, pushed checkpoint `c1099d1`: pickup search handler and autocomplete display gate both changed from three to two characters, matching drop-off. Source-only; no WB-T build or installation for this change.
 
-Remaining work: the header company selection is shared with Settings and Dispatch catalog loading. It has not yet been connected to every other Dashboard tab or every Dispatch operational data subscription/write. Do not describe it as complete suite-wide company scoping. Company SWD directory aliases/blacklists should also be reconciled with the job catalog for full WB-T parity.
+Remaining work: the header company selection is shared with Settings and Dispatch catalog loading. It has not yet been connected to every other Dashboard tab or every Dispatch operational data subscription/write. Do not describe it as complete suite-wide company scoping. Company SWD aliases, blacklist exclusions, custom SWDs, WB-T badge colors/PLACE labels, learned-place metadata, and natural ranking are now reconciled.
+
+Parity release: Hosting source 67e70e2a passed mandatory preflight and deployed; 20 Dispatch assets byte-matched at 2026-10-05T19:08:49Z. Scoped catalog Function updated from 25a9cbae. Seven server tests, eight search tests, and TypeScript validation passed. Live two-character pickup results and naturally ranked Mauser drop-off results verified.
+
