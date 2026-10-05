@@ -2,7 +2,7 @@
   "capturedAt": "2026-09-12",
   "project": "wellbuilt-sync",
   "source": "firebase functions:list",
-  "count": 177,
+  "count": 178,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -74,6 +74,7 @@
     "getCompanySwdDirectory",
     "getCustomLocations",
     "getDashboardReadModelForDay",
+    "getDispatchLocationCatalog",
     "getDriverOutgoingStatus",
     "getDriverPhotoRequirements",
     "getDriverReferenceBundle",
@@ -181,5 +182,11 @@
     "watchdogStrandedPackets",
     "weeklyDieselPriceFetch",
     "writeDiagnosticLog"
-  ]
+  ],
+  "verifiedAdditions": {
+    "getDispatchLocationCatalog": {
+      "verifiedAt": "2026-10-05",
+      "source": "Successful scoped Firebase deployment from 2477e56e"
+    }
+  }
 }

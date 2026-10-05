@@ -764,16 +764,17 @@ function DispatchPageInner() {
     loadOperators().then(setAllOperators).catch(console.error);
   }, [user, loading]);
 
+  const catalogRouteWells = useMemo(() => operatingCompanyId === 'liquid-gold' ? wells : wells.filter(w => !!operatingCompanyId && w.companyId === operatingCompanyId), [wells, operatingCompanyId]);
   const locationCatalog = useMemo(() => {
     const rows: NdicWell[] = [
       ...allOperatorWells.map(w => ({ ...w, kind: 'WELL' as const })),
       ...allDisposals.map(w => ({ ...w, kind: 'SWD' as const })),
       ...customCatalogLocations.map(c => ({ well_name: c.locationName, operator: c.company, api_no: '', latitude: c.latitude, longitude: c.longitude, kind: 'LOC' as const })),
-      ...wells.map(w => ({ well_name: w.ndicName || w.wellName, operator: w.route || '', api_no: w.ndicApiNo || '', kind: 'WELL' as const })),
+      ...catalogRouteWells.map(w => ({ well_name: w.ndicName || w.wellName, operator: w.route || '', api_no: w.ndicApiNo || '', kind: 'WELL' as const })),
     ];
     const seen = new Set<string>();
     return rows.filter(w => { const k = w.well_name.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-  }, [allOperatorWells, allDisposals, customCatalogLocations, wells]);
+  }, [allOperatorWells, allDisposals, customCatalogLocations, catalogRouteWells]);
   const locationResults = (q: string) => searchDisposals(q, locationCatalog);
 
   // Load dynamic service types from job packages
@@ -2739,7 +2740,7 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swWellName}
                             onValueChange={setSwWellName}
-                            items={combinedLocationResults(swWellName, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swWellName.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations })}
+                            items={combinedLocationResults(swWellName, { wells: catalogRouteWells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swWellName.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations })}
                             onSelect={(item) => setSwWellName(item.value)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => <LocationSearchResult item={item} />}
@@ -2756,7 +2757,7 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swDropoff}
                             onValueChange={setSwDropoff}
-                            items={combinedLocationResults(swDropoff, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations })}
+                            items={combinedLocationResults(swDropoff, { wells: catalogRouteWells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations })}
                             onSelect={(item) => setSwDropoff(item.value)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => <LocationSearchResult item={item} />}
