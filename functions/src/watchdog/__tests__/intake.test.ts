@@ -58,3 +58,10 @@ test('manual aggregate containment blocks an individual load even after ordinary
  expect(answer.result.status).toBe('review');expect(answer.result.aggregatePacketIds).toEqual(['combined']);
  expect([...database.keys()].some(k=>k.startsWith('packets/incoming/'))).toBe(false);
 });
+test('queued observations include shadow diagnostics without changing canonical measurement fields',async()=>{
+ const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());
+ const packet=database.get('packets/incoming/'+answer.result.packetId);
+ expect(packet.watchdogProvenance.flowDiagnostic.mode).toBe('shadow');
+ expect(packet.watchdogProvenance.flowDiagnostic.minimumRecoveryInches).toBe(6);
+ expect(packet.flowRateDays).toBeUndefined();expect(packet.bottomLevelFeet).toBe(11.125);
+});
