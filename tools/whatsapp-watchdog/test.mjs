@@ -39,7 +39,7 @@ test('group barrel fallback is configurable and written barrels take precedence'
 
 test('fallback changes release only missing-barrel holds and preserve explicit amounts and completed receipts',async()=>{
  const dir=mkdtempSync(path.join(os.tmpdir(),'wb-fallback-'));try{
-  const q=new Queue(dir),chat=header(Date.now(),'Driver','Gabriel 7\n12 9\n5 9. 158p');
+  const q=new Queue(dir),chat=header('2026-10-05T18:58:41.000Z','Driver','Gabriel 7\n12 9\n5 9. 158p');
   q.ingest({id:'missing',channel:'gab',chat,options:{wellNames:['Gabriel 7']}});q.ingest({id:'written',channel:'gab',chat:chat+'\n185 bbl',options:{wellNames:['Gabriel 7']}});
   const rows=Object.values(q.data.messages).map(m=>m.rows[0]);q.data.deliveries={[rows[0].id]:{status:'review',issues:['Missing barrels']},[rows[1].id]:{status:'complete',identity:'done'}};
   const t=new Transport(q);t.wells=[{wellName:'Gabriel 7',channels:['gab']}];t.channelOptions={gab:{defaultBbls:140}};t.lastLifecycleCheck=Date.now();t.secret='synthetic';t.config={enabled:true,enabledAt:0};let sent;
