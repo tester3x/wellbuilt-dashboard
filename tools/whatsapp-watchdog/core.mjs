@@ -13,14 +13,14 @@ export function header(timestamp,author,body){
 export class Queue{
  constructor(directory){this.directory=directory;mkdirSync(directory,{recursive:true});this.file=path.join(directory,'queue.json');try{this.data=JSON.parse(readFileSync(this.file,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;this.data={version:1,messages:{}};}if(this.data.version!==1)throw Error('Unsupported queue version');}
  save(){const tmp=this.file+'.tmp';writeFileSync(tmp,JSON.stringify(this.data),{mode:0o600});renameSync(tmp,this.file);}
- ingest({id,channel,chat,options={},deleted=false}){
+ ingest({id,channel,chat,options={},deleted=false,senderId}){
  if(!id||!channel||typeof chat!=='string'||chat.length>2000000)throw Error('Invalid message');
- const key=hash(channel+'\0'+id),digest=hash(chat+'\0'+deleted+'\0'+JSON.stringify(options));const previous=this.data.messages[key];
+ const key=hash(channel+'\0'+id),digest=hash(chat+'\0'+deleted+'\0'+JSON.stringify(options)+'\0'+(senderId||''));const previous=this.data.messages[key];
  if(previous?.digest===digest)return {duplicate:true};
  const rows=deleted?[]:parsePullChat(chat,options).map(row=>({...row,id:key+':'+row.id}));
  const notices=deleted?[]:findPullChatNotices(chat);
  const post=splitChat(chat)[0];let postedAt=rows[0]?.postedAt||'';if(!postedAt&&post)try{postedAt=chatTimestamp(post.date,post.time);}catch{}
- this.data.messages[key]={key,id,channel,chat,digest,rows,notices,deleted,edited:!!previous&&(previous.edited||previous.body!==(post?.body||chat)||previous.postedAt!==postedAt),postedAt,author:post?.author||'',body:post?.body||chat,updatedAt:new Date().toISOString()};this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
+ this.data.messages[key]={key,id,channel,chat,digest,senderId:senderId||previous?.senderId||null,rows,notices,deleted,edited:!!previous&&(previous.edited||previous.body!==(post?.body||chat)||previous.postedAt!==postedAt),postedAt,author:post?.author||'',body:post?.body||chat,updatedAt:new Date().toISOString()};this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
  }
  reparseChannels(channelOptions){
  let changed=false;

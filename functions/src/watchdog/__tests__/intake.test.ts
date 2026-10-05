@@ -43,3 +43,10 @@ test('stop archives only the selected well, queues an idempotent authoritative c
  expect((await call(stopWatchdogWellV2,'stopWatchdogWellV2',{wellName:'Other',reason:body.reason})).code).toBe(400);
 });
 test('stop uses explicit well allowlist for legacy configs without company, but rejects another company',async()=>{database.set('well_config/Kahuna 5',{tanks:3});expect((await call(stopWatchdogWellV2,'stopWatchdogWellV2',{wellName:'Kahuna 5',reason:'Hauling ended'})).code).toBe(200);database.set('well_config/Kahuna 5',{companyId:'another-company'});expect((await call(stopWatchdogWellV2,'stopWatchdogWellV2',{wellName:'Kahuna 5',reason:'Hauling ended'})).code).toBe(400);});
+
+test('sender binding stamps canonical driver ownership and preserves source provenance',async()=>{
+ const {watchdogSenderKey}=require('../senderOwnership');const senderId='123456789@lid';const policy=documents.get('watchdog_v2_config/laptop');policy.senderBindings={[watchdogSenderKey(senderId)]:{enabled:true,companyId:'liquid-gold',driverId:'driver-test-123'}};
+ database.set('drivers/profiles/driver-test-123',{active:true,companyId:'liquid-gold',displayName:'Test Driver',assignedWells:['Kahuna 5']});
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),senderId});expect(first.code).toBe(200);const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.driverId).toBe('driver-test-123');expect(packet.driverName).toBe('Test Driver');expect(packet.source).toBe('whatsapp_watchdog');expect(packet.watchdogProvenance.ownershipSource).toBe('verified_sender_binding');
+ expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),driverId:'forged'})).result.error).toBe('invalid_observation');
+});
