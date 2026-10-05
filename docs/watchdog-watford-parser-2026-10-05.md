@@ -6,4 +6,5 @@ Marcial Lebaron’s active Liquid Gold profile has Watford and Dunn County assig
 
 Parser fix source 78d7d981 accepts whitespace after foot markers, including curly feet/inch quotes. Exact Kahuna 1 observation parses as top 11 ft 11 in, reported bottom 4 ft 11 in, 140 written barrels, timestamp 2026-10-05T21:17:08Z, zero parser issues. Invalid 12-inch and trailing-junk inputs remain rejected. 36 parser/intake/ownership tests and Functions build pass. All 12 local watcher tests pass after time-dependent fixture was pinned (03aadcf2).
 
-Scoped intake deployment/restart/live delivery verification in progress. Do not claim the held Watford observation has completed until receipt and canonical owner are checked.
+Scoped intake Function deployed from 78d7d981; local watcher restarted, linked session reconnected and watching confirmed. Live Kahuna 1 post no longer has Unreadable levels. It is correctly held for a possible existing pull: processed WB-M history contains a Marcial-owned pull with the same top and barrels approximately 21 minutes earlier. Duplicate review remains unresolved intentionally; no extra pull created. Screenshot retained privately as verification evidence.
+
