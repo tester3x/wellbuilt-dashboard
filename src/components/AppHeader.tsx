@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
+import { type CompanyConfig } from '@/lib/companySettings';
 import { usePathname, useRouter } from 'next/navigation';
 import { ref, onValue } from 'firebase/database';
 import { useAuth } from '@/contexts/AuthContext';
@@ -24,7 +24,7 @@ export function AppHeader() {
   useEffect(() => {
     if (!user || user.companyId) return;
     let cancelled = false;
-    loadAllCompanies().then(rows => { if (!cancelled) setCompanies(rows); }).catch(console.error);
+    import('@/lib/companySettings').then(m => m.loadAllCompanies()).then(rows => { if (!cancelled) setCompanies(rows); }).catch(console.error);
     return () => { cancelled = true; };
   }, [user]);
   const [chatUnread, setChatUnread] = useState(0);

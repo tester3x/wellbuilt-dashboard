@@ -10,9 +10,9 @@ test('ALL Job Builder autocomplete fields use the ONE shared BuilderAutocomplete
   // Six create-form fields: PW well, PW SWD, SW well, SW drop-off, project operator,
   // project well — all routed through the shared component.
   const count = (page.match(/<BuilderAutocomplete/g) || []).length;
-  assert.equal(count, 6, 'exactly the six Builder autocomplete fields use the shared component');
+  assert.equal(count, 7, 'the six create fields and edit pickup use the shared component');
   // The aria-labels prove each specific field is covered.
-  for (const label of ['Search wells', 'Search SWD disposal', 'Well / location', 'Drop-off (optional)', 'Operator / customer', 'Search wells to add to the project']) {
+  for (const label of ['Search wells', 'Search SWD disposal', 'Well / location', 'Drop-off (optional)', 'Operator / customer', 'Search wells to add to the project', 'Edit pickup location']) {
     assert.ok(page.includes(`ariaLabel="${label}"`), `field present: ${label}`);
   }
   // No bespoke inline suggestion list survives in the Builder create forms.
