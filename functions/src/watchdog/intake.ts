@@ -100,6 +100,16 @@ export const stopWatchdogWellV2=https.onRequest(options,async(req,res)=>{
  const packet={packetId:archive.packetId,idempotencyKey:archive.packetId,requestType:'pull',wellName,tankLevelFeet:0,bblsTaken:0,dateTimeUTC:archive.at,timezone:'America/Chicago',companyId:'liquid-gold',wellDown:true,wellDownIsAuthoritative:true,source:'whatsapp_watchdog_stop',watchdogProvenance:{principalId:'laptop-watchdog-v2',reason:archive.reason,lifecycle:'archive'}};
  const done=await db.ref('packets/processed/'+archive.packetId).once('value');if(!done.exists()){const write=await db.ref('packets/incoming/'+archive.packetId).transaction(current=>current||packet);if(!write.committed)throw Error('stop_queue_failed');}
  if(!archive.confirmedAt){await Promise.all([db.ref('wells/'+wellName+'/status/isDown').set(packet.wellDown),db.ref('well_config/'+wellName+'/isDown').set(packet.wellDown)]);await admin.firestore().runTransaction(async tx=>{const policy=(await tx.get(ref)).data();const existing=policy?.archivedWells?.[wellName];if(existing?.packetId!==archive.packetId)throw Error('archive_changed');tx.set(ref,{...policy,archivedWells:{...policy?.archivedWells,[wellName]:{...existing,confirmedAt:new Date().toISOString()}}});});}
+ // Publish the same outgoing snapshot WB M subscribes to; status flags alone do not refresh its cache.
+ const latestPolicy=(await ref.get()).data();const saved=latestPolicy?.archivedWells?.[wellName];
+ if(!saved?.responsePublishedAt&&(await db.ref('wells/'+wellName+'/status/isDown').once('value')).val()===true){
+  const outgoing=(await db.ref('packets/outgoing').orderByChild('wellName').equalTo(wellName).once('value')).val()||{};
+  const entries=Object.entries(outgoing) as [string,any][];
+  if(!entries.length)throw Error('stop_response_missing');
+  const publishedAt=new Date().toISOString();
+  for(const [id,previous] of entries){await db.ref('packets/outgoing/'+id).set({...previous,wellDown:true,currentLevel:'Down',timeTillPull:'Down',nextPullTime:'Down',nextPullTimeUTC:'',timestamp:publishedAt,timestampUTC:publishedAt,watchdogStopPacketId:archive.packetId});}
+  await admin.firestore().runTransaction(async tx=>{const current=(await tx.get(ref)).data();const item=current?.archivedWells?.[wellName];if(item?.packetId!==archive.packetId)throw Error('archive_changed');tx.set(ref,{...current,archivedWells:{...current?.archivedWells,[wellName]:{...item,responsePublishedAt:publishedAt}}});});
+ }
  res.json({ok:true,state:'stopping',archive});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });
