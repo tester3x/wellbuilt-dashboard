@@ -755,12 +755,13 @@ function DispatchPageInner() {
     };
   }, [user, loading]);
 
-  // Load drivers + disposals
+  // Catalog callables must wait for the authenticated user.
   useEffect(() => {
+    if (!user || loading) return;
     loadDriversData();
     loadDisposals().then(setAllDisposals).catch(() => {});
     loadOperators().then(setAllOperators).catch(console.error);
-  }, []);
+  }, [user, loading]);
 
   const locationCatalog = useMemo(() => {
     const rows: NdicWell[] = [

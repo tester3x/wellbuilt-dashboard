@@ -1,4 +1,5 @@
 'use client';
+import { CatalogSearchResult } from '@/components/LocationSearchResult';
 
 // Add Pull Modal — shared component for recording a load from the dashboard.
 // Used on: WB Mobile Well Status page, Well History page, Dispatch page.
@@ -559,8 +560,7 @@ export function AddPullModal({
                           onClick={() => { setHauledTo(d.well_name); setShowHauledToDropdown(false); }}
                           className="wb-option-row px-3 py-2 text-sm text-white"
                         >
-                          <span>{d.well_name}</span>
-                          {d.operator && <span className="wb-option-sub text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                          <CatalogSearchResult row={{ ...d, kind: d.kind || 'SWD' }} />
                         </button>
                       ))}
                     </div>

@@ -1,4 +1,5 @@
 'use client';
+import { CatalogSearchResult } from '@/components/LocationSearchResult';
 
 // SWD Directory Card — Manage disposal site names + blacklist for the company.
 // Three capabilities:
@@ -333,7 +334,7 @@ export function SWDDirectoryCard({ company, onSave, canEdit }: Props) {
                               }}
                               className="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-700 last:border-0"
                             >
-                              {d.well_name} <span className="wb-option-sub text-gray-500">{d.operator}</span>
+                              <CatalogSearchResult row={{ ...d, kind: 'SWD' }} />
                             </button>
                           ))}
                         </div>
