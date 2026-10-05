@@ -79,7 +79,7 @@ export function chatTimestamp(date: string, time: string, zone = 'America/Chicag
 }
 export function parseFeet(text: string): number | null {
   const value = text.trim().replace(/[’′]/g, "'").replace(/[”″]/g, '"');
-  const inch = /^(\d{1,2})\s*(?:'|ft\s*|[- ]\s*)(\d{1,2})?\s*(?:"|in)?$/i.exec(value);
+  const inch = /^(\d{1,2})\s*(?:'|ft\s*|[- ]\s*)\s*(\d{1,2})?\s*(?:"|in)?$/i.exec(value);
   if (inch) {
     const inches = Number(inch[2] || 0);
     return inches < 12 ? Number(inch[1]) + inches / 12 : null;

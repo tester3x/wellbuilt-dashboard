@@ -67,3 +67,12 @@ test('bare compact time attached to bottom resolves against post without consumi
  const [spaced]=parsePullChat('[10/4/2026, 4:21:08 PM] Driver: Kahuna 5\n12 3\n11 4\n185 bbls');expect(spaced.tankLevelFeet).toBe(12.25);expect(spaced.bottomLevelFeet).toBeCloseTo(11+4/12);expect(spaced.dateTimeUTC).toBe(spaced.postedAt);
  const [far]=parsePullChat('[10/4/2026, 10:21:08 PM] Driver: Kahuna 5\n12\n11.    420\n185 bbls');expect(far.issues).toContain('Pull time lacks AM/PM; confirm');
 });
+
+test.each(['11’ 11”','11\' 11"','11′ 11″','11 ft 11 in'])('spaced feet and inch marks parse without confusing decimal feet: %s',value=>{
+ expect(parseFeet(value)).toBeCloseTo(11+11/12);
+});
+test('Watford post with spaced curly quotes preserves top bottom written barrels and posting time',()=>{
+ const [row]=parsePullChat('[10/5/2026, 4:17:08 PM] Driver: Kahuna 1\n11’ 11”\n4’ 11”\n140 bbl',{wellNames:['Kahuna 1'],defaultBbls:165});
+ expect(row.wellName).toBe('Kahuna 1');expect(row.tankLevelFeet).toBeCloseTo(11+11/12);expect(row.bottomLevelFeet).toBeCloseTo(4+11/12);expect(row.bblsTaken).toBe(140);expect(row.dateTimeUTC).toBe('2026-10-05T21:17:08.000Z');expect(row.issues).toEqual([]);
+ expect(parseFeet('11’ 12”')).toBeNull();expect(parseFeet('11’ 11” junk')).toBeNull();
+});
