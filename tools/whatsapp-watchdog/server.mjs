@@ -25,6 +25,7 @@ async function loadGroups(){if(loadingGroups||!client||!['Connected','Syncing Wh
 const groupRetry=setInterval(()=>{if(['Connected','Syncing WhatsApp'].includes(state)&&!chats.length)void loadGroups().catch(e=>{error=e.message;});},10000);groupRetry.unref();
 let polling=false,lastReceiverCheck='',receiverMode='Starting',receiverGroups=[];
 async function pollReceiver(){
+ transport.channelOptions=Object.fromEntries(channels.map(c=>[c.id,c.options]));
  if(polling||!client||!['Syncing WhatsApp','Connected'].includes(state))return;
  polling=true;
  try{
@@ -45,7 +46,7 @@ async function pollReceiver(){
   return {diagnostics,groups:groups.map(c=>({id:c.id._serialized,name:c.name||c.formattedTitle||c.id._serialized})),messages};
  },paused?[]:channels.map(c=>c.id));
  chats=result.groups;receiverGroups=result.diagnostics;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
- if(!paused)for(const m of newestReceiverMessages(result.messages)){const selected=channels.find(c=>c.id===m.channel);if(selected)queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:selected.options,deleted:m.deleted});}
+ if(!paused)for(const m of newestReceiverMessages(result.messages)){const selected=channels.find(c=>c.id===m.channel);if(selected)queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:{...selected.options,wellNames:(transport.wells||[]).filter(w=>w.channels?.includes(selected.id)).map(w=>w.wellName)},deleted:m.deleted});}
  }catch(e){error='Receiver not ready: '+String(e?.message||e);if(state==='Connected')state='Syncing WhatsApp';}
  finally{polling=false;}
 }
@@ -86,7 +87,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/stop'){paused=true;state='Stopped';if(client){const old=client;client=null;await old.destroy();}return respond(res,200,{ok:true});}
  if(url.pathname==='/pause'){paused=true;return respond(res,200,{ok:true});}
  if(url.pathname==='/resume'){if(!client||state!=='Connected')throw Error('Connect WhatsApp first');if(!channels.length)throw Error('Choose channels first');paused=false;await pollReceiver();if(paused)throw Error(error||'Receiver not ready');return respond(res,200,{ok:true});}
- if(url.pathname==='/channels'){const value=JSON.parse(bytes);if(!Array.isArray(value)||value.length>20)throw Error('Invalid channels');channels=value.map(c=>{if(!chats.some(chat=>chat.id===c.id))throw Error('Choose an available group');return {id:c.id,name:chats.find(chat=>chat.id===c.id).name,options:{defaultWell:typeof c.defaultWell==='string'?c.defaultWell:'',defaultBbls:c.defaultBbls===165?165:undefined}};});writeFileSync(configFile,JSON.stringify(channels),{mode:0o600});return respond(res,200,{ok:true});}
+ if(url.pathname==='/channels'){const value=JSON.parse(bytes);if(!Array.isArray(value)||value.length>20)throw Error('Invalid channels');channels=value.map(c=>{if(!chats.some(chat=>chat.id===c.id))throw Error('Choose an available group');return {id:c.id,name:chats.find(chat=>chat.id===c.id).name,options:{defaultWell:typeof c.defaultWell==='string'?c.defaultWell:'',defaultBbls:c.defaultBbls===undefined?undefined:(Number.isFinite(c.defaultBbls)&&c.defaultBbls>0&&c.defaultBbls<=1000?c.defaultBbls:(()=>{throw Error('Missing barrels fallback must be greater than 0 and at most 1000');})())}};});writeFileSync(configFile,JSON.stringify(channels),{mode:0o600});return respond(res,200,{ok:true});}
  if(url.pathname==='/replay'){let text;if(bytes[0]===80&&bytes[1]===75){let total=0,count=0;const entries=unzipSync(bytes,{filter:f=>{count++;total+=f.originalSize;if(count>1000||total>2000000)throw Error('Export exceeds 2 MB expanded size');return /\.txt$/i.test(f.name);}});const values=Object.values(entries);if(values.length!==1)throw Error('ZIP needs exactly one TXT chat');text=strFromU8(values[0]);}else text=bytes.toString('utf8');if(text.length>2000000)throw Error('Chat exceeds 2 MB');const channel=url.searchParams.get('channel')||'Sample';const options={defaultWell:url.searchParams.get('well')||'',defaultBbls:url.searchParams.get('default165')==='true'?165:undefined};let added=0,duplicates=0;for(const m of splitChat(text)){const chat=`[${m.date}, ${m.time}] ${m.author}: ${m.body}`;const result=queue.ingest({channel,id:'export:'+hash(chat),chat,options});result.duplicate?duplicates++:added++;}return respond(res,200,{added,duplicates});}
  return respond(res,404,{error:'Not found'});
  }catch(e){respond(res,400,{error:e.message});}});

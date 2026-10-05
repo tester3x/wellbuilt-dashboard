@@ -23,11 +23,13 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  try{
  await authenticate(req,'ingestWatchdogPullV2');
  const body=req.body as JsonRecord;
- if(!body||Object.keys(body).some(k=>!['chatId','messageId','chat','rowIndex','review'].includes(k))||typeof body.chatId!=='string'||typeof body.messageId!=='string'||typeof body.chat!=='string'||body.chat.length>6000||!Number.isInteger(body.rowIndex)||body.rowIndex<0||body.rowIndex>10)throw Error('invalid_observation');
+ if(!body||Object.keys(body).some(k=>!['chatId','messageId','chat','rowIndex','review','defaultBbls'].includes(k))||typeof body.chatId!=='string'||typeof body.messageId!=='string'||typeof body.chat!=='string'||body.chat.length>6000||!Number.isInteger(body.rowIndex)||body.rowIndex<0||body.rowIndex>10)throw Error('invalid_observation');
  const policy=(await admin.firestore().doc('watchdog_v2_config/laptop').get()).data();
  if(!policy?.enabled)throw Error('transport_disabled');
  const channel=policy.channels?.[body.chatId];if(!channel)throw Error('channel_not_allowed');
- const rows=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',defaultBbls:channel.defaultBbls===165?165:undefined});
+ const fallback=Object.prototype.hasOwnProperty.call(body,'defaultBbls')?body.defaultBbls:channel.defaultBbls;
+ if(fallback!=null&&fallback!==0&&(!Number.isFinite(fallback)||fallback<=0||fallback>1000))throw Error('invalid_barrel_fallback');
+ const rows=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined});
  const row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
  const originalTime=row.dateTimeUTC;
  const review=body.review;
@@ -36,7 +38,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
    row.dateTimeUTC=review.dateTimeUTC;
  }
 
- if(Date.parse(row.postedAt)<policy.enabledAt||Date.parse(row.dateTimeUTC)<policy.enabledAt) {res.json({ok:true,status:'before_activation'});return;}
+ if(Date.parse(row.postedAt)<Math.max(policy.enabledAt,channel.enabledAt||0)||Date.parse(row.dateTimeUTC)<Math.max(policy.enabledAt,channel.enabledAt||0)) {res.json({ok:true,status:'before_activation'});return;}
  if(findPullChatNotices(body.chat).length||row.issues.length) {res.json({ok:true,status:'review',issues:row.issues.length?row.issues:['Tank setup needs review']});return;}
  const db=admin.database();const configs=(await db.ref('well_config').once('value')).val()||{};
  const mapped=reviewPulls([row],configs,{}, {},new Set())[0];
@@ -48,7 +50,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  let estimate: ReturnType<typeof barrelEstimate> = null;
  let barrelSource: 'written' | 'default' = 'written';
  if(/^Gunslinger (3|5)$/.test(mapped.wellName)) {
-   const noDefault=parsePullChat(body.chat,{defaultWell:channel.defaultWell||''})[body.rowIndex];
+   const noDefault=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',wellNames:channel.wells||[]})[body.rowIndex];
    barrelSource=noDefault?.bblsTaken == null ? 'default' : 'written';
    const status=(await db.ref('wells/'+mapped.wellName+'/status').once('value')).val();
    estimate=barrelEstimate({top:row.tankLevelFeet,bottom:row.bottomLevelFeet,bank:checked.bank,rateMinutesPerFoot:Number(status?.calculated?.flowRateMinutes),isDown:status?.isDown!==false,rateMeasuredAt:status?.lastPull?.dateTimeUTC||'',measuredAt:row.dateTimeUTC});

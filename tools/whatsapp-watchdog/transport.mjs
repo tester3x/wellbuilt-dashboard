@@ -5,7 +5,7 @@ import path from 'node:path';
 const origin='https://us-central1-wellbuilt-sync.cloudfunctions.net/';
 export function signedRequest(endpoint,body,secret){const raw=JSON.stringify(body),timestamp=String(Date.now()),nonce=randomBytes(16).toString('hex');const digest=createHash('sha256').update(raw).digest('hex');return {method:'POST',headers:{'Content-Type':'application/json','x-watchdog-key-id':'V1','x-watchdog-timestamp':timestamp,'x-watchdog-nonce':nonce,'x-watchdog-signature':createHmac('sha256',secret).update(`v1:${endpoint}:POST:${timestamp}:${nonce}:${digest}`).digest('hex')},body:raw,signal:AbortSignal.timeout(20000)};}
 export class Transport{
- constructor(queue){this.queue=queue;this.busy=false;this.secret=null;this.status='Not configured';}
+ constructor(queue){this.queue=queue;this.channelOptions={};this.busy=false;this.secret=null;this.status='Not configured';}
  configure(){const file=path.join(this.queue.directory,'transport.json');try{this.config=JSON.parse(readFileSync(file,'utf8'));if(!this.config.enabled){this.status='Disabled';return;}const protectedFile=path.join(this.queue.directory,'hmac-key.dpapi');const script="$s=(Get-Content -LiteralPath $env:WBC_KEY_FILE -Raw).Trim() | ConvertTo-SecureString; $p=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($s);try{[Console]::Write([Runtime.InteropServices.Marshal]::PtrToStringBSTR($p))}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($p)}";this.secret=execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',windowsHide:true,env:{...process.env,PSModulePath:process.env.SystemRoot+'\\System32\\WindowsPowerShell\\v1.0\\Modules',WBC_KEY_FILE:protectedFile},stdio:['ignore','pipe','pipe']});if(this.secret.length<16)throw Error('Credential unavailable');this.status='Ready';}catch{this.status='Not configured';}}
  async request(endpoint,body){const response=await fetch(origin+endpoint,signedRequest(endpoint,body,this.secret));const result=await response.json();if(!response.ok||!result.ok)throw Error(result.error||'Intake request failed');return result;}
  async lifecycle(){const result=await this.request('getWatchdogWellLifecycleV2',{});this.wells=result.wells;return result;}
@@ -19,7 +19,7 @@ export class Transport{
   if(decision==='exclude'){this.queue.data.deliveries[rowId]={...previous,status:'excluded',review:{reason,at:new Date().toISOString()}};this.queue.save();return;}
   if(decision!=='confirm'||!this.secret||!this.config?.enabled)throw Error('Transport unavailable');
   this.busy=true;try{
-   const delivery=await this.request('ingestWatchdogPullV2',{chatId:message.channel,messageId:message.id,chat:message.chat,rowIndex:index,review:{confirmed:true,dateTimeUTC,reason}});
+   const delivery=await this.request('ingestWatchdogPullV2',{chatId:message.channel,messageId:message.id,chat:message.chat,rowIndex:index,defaultBbls:this.channelOptions[message.channel]?.defaultBbls??null,review:{confirmed:true,dateTimeUTC,reason}});
    this.queue.data.deliveries[rowId]={...delivery,review:{dateTimeUTC,reason,at:new Date().toISOString()}};this.queue.save();
   }finally{this.busy=false;}
  }

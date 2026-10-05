@@ -26,3 +26,13 @@ test('review corrects measurement time with original observation preserved and e
   q.data.deliveries[row.id]={status:'review'};await t.review(row.id,'exclude',null,'Duplicate chat post');assert.equal(new Queue(dir).data.deliveries[row.id].status,'excluded');let calls=0;t.request=async()=>{calls++;};await t.tick(false);assert.equal(calls,0);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('group barrel fallback is configurable and written barrels take precedence',()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'wb-variable-barrels-'));
+ try { const q=new Queue(dir);
+ q.ingest({id:'missing',channel:'group',chat:header(Date.now(),'Driver','Gunslinger 3\nTop 12\nBottom 10'),options:{defaultBbls:140}});
+ q.ingest({id:'written',channel:'group',chat:header(Date.now(),'Driver','Gunslinger 3\nTop 12\nBottom 10\n185 bbl'),options:{defaultBbls:140}});
+ const rows=q.snapshot().messages.flatMap(m=>m.rows);
+ assert.deepEqual(rows.map(r=>r.bblsTaken).sort((a,b)=>a-b),[140,185]);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
