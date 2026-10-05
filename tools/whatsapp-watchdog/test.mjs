@@ -47,3 +47,12 @@ test('fallback changes release only missing-barrel holds and preserve explicit a
   await t.tick(false);assert.equal(sent.defaultBbls,140);assert.equal(q.data.messages[Object.keys(q.data.messages)[0]].rows[0].bblsTaken,140);assert.equal(Object.values(q.data.messages)[1].rows[0].bblsTaken,185);assert.equal(q.data.deliveries[rows[1].id].identity,'done');assert.equal(q.data.deliveries[rows[0].id].status,'complete');
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('sender IDs survive queue restart and automatic delivery without trusting display names',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'wb-sender-'));try{
+  let q=new Queue(dir);q.ingest({id:'owner',channel:'group',senderId:'123456789@lid',chat:header(Date.now(),'Display Name','Kahuna 5\nTop 12.5\n165 bbl')});q=new Queue(dir);expectSender(q);
+  const t=new Transport(q);t.lastLifecycleCheck=Date.now();t.secret='synthetic';t.config={enabled:true,enabledAt:0};let sent;
+  t.request=async(endpoint,body)=>{if(endpoint==='ingestWatchdogPullV2'){sent=body;return {ok:true,status:'queued',identity:'sender-test'};}return {ok:true,status:'complete',identity:'sender-test'};};await t.tick(false);assert.equal(sent.senderId,'123456789@lid');assert.ok(!('driverId' in sent));
+ }finally{rmSync(dir,{recursive:true,force:true});}
+ function expectSender(q){assert.equal(Object.values(q.data.messages)[0].senderId,'123456789@lid');}
+});
