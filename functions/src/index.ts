@@ -1,3 +1,5 @@
+import {refreshFlowWindow} from './refreshFlowWindow';
+import {effectiveFlow} from './effectiveFlow';
 import * as functionsV1 from 'firebase-functions/v1';
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as httpsV2 from 'firebase-functions/v2/https';
@@ -882,6 +884,10 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     .equalTo(wellName)
     .once('value');
 
+  const flowConfig=(await db.ref('well_config/'+wellName).once('value')).val()||{};
+  const windowed=effectiveFlow(snapshot.val()||{},flowConfig);
+  if(windowed)return windowed.averageDays;
+
   // Collect rates with timestamps, sort by actual time, take most recent 15
   const rateEntries: { timestamp: number; rate: number }[] = [];
 
@@ -1179,7 +1185,9 @@ export const processIncomingPull = functionsV1.database
     }
 
     const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
-    const tankAfterInches = tankTopInches - bblsInInches;
+    let tankAfterInches = tankTopInches - bblsInInches;
+    const reportedBottom=Number((data as any).watchdogProvenance?.reportedBottomFeet)*12;
+    if(config.flowWindowMinimumRecoveryInches && (data as any).source==='whatsapp_watchdog' && (data as any).watchdogProvenance?.principalId==='laptop-watchdog-v2' && (data as any).watchdogProvenance?.reportedBottomFeet!=null && Number.isFinite(reportedBottom) && reportedBottom>=0 && reportedBottom<=tankTopInches && Math.abs(reportedBottom-tankAfterInches)<=2)tankAfterInches=reportedBottom;
 
     // Time Dif
     let timeDifDays = 0;
@@ -1213,8 +1221,11 @@ export const processIncomingPull = functionsV1.database
       }
     }
 
-    // Calculate AFR
-    const afr = await calculateAFR(wellName, flowRateDays);
+    const flowHistorySnap=Number(config.flowWindowMinimumRecoveryInches)>=3
+      ? await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value') : null;
+    const windowed=flowHistorySnap?effectiveFlow({...flowHistorySnap.val(),[packetId]:{...data,packetId,tankTopInches,tankAfterInches,wellDown:nextIsDown}},config):null;
+    if(windowed){const sample=windowed.results.find(r=>r.packetId===packetId);flowRateDays=sample?.flowRateDays||0;flowRate=flowRateDays>0?daysToHMMSS(flowRateDays):'';recoveryInches=sample?.recoveryInches||0;timeDifDays=sample?.timeDifDays||0;timeDif=timeDifDays>0?daysToHMM(timeDifDays):'';}
+    const afr = windowed?windowed.averageDays:await calculateAFR(wellName, flowRateDays);
 
     // Calculate window-averaged and overnight bbls/day
     const bblPerFoot = tanks * 20;
@@ -1231,8 +1242,8 @@ export const processIncomingPull = functionsV1.database
     });
     historicalPulls.sort((a, b) => a.timestamp - b.timestamp);
 
-    const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
-    const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
+    const windowBblsDay = windowed ? 0 : calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
+    const overnightBblsDay = windowed ? 0 : calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);
 
     // Recovery Needed
@@ -1443,6 +1454,7 @@ export const processIncomingPull = functionsV1.database
     await db.ref(`wells/${wellName}/status`).set(wellStatus);
 
     console.log(`[NEW] Wrote wells/${wellName}/status`);
+    await refreshFlowWindow(db,wellName);
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
       outgoingCommitted: true,
@@ -2229,6 +2241,7 @@ export const processDeleteRequest = functionsV1.database
       }
     }
 
+    await refreshFlowWindow(db,wellName);
     // Archive delete request for audit trail (instead of just removing it)
     const auditData = {
       ...data,

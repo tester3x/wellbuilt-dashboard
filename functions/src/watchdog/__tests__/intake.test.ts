@@ -65,3 +65,15 @@ test('queued observations include shadow diagnostics without changing canonical 
  expect(packet.watchdogProvenance.flowDiagnostic.minimumRecoveryInches).toBe(6);
  expect(packet.flowRateDays).toBeUndefined();expect(packet.bottomLevelFeet).toBe(11.125);
 });
+test('enabled well uses corroborated reported bottom and receipt recognizes it',async()=>{
+ database.get('well_config')['Kahuna 5'].flowWindowMinimumRecoveryInches=6;
+ const body={...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 11.2')};
+ const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);const packet=database.get('packets/incoming/'+answer.result.packetId);
+ expect(packet.bottomLevelFeet).toBe(11.2);
+ database.set('packets/processed/'+answer.result.packetId,{...packet,tankAfterInches:134.4,canonicalProcessingComplete:true});
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:answer.result.identity})).result.status).toBe('complete');
+});
+test('enabled well holds an uncorroborated bottom instead of changing tank math',async()=>{
+ database.get('well_config')['Kahuna 5'].flowWindowMinimumRecoveryInches=6;
+ const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 10')});expect(answer.result.status).toBe('review');
+});

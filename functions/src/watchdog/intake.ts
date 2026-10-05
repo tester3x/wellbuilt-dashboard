@@ -55,6 +55,11 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const [processed,incoming]=await Promise.all([db.ref('packets/processed').orderByChild('wellName').equalTo(mapped.wellName).once('value'),db.ref('packets/incoming').orderByChild('wellName').equalTo(mapped.wellName).once('value')]);
  const history={[mapped.wellName]:{...(processed.val()||{}),...(incoming.val()||{})}};
  const checked=reviewPulls([row],configs,history,{},new Set())[0];
+ if(configs[mapped.wellName].flowWindowMinimumRecoveryInches && row.bottomLevelFeet!==null){
+   const reported=row.bottomLevelFeet;
+   if(!Number.isFinite(reported)||reported<0||reported>Number(row.tankLevelFeet)||Math.abs(reported-Number(checked.afterFeet))*12>2){res.json({ok:true,status:'review',issues:['Reported bottom differs from calibrated removal by more than two inches; confirm levels and barrels']});return;}
+   checked.afterFeet=reported;
+ }
  let estimate: ReturnType<typeof barrelEstimate> = null;
  let barrelSource: 'written' | 'default' = 'written';
  if(/^Gunslinger (3|5)$/.test(mapped.wellName)) {
@@ -127,5 +132,3 @@ export const stopWatchdogWellV2=https.onRequest(options,async(req,res)=>{
  res.json({ok:true,state:'stopping',archive});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });
-
-
