@@ -36,3 +36,14 @@ test('group barrel fallback is configurable and written barrels take precedence'
  assert.deepEqual(rows.map(r=>r.bblsTaken).sort((a,b)=>a-b),[140,185]);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('fallback changes release only missing-barrel holds and preserve explicit amounts and completed receipts',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'wb-fallback-'));try{
+  const q=new Queue(dir),chat=header(Date.now(),'Driver','Gabriel 7\n12 9\n5 9. 158p');
+  q.ingest({id:'missing',channel:'gab',chat,options:{wellNames:['Gabriel 7']}});q.ingest({id:'written',channel:'gab',chat:chat+'\n185 bbl',options:{wellNames:['Gabriel 7']}});
+  const rows=Object.values(q.data.messages).map(m=>m.rows[0]);q.data.deliveries={[rows[0].id]:{status:'review',issues:['Missing barrels']},[rows[1].id]:{status:'complete',identity:'done'}};
+  const t=new Transport(q);t.wells=[{wellName:'Gabriel 7',channels:['gab']}];t.channelOptions={gab:{defaultBbls:140}};t.lastLifecycleCheck=Date.now();t.secret='synthetic';t.config={enabled:true,enabledAt:0};let sent;
+  t.request=async(endpoint,body)=>{if(endpoint==='ingestWatchdogPullV2'){sent=body;return {ok:true,status:'queued',identity:'new'};}return {ok:true,status:'complete',identity:'new'};};
+  await t.tick(false);assert.equal(sent.defaultBbls,140);assert.equal(q.data.messages[Object.keys(q.data.messages)[0]].rows[0].bblsTaken,140);assert.equal(Object.values(q.data.messages)[1].rows[0].bblsTaken,185);assert.equal(q.data.deliveries[rows[1].id].identity,'done');assert.equal(q.data.deliveries[rows[0].id].status,'complete');
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});

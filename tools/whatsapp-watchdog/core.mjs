@@ -22,6 +22,19 @@ export class Queue{
  const post=splitChat(chat)[0];let postedAt=rows[0]?.postedAt||'';if(!postedAt&&post)try{postedAt=chatTimestamp(post.date,post.time);}catch{}
  this.data.messages[key]={key,id,channel,chat,digest,rows,notices,deleted,edited:!!previous&&(previous.edited||previous.body!==(post?.body||chat)||previous.postedAt!==postedAt),postedAt,author:post?.author||'',body:post?.body||chat,updatedAt:new Date().toISOString()};this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
  }
+ reparseChannels(channelOptions){
+ let changed=false;
+ for(const message of Object.values(this.data.messages)){
+  const options=channelOptions[message.channel];
+  if(!options||message.deleted||message.edited||message.id.startsWith('export:'))continue;
+  const rows=parsePullChat(message.chat,options).map(row=>({...row,id:message.key+':'+row.id}));
+  if(JSON.stringify(rows)!==JSON.stringify(message.rows)){message.rows=rows;changed=true;}
+  for(const row of rows){const delivery=this.data.deliveries?.[row.id];
+   if(!row.issues.length&&!message.notices.length&&delivery?.status==='review'&&!delivery.identity&&!delivery.review&&delivery.issues?.length===1&&['Missing barrels','Unreadable levels'].includes(delivery.issues[0])){delete this.data.deliveries[row.id];changed=true;}
+  }
+ }
+ if(changed)this.save();
+ }
  snapshot(){const messages=Object.values(this.data.messages);return {messageCount:messages.length,pullCount:messages.reduce((n,m)=>n+m.rows.length,0),messages:messages.filter(m=>m.rows.length||m.notices.length||m.deleted).slice(-200).reverse()};}
  liveFeed(channels){const selected=new Set(channels),counts=new Map();return Object.values(this.data.messages).filter(m=>selected.has(m.channel)&&!m.id.startsWith('export:')).sort((a,b)=>Date.parse(b.postedAt||b.updatedAt)-Date.parse(a.postedAt||a.updatedAt)).filter(m=>{const count=counts.get(m.channel)||0;counts.set(m.channel,count+1);return count<100;});}
  export(channel){return Object.values(this.data.messages).filter(m=>m.channel===channel&&!m.deleted&&(m.rows.length||m.notices.length)).sort((a,b)=>Date.parse(a.rows[0]?.postedAt||a.updatedAt)-Date.parse(b.rows[0]?.postedAt||b.updatedAt)).map(m=>m.chat).join('\n');}
