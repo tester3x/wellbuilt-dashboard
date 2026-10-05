@@ -66,3 +66,8 @@ test('unmonitored operator wells and custom locations retain type and metadata',
   assert.equal(rows[0].county, 'McKenzie');
   assert.equal(rows[1].kind, 'LOC');
 });
+
+test('full well search ignores pad suffix and naturally ranks names before capping', () => {
+  const rows = combinedLocationResults('gab pad', { wells: [], operatorWells: [{ well_name: 'Gab 14' }, { well_name: 'Gab 5' }], disposalMatches: [] });
+  assert.deepEqual(rows.map(r => r.label), ['Gab 5', 'Gab 14']);
+});

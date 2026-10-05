@@ -1,5 +1,6 @@
 import * as https from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
+import { applyDispatchSwdDirectory } from './dispatchSwdDirectory';
 import { authorizeAdminCall } from '../admin/authority';
 import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
 
@@ -20,18 +21,19 @@ export const getDispatchLocationCatalog = https.onCall({ timeoutSeconds: 60, mem
   const operators: string[] = Array.isArray(company.data()?.assignedOperators) ? company.data()!.assignedOperators.filter((v: unknown): v is string => typeof v === 'string' && !!v.trim()) : [];
   const allowedFields = ['well_name', 'operator', 'api_no', 'latitude', 'longitude', 'legal_desc', 'county', 'field_name', 'search_name', 'search_operator', 'state'];
   const project = (data: Record<string, unknown>) => Object.fromEntries(allowedFields.filter(k => data[k] !== undefined).map(k => [k, data[k]]));
-  const [wellSnaps, disposals, customSnaps] = await Promise.all([
+  const [wellSnaps, disposals, customSnaps, directory] = await Promise.all([
     Promise.all(operators.map(op => db.collection('wells').where('operator', '==', op).limit(20000).get())),
     db.collection('disposals').limit(10000).get(),
     Promise.all(operators.map(op => db.collection('customLocations').where('company', '==', op).limit(5000).get())),
+    db.collection('companies').doc(requested).collection('swd_directory').limit(5000).get(),
   ]);
   return {
     companyId: requested,
     wells: wellSnaps.flatMap(s => s.docs.map(d => project(d.data()))),
-    disposals: disposals.docs.map(d => project(d.data())),
+    disposals: applyDispatchSwdDirectory(disposals.docs.map(d => project(d.data())), directory.docs.map(d => d.data())),
     customLocations: customSnaps.flatMap(s => s.docs.map(d => {
       const c = d.data();
-      return { locationName: c.locationName, company: c.company, latitude: c.latitude ?? null, longitude: c.longitude ?? null };
+      return { locationName: c.locationName, company: c.company, usageCount: typeof c.usageCount === 'number' ? c.usageCount : 0, latitude: c.latitude ?? null, longitude: c.longitude ?? null };
     })),
   };
 });

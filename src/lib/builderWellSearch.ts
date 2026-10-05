@@ -21,7 +21,7 @@ export interface CombinedSearchSources {
   operatorWells: Array<{ well_name: string; operator?: string; county?: string }>;
   /** SWD/disposal directory search result rows (well_name). */
   disposalMatches: Array<{ well_name: string; operator?: string; county?: string }>;
-  customLocations?: Array<{ locationName: string; company: string }>;
+  customLocations?: Array<{ locationName: string; company: string; usageCount?: number }>;
 }
 
 export const COMBINED_SEARCH_LIMIT = 15;
@@ -48,7 +48,7 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
   if (hasExactLocationMatch(query, s)) return [];
   const seen = new Set<string>();
   const wellMatches: CombinedLocation[] = s.wells
-    .filter((w) => (w.ndicName || w.wellName).toLowerCase().includes(q))
+    .filter((w) => locationQueryMatches(q, w.ndicName || w.wellName))
     .map((w) => {
       const name = w.ndicName || w.wellName;
       seen.add(name.toLowerCase());
@@ -56,7 +56,7 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
       return { label: name, sub: catalog?.operator || w.route || '', county: catalog?.county, kind: 'WELL', value: name };
     });
   const operatorMatches: CombinedLocation[] = s.operatorWells
-    .filter((w) => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
+    .filter((w) => locationQueryMatches(q, w.well_name) && !seen.has(w.well_name.toLowerCase()))
     .map((w) => {
       seen.add(w.well_name.toLowerCase());
       return { label: w.well_name, sub: w.operator || 'NDIC', county: w.county, kind: 'WELL', value: w.well_name };
@@ -65,7 +65,22 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
     .filter((d) => !seen.has(d.well_name.toLowerCase()))
     .map((d): CombinedLocation => ({ label: d.well_name, sub: d.operator || 'SWD', county: d.county, kind: 'SWD', value: d.well_name }));
   const customMatches: CombinedLocation[] = (s.customLocations || [])
-    .filter(c => c.locationName.toLowerCase().includes(q) && !seen.has(c.locationName.toLowerCase()))
-    .map(c => ({ label: c.locationName, sub: c.company, kind: 'LOC', value: c.locationName }));
-  return [...wellMatches, ...operatorMatches, ...disposalMatches, ...customMatches].slice(0, COMBINED_SEARCH_LIMIT);
+    .filter(c => locationQueryMatches(q, c.locationName) && !seen.has(c.locationName.toLowerCase()))
+    .map(c => ({ label: c.locationName, sub: `Used ${c.usageCount || 0}× — ${c.company || 'Custom'}`, kind: 'LOC', value: c.locationName }));
+  return rankLocationRows([...wellMatches, ...operatorMatches, ...disposalMatches, ...customMatches], q, row => row.label, COMBINED_SEARCH_LIMIT);
+}
+
+/** Match and ranking parity with WB-T: ignore location noise words; cap after ranking. */
+export function locationQueryMatches(query: string, text: string): boolean {
+  const noise = new Set(['pad', 'well', 'site', 'loc', 'location', 'the', 'at', 'on', 'in']);
+  const words = query.toLowerCase().split(/\s+/).filter(w => w && !noise.has(w));
+  return words.length > 0 && words.every(w => text.toLowerCase().includes(w));
+}
+export function rankLocationRows<T>(rows: T[], query: string, getName: (row: T) => string, limit: number): T[] {
+  const q = query.trim().toLowerCase();
+  const rank = (name: string) => name === q ? 0 : name.startsWith(q) ? 1 : 2;
+  return [...rows].sort((a, b) => {
+    const an = getName(a).toLowerCase(), bn = getName(b).toLowerCase();
+    return rank(an) - rank(bn) || an.localeCompare(bn, undefined, { numeric: true });
+  }).slice(0, limit);
 }

@@ -4,6 +4,7 @@
 
 import { getFirestoreDb, getFirebaseFunctions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
+import { locationQueryMatches, rankLocationRows } from './builderWellSearch';
 import {
   collection,
   getDocs,
@@ -15,6 +16,7 @@ import {
 
 export interface NdicWell {
   kind?: 'WELL' | 'SWD' | 'LOC';
+  usageCount?: number;
   well_name: string;
   operator: string;
   api_no: string;
@@ -193,10 +195,10 @@ export function searchDisposals(
   const matches = disposals.filter(disp => {
     const name = (disp.search_name || disp.well_name || '').toLowerCase();
     const op = (disp.search_operator || disp.operator || '').toLowerCase();
-    return words.every(w => name.includes(w) || op.includes(w));
+    return locationQueryMatches(lower, name) || locationQueryMatches(lower, op);
   });
 
-  return matches.slice(0, maxResults);
+  return rankLocationRows(matches, lower, row => row.well_name, maxResults);
 }
 
 // ── Search operators ────────────────────────────────────────────────────────

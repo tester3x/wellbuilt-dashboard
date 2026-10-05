@@ -2,7 +2,7 @@ const mockGet = jest.fn();
 const mockWhere = jest.fn();
 const mockTrusted = jest.fn();
 jest.mock('firebase-admin', () => ({ firestore: () => ({ collection: (name: string) => ({
-  doc: (id: string) => ({ get: () => mockGet(name, id) }),
+  doc: (id: string) => ({ get: () => mockGet(name, id), collection: () => ({ limit: () => ({ get: async () => ({ docs: [] }) }) }) }),
   where: (field: string, op: string, value: string) => { mockWhere(name, field, op, value); return { limit: () => ({ get: async () => ({ docs: [] }) }) }; },
   limit: () => ({ get: async () => ({ docs: [] }) }),
 }) }) }));

@@ -448,7 +448,7 @@ function DispatchPageInner() {
   const [disposalSearch, setDisposalSearch] = useState('');
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
   const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
-  const [customCatalogLocations, setCustomCatalogLocations] = useState<Array<{ locationName: string; company: string; latitude?: number; longitude?: number }>>([]);
+  const [customCatalogLocations, setCustomCatalogLocations] = useState<Array<{ locationName: string; company: string; usageCount?: number; latitude?: number; longitude?: number }>>([]);
   const [allOperatorWells, setAllOperatorWells] = useState<NdicWell[]>([]);
   const [assigning, setAssigning] = useState(false);
 
@@ -769,7 +769,7 @@ function DispatchPageInner() {
     const rows: NdicWell[] = [
       ...allOperatorWells.map(w => ({ ...w, kind: 'WELL' as const })),
       ...allDisposals.map(w => ({ ...w, kind: 'SWD' as const })),
-      ...customCatalogLocations.map(c => ({ well_name: c.locationName, operator: c.company, api_no: '', latitude: c.latitude, longitude: c.longitude, kind: 'LOC' as const })),
+      ...customCatalogLocations.map(c => ({ well_name: c.locationName, operator: c.company, usageCount: c.usageCount, api_no: '', latitude: c.latitude, longitude: c.longitude, kind: 'LOC' as const })),
       ...catalogRouteWells.map(w => ({ well_name: w.ndicName || w.wellName, operator: w.route || '', api_no: w.ndicApiNo || '', kind: 'WELL' as const })),
     ];
     const seen = new Set<string>();
@@ -806,7 +806,7 @@ function DispatchPageInner() {
           // Replace it on scope changes; never retain another company's catalog.
           const response = await httpsCallable(getFirebaseFunctions(), 'getDispatchLocationCatalog')({ companyId });
           if (cancelled) return;
-          const catalog = response.data as { wells: NdicWell[]; disposals: NdicWell[]; customLocations: Array<{ locationName: string; company: string; latitude?: number; longitude?: number }> };
+          const catalog = response.data as { wells: NdicWell[]; disposals: NdicWell[]; customLocations: Array<{ locationName: string; company: string; usageCount?: number; latitude?: number; longitude?: number }> };
           setAllOperatorWells(catalog.wells);
           setAllDisposals(catalog.disposals);
           setCustomCatalogLocations(catalog.customLocations);
