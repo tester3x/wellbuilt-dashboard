@@ -1,3 +1,4 @@
+import {possibleAggregateOverlap} from './aggregateOverlap';
 import {watchdogSenderKey,resolveWatchdogOwner} from './senderOwnership';
 import { barrelEstimate } from './barrelEstimate';
 import * as https from 'firebase-functions/v2/https';
@@ -67,6 +68,8 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
    if(!checked.issues.length)checked.status='ready';
  }
 
+ const aggregateMatches=possibleAggregateOverlap({...row,wellName:mapped.wellName},history[mapped.wellName],owner?.driverId??null);
+ if(aggregateMatches.length){res.json({ok:true,status:'review',issues:['Possible load already included in a combined manual pull; reconcile the combined entry before sending'],aggregatePacketIds:aggregateMatches,estimate,barrelSource});return;}
  const identity=digest([mapped.wellName,row.dateTimeUTC,row.tankLevelFeet,row.bottomLevelFeet,row.bblsTaken]);
  const entryRef=admin.firestore().collection(root).doc(identity);
  const prior=(await entryRef.get()).data();
@@ -121,3 +124,4 @@ export const stopWatchdogWellV2=https.onRequest(options,async(req,res)=>{
  res.json({ok:true,state:'stopping',archive});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });
+

@@ -50,3 +50,11 @@ test('sender binding stamps canonical driver ownership and preserves source prov
  const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),senderId});expect(first.code).toBe(200);const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.driverId).toBe('driver-test-123');expect(packet.driverName).toBe('Test Driver');expect(packet.source).toBe('whatsapp_watchdog');expect(packet.watchdogProvenance.ownershipSource).toBe('verified_sender_binding');
  expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),driverId:'forged'})).result.error).toBe('invalid_observation');
 });
+
+test('manual aggregate containment blocks an individual load even after ordinary time review',async()=>{
+ const body=observation();const rowTime=new Date(Date.now()-600000).toISOString();
+ database.set('packets/processed/combined',{packetId:'combined',wellName:'Kahuna 5',dateTimeUTC:rowTime,tankLevelFeet:12.5,tankAfterInches:117,bblsTaken:330});
+ const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review:{confirmed:true,dateTimeUTC:new Date().toISOString(),reason:'Confirmed posted time'}});
+ expect(answer.result.status).toBe('review');expect(answer.result.aggregatePacketIds).toEqual(['combined']);
+ expect([...database.keys()].some(k=>k.startsWith('packets/incoming/'))).toBe(false);
+});
