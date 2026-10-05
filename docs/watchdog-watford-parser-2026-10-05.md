@@ -8,3 +8,5 @@ Parser fix source 78d7d981 accepts whitespace after foot markers, including curl
 
 Scoped intake Function deployed from 78d7d981; local watcher restarted, linked session reconnected and watching confirmed. Live Kahuna 1 post no longer has Unreadable levels. It is correctly held for a possible existing pull: processed WB-M history contains a Marcial-owned pull with the same top and barrels approximately 21 minutes earlier. Duplicate review remains unresolved intentionally; no extra pull created. Screenshot retained privately as verification evidence.
 
+
+Deferred Dunn County follow-up: user identified Dagger 2 on the Dunn County route. Exact WhatsApp channel name is `Dunn County wells`; user reports membership is now available. Return to this later, verify the available group ID and server well scope before enabling it. Marcial's existing verified sender mapping already supports his assigned Dunn County route. This note does not enable the group or submit a pull.
