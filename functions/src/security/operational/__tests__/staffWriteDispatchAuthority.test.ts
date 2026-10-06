@@ -249,18 +249,10 @@ describe('production callable wiring', () => {
     expect(callable).toMatch(/isPlatformAdmin: access\.isPlatformAdmin/);
   });
 
-  it('well allowlist is loaded from well_config, never wellConfig', () => {
-    const runtime = readFileSync(
-      join(ROOT, 'functions', 'src', 'security', 'operational', 'dispatchPinRuntime.ts'),
-      'utf8',
-    );
-    expect(runtime).toMatch(/ref\('well_config'\)/);
-    expect(runtime).not.toMatch(/ref\('wellConfig'\)/);
-    const callable = readFileSync(
-      join(ROOT, 'functions', 'src', 'security', 'staffWriteDispatchCallable.ts'),
-      'utf8',
-    );
-    expect(callable).toMatch(/loadAuthorizedWellCatalog\(access\.companyId\)/);
+  it('staff dispatch does not use the maintained well catalog as an allowlist', () => {
+    expect(callable).not.toMatch(/loadAuthorizedWellCatalog\(/);
+    expect(callable).not.toMatch(/loadAuthoritativeWell\(/);
+    expect(callable).toMatch(/if \(!wellName\) throwDecided/);
   });
 
   it('companyId on create comes from trusted access, not the request', () => {
@@ -276,9 +268,8 @@ describe('production callable wiring', () => {
     expect(callable).toMatch(/create_conflict/);
   });
 
-  it('R1: target well is resolved authoritatively; zero ndicWellName fallback', () => {
-    expect(callable).toMatch(/loadAuthoritativeWell\(record/);
-    expect(callable).not.toMatch(/ndicWellNameStr\s*=\s*.*wellNameStr/);
+  it('R1: non-NDIC dispatch preserves an empty NDIC identity', () => {
+    expect(callable).toMatch(/fields\.ndicWellName = ndicWellName/);
     expect(callable).not.toMatch(/ndicWellName\s*=\s*wellName/);
   });
 });

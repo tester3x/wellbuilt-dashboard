@@ -30,8 +30,6 @@ import {
   type BirthIdentity,
 } from './operational/dispatchPacketPin';
 import {
-  loadAuthoritativeWell,
-  loadAuthorizedWellCatalog,
   loadVerifiedRevision,
 } from './operational/dispatchPinRuntime';
 import { packageIndexDocId } from './operational/jobPacketPublish';
@@ -204,10 +202,14 @@ export const staffWriteDispatch = httpsV2.onCall(
         isPlatformAdmin: access.isPlatformAdmin,
       });
       if (!decided.ok) throwDecided(decided);
-      const wells = await loadAuthorizedWellCatalog(access.companyId);
-      if (!wells.ok) throwDecided(wells);
-      const authWell = await loadAuthoritativeWell(record, decided.companyId);
-      if (!authWell.ok) throwDecided(authWell);
+      // well_config describes maintained/monitored wells. It is not a dispatch
+      // allowlist: authorized staff may send work to other company locations.
+      const wellName = typeof record.wellName === 'string' ? record.wellName.trim() : '';
+      if (record.ndicWellName !== undefined && typeof record.ndicWellName !== 'string') {
+        throwDecided({ ok: false, reason: 'malformed_well_identity', field: 'ndicWellName' });
+      }
+      const ndicWellName = typeof record.ndicWellName === 'string' ? record.ndicWellName.trim() : '';
+      if (!wellName) throwDecided({ ok: false, reason: 'well_required', field: 'wellName' });
       const revision = await loadVerifiedRevision(decided.companyId, packet.packetRef);
       if (!revision.ok) throwDecided(revision);
       const requestedJobType = (typeof record.jobTypeId === 'string' && record.jobTypeId.trim())
@@ -221,8 +223,8 @@ export const staffWriteDispatch = httpsV2.onCall(
       const fields = pickDispatchFields(record, DISPATCH_CREATE_ALLOWLIST);
       delete fields.packageId;
       await stampServerAuthoritativeIdentity(fields, decided.companyId);
-      fields.wellName = authWell.well.wellName;
-      fields.ndicWellName = authWell.well.ndicWellName;
+      fields.wellName = wellName;
+      fields.ndicWellName = ndicWellName;
       const binding = stampDispatchBinding(revision.envelope);
       const identity: BirthIdentity = {
         companyId: decided.companyId,
@@ -230,8 +232,8 @@ export const staffWriteDispatch = httpsV2.onCall(
         jobTypeId: jobType.jobTypeId,
         binding,
         well: {
-          wellName: authWell.well.wellName,
-          ndicWellName: authWell.well.ndicWellName,
+          wellName,
+          ndicWellName,
         },
       };
       const outcome = await fs.runTransaction(async (tx) => {

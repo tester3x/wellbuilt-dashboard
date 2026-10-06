@@ -109,7 +109,7 @@ export function readDispatchExecutionContext(
   if (Object.prototype.hasOwnProperty.call(job, 'ndicWellName')) {
     if (typeof job.ndicWellName !== 'string') return fail('malformed_well_identity', 'ndicWellName');
     ndicWellName = job.ndicWellName.trim();
-    if (!ndicWellName) return fail('partial_well_identity', 'ndicWellName');
+    // An explicitly empty NDIC field represents a valid non-NDIC location.
   } else if (authoritativeIdentity && typeof authoritativeIdentity.ndicWellName === 'string') {
     ndicWellName = authoritativeIdentity.ndicWellName.trim();
     if (!ndicWellName) return fail('missing_well_identity', 'ndicWellName');
@@ -232,7 +232,7 @@ export async function runResolveExecutionBinding(input: {
   if (
     str(execution.jobTypeId) !== executionRead.execution.jobTypeId
     || str(execution.wellName) !== executionRead.execution.wellName
-    || str(execution.ndicWellName) !== executionRead.execution.ndicWellName
+    || execution.ndicWellName !== executionRead.execution.ndicWellName
   ) {
     return fail('malformed_execution', 'execution');
   }

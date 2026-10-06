@@ -211,7 +211,7 @@ export async function executeServiceWorkWorkflow(
       ...assignmentIdentityForDriver(driver),
       ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
       wellName: wellName.trim(),
-      ndicWellName: ndicWellName.trim() || wellName.trim(),
+      ndicWellName: ndicWellName.trim(),
       ...(dropoff?.trim() ? { disposal: dropoff.trim() } : {}),
       ...(onsiteBy ? { onsiteBy } : {}),
       jobType: 'service',
@@ -242,7 +242,7 @@ export async function executeServiceWorkWorkflow(
       const job2: Record<string, unknown> = {
         ...baseJob,
         wellName: dropoff.trim(),
-        ndicWellName: dropoff.trim(),
+        ndicWellName: '',
         disposal: dropoff.trim(),
         notes: `Split ticket B — ${notes || serviceType.trim()}`,
         splitGroupId: workflow.splitGroupId!,
@@ -266,7 +266,7 @@ export async function executeServiceWorkWorkflow(
         const extraJob: Record<string, unknown> = {
           ...baseJob,
           wellName: extra.disposal.trim(),
-          ndicWellName: extra.disposal.trim(),
+          ndicWellName: '',
           disposal: extra.disposal.trim(),
           notes: extra.notes
             ? `Split ticket ${letter} — ${extra.notes}`

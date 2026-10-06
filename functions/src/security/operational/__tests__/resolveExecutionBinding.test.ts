@@ -371,7 +371,7 @@ describe('G-015 authoritative execution context', () => {
     })).toMatchObject({ ok: false, reason: 'missing_well_identity' });
   });
 
-  it('6. partial well identity fails closed', async () => {
+  it('6. explicitly non-NDIC well identity is accepted', async () => {
     const store = new MemoryStore();
     const rev = await publishRevision(store);
     expect(await runResolveExecutionBinding({
@@ -382,7 +382,7 @@ describe('G-015 authoritative execution context', () => {
         const data = await store.getRevision(id);
         return { exists: !!data, data: data || undefined };
       },
-    })).toMatchObject({ ok: false, reason: 'partial_well_identity', field: 'ndicWellName' });
+    })).toMatchObject({ ok: true, execution: { wellName: 'Python', ndicWellName: '' } });
   });
 
   it('7. malformed well identity fails closed', async () => {

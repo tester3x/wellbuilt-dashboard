@@ -1264,7 +1264,7 @@ function DispatchPageInner() {
       // Resolve full NDIC/MBOGC legal name — check operator wells if ndicName not on well_config
       const resolvedNdicName = assignTarget.ndicName
         || allOperatorWells.find(w => w.well_name.toLowerCase().includes(assignTarget.wellName.toLowerCase()))?.well_name
-        || assignTarget.wellName;
+        || '';
 
       const job: Omit<DispatchJob, 'id'> = {
         // Canonical driver identity contract (driverId + canonical driverHash + real name).
@@ -1351,7 +1351,7 @@ function DispatchPageInner() {
         : undefined;
 
       const swResolvedWellName = matchedWell?.wellName || matchedOperatorWell?.well_name || trimmedTarget;
-      const swNdicName = matchedWell?.ndicName || matchedOperatorWell?.well_name || swResolvedWellName;
+      const swNdicName = matchedWell?.ndicName || matchedOperatorWell?.well_name || '';
 
       const trimmedServiceType = swServiceType.trim();
       const mappedPkgId = jobTypeToPackageId[trimmedServiceType];
@@ -1682,7 +1682,7 @@ function DispatchPageInner() {
             ...assignmentIdentityForDriver(driver),
             driverFirstName,
             wellName,
-            ndicWellName: wellData?.ndicName || wellName,
+            ndicWellName: wellData?.ndicName || '',
             operator: project.operatorName || '',
             route: wellData?.route || '',
             jobType: project.jobType || 'service',
@@ -1778,7 +1778,7 @@ function DispatchPageInner() {
             ...assignmentIdentityForDriver(driver),
             driverFirstName,
             wellName,
-            ndicWellName: wellData?.ndicName || wellName,
+            ndicWellName: wellData?.ndicName || '',
             operator: project.operatorName || '',
             route: wellData?.route || '',
             jobType: project.jobType || 'service',
@@ -1930,7 +1930,7 @@ function DispatchPageInner() {
         ...assignmentIdentityForDriver(driver),
         driverFirstName,
         wellName: reassignJob.wellName,
-        ndicWellName: reassignJob.ndicWellName || reassignJob.wellName,
+        ndicWellName: reassignJob.ndicWellName || '',
         route: reassignJob.route || '',
         jobType: reassignJob.jobType,
         jobTypeId: reassignJob.jobTypeId || (reassignJob.jobType === 'pw' ? 'pw' : (reassignJob.serviceType ? canonicalJobTypeIdForServiceType(reassignJob.serviceType) : 'service-work')),
@@ -2088,7 +2088,7 @@ function DispatchPageInner() {
         // Resolve full NDIC/MBOGC legal name
         const resolvedNdic = well?.ndicName
           || allOperatorWells.find(w => w.well_name.toLowerCase().includes(wellName.toLowerCase()))?.well_name
-          || wellName;
+          || '';
 
         const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
         const job: Omit<DispatchJob, 'id'> = {
@@ -2194,9 +2194,17 @@ function DispatchPageInner() {
       // 1a. Update well name if changed (PW jobs — GPS resolved when driver accepts)
       const origWell = editSwJob.ndicWellName || editSwJob.wellName || '';
       if (editSwWellName.trim() && editSwWellName.trim() !== origWell && editSwJob.id) {
+        const selectedName = editSwWellName.trim();
+        const selectedWell = wells.find(w =>
+          w.wellName.toLowerCase() === selectedName.toLowerCase()
+          || w.ndicName?.toLowerCase() === selectedName.toLowerCase()
+        );
+        const selectedOperatorWell = !selectedWell
+          ? allOperatorWells.find(w => w.well_name.toLowerCase() === selectedName.toLowerCase())
+          : undefined;
         await staffUpdateDispatch(editSwJob.id, {
-          wellName: editSwWellName.trim(),
-          ndicWellName: editSwWellName.trim(),
+          wellName: selectedWell?.wellName || selectedOperatorWell?.well_name || selectedName,
+          ndicWellName: selectedWell?.ndicName || selectedOperatorWell?.well_name || '',
         });
       }
 
@@ -2264,7 +2272,7 @@ function DispatchPageInner() {
             ...assignmentIdentityForDriver(driver),
             ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
             wellName: editSwJob.wellName,
-            ndicWellName: editSwJob.ndicWellName || editSwJob.wellName,
+            ndicWellName: editSwJob.ndicWellName || '',
             jobType: 'service',
             serviceType: editSwJob.serviceType || '',
             status: 'pending',
@@ -2337,7 +2345,7 @@ function DispatchPageInner() {
         ...assignmentIdentityForDriver(driver),
         driverFirstName,
         wellName: editSwJob.wellName,
-        ndicWellName: editSwJob.ndicWellName || editSwJob.wellName,
+        ndicWellName: editSwJob.ndicWellName || '',
         route: editSwJob.route || '',
         jobType: 'pw',
         jobTypeId: 'pw',
