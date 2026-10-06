@@ -1,3 +1,4 @@
+import {canReviewPost} from './core.mjs';
 import {createHash,createHmac,randomBytes} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
@@ -15,7 +16,7 @@ export class Transport{
   const message=Object.values(this.queue.data.messages).find(m=>m.rows.some(r=>r.id===rowId));
   const index=message?.rows.findIndex(r=>r.id===rowId),row=message?.rows[index];
   const previous=this.queue.data.deliveries?.[rowId];
-  if(!row||message.deleted||message.edited||previous?.status!=='review'||previous.identity)throw Error('This entry is not available for review');
+  if(!row||!canReviewPost(message,this.queue.data.deliveries)||previous?.status!=='review'||previous.identity)throw Error('This entry is not available for review');
   if(decision==='exclude'){this.queue.data.deliveries[rowId]={...previous,status:'excluded',review:{reason,at:new Date().toISOString()}};this.queue.save();return;}
   if(decision!=='confirm'||!this.secret||!this.config?.enabled)throw Error('Transport unavailable');
   this.busy=true;try{

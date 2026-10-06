@@ -42,3 +42,5 @@ export class Queue{
 }
 
 export function newestReceiverMessages(messages,limit=100){const unique=new Map();for(const m of messages)unique.set(m.channel+'\0'+m.id,m);const counts=new Map();return [...unique.values()].sort((a,b)=>b.timestamp-a.timestamp).filter(m=>{const count=counts.get(m.channel)||0;counts.set(m.channel,count+1);return count<limit;});}
+
+export function canReviewPost(post,deliveries){return !post.deleted&&!Object.entries(deliveries||{}).some(([id,d])=>id.startsWith(post.key+':')&&(d.identity||['complete','duplicate','queued','incomplete'].includes(d.status)));}
