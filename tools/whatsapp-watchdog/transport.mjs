@@ -10,7 +10,7 @@ export class Transport{
  async request(endpoint,body){const response=await fetch(origin+endpoint,signedRequest(endpoint,body,this.secret));const result=await response.json();if(!response.ok||!result.ok)throw Error(result.error||'Intake request failed');return result;}
  async lifecycle(){const result=await this.request('getWatchdogWellLifecycleV2',{});this.wells=result.wells;return result;}
  async stopWell(wellName,reason){if(this.busy)throw Error('Delivery in progress; try again');this.busy=true;try{const result=await this.request('stopWatchdogWellV2',{wellName,reason});await this.lifecycle();return result;}finally{this.busy=false;}}
- async review(rowId,decision,dateTimeUTC,reason){
+ async review(rowId,decision,dateTimeUTC,reason,corrections={}){
   if(this.busy)throw Error('Delivery in progress; try again in a moment');
   const message=Object.values(this.queue.data.messages).find(m=>m.rows.some(r=>r.id===rowId));
   const index=message?.rows.findIndex(r=>r.id===rowId),row=message?.rows[index];
@@ -19,7 +19,7 @@ export class Transport{
   if(decision==='exclude'){this.queue.data.deliveries[rowId]={...previous,status:'excluded',review:{reason,at:new Date().toISOString()}};this.queue.save();return;}
   if(decision!=='confirm'||!this.secret||!this.config?.enabled)throw Error('Transport unavailable');
   this.busy=true;try{
-   const delivery=await this.request('ingestWatchdogPullV2',{chatId:message.channel,messageId:message.id,chat:message.chat,rowIndex:index,...(message.senderId?{senderId:message.senderId}:{}),defaultBbls:this.channelOptions[message.channel]?.defaultBbls??null,review:{confirmed:true,dateTimeUTC,reason}});
+   const delivery=await this.request('ingestWatchdogPullV2',{chatId:message.channel,messageId:message.id,chat:message.chat,rowIndex:index,...(message.senderId?{senderId:message.senderId}:{}),defaultBbls:this.channelOptions[message.channel]?.defaultBbls??null,review:{...Object.fromEntries(Object.entries(corrections).filter(([k])=>['tankLevelFeet','bottomLevelFeet','bblsTaken','actorUid'].includes(k))),confirmed:true,dateTimeUTC,reason}});
    this.queue.data.deliveries[rowId]={...delivery,review:{dateTimeUTC,reason,at:new Date().toISOString()}};this.queue.save();
   }finally{this.busy=false;}
  }

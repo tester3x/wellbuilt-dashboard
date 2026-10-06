@@ -120,7 +120,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       const bbls = amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : options.defaultBbls || null;
       // A routing instruction containing a well and barrels is not a pull.
       if (!labelled && !pair && !unlabelled) {
-        if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s+)?\d/i.test(segment.body)) rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: '', dateTimeUTC: '', tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false });
+        if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s+)?\d/i.test(segment.body)) { let timestamp='';try{timestamp=chatTimestamp(message.date,message.time,options.timeZone,options.dateOrder);}catch{} rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp, tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false }); }
         continue;
       }
       const issues: string[] = [];

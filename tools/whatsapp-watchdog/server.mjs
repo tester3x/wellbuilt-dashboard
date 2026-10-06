@@ -9,6 +9,7 @@ import QRCode from 'qrcode';
 import {Queue,header,hash,newestReceiverMessages} from './core.mjs';
 import {Transport} from './transport.mjs';
 import {ReviewAlerts} from './alerts.mjs';
+import {RemoteReviews} from './remote-review.mjs';
 const require=createRequire(import.meta.url);
 const {splitChat,parsePullChat,chatTimestamp}=require('../../functions/lib/imports/pullParser.js');
 const root=path.dirname(fileURLToPath(import.meta.url));
@@ -49,10 +50,12 @@ async function pollReceiver(){
  }catch(e){error='Receiver not ready: '+String(e?.message||e);if(state==='Connected')state='Syncing WhatsApp';}
  finally{polling=false;}
 }
+const remoteReviews=new RemoteReviews(queue,transport);
+const remoteReviewTimer=setInterval(()=>{if(!paused)void remoteReviews.tick(channels);},30000);remoteReviewTimer.unref();
 const alerts=new ReviewAlerts(queue);
 const alertTimer=setInterval(()=>{if(client&&state==='Connected'&&!paused)void alerts.tick((id,body)=>client.sendMessage(id,body),Object.fromEntries(channels.map(c=>[c.id,c.name])));},10000);alertTimer.unref();
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
-function status(){return {reviewAlerts:{enabled:!!queue.data.reviewAlerts?.enabled,groupId:queue.data.reviewAlerts?.groupId||'',lastSentAt:queue.data.reviewAlerts?.lastSentAt||null,error:alerts.error},state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,wellLifecycle:transport.wells||[],enabledAt:transport.config?.enabledAt,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
+function status(){return {remoteReviewError:remoteReviews.error,reviewAlerts:{enabled:!!queue.data.reviewAlerts?.enabled,groupId:queue.data.reviewAlerts?.groupId||'',lastSentAt:queue.data.reviewAlerts?.lastSentAt||null,error:alerts.error},state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,wellLifecycle:transport.wells||[],enabledAt:transport.config?.enabledAt,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId:m.id?.participant?._serialized||m.author||null});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
@@ -83,7 +86,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/stop-well'){const value=JSON.parse(bytes);if(typeof value.wellName!=='string'||typeof value.reason!=='string')throw Error('Choose a well and enter a reason');const result=await transport.stopWell(value.wellName,value.reason);return respond(res,200,result);}
  if(url.pathname==='/well-lifecycle'){return respond(res,200,await transport.lifecycle());}
  if(url.pathname==='/review-alerts'){const value=JSON.parse(bytes);if(typeof value.enabled!=='boolean'||(value.enabled&&!chats.some(c=>c.id===value.groupId)))throw Error('Choose an available alert group');if(value.enabled&&channels.some(c=>c.id===value.groupId))throw Error('Choose an alert-only group, not a watched route');queue.data.reviewAlerts={...queue.data.reviewAlerts,enabled:value.enabled,groupId:value.groupId||queue.data.reviewAlerts?.groupId||''};queue.save();return respond(res,200,{ok:true});}
- if(url.pathname==='/review'){const value=JSON.parse(bytes);if(typeof value.rowId!=='string'||!['confirm','exclude'].includes(value.decision)||typeof value.reason!=='string'||value.reason.trim().length<3||value.reason.length>300)throw Error('Enter a review reason');let at;if(value.decision==='confirm'){if(typeof value.time!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.time))throw Error('Choose a valid measurement time');const [date,time]=value.time.split('T');const [y,m,d]=date.split('-');at=chatTimestamp(m+'/'+d+'/'+y,time);}await transport.review(value.rowId,value.decision,at,value.reason.trim());return respond(res,200,{ok:true});}
+ if(url.pathname==='/review'){const value=JSON.parse(bytes);if(typeof value.rowId!=='string'||!['confirm','exclude'].includes(value.decision)||typeof value.reason!=='string'||value.reason.trim().length<3||value.reason.length>300)throw Error('Enter a review reason');let at;if(value.decision==='confirm'){if(typeof value.time!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.time))throw Error('Choose a valid measurement time');const [date,time]=value.time.split('T');const [y,m,d]=date.split('-');at=chatTimestamp(m+'/'+d+'/'+y,time);}await transport.review(value.rowId,value.decision,at,value.reason.trim(),value.corrections||{});return respond(res,200,{ok:true});}
  if(url.pathname==='/refresh-groups'){await loadGroups();return respond(res,200,{ok:true});}
  if(url.pathname==='/connect'){await connect();return respond(res,200,{ok:true});}
  if(url.pathname==='/stop'){paused=true;state='Stopped';if(client){const old=client;client=null;await old.destroy();}return respond(res,200,{ok:true});}

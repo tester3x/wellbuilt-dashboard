@@ -44,6 +44,7 @@ export const TABS: TabConfig[] = [
     matchPrefixes: ['/dispatch'],
     capability: 'viewDispatch',
   },
+  {id:'watchdog',label:'Watchdog',href:'/watchdog',matchPrefixes:['/watchdog'],capability:'viewDispatch'},
   {
     id: 'photo-review',
     label: 'Photo Review',
