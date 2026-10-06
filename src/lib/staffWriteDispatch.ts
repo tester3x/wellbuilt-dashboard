@@ -46,6 +46,7 @@ export {
   executeServiceWorkWorkflow,
   cancelServiceWorkWorkflow,
   canonicalJobTypeIdForServiceType,
+  evaluateSplitBblPlan,
 } from './serviceWorkWorkflowCore';
 export type {
   ServiceWorkWorkflowState,

@@ -4,6 +4,7 @@ import {
   canonicalJobTypeIdForServiceType,
   executeServiceWorkWorkflow,
   createServiceWorkWorkflow,
+  evaluateSplitBblPlan,
 } from '../serviceWorkWorkflowCore';
 import { buildCreatePayload, DispatchCreationCoordinator } from '../staffWriteDispatchCore';
 import { matchWellInPool, WellResponse } from '../wellPoolCore';
@@ -122,26 +123,43 @@ test('SW split dispatch gives each leg its own ID and preserves the split group'
     ndicWellName: '',
     serviceType: 'Service Work',
     dropoff: 'Test Well',
-    splitABbls: '80',
-    splitBBbls: '35',
+    splitABbls: '120',
+    splitBBbls: '80',
     splitBNotes: 'On-site follow-up',
+    extraSplitLegs: [{ disposal: 'Gab 1', bbls: '80', notes: 'Final delivery' }],
     isSplitTicket: true,
     assignedBy: 'dispatch@example.com',
   });
-  assert.equal(sent.length, 2);
+  assert.equal(sent.length, 3);
   assert.notEqual(sent[0].dispatchId, sent[1].dispatchId, 'leg B must not reuse leg A dispatchId');
   const a = sent[0].record as Record<string, unknown>;
   const b = sent[1].record as Record<string, unknown>;
+  const c = sent[2].record as Record<string, unknown>;
   assert.equal(a.wellName, 'Added Test');
   assert.equal(b.wellName, 'Test Well');
   assert.equal(a.splitGroupId, b.splitGroupId);
   assert.equal(a.splitSequence, 1);
   assert.equal(b.splitSequence, 2);
+  assert.equal(c.splitSequence, 3);
+  assert.equal(c.splitTotal, 3);
   assert.equal(a.disposal, 'Test Well');
   assert.equal(b.disposal, 'Test Well');
-  assert.equal(a.bbls, 80);
-  assert.equal(b.bbls, 35);
-  assert.equal(b.notes, 'Split ticket B — On-site follow-up');
+  assert.equal(c.disposal, 'Gab 1');
+  assert.equal(a.bbls, 120);
+  assert.equal(b.bbls, undefined, 'actual A carry must prefill B');
+  assert.equal(c.bbls, undefined, 'actual B carry must prefill C');
+  assert.equal(b.notes, 'Split ticket B — Planned delivery 80 BBL — On-site follow-up');
+  assert.equal(c.notes, 'Split ticket C — Planned delivery 80 BBL — Final delivery');
+});
+
+test('SW split quantity mismatch warns without blocking dispatch', () => {
+  const plan = evaluateSplitBblPlan('120', ['80', '80']);
+  assert.equal(plan.plannedTotal, 160);
+  assert.equal(plan.pickupBbls, 120);
+  assert.equal(plan.warning, 'exceeds_pickup');
+  assert.equal(evaluateSplitBblPlan('120', ['80', '40']).warning, undefined);
+  assert.equal(evaluateSplitBblPlan('', ['80']).warning, 'missing_pickup');
+  assert.equal(evaluateSplitBblPlan('120', ['0', '40']).deliveryBbls[0], 0);
 });
 
 test('SW split dispatch rejects invalid A/B planned BBLs before creating jobs', async () => {

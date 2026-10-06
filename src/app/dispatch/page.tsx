@@ -57,6 +57,7 @@ import {
   executeServiceWorkWorkflow,
   cancelServiceWorkWorkflow,
   canonicalJobTypeIdForServiceType,
+  evaluateSplitBblPlan,
   type ServiceWorkWorkflowState,
   createProjectWorkflow,
   executeCreateProjectWorkflow,
@@ -1455,7 +1456,7 @@ function DispatchPageInner() {
       const errMsg = rawMsg.includes('split_dropoff_required')
         ? 'Choose the Split B location before dispatching linked jobs.'
         : rawMsg.includes('split_bbls_invalid')
-        ? 'Enter a positive number for split job BBLs, or leave the field blank.'
+        ? 'Enter a non-negative number for split job BBLs, or leave the field blank.'
         : rawMsg.includes('sent_dispatch_material_changed')
         ? 'A linked job was already sent. Review that job before starting a different split dispatch.'
         : rawMsg;
@@ -2424,6 +2425,17 @@ function DispatchPageInner() {
     return driverSet.size;
   }, [dispatches]);
 
+  const swBblPlan = useMemo(() => {
+    if (!swSplitTicket) return { plan: null, error: '' };
+    try {
+      const deliveries = [swSplitBBbls, ...swExtraSplitLegs.map(leg => leg.bbls)];
+      if (swExtraLegDraft) deliveries.push(swExtraLegDraft.bbls);
+      return { plan: evaluateSplitBblPlan(swSplitABbls, deliveries), error: '' };
+    } catch (error) {
+      return { plan: null, error: error instanceof Error ? error.message : 'split_bbls_invalid' };
+    }
+  }, [swSplitTicket, swSplitABbls, swSplitBBbls, swExtraSplitLegs, swExtraLegDraft]);
+
   // ─── Render Guards ─────────────────────────────────────────────────────────
 
   if (loading) {
@@ -2847,7 +2859,7 @@ function DispatchPageInner() {
                         <h3 className="text-base font-semibold text-purple-200">Split A</h3>
                         <p className="text-xs text-gray-400">Pickup at {swWellName.trim() || 'the location above'}; drop-off at {swDropoff.trim() || 'Split B’s location below'}</p>
                         <div className="mt-3 w-full sm:w-[140px]">
-                          <label htmlFor="sw-split-a-bbls" className="block text-sm text-gray-300 mb-1">BBLs (optional)</label>
+                          <label htmlFor="sw-split-a-bbls" className="block text-sm text-gray-300 mb-1">Pickup BBLs (optional)</label>
                           <input id="sw-split-a-bbls" type="text" inputMode="decimal" value={swSplitABbls}
                             onChange={(e) => setSwSplitABbls(e.target.value)} placeholder="BBLs"
                             className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
@@ -2880,7 +2892,7 @@ function DispatchPageInner() {
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)] gap-3">
                           <div>
-                            <label htmlFor="sw-split-b-bbls" className="block text-sm text-gray-300 mb-1">BBLs (optional)</label>
+                            <label htmlFor="sw-split-b-bbls" className="block text-sm text-gray-300 mb-1">Planned delivery BBLs (optional)</label>
                             <input id="sw-split-b-bbls" type="text" inputMode="decimal" value={swSplitBBbls}
                               onChange={(e) => setSwSplitBBbls(e.target.value)} placeholder="BBLs"
                               className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
@@ -2910,7 +2922,7 @@ function DispatchPageInner() {
                           <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
                             <div><span className="text-gray-400">Location: </span><span className="text-white font-medium">{leg.disposal}</span></div>
                             <div><span className="text-gray-400">On site at: </span><span className="text-white font-medium">{leg.disposal}</span></div>
-                            {leg.bbls && <div><span className="text-gray-400">BBLs: </span><span className="text-white">{leg.bbls}</span></div>}
+                            {leg.bbls && <div><span className="text-gray-400">Planned delivery: </span><span className="text-white">{leg.bbls} BBL</span></div>}
                             {leg.notes && <div><span className="text-gray-400">Notes: </span><span className="text-white">{leg.notes}</span></div>}
                           </div>
                         </div>
@@ -2948,7 +2960,7 @@ function DispatchPageInner() {
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)] gap-3">
                           <div>
-                            <label htmlFor="sw-extra-bbls" className="block text-sm text-gray-300 mb-1">BBLs (optional)</label>
+                            <label htmlFor="sw-extra-bbls" className="block text-sm text-gray-300 mb-1">Planned delivery BBLs (optional)</label>
                             <input id="sw-extra-bbls" type="text" inputMode="decimal"
                               value={swExtraLegDraft.bbls}
                               onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, bbls: e.target.value } : d)}
@@ -2978,7 +2990,7 @@ function DispatchPageInner() {
                             type="button"
                             onClick={() => {
                               const draft = swExtraLegDraft;
-                              if (!draft || !draft.disposal.trim()) return;
+                              if (!draft || !draft.disposal.trim() || swBblPlan.error) return;
                               const id = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
                               setSwExtraSplitLegs(prev => [
                                 ...prev,
@@ -2986,12 +2998,23 @@ function DispatchPageInner() {
                               ]);
                               setSwExtraLegDraft(null);
                             }}
-                            disabled={!swExtraLegDraft.disposal.trim()}
+                            disabled={!swExtraLegDraft.disposal.trim() || !!swBblPlan.error}
                             className="px-4 py-2 text-sm font-medium rounded bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white"
                           >
                             Save Split {String.fromCharCode(67 + swExtraSplitLegs.length)}
                           </button>
                         </div>
+                      </div>
+                    )}
+                    {swSplitTicket && (swBblPlan.error || swBblPlan.plan?.warning || (swBblPlan.plan?.pickupBbls != null && swBblPlan.plan.plannedTotal > 0)) && (
+                      <div role="status" className={`rounded border px-3 py-2 text-sm ${swBblPlan.error ? 'border-red-600/60 bg-red-950/30 text-red-200' : swBblPlan.plan?.warning ? 'border-amber-600/60 bg-amber-950/30 text-amber-200' : 'border-purple-700/50 bg-gray-900 text-gray-300'}`}>
+                        {swBblPlan.error
+                          ? 'Enter non-negative numbers for BBLs, or leave the fields blank.'
+                          : swBblPlan.plan?.warning === 'missing_pickup'
+                            ? `${swBblPlan.plan.plannedTotal} BBL planned for delivery. Add Split A pickup BBLs to compare the total.`
+                            : swBblPlan.plan?.warning === 'exceeds_pickup'
+                              ? `${swBblPlan.plan.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan.pickupBbls} BBL. That is ${Math.round((swBblPlan.plan.plannedTotal - (swBblPlan.plan.pickupBbls || 0)) * 100) / 100} BBL beyond the initial load. Review the source of the extra volume.`
+                              : `${swBblPlan.plan?.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan?.pickupBbls} BBL. ${swBblPlan.plan?.unallocatedBbls} BBL has no planned stop yet.`}
                       </div>
                     )}
                     {/* Keep driver selection and notes usable as split cards grow.
@@ -3066,7 +3089,7 @@ function DispatchPageInner() {
                       Clear
                     </button>
                     <button onClick={submitServiceWork}
-                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || swExtraLegDraft !== null || (swSplitTicket && !swDropoff.trim())}
+                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || swExtraLegDraft !== null || (swSplitTicket && (!swDropoff.trim() || !!swBblPlan.error))}
                       className="flex-1 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
                       {swSubmitting ? 'Sending...' : swExtraLegDraft ? `Save Split ${String.fromCharCode(67 + swExtraSplitLegs.length)} first` : swSplitTicket && !swDropoff.trim() ? 'Set Split B location' : 'Dispatch'}
                     </button>

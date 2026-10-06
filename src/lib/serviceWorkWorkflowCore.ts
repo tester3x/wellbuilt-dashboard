@@ -37,7 +37,7 @@ export interface ServiceWorkDriverInput extends DriverIdentity {
 export interface ExtraSplitLegInput {
   id?: string;
   disposal: string;
-  bbls?: string | number;
+  bbls?: string | number; // Planned delivery at this stop, not load entering it.
   notes?: string;
 }
 
@@ -51,8 +51,8 @@ export interface ExecuteServiceWorkInput {
   serviceType: string;
   packageId?: string;
   dropoff?: string;
-  splitABbls?: string | number;
-  splitBBbls?: string | number;
+  splitABbls?: string | number; // Total load picked up on A.
+  splitBBbls?: string | number; // Planned delivery at B.
   splitBNotes?: string;
   onsiteBy?: string;
   notes?: string;
@@ -72,6 +72,30 @@ export interface ExecuteServiceWorkResult {
   serviceGroupId?: string;
   splitGroupId?: string;
   dispatches: Array<{ dispatchId: string; unitId: string }>;
+}
+
+export function evaluateSplitBblPlan(
+  pickupRaw: string | number | undefined,
+  deliveryRaws: Array<string | number | undefined>,
+): { pickupBbls?: number; deliveryBbls: Array<number | undefined>; plannedTotal: number; unallocatedBbls?: number; warning?: 'missing_pickup' | 'exceeds_pickup' } {
+  const parse = (raw: string | number | undefined): number | undefined => {
+    if (raw == null || String(raw).trim() === '') return undefined;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0) throw new Error('split_bbls_invalid');
+    return value;
+  };
+  const pickupBbls = parse(pickupRaw);
+  const deliveryBbls = deliveryRaws.map(parse);
+  const plannedTotal = deliveryBbls.reduce<number>((sum, value) => sum + (value || 0), 0);
+  return {
+    pickupBbls,
+    deliveryBbls,
+    plannedTotal,
+    unallocatedBbls: pickupBbls == null ? undefined : Math.max(0, Math.round((pickupBbls - plannedTotal) * 100) / 100),
+    warning: pickupBbls == null && plannedTotal > 0 ? 'missing_pickup'
+      : pickupBbls != null && plannedTotal > pickupBbls + 1e-9 ? 'exceeds_pickup'
+      : undefined,
+  };
 }
 
 /**
@@ -192,14 +216,11 @@ export async function executeServiceWorkWorkflow(
   if (!serviceType.trim()) throw new Error('service_type_required');
   if (selectedDrivers.length === 0) throw new Error('no_drivers_selected');
   if (isSplitTicket && !dropoff?.trim()) throw new Error('split_dropoff_required');
-  const plannedBbls = (raw: string | number | undefined): number | undefined => {
-    if (raw == null || String(raw).trim() === '') return undefined;
-    const value = Number(raw);
-    if (!Number.isFinite(value) || value <= 0) throw new Error('split_bbls_invalid');
-    return value;
-  };
-  const aBbls = isSplitTicket ? plannedBbls(splitABbls) : undefined;
-  const bBbls = isSplitTicket ? plannedBbls(splitBBbls) : undefined;
+  const bblPlan = isSplitTicket
+    ? evaluateSplitBblPlan(splitABbls, [splitBBbls, ...(extraSplitLegs || []).map(leg => leg.bbls)])
+    : null;
+  const aBbls = bblPlan?.pickupBbls;
+  const bDeliveryBbls = bblPlan?.deliveryBbls[0];
 
   // Allocate group IDs once per workflow; retain across all retries
   ensureServiceWorkGroupIds(workflow, selectedDrivers.length > 1, !!isSplitTicket);
@@ -261,8 +282,9 @@ export async function executeServiceWorkWorkflow(
         wellName: dropoff.trim(),
         ndicWellName: '',
         disposal: dropoff.trim(),
-        notes: `Split ticket B — ${splitBNotes?.trim() || notes || serviceType.trim()}`,
-        ...(bBbls != null ? { bbls: bBbls } : {}),
+        notes: `Split ticket B — ${bDeliveryBbls != null ? `Planned delivery ${bDeliveryBbls} BBL — ` : ''}${splitBNotes?.trim() || notes || serviceType.trim()}`,
+        // WB T treats dispatch.bbls as the load entering this leg. Leave it
+        // unset so the actual load carried from A pre-fills B.
         splitGroupId: workflow.splitGroupId!,
         splitSequence: 2,
         ...(splitTotal != null ? { splitTotal } : {}),
@@ -280,19 +302,18 @@ export async function executeServiceWorkWorkflow(
       for (let idx = 0; idx < extraSplitLegs.length; idx++) {
         const extra = extraSplitLegs[idx];
         const letter = String.fromCharCode(67 + idx);
-        const bblsNum = extra.bbls ? (typeof extra.bbls === 'number' ? extra.bbls : parseFloat(String(extra.bbls))) : NaN;
+        const plannedDelivery = bblPlan?.deliveryBbls[idx + 1];
         const extraJob: Record<string, unknown> = {
           ...baseJob,
           wellName: extra.disposal.trim(),
           ndicWellName: '',
           disposal: extra.disposal.trim(),
-          notes: extra.notes
-            ? `Split ticket ${letter} — ${extra.notes}`
-            : `Split ticket ${letter} — ${serviceType.trim()}`,
+          notes: `Split ticket ${letter} — ${plannedDelivery != null ? `Planned delivery ${plannedDelivery} BBL — ` : ''}${extra.notes || serviceType.trim()}`,
           splitGroupId: workflow.splitGroupId!,
           splitSequence: 3 + idx,
           ...(splitTotal != null ? { splitTotal } : {}),
-          ...(isFinite(bblsNum) && bblsNum > 0 ? { bbls: bblsNum } : {}),
+          // The actual remainder from the previous stop must prefill this leg.
+          // An explicit dispatch.bbls here would override that carry-forward.
         };
         const extraUnitId = `${driver.key}::leg${3 + idx}`;
         const resExtra = await coordinator.executeUnit(invoke, extraJob, {
