@@ -8,7 +8,8 @@ import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { operationalDriverName } from '@/lib/operationalDriverName';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
-import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
+import { comparePhysicalJobs, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
+import { nextDisplayedJobId, orderSplitTicketChains } from '@/lib/splitTicketDisplayOrder';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
@@ -4820,12 +4821,12 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(d);
     });
-    // Sort each driver's jobs by the SHARED physical-readiness contract, so the assigned
-    // subset matches the Well Queue: in-progress pinned, then by the well's Well-Queue
-    // rank, deterministic ties. Assignment status never alters physical priority.
+    // Sort by physical readiness, then keep each linked Service Work split chain in
+    // ticket sequence. Unrelated jobs retain Well Queue priority and stable ties.
     map.forEach((jobs, key) => {
       const rankById = new Map(jobs.map(jb => [jb.id, rankOf(jb)]));
-      const ordered = [...jobs].sort((a, b) => comparePhysicalJobs(rankById.get(a.id)!, rankById.get(b.id)!));
+      const physicalOrder = [...jobs].sort((a, b) => comparePhysicalJobs(rankById.get(a.id)!, rankById.get(b.id)!));
+      const ordered = orderSplitTicketChains(physicalOrder);
       map.set(key, ordered);
     });
     return new Map(
@@ -4837,12 +4838,11 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     );
   }, [assigned, drivers, rankOf]);
 
-  // Recommended-next per driver group: first non-in-progress job in physical order (DOWN
-  // is NOT categorically excluded — a DOWN well may hold pullable water — it just sorts to
-  // the DOWN tier, so a ready well wins first). Marks an existing card; never a duplicate.
+  // Recommend the first available card in the displayed order. Physical priority still
+  // governs unrelated jobs; linked split tickets follow A, B, C work sequence.
   const recommendedByGroup = useMemo(() => {
     const m = new Map<string, string | null>();
-    grouped.forEach((jobs, key) => m.set(key, recommendedNextJobId(jobs.map(rankOf))));
+    grouped.forEach((jobs, key) => m.set(key, nextDisplayedJobId(jobs, j => rankOf(j).inProgress)));
     return m;
   }, [grouped, rankOf]);
 
