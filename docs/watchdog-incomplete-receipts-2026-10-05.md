@@ -10,4 +10,4 @@ Three confirmed partial writes were repaired with conditional ETag writes: two K
 
 Validation: TypeScript build passed; 14 intake/receipt tests passed, including rejection of a changed canonical bottom or wrong observation. Expanded notification suite had one pre-existing source-census assertion failure (expects three call sites; branch has two); no notification source was changed.
 
-Deployment: processIncomingPull missing-name fix deployed successfully. Final processIncomingPull + getWatchdogPullReceiptV2 deployment and live receipt verification pending at this checkpoint.
+Deployment: processIncomingPull missing-name fix deployed successfully. Final processIncomingPull + getWatchdogPullReceiptV2 deployment completed successfully from e6c3e62e. Live watchdog is Connected / Ready and all three repaired deliveries report complete. Re-read verification confirms no new affected packet IDs and unchanged original time, top, bottom, barrels, ownership and flowRateDays. Latest unified status identifies the latest existing packet for each well.
