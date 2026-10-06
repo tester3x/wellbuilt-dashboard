@@ -5,3 +5,5 @@ button:disabled{opacity:.45;cursor:not-allowed}#notice:not(:empty){padding:12px;
 .group-posts input{display:block;box-sizing:border-box;width:100%;margin:8px 0;background:#0e1725;color:#edf4ff;border:1px solid #68809c}.group-posts button{max-width:100%}
 
 .barrel-table-wrap{overflow:auto;max-height:360px}#barrel-test-table{border-collapse:collapse;width:100%;font-size:14px}#barrel-test-table th,#barrel-test-table td{text-align:left;padding:10px;border-bottom:1px solid #34445a;min-width:100px}#barrel-test-table th{position:sticky;top:0;background:#152238}#barrel-test{scroll-margin-top:12px}
+
+.review-alert{border:2px solid #e3b936;padding:14px;border-radius:8px;font-weight:bold}.review-badge{font-size:13px;margin-left:8px;padding:5px 8px}#review-items input{display:block;margin:8px 0;max-width:95%}#review-items article{border-color:#e3b936}

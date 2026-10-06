@@ -35,7 +35,8 @@ export class Queue{
  }
  if(changed)this.save();
  }
- snapshot(){const messages=Object.values(this.data.messages);return {messageCount:messages.length,pullCount:messages.reduce((n,m)=>n+m.rows.length,0),messages:messages.filter(m=>m.rows.length||m.notices.length||m.deleted).slice(-200).reverse()};}
+ reviewInbox(){return Object.values(this.data.messages).flatMap(post=>post.rows.filter(row=>this.data.deliveries?.[row.id]?.status==='review').map(row=>({post:{...post,rows:[row]},row}))).sort((a,b)=>Date.parse(a.post.postedAt||a.post.updatedAt)-Date.parse(b.post.postedAt||b.post.updatedAt));}
+ snapshot(){const messages=Object.values(this.data.messages);return {reviewInbox:this.reviewInbox(),messageCount:messages.length,pullCount:messages.reduce((n,m)=>n+m.rows.length,0),messages:messages.filter(m=>m.rows.length||m.notices.length||m.deleted).slice(-200).reverse()};}
  liveFeed(channels){const selected=new Set(channels),counts=new Map();return Object.values(this.data.messages).filter(m=>selected.has(m.channel)&&!m.id.startsWith('export:')).sort((a,b)=>Date.parse(b.postedAt||b.updatedAt)-Date.parse(a.postedAt||a.updatedAt)).filter(m=>{const count=counts.get(m.channel)||0;counts.set(m.channel,count+1);return count<100;});}
  export(channel){return Object.values(this.data.messages).filter(m=>m.channel===channel&&!m.deleted&&(m.rows.length||m.notices.length)).sort((a,b)=>Date.parse(a.rows[0]?.postedAt||a.updatedAt)-Date.parse(b.rows[0]?.postedAt||b.updatedAt)).map(m=>m.chat).join('\n');}
 }

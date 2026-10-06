@@ -56,3 +56,5 @@ test('sender IDs survive queue restart and automatic delivery without trusting d
  }finally{rmSync(dir,{recursive:true,force:true});}
  function expectSender(q){assert.equal(Object.values(q.data.messages)[0].senderId,'123456789@lid');}
 });
+
+test('review inbox retains old holds beyond feed limits and removes resolved holds',()=>{const dir=mkdtempSync(path.join(os.tmpdir(),'wb-inbox-'));try{const q=new Queue(dir);q.ingest({id:'old',channel:'quiet',chat:header('2026-10-03T01:00:00Z','Driver','Kahuna 5\nTop 12\n165 bbl')});const row=Object.values(q.data.messages)[0].rows[0];q.data.deliveries={[row.id]:{status:'review'}};for(let i=0;i<205;i++)q.ingest({id:'new'+i,channel:'busy',chat:header(Date.now(),'Driver','Kahuna 5\nTop 12\n165 bbl')});assert.ok(!q.snapshot().messages.some(p=>p.id==='old'));assert.equal(q.snapshot().reviewInbox.length,1);assert.equal(q.snapshot().reviewInbox[0].post.channel,'quiet');q.data.deliveries[row.id].status='excluded';assert.equal(q.reviewInbox().length,0);q.data.deliveries[row.id].status='complete';assert.equal(q.reviewInbox().length,0);}finally{rmSync(dir,{recursive:true,force:true});}});

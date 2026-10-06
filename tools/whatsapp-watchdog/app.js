@@ -2,8 +2,10 @@ let token='__TOKEN__';const $=id=>document.getElementById(id);let current;let bu
 async function api(url,body,method=body===undefined?'GET':'POST'){const request=()=>fetch(url,{method,headers:{'x-watchdog-token':token},body:body===undefined?undefined:body});let response=await request();if(response.status===403){const source=await(await fetch('/app.js',{cache:'no-store'})).text();const fresh=/let token='([^']+)'/.exec(source);if(fresh&&fresh[1]!==token){token=fresh[1];response=await request();}}const data=await response.json();if(!response.ok)throw Error(data.error);return data;}
 function node(tag,text,parent){const el=document.createElement(tag);el.textContent=text;parent.append(el);return el;}
 async function refresh(){current=await api('/status');$('status').textContent=`${current.state} · ${current.receiverMode||''} · WB M: ${current.transportStatus||'Not configured'} · ${current.paused?'Paused':'Watching'} · ${current.pullCount} parsed pulls · ${current.messageCount} captured messages${current.error?' · '+current.error:''}`;$('qr').hidden=!current.qr;if(current.qr)$('qr').src=current.qr;
+ renderReviews();
  renderBarrelTest();
  renderLiveFeed();
+ renderReviews();
  $('resume').disabled=busy||current.state!=='Connected'||!current.channels.length||!current.paused;$('pause').disabled=busy||current.paused;$('save').disabled=busy||!current.chats.length;$('connect').disabled=busy||['Connecting','Syncing WhatsApp','Connected','Scan QR'].includes(current.state);
  if(!$('groups').contains(document.activeElement)&&$('groups').dataset.signature!==JSON.stringify(current.chats)){$('groups').replaceChildren();$('groups').dataset.signature=JSON.stringify(current.chats);for(const chat of current.chats){const div=node('div','',$('groups'));div.className='group';const check=node('input','',div);check.type='checkbox';check.dataset.id=chat.id;const saved=current.channels.find(c=>c.id===chat.id);check.checked=!!saved;node('span',chat.name,div);const well=node('input','',div);well.type='text';well.placeholder='Default well';well.value=saved?.options.defaultWell||'';const label=node('label','',div),def=node('input','',label);def.type='checkbox';def.checked=Number(saved?.options.defaultBbls)>0;node('span',' Missing barrels fallback: ',label);const amount=node('input','',label);amount.type='number';amount.min='1';amount.max='1000';amount.step='any';amount.value=saved?.options.defaultBbls||165;amount.setAttribute('aria-label','Missing barrels fallback for '+chat.name);amount.disabled=!def.checked;def.onchange=()=>amount.disabled=!def.checked;}}
  $('exports').replaceChildren();for(const c of current.channels){const b=node('button','Download '+c.name,$('exports'));b.onclick=()=>download(c.id,c.name);}
@@ -73,3 +75,19 @@ function renderWellControls(panel,group,archivedWell){
  const posts=(current.messages||[]).filter(p=>p.channel===group.id&&p.rows.some(r=>r.wellName===w.wellName));node('p',posts.length+' saved posts. Starting again will require a new monitoring run; WB M stays marked down until manually unchecked.',list);for(const p of posts){const card=node('article','',list);node('pre',p.chat,card);}
  };select.onchange=draw;draw();
 }
+
+function openReviews(channel=''){ $('review-filter').value=channel;renderReviews();$('review-inbox').scrollIntoView({behavior:'smooth'});}
+function reviewBadge(parent,channel){const count=(current.reviewInbox||[]).filter(e=>e.post.channel===channel).length;let badge=parent.querySelector('.review-badge');if(!badge){badge=node('button','',parent);badge.className='review-badge';badge.onclick=()=>openReviews(channel);}badge.textContent=count+' need review';badge.hidden=!count;}
+function renderReviews(){
+ const entries=current.reviewInbox||[],filter=$('review-filter');
+ document.title=(entries.length?'('+entries.length+' reviews) ':'')+'WellBuilt Watchdog';
+ const banner=$('review-banner');banner.replaceChildren();const link=node('a',entries.length+' pulls need review',banner);link.href='#review-inbox';link.onclick=()=>openReviews();banner.className=entries.length?'review-alert':'';
+ const groups=[...new Set(entries.map(e=>e.post.channel))];const options=JSON.stringify(groups.map(id=>[id,current.channels.find(c=>c.id===id)?.name||id]));if(filter.dataset.options!==options){const value=filter.value;filter.replaceChildren();node('option','All groups',filter).value='';for(const id of groups)node('option',current.channels.find(c=>c.id===id)?.name||id,filter).value=id;filter.value=groups.includes(value)?value:'';filter.dataset.options=options;}
+ for(const panel of $('live-feed').children)if(panel.dataset.channel)reviewBadge(panel.querySelector('h3'),panel.dataset.channel);
+ for(const div of $('groups').children)reviewBadge(div.children[1],div.children[0].dataset.id);
+ const list=$('review-items');if(list.contains(document.activeElement))return;
+ const shown=entries.filter(e=>!filter.value||e.post.channel===filter.value),signature=JSON.stringify(shown.map(e=>[e,current.deliveries?.[e.row.id]]));if(list.dataset.signature===signature)return;list.dataset.signature=signature;list.replaceChildren();
+ if(!shown.length)node('p','No pulls waiting for review.',list);
+ for(const {post,row} of shown){const card=node('article','',list);node('h3',row.wellName+' � '+(current.channels.find(c=>c.id===post.channel)?.name||post.channel),card);node('p',(post.author||'Driver')+' � '+new Date(post.postedAt||post.updatedAt).toLocaleString('en-US',{timeZone:'America/Chicago'}),card);node('pre',post.body||post.chat,card);node('p',(current.deliveries?.[row.id]?.issues||row.issues||[]).join('; ')||'Held for review',card).className='warn';reviewControls(row,post,card);if(post.edited||post.deleted||current.deliveries?.[row.id]?.identity)node('p','This hold needs reconciliation before it can be sent again.',card);}
+}
+$('review-filter').onchange=()=>renderReviews();
