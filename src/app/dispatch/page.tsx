@@ -2730,9 +2730,9 @@ function DispatchPageInner() {
 
               {/* ── SW Tab ── */}
               {builderTab === 'sw' && (
-                <div className="flex-1 flex flex-col min-h-0">
+                <div className="flex flex-col flex-shrink-0">
                   <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-2">Dispatch Service Work</div>
-                  <div className="flex flex-col gap-2 flex-1 min-h-0">
+                  <div className="flex flex-col gap-2">
                     {/* Top row: Well/Drop-off stacked left, Service Type + Onsite By stacked right */}
                     <div className="flex gap-3 flex-shrink-0">
                       {/* Left: Well + Drop-off stacked */}
@@ -2994,8 +2994,9 @@ function DispatchPageInner() {
                         </div>
                       </div>
                     )}
-                    {/* Bottom row: Driver list + Notes side by side, bottom-aligned */}
-                    <div className="flex gap-3 flex-1 min-h-0">
+                    {/* Keep driver selection and notes usable as split cards grow.
+                        The builder owns vertical scrolling on desktop. */}
+                    <div className="flex gap-3 min-h-[220px]">
                       {/* Driver picker */}
                       <div className="flex-1 flex flex-col min-h-0">
                         <label className="block text-xs text-gray-400 mb-1">
