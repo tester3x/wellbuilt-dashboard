@@ -3014,7 +3014,9 @@ function DispatchPageInner() {
                             ? `${swBblPlan.plan.plannedTotal} BBL planned for delivery. Add Split A pickup BBLs to compare the total.`
                             : swBblPlan.plan?.warning === 'exceeds_pickup'
                               ? `${swBblPlan.plan.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan.pickupBbls} BBL. That is ${Math.round((swBblPlan.plan.plannedTotal - (swBblPlan.plan.pickupBbls || 0)) * 100) / 100} BBL beyond the initial load. Review the source of the extra volume.`
-                              : `${swBblPlan.plan?.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan?.pickupBbls} BBL. ${swBblPlan.plan?.unallocatedBbls} BBL has no planned stop yet.`}
+                              : swBblPlan.plan?.unallocatedBbls === 0
+                                ? 'All BBLs accounted for.'
+                                : `${swBblPlan.plan?.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan?.pickupBbls} BBL. ${swBblPlan.plan?.unallocatedBbls} BBL has no planned stop yet.`}
                       </div>
                     )}
                     {/* Keep driver selection and notes usable as split cards grow.
