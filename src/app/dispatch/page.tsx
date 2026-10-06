@@ -2890,7 +2890,7 @@ function DispatchPageInner() {
                             optionClassName="wb-option-row w-full px-3 py-2 border-b border-gray-700/50 last:border-0 text-left text-white text-sm"
                           />
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)] gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-end gap-3">
                           <div>
                             <label htmlFor="sw-split-b-bbls" className="block text-sm text-gray-300 mb-1">Planned delivery BBLs (optional)</label>
                             <input id="sw-split-b-bbls" type="text" inputMode="decimal" value={swSplitBBbls}
@@ -2958,7 +2958,7 @@ function DispatchPageInner() {
                             optionClassName="wb-option-row w-full px-3 py-2 border-b border-gray-700/50 last:border-0 text-left text-white text-sm"
                           />
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)] gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-end gap-3">
                           <div>
                             <label htmlFor="sw-extra-bbls" className="block text-sm text-gray-300 mb-1">Planned delivery BBLs (optional)</label>
                             <input id="sw-extra-bbls" type="text" inputMode="decimal"
