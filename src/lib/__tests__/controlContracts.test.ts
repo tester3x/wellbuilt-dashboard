@@ -29,6 +29,8 @@ const deployedSet = new Set(DEPLOYED.names);
  * deploys one, this list must shrink (a test below enforces that).
  */
 const KNOWN_BLOCKED_MISSING: Record<string, string> = {
+  listWatchdogReviews: 'BLOCKED: tested remote review endpoint awaits explicit production deployment approval.',
+  decideWatchdogReview: 'BLOCKED: tested remote review decision endpoint awaits explicit production deployment approval.',
   staffIngestDashboardPull: 'BLOCKED: exported in source, but absent from the 2026-09-23 production Functions inventory; deploy and verify this named callable before treating +Add Pull as working.',
   updateSpillNotificationPolicy: 'BLOCKED: deploy the spill-notification-policy callable (no deployed target).',
   staffBackfillDieselPrices: 'BLOCKED: deploy a governed diesel-backfill callable (only triggerDieselFetch/weeklyDieselPriceFetch exist).',
