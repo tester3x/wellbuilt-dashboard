@@ -274,6 +274,9 @@ export class DispatchCreationCoordinator {
     if (unit) {
       // If unit already succeeded, preserve identity
       if (unit.status === 'succeeded') {
+        if (!materialBirthFieldsMatch(unit.payloadRecord, record)) {
+          throw new Error('sent_dispatch_material_changed');
+        }
         return { dispatchId: unit.dispatchId, unitId, actionId };
       }
       // If material birth fields match, preserve existing dispatchId across rerender/re-entry

@@ -513,7 +513,11 @@ export function evaluateCreateIfAbsent(input: {
   if (!dispatchBindingsEqual(existingBind, input.expected.binding)) return fail('conflict', 'binding');
   const company = typeof existing.companyId === 'string' ? existing.companyId.trim() : '';
   const driver = typeof existing.driverId === 'string' ? existing.driverId.trim() : '';
-  const jobType = typeof existing.jobType === 'string' ? existing.jobType.trim() : '';
+  // jobType is a display family ("service"); jobTypeId is the canonical packet
+  // identity ("service-work") used when this dispatch was created.
+  const jobType = typeof existing.jobTypeId === 'string' && existing.jobTypeId.trim()
+    ? existing.jobTypeId.trim()
+    : (typeof existing.jobType === 'string' ? existing.jobType.trim() : '');
   if (company !== input.expected.companyId) return fail('conflict', 'companyId');
   if (driver !== input.expected.driverId) return fail('conflict', 'driverId');
   if (jobType !== input.expected.jobTypeId) return fail('conflict', 'jobType');

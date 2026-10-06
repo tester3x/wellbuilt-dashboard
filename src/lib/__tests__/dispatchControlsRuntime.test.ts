@@ -1209,6 +1209,19 @@ test('Item 32: All seven already-stable workflows remain stable', async () => {
   coord.finalizeAction(act7);
 });
 
+test('A sent split leg cannot be silently reused after its pickup changes', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const actionId = coord.beginAction({ actionScope: 'service-work-modal' });
+  const invoke: CallableInvoker = async (payload: any) => ({ data: { dispatchId: payload.dispatchId } });
+  const original = { wellName: 'Added Test', driverHash: 'driverA', jobType: 'service', splitSequence: 1 };
+  const sent = await coord.executeUnit(invoke, { ...original }, { actionId, unitId: 'driverA::leg1' });
+  assert.ok(sent.dispatchId);
+  assert.throws(
+    () => coord.prepareUnit(actionId, 'driverA::leg1', { ...original, wellName: 'Different Pickup' }),
+    /sent_dispatch_material_changed/,
+  );
+});
+
 test('Item 33: Scoped cancellation remains correct', () => {
   const coord = new DispatchCreationCoordinator();
   const actA = coord.beginAction({ actionScope: 'modal-A' });

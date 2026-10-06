@@ -106,6 +106,36 @@ test('SW dispatch contract: executeServiceWorkWorkflow produces single-driver pa
   assert.equal(rec.notes, 'Haul casing tools');
 });
 
+test('SW split dispatch gives each leg its own ID and preserves the split group', async () => {
+  const sent: Array<Record<string, unknown>> = [];
+  const invoke = async (payload: unknown) => {
+    const request = payload as Record<string, unknown>;
+    sent.push(request);
+    return { data: { dispatchId: request.dispatchId } };
+  };
+  await executeServiceWorkWorkflow({
+    workflow: createServiceWorkWorkflow(),
+    coordinator: new DispatchCreationCoordinator(),
+    invoke,
+    selectedDrivers: [{ key: 'driver-1', id: 'driver-1', displayName: 'Driver One' }],
+    wellName: 'Added Test',
+    ndicWellName: '',
+    serviceType: 'Service Work',
+    dropoff: 'Test Well',
+    isSplitTicket: true,
+    assignedBy: 'dispatch@example.com',
+  });
+  assert.equal(sent.length, 2);
+  assert.notEqual(sent[0].dispatchId, sent[1].dispatchId, 'leg B must not reuse leg A dispatchId');
+  const a = sent[0].record as Record<string, unknown>;
+  const b = sent[1].record as Record<string, unknown>;
+  assert.equal(a.wellName, 'Added Test');
+  assert.equal(b.wellName, 'Test Well');
+  assert.equal(a.splitGroupId, b.splitGroupId);
+  assert.equal(a.splitSequence, 1);
+  assert.equal(b.splitSequence, 2);
+});
+
 test('SW dispatch contract: multi-driver workflow generates shared serviceGroupId across all drivers', async () => {
   const workflow = createServiceWorkWorkflow();
   const dispatchesCreated: Array<{ payload: Record<string, unknown> }> = [];

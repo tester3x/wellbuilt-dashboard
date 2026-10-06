@@ -231,7 +231,9 @@ export async function executeServiceWorkWorkflow(
     };
 
     const unit1Id = `${driver.key}::leg1`;
-    const res1 = await coordinator.executeUnit(invoke, baseJob, {
+    // The coordinator stamps dispatchId onto its input for retries. Keep the
+    // template free of leg A's ID before deriving subsequent split legs.
+    const res1 = await coordinator.executeUnit(invoke, { ...baseJob }, {
       actionId: workflow.actionId,
       actionScope: 'service-work-modal',
       unitId: unit1Id,

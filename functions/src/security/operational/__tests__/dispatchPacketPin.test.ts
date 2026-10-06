@@ -523,6 +523,27 @@ describe('idempotent birth and binding immutability', () => {
     expect(replay.ok && replay.result === 'already_exists').toBe(true);
     expect(existing.status).toBe('in_progress');
   });
+  it('F2. service-work replay compares canonical jobTypeId, not display jobType', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const binding = stampDispatchBinding(rev);
+    const identity = {
+      companyId: COMPANY, driverId: DRIVER, jobTypeId: 'service-work', binding,
+      well: { wellName: 'Added Test', ndicWellName: '' },
+    };
+    const existing = {
+      companyId: COMPANY, driverId: DRIVER,
+      jobType: 'service', jobTypeId: 'service-work',
+      wellName: 'Added Test', ndicWellName: '', status: 'accepted',
+      ...binding,
+    };
+    expect(evaluateCreateIfAbsent({ existing, expected: identity })).toMatchObject({
+      ok: true, result: 'already_exists',
+    });
+    expect(evaluateCreateIfAbsent({
+      existing: { ...existing, jobTypeId: 'pw' }, expected: identity,
+    })).toMatchObject({ ok: false, field: 'jobType' });
+  });
   it('F2. different wellName conflicts', async () => {
     const store = new MemoryStore();
     const rev = await publishRevision(store);

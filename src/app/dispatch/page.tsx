@@ -1437,7 +1437,10 @@ function DispatchPageInner() {
         },
       });
     } catch (err: any) {
-      const errMsg = err?.message || 'Failed to dispatch service work';
+      const rawMsg = err?.message || 'Failed to dispatch service work';
+      const errMsg = rawMsg.includes('sent_dispatch_material_changed')
+        ? 'A linked job was already sent. Review that job before starting a different split dispatch.'
+        : rawMsg;
       setSwError(errMsg);
       setMessage(`Error: ${errMsg}`);
       setTimeout(() => setMessage(''), 5000);
