@@ -3,6 +3,7 @@ async function api(url,body,method=body===undefined?'GET':'POST'){const request=
 function node(tag,text,parent){const el=document.createElement(tag);el.textContent=text;parent.append(el);return el;}
 async function refresh(){current=await api('/status');$('status').textContent=`${current.state} · ${current.receiverMode||''} · WB M: ${current.transportStatus||'Not configured'} · ${current.paused?'Paused':'Watching'} · ${current.pullCount} parsed pulls · ${current.messageCount} captured messages${current.error?' · '+current.error:''}`;$('qr').hidden=!current.qr;if(current.qr)$('qr').src=current.qr;
  renderReviews();
+ renderAlertSettings();
  renderBarrelTest();
  renderLiveFeed();
  renderReviews();
@@ -91,3 +92,6 @@ function renderReviews(){
  for(const {post,row} of shown){const card=node('article','',list);node('h3',row.wellName+' � '+(current.channels.find(c=>c.id===post.channel)?.name||post.channel),card);node('p',(post.author||'Driver')+' � '+new Date(post.postedAt||post.updatedAt).toLocaleString('en-US',{timeZone:'America/Chicago'}),card);node('pre',post.body||post.chat,card);node('p',(current.deliveries?.[row.id]?.issues||row.issues||[]).join('; ')||'Held for review',card).className='warn';reviewControls(row,post,card);if(post.edited||post.deleted||current.deliveries?.[row.id]?.identity)node('p','This hold needs reconciliation before it can be sent again.',card);}
 }
 $('review-filter').onchange=()=>renderReviews();
+
+function renderAlertSettings(){const config=current.reviewAlerts||{},select=$('alerts-group'),signature=JSON.stringify(current.chats);if(!select.parentElement.parentElement.contains(document.activeElement)){if(select.dataset.signature!==signature){select.replaceChildren();node('option','Choose alert group',select).value='';for(const c of current.chats||[])node('option',c.name,select).value=c.id;select.dataset.signature=signature;}select.value=config.groupId||'';$('alerts-enabled').checked=!!config.enabled;}$('alerts-status').textContent=(config.enabled?'WhatsApp alerts enabled':'WhatsApp alerts off')+(config.lastSentAt?' / Last sent: '+new Date(config.lastSentAt).toLocaleString('en-US',{timeZone:'America/Chicago'}):'')+(config.error?' / Send failed: '+config.error:'');}
+$('alerts-save').onclick=()=>action(()=>api('/review-alerts',JSON.stringify({enabled:$('alerts-enabled').checked,groupId:$('alerts-group').value})),$('alerts-save'),'Review alert settings saved.');
