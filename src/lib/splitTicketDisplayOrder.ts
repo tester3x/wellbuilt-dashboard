@@ -31,8 +31,3 @@ export function orderSplitTicketChains<T extends {
   }
   return ordered;
 }
-
-/** The Next badge follows the same card order the dispatcher sees. */
-export function nextDisplayedJobId<T extends { id?: string }>(jobs: readonly T[], isInProgress: (job: T) => boolean): string | null {
-  return jobs.find(job => !isInProgress(job))?.id || null;
-}

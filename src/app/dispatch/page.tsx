@@ -8,8 +8,8 @@ import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { operationalDriverName } from '@/lib/operationalDriverName';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
-import { comparePhysicalJobs, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
-import { nextDisplayedJobId, orderSplitTicketChains } from '@/lib/splitTicketDisplayOrder';
+import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
+import { orderSplitTicketChains } from '@/lib/splitTicketDisplayOrder';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
@@ -4838,11 +4838,11 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     );
   }, [assigned, drivers, rankOf]);
 
-  // Recommend the first available card in the displayed order. Physical priority still
-  // governs unrelated jobs; linked split tickets follow A, B, C work sequence.
+  // PW recommendations use physical readiness. SW jobs have no Next badge because
+  // split-ticket sequence is shown directly on their cards.
   const recommendedByGroup = useMemo(() => {
     const m = new Map<string, string | null>();
-    grouped.forEach((jobs, key) => m.set(key, nextDisplayedJobId(jobs, j => rankOf(j).inProgress)));
+    grouped.forEach((jobs, key) => m.set(key, recommendedNextJobId(jobs.filter(j => j.jobType !== 'service').map(rankOf))));
     return m;
   }, [grouped, rankOf]);
 
@@ -4971,7 +4971,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
             compact={jobs.length > 2}
             onClickServiceWork={onEditServiceWork}
             onReassign={onReassignDeclined}
-            isRecommendedNext={recommendedByGroup.get(driverHash) === job.id}
+            isRecommendedNext={job.jobType !== 'service' && recommendedByGroup.get(driverHash) === job.id}
             isWellDown={!!job.id && downByJobId.has(job.id)}
             onDismiss={(j) => {
               setConfirmDismissJob(j);

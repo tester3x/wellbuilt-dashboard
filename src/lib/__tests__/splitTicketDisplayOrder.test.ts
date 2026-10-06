@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextDisplayedJobId, orderSplitTicketChains } from '../splitTicketDisplayOrder.ts';
+import { orderSplitTicketChains } from '../splitTicketDisplayOrder.ts';
 
 const job = (id: string, splitGroupId?: string, splitSequence?: number) => ({
   id,
@@ -18,10 +18,4 @@ test('linked split tickets display A, B, C while unrelated jobs keep physical or
 test('separate chains stay separate and incomplete sequence metadata sorts last', () => {
   const physical = [job('B2', 'split-2', 2), job('C1', 'split-1', 3), job('A2', 'split-2', 1), job('unknown1', 'split-1'), job('B1', 'split-1', 2)];
   assert.deepEqual(orderSplitTicketChains(physical).map(j => j.id), ['A2', 'B2', 'B1', 'C1', 'unknown1']);
-});
-
-test('Next badge points to A, then B after A becomes active', () => {
-  const displayed = orderSplitTicketChains([job('B', 'split-1', 2), job('C', 'split-1', 3), job('A', 'split-1', 1)]);
-  assert.equal(nextDisplayedJobId(displayed, () => false), 'A');
-  assert.equal(nextDisplayedJobId(displayed, j => j.id === 'A'), 'B');
 });
