@@ -97,7 +97,13 @@ export const getWatchdogPullReceiptV2=https.onRequest(options,async(req,res)=>{
  try{await authenticate(req,'getWatchdogPullReceiptV2');const identity=req.body?.identity;if(typeof identity!=='string'||!/^[a-f0-9]{64}$/.test(identity)||Object.keys(req.body).some(k=>k!=='identity'))throw Error('invalid_receipt');
  const entry=(await admin.firestore().collection(root).doc(identity).get()).data();if(!entry||entry.principalId!=='laptop-watchdog-v2')throw Error('receipt_not_owned');
  const db=admin.database();const packet=(await db.ref('packets/processed/'+entry.packetId).once('value')).val();
- const matched=packet&&packet.wellName===entry.wellName&&packet.dateTimeUTC===entry.dateTimeUTC&&Number(packet.tankLevelFeet)===entry.top&&Number(packet.bblsTaken)===entry.bbl&&Math.abs(Number(packet.tankAfterInches)-entry.bottom*12)<0.01;
+ // The canonical processor can use a different tank calibration than intake.
+ // Its completion snapshot binds the receipt to the result actually committed.
+ const snapshotBottom=packet?.canonicalProcessingBottomInches;
+ const hasSnapshot=typeof snapshotBottom==='number'&&Number.isFinite(snapshotBottom);
+ const expectedBottom=hasSnapshot?snapshotBottom:entry.bottom*12;
+ const snapshotOwned=!hasSnapshot||(packet.watchdogProvenance?.observationDigest===identity&&packet.watchdogProvenance?.principalId===entry.principalId);
+ const matched=packet&&snapshotOwned&&packet.wellName===entry.wellName&&packet.dateTimeUTC===entry.dateTimeUTC&&Number(packet.tankLevelFeet)===entry.top&&Number(packet.bblsTaken)===entry.bbl&&Math.abs(Number(packet.tankAfterInches)-expectedBottom)<0.01;
  res.json({ok:true,identity,packetId:entry.packetId,estimate:entry.estimate,barrelSource:entry.barrelSource,status:matched&&packet.canonicalProcessingComplete===true?'complete':packet?'incomplete':'queued'});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });

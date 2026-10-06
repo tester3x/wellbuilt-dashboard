@@ -1435,7 +1435,7 @@ export const processIncomingPull = functionsV1.database
         bottomLevel: inchesToFeetInches(tankAfterInches),
         bottomLevelInches: tankAfterInches,
         bblsTaken: data.bblsTaken,
-        driverName: data.driverName,
+        ...(typeof data.driverName === 'string' ? { driverName: data.driverName } : {}),
         packetId,
       },
       calculated: {
@@ -1476,6 +1476,7 @@ export const processIncomingPull = functionsV1.database
     // below (canonical_jobs / Firestore back-patch) is best-effort and advisory.
     await db.ref(`packets/processed/${packetId}`).update({
       canonicalProcessingComplete: true,
+      canonicalProcessingBottomInches: tankAfterInches,
       canonicalProcessingCompletedAt: admin.database.ServerValue.TIMESTAMP,
     });
     if (shouldApplyCrossKeyGuard(reqType)) {

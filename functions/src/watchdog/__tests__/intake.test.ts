@@ -77,3 +77,16 @@ test('enabled well holds an uncorroborated bottom instead of changing tank math'
  database.get('well_config')['Kahuna 5'].flowWindowMinimumRecoveryInches=6;
  const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 10')});expect(answer.result.status).toBe('review');
 });
+
+test('receipt validates the committed canonical bottom when calibration differs from intake',async()=>{
+ const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());
+ const packet=database.get('packets/incoming/'+answer.result.packetId);
+ const path='packets/processed/'+answer.result.packetId;
+ const receipt={identity:answer.result.identity};
+ database.set(path,{...packet,tankAfterInches:120,canonicalProcessingBottomInches:120,canonicalProcessingComplete:true});
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('complete');
+ database.get(path).tankAfterInches=121;
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');
+ database.get(path).tankAfterInches=120;database.get(path).watchdogProvenance.observationDigest='wrong-observation';
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');
+});
