@@ -93,6 +93,7 @@ interface ApprovedDriver {
 
 interface DispatchJob {
   id?: string;
+  driverId?: string;
   // Tenant stamp (7/9): present on WB-T-era dispatch docs; legacy docs may
   // lack it (treated as liquid-gold's by docBelongsToTenant).
   companyId?: string;
@@ -460,6 +461,9 @@ function DispatchPageInner() {
   // Service work form state
   const [swWellName, setSwWellName] = useState('');
   const [swDropoff, setSwDropoff] = useState('');
+  const [swSplitABbls, setSwSplitABbls] = useState('');
+  const [swSplitBBbls, setSwSplitBBbls] = useState('');
+  const [swSplitBNotes, setSwSplitBNotes] = useState('');
   const [swServiceType, setSwServiceType] = useState('');
   const [swOnsiteBy, setSwOnsiteBy] = useState('');
   const [swNotes, setSwNotes] = useState('');
@@ -1372,6 +1376,9 @@ function DispatchPageInner() {
         packageId: swPackageId,
         customJobTypes: customJobTypesList,
         dropoff: swDropoff.trim() || undefined,
+        splitABbls: swSplitABbls,
+        splitBBbls: swSplitBBbls,
+        splitBNotes: swSplitBNotes,
         onsiteBy: swOnsiteBy || undefined,
         notes: swNotes || undefined,
         isSplitTicket: swSplitTicket,
@@ -1426,6 +1433,9 @@ function DispatchPageInner() {
           setSwError(null);
           setSwWellName('');
           setSwDropoff('');
+          setSwSplitABbls('');
+          setSwSplitBBbls('');
+          setSwSplitBNotes('');
           setSwServiceType('');
           setSwOnsiteBy('');
           setSwNotes('');
@@ -1444,6 +1454,8 @@ function DispatchPageInner() {
       const rawMsg = err?.message || 'Failed to dispatch service work';
       const errMsg = rawMsg.includes('split_dropoff_required')
         ? 'Choose the Split B location before dispatching linked jobs.'
+        : rawMsg.includes('split_bbls_invalid')
+        ? 'Enter a positive number for split job BBLs, or leave the field blank.'
         : rawMsg.includes('sent_dispatch_material_changed')
         ? 'A linked job was already sent. Review that job before starting a different split dispatch.'
         : rawMsg;
@@ -1460,6 +1472,9 @@ function DispatchPageInner() {
     setSwError(null);
     setSwWellName('');
     setSwDropoff('');
+    setSwSplitABbls('');
+    setSwSplitBBbls('');
+    setSwSplitBNotes('');
     setSwServiceType('');
     setSwOnsiteBy('');
     setSwNotes('');
@@ -2739,8 +2754,8 @@ function DispatchPageInner() {
                             optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
                         </div>
-                        <div className="relative">
-                          <label className="block text-xs text-gray-400 mb-1">{swSplitTicket ? 'Split A drop-off / Split B location (required)' : 'Drop-off (optional)'}</label>
+                        {!swSplitTicket && <div className="relative">
+                          <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
                           <BuilderAutocomplete
                             value={swDropoff}
                             onValueChange={setSwDropoff}
@@ -2749,13 +2764,13 @@ function DispatchPageInner() {
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
                             placeholder="SWD or well..."
-                            ariaLabel={swSplitTicket ? 'Split A drop-off / Split B location (required)' : 'Drop-off (optional)'}
+                            ariaLabel="Drop-off (optional)"
                             minChars={2}
                             inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                             listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
                             optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
-                        </div>
+                        </div>}
                       </div>{/* end left: Well + Drop-off */}
                       {/* Right: Service Type + Onsite By stacked */}
                       <div className="flex-1 space-y-2">
@@ -2826,19 +2841,57 @@ function DispatchPageInner() {
                         </span>
                       </label>
                     </div>
-                    {/* Split B exists as soon as Split Ticket is checked. It uses
-                        the main drop-off as both its location and work site. */}
+                    {/* A carries the pickup quantity. B's destination is also A's drop-off. */}
                     {swSplitTicket && (
-                      <div className="flex-shrink-0 rounded-lg border border-purple-700/50 bg-gray-900 p-3 sm:p-4">
-                        <h3 className="text-base font-semibold text-purple-200">Split B</h3>
-                        {swDropoff.trim() ? (
-                          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                            <div><span className="text-gray-400">Location: </span><span className="text-white font-medium">{swDropoff.trim()}</span></div>
-                            <div><span className="text-gray-400">On site at: </span><span className="text-white font-medium">{swDropoff.trim()}</span></div>
+                      <div className="flex-shrink-0 rounded-lg border border-purple-700/50 bg-gray-900 p-4">
+                        <h3 className="text-base font-semibold text-purple-200">Split A</h3>
+                        <p className="text-xs text-gray-400">Pickup at {swWellName.trim() || 'the location above'}; drop-off at {swDropoff.trim() || 'Split B’s location below'}</p>
+                        <div className="mt-3 w-full sm:w-[140px]">
+                          <label htmlFor="sw-split-a-bbls" className="block text-sm text-gray-300 mb-1">BBLs (optional)</label>
+                          <input id="sw-split-a-bbls" type="text" inputMode="decimal" value={swSplitABbls}
+                            onChange={(e) => setSwSplitABbls(e.target.value)} placeholder="BBLs"
+                            className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                        </div>
+                      </div>
+                    )}
+                    {swSplitTicket && (
+                      <div className="relative z-20 flex flex-col gap-4 flex-shrink-0 bg-gray-900 border border-purple-700/50 rounded-lg p-4">
+                        <div>
+                          <h3 className="text-base font-semibold text-purple-200">Split B</h3>
+                          <p className="text-xs text-gray-400">Next linked Service Work job, on site at its destination</p>
+                        </div>
+                        <div className="w-full">
+                          <label htmlFor="sw-split-b-destination" className="block text-sm text-gray-300 mb-1">Destination / location (required)</label>
+                          <BuilderAutocomplete
+                            value={swDropoff}
+                            onValueChange={setSwDropoff}
+                            items={combinedLocationResults(swDropoff, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals) })}
+                            onSelect={(item) => setSwDropoff(item.value)}
+                            getItemKey={(item, i) => `${item.value}-${i}`}
+                            renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
+                            placeholder="Search well, location, or SWD..."
+                            ariaLabel="Split B destination"
+                            inputId="sw-split-b-destination"
+                            minChars={2}
+                            inputClassName="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            listClassName="relative z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-56 overflow-y-auto shadow-lg"
+                            optionClassName="wb-option-row w-full px-3 py-2 border-b border-gray-700/50 last:border-0 text-left text-white text-sm"
+                          />
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)] gap-3">
+                          <div>
+                            <label htmlFor="sw-split-b-bbls" className="block text-sm text-gray-300 mb-1">BBLs (optional)</label>
+                            <input id="sw-split-b-bbls" type="text" inputMode="decimal" value={swSplitBBbls}
+                              onChange={(e) => setSwSplitBBbls(e.target.value)} placeholder="BBLs"
+                              className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
                           </div>
-                        ) : (
-                          <p className="mt-1 text-sm text-amber-300">Choose the drop-off above to set Split B&apos;s location.</p>
-                        )}
+                          <div>
+                            <label htmlFor="sw-split-b-notes" className="block text-sm text-gray-300 mb-1">Notes (optional)</label>
+                            <input id="sw-split-b-notes" type="text" value={swSplitBNotes}
+                              onChange={(e) => setSwSplitBNotes(e.target.value)} placeholder="Special instructions for this split job"
+                              className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                          </div>
+                        </div>
                       </div>
                     )}
                     {swSplitTicket && swExtraSplitLegs.map((leg, idx) => {
@@ -5125,7 +5178,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
 function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJobId, onHighlightClear, authenticatedCompanyId, updateCompletedJob }: {
   jobs: DispatchJob[];
-  drivers?: { key: string; displayName: string; legalName?: string }[];
+  drivers?: ApprovedDriver[];
   allWells?: NdicWell[];
   allDisposals?: NdicWell[];
   highlightJobId?: string | null;
@@ -5286,22 +5339,17 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
     return null;
   }
 
-  function getDriverName(hash: string) {
-    const d = drivers?.find(dr => dr.key === hash);
-    return d?.legalName?.split(' ')[0] || d?.displayName || hash?.slice(0, 6) || 'Unknown';
-  }
-
-  function getDriverFullName(hash: string) {
-    const d = drivers?.find(dr => dr.key === hash);
-    return d?.legalName || d?.displayName || hash?.slice(0, 8) || 'Unknown';
+  function getDriverFullName(job: DispatchJob) {
+    return dispatchDriverDisplayName(job, drivers || []);
   }
 
   // Get unique drivers from completed jobs
   const uniqueDrivers = useMemo(() => {
     const map = new Map<string, string>();
     jobs.forEach(j => {
-      if (!map.has(j.driverHash)) {
-        map.set(j.driverHash, getDriverFullName(j.driverHash));
+      const key = dispatchDriverGroupKey(j, drivers || []);
+      if (!map.has(key)) {
+        map.set(key, getDriverFullName(j));
       }
     });
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
@@ -5314,7 +5362,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
 
     return jobs.filter(job => {
       // Driver filter
-      if (driverFilter !== 'all' && job.driverHash !== driverFilter) return false;
+      if (driverFilter !== 'all' && dispatchDriverGroupKey(job, drivers || []) !== driverFilter) return false;
 
       // Date range filter
       const completed = toDate(job.completedAt);
@@ -5344,7 +5392,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
         const wellName = (job.ndicWellName || job.wellName || '').toLowerCase();
         const disposal = (job.disposal || job.hauledTo || '').toLowerCase();
         const invoiceNum = (job.invoiceNumber || job.ticketNumber || '').toLowerCase();
-        const driverName = getDriverFullName(job.driverHash).toLowerCase();
+        const driverName = getDriverFullName(job).toLowerCase();
         const serviceType = (job.serviceType || '').toLowerCase();
         if (!wellName.includes(q) && !disposal.includes(q) && !invoiceNum.includes(q) && !driverName.includes(q) && !serviceType.includes(q)) return false;
       }
@@ -5453,7 +5501,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
           const assigned = toDate(job.assignedAt);
           const timeStr = completed ? completed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
           const dateStr = completed ? completed.toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
-          const driverName = getDriverFullName(job.driverHash);
+          const driverName = getDriverFullName(job);
           const loads = job.loadsCompleted || job.loadCount || 1;
           const isExpanded = expandedJobId === job.id;
           const isHighlighted = highlightJobId === job.id;
@@ -5613,7 +5661,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                   <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
                     <div>
                       <span className="text-gray-500">Driver</span>
-                      <div className="text-gray-200">{getDriverFullName(job.driverHash)}</div>
+                      <div className="text-gray-200">{getDriverFullName(job)}</div>
                     </div>
                     <div>
                       <span className="text-gray-500">Job Type</span>

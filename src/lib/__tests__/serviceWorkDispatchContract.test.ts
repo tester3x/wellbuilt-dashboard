@@ -122,6 +122,9 @@ test('SW split dispatch gives each leg its own ID and preserves the split group'
     ndicWellName: '',
     serviceType: 'Service Work',
     dropoff: 'Test Well',
+    splitABbls: '80',
+    splitBBbls: '35',
+    splitBNotes: 'On-site follow-up',
     isSplitTicket: true,
     assignedBy: 'dispatch@example.com',
   });
@@ -134,6 +137,29 @@ test('SW split dispatch gives each leg its own ID and preserves the split group'
   assert.equal(a.splitGroupId, b.splitGroupId);
   assert.equal(a.splitSequence, 1);
   assert.equal(b.splitSequence, 2);
+  assert.equal(a.disposal, 'Test Well');
+  assert.equal(b.disposal, 'Test Well');
+  assert.equal(a.bbls, 80);
+  assert.equal(b.bbls, 35);
+  assert.equal(b.notes, 'Split ticket B — On-site follow-up');
+});
+
+test('SW split dispatch rejects invalid A/B planned BBLs before creating jobs', async () => {
+  let calls = 0;
+  await assert.rejects(() => executeServiceWorkWorkflow({
+    workflow: createServiceWorkWorkflow(),
+    coordinator: new DispatchCreationCoordinator(),
+    invoke: async () => { calls++; return { data: { dispatchId: 'unexpected' } }; },
+    selectedDrivers: [{ key: 'driver-1', displayName: 'Driver One' }],
+    wellName: 'Added Test',
+    ndicWellName: '',
+    serviceType: 'Service Work',
+    dropoff: 'Test Well',
+    splitABbls: 'not a number',
+    isSplitTicket: true,
+    assignedBy: 'dispatch@example.com',
+  }), /split_bbls_invalid/);
+  assert.equal(calls, 0);
 });
 
 test('SW split dispatch refuses to send A while B has no location', async () => {

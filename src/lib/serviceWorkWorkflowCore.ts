@@ -51,6 +51,9 @@ export interface ExecuteServiceWorkInput {
   serviceType: string;
   packageId?: string;
   dropoff?: string;
+  splitABbls?: string | number;
+  splitBBbls?: string | number;
+  splitBNotes?: string;
   onsiteBy?: string;
   notes?: string;
   isSplitTicket?: boolean;
@@ -169,6 +172,9 @@ export async function executeServiceWorkWorkflow(
     serviceType,
     packageId,
     dropoff,
+    splitABbls,
+    splitBBbls,
+    splitBNotes,
     onsiteBy,
     notes,
     isSplitTicket,
@@ -186,6 +192,14 @@ export async function executeServiceWorkWorkflow(
   if (!serviceType.trim()) throw new Error('service_type_required');
   if (selectedDrivers.length === 0) throw new Error('no_drivers_selected');
   if (isSplitTicket && !dropoff?.trim()) throw new Error('split_dropoff_required');
+  const plannedBbls = (raw: string | number | undefined): number | undefined => {
+    if (raw == null || String(raw).trim() === '') return undefined;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) throw new Error('split_bbls_invalid');
+    return value;
+  };
+  const aBbls = isSplitTicket ? plannedBbls(splitABbls) : undefined;
+  const bBbls = isSplitTicket ? plannedBbls(splitBBbls) : undefined;
 
   // Allocate group IDs once per workflow; retain across all retries
   ensureServiceWorkGroupIds(workflow, selectedDrivers.length > 1, !!isSplitTicket);
@@ -234,7 +248,7 @@ export async function executeServiceWorkWorkflow(
     const unit1Id = `${driver.key}::leg1`;
     // The coordinator stamps dispatchId onto its input for retries. Keep the
     // template free of leg A's ID before deriving subsequent split legs.
-    const res1 = await coordinator.executeUnit(invoke, { ...baseJob }, {
+    const res1 = await coordinator.executeUnit(invoke, { ...baseJob, ...(aBbls != null ? { bbls: aBbls } : {}) }, {
       actionId: workflow.actionId,
       actionScope: 'service-work-modal',
       unitId: unit1Id,
@@ -247,7 +261,8 @@ export async function executeServiceWorkWorkflow(
         wellName: dropoff.trim(),
         ndicWellName: '',
         disposal: dropoff.trim(),
-        notes: `Split ticket B — ${notes || serviceType.trim()}`,
+        notes: `Split ticket B — ${splitBNotes?.trim() || notes || serviceType.trim()}`,
+        ...(bBbls != null ? { bbls: bBbls } : {}),
         splitGroupId: workflow.splitGroupId!,
         splitSequence: 2,
         ...(splitTotal != null ? { splitTotal } : {}),
