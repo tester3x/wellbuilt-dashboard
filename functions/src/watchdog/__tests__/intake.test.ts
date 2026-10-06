@@ -90,3 +90,13 @@ test('receipt validates the committed canonical bottom when calibration differs 
  database.get(path).tankAfterInches=120;database.get(path).watchdogProvenance.observationDigest='wrong-observation';
  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');
 });
+
+test('same verified owner later report never creates another app pull',async()=>{
+ const {watchdogSenderKey}=require('../senderOwnership');const senderId='123456789@lid';
+ documents.get('watchdog_v2_config/laptop').senderBindings={[watchdogSenderKey(senderId)]:{enabled:true,companyId:'liquid-gold',driverId:'driver-test-123'}};
+ database.set('drivers/profiles/driver-test-123',{active:true,companyId:'liquid-gold',displayName:'Test Driver',assignedWells:['Kahuna 5']});
+ database.set('packets/processed/app',{canonicalProcessingComplete:true,packetId:'app',requestType:'pull',wellName:'Kahuna 5',dateTimeUTC:new Date(Date.now()-32*60000).toISOString(),tankLevelFeet:12.5,bblsTaken:165,tankAfterInches:133.5,driverId:'driver-test-123'});
+ const result=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),senderId});
+ expect(result.result).toMatchObject({status:'duplicate',alreadyRecorded:true,matchedPacketId:'app'});
+ expect([...database.keys()].some(k=>k.startsWith('packets/incoming/'))).toBe(false);
+});

@@ -1,3 +1,4 @@
+import {matchExistingAppPull} from './existingAppPull';
 import {applyReviewCorrections} from './reviewCorrections';
 import {diagnosticFlowWindow} from '../flowWindows';
 import {possibleAggregateOverlap} from './aggregateOverlap';
@@ -52,8 +53,12 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const profile=binding?(await db.ref('drivers/profiles/'+binding.driverId).once('value')).val():null;
  const owner=resolveWatchdogOwner(binding,profile,mapped.wellName,configs[mapped.wellName]);
  const [processed,incoming]=await Promise.all([db.ref('packets/processed').orderByChild('wellName').equalTo(mapped.wellName).once('value'),db.ref('packets/incoming').orderByChild('wellName').equalTo(mapped.wellName).once('value')]);
- const history={[mapped.wellName]:{...(processed.val()||{}),...(incoming.val()||{})}};
+ const history={[mapped.wellName]:{...Object.fromEntries(Object.entries(incoming.val()||{}).map(([key,value])=>[key,{...(value as JsonRecord),watchdogProcessed:false}])),...Object.fromEntries(Object.entries(processed.val()||{}).map(([key,value])=>[key,{...(value as JsonRecord),watchdogProcessed:true}]))}};
  const checked=reviewPulls([row],configs,history,{},new Set())[0];
+ const appMatch=matchExistingAppPull({...row,wellName:mapped.wellName},history[mapped.wellName],owner?.driverId??null,checked.bank);
+ if(appMatch.status==='matched'){res.json({ok:true,status:'duplicate',alreadyRecorded:true,matchedPacketId:appMatch.packetIds[0],matchedDateTimeUTC:appMatch.dateTimeUTC,issues:['Already recorded through the app; original gauge time preserved']});return;}
+ if(appMatch.status==='review'&&!review){res.json({ok:true,status:'review',candidatePacketIds:appMatch.packetIds,issues:['Possible app pull already recorded within 90 minutes; confirm separate load or exclude this report']});return;}
+
  if(configs[mapped.wellName].flowWindowMinimumRecoveryInches && row.bottomLevelFeet!==null){
    const reported=row.bottomLevelFeet;
    if(!Number.isFinite(reported)||reported<0||reported>Number(row.tankLevelFeet)||Math.abs(reported-Number(checked.afterFeet))*12>2){res.json({ok:true,status:'review',issues:['Reported bottom differs from calibrated removal by more than two inches; confirm levels and barrels']});return;}
@@ -82,7 +87,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  if(prior){res.json({ok:true,status:'queued',identity,packetId:prior.packetId,estimate:prior.estimate,barrelSource:prior.barrelSource});return;}
  const stamp=new Date(row.dateTimeUTC).toISOString().replace(/[-:]/g,'').slice(0,15).replace('T','_');
  const packetId=stamp+'_'+mapped.wellName.replace(/\s+/g,'')+'_'+identity.slice(0,6);
- const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:owner?.driverId??null,driverName:owner?.driverName??null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,...(owner?{senderKey,ownerDriverId:owner.driverId,ownershipSource:'verified_sender_binding'}:{}),reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(estimate?{barrelEstimate:estimate,barrelSource}:{}),...(review?{review:{originalTime,originalMeasurements,correctedMeasurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken},...(review.actorUid?{actorUid:review.actorUid}:{}),correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
+ const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,dateTime:watchdogDisplayTime(row.dateTimeUTC),timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:owner?.driverId??null,driverName:owner?.driverName??null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,...(owner?{senderKey,ownerDriverId:owner.driverId,ownershipSource:'verified_sender_binding'}:{}),reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(estimate?{barrelEstimate:estimate,barrelSource}:{}),...(review?{review:{originalTime,originalMeasurements,correctedMeasurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken},...(review.actorUid?{actorUid:review.actorUid}:{}),correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
  const flowDiagnostic=diagnosticFlowWindow(history[mapped.wellName],{...packet,tankTopInches:Number(row.tankLevelFeet)*12,tankAfterInches:Number(checked.afterFeet)*12},6);
  Object.assign(packet.watchdogProvenance,{flowDiagnostic:{...flowDiagnostic,mode:'shadow',minimumRecoveryInches:6}});
  const payloadDigest=digest(packet);
@@ -137,3 +142,8 @@ export const stopWatchdogWellV2=https.onRequest(options,async(req,res)=>{
  res.json({ok:true,state:'stopping',archive});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });
+
+function watchdogDisplayTime(utc:string){
+ const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true}).formatToParts(new Date(utc)).map(v=>[v.type,v.value]));
+ return `${p.month}/${p.day}/${p.year} ${p.hour}:${p.minute} ${p.dayPeriod}`;
+}
