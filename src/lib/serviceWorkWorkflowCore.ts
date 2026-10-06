@@ -185,6 +185,7 @@ export async function executeServiceWorkWorkflow(
   if (!wellName.trim()) throw new Error('well_name_required');
   if (!serviceType.trim()) throw new Error('service_type_required');
   if (selectedDrivers.length === 0) throw new Error('no_drivers_selected');
+  if (isSplitTicket && !dropoff?.trim()) throw new Error('split_dropoff_required');
 
   // Allocate group IDs once per workflow; retain across all retries
   ensureServiceWorkGroupIds(workflow, selectedDrivers.length > 1, !!isSplitTicket);

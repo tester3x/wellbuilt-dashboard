@@ -40,6 +40,7 @@ export interface BuilderAutocompleteProps<T> {
   ariaLabel?: string;
   inputId?: string;
   disabled?: boolean;
+  autoFocus?: boolean;
   autoComplete?: string;
 }
 
@@ -58,6 +59,7 @@ export function BuilderAutocomplete<T>({
   ariaLabel,
   inputId,
   disabled,
+  autoFocus,
   autoComplete = 'off',
 }: BuilderAutocompleteProps<T>) {
   const [focused, setFocused] = useState(false);
@@ -96,6 +98,7 @@ export function BuilderAutocomplete<T>({
         id={inputId}
         value={value}
         disabled={disabled}
+        autoFocus={autoFocus}
         autoComplete={autoComplete}
         onChange={(e) => {
           onValueChange(e.target.value);

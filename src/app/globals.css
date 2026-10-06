@@ -156,7 +156,12 @@ body {
       "jobs    queue";
     align-items: stretch;
   }
-  .dispatch-builder { grid-area: builder; }
+  .dispatch-builder {
+    grid-area: builder;
+    max-height: calc(100dvh - 13rem);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
   .dispatch-pane-jobs {
     grid-area: jobs;
     order: 0;

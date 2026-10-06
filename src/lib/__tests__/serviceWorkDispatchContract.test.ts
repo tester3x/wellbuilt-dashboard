@@ -136,6 +136,25 @@ test('SW split dispatch gives each leg its own ID and preserves the split group'
   assert.equal(b.splitSequence, 2);
 });
 
+test('SW split dispatch refuses to send A while B has no location', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => executeServiceWorkWorkflow({
+      workflow: createServiceWorkWorkflow(),
+      coordinator: new DispatchCreationCoordinator(),
+      invoke: async () => { calls++; return { data: { dispatchId: 'unexpected' } }; },
+      selectedDrivers: [{ key: 'driver-1', id: 'driver-1', displayName: 'Driver One' }],
+      wellName: 'Added Test',
+      ndicWellName: '',
+      serviceType: 'Service Work',
+      isSplitTicket: true,
+      assignedBy: 'dispatch@example.com',
+    }),
+    /split_dropoff_required/,
+  );
+  assert.equal(calls, 0);
+});
+
 test('SW dispatch contract: multi-driver workflow generates shared serviceGroupId across all drivers', async () => {
   const workflow = createServiceWorkWorkflow();
   const dispatchesCreated: Array<{ payload: Record<string, unknown> }> = [];
