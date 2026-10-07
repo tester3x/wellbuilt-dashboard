@@ -261,9 +261,12 @@ describe('canonical packet ID joins ingest storage key to processor trigger', ()
     expect(pullHandler).not.toMatch(/wbm_\$\{/);
   });
 
-  it('WB-T ingestDriverPacket remains unchanged and does not use canonical mint keys', () => {
+  it('WB-T ingestDriverPacket stores new pulls under the returned canonical key', () => {
     expect(wbtIngestSrc).toMatch(/export const ingestDriverPacket/);
-    expect(wbtIngestSrc).toMatch(/idem_\$\{packet\.idempotencyKey/);
+    expect(wbtIngestSrc).toContain('canonicalIngestStorageKey(packet)');
+    expect(wbtIngestSrc).toContain('packets/incoming/${key}');
+    expect(wbtIngestSrc).toContain('packetId: canonicalPacketId, duplicate: false');
+    expect(wbtIngestSrc).toContain('packets/processed/${legacyKey}');
     expect(wbtIngestSrc).not.toMatch(/wbmPullStorageKey/);
     expect(wbtIngestSrc).not.toMatch(/matchesMintPacketId/);
     expect(wbtIngestSrc).not.toMatch(/wbmIncomingPath/);

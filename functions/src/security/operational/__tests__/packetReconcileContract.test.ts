@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { decideProcessedPullReconcile, selectProcessedPullParent } from '../packetReconcileCore';
+import { canonicalIngestStorageKey, decideProcessedPullReconcile, sameIngestOwner, selectProcessedPullParent } from '../packetReconcileCore';
 
 const functionsRoot = join(__dirname, '../../../..');
 const read = (rel: string) => readFileSync(join(functionsRoot, rel), 'utf8');
@@ -89,6 +89,24 @@ describe('selectProcessedPullParent — WB-T correction authorization', () => {
   });
 });
 
+describe('new pull ingest identity', () => {
+  const canonical = '20261007_090425_Gabriel7_qz0oq3';
+  const packet = { packetId: canonical, idempotencyKey: canonical, driverId: base.driverId, companyId: base.companyId };
+
+  it('uses the client packet id as the stored key without an idem_ prefix', () => {
+    expect(canonicalIngestStorageKey(packet)).toBe(canonical);
+    expect(canonicalIngestStorageKey({ idempotencyKey: canonical })).toBe(canonical);
+    expect(canonicalIngestStorageKey({})).toBeNull();
+  });
+
+  it('acknowledges only the same driver, company, and packet identity on replay', () => {
+    expect(sameIngestOwner(packet, packet, canonical)).toBe(true);
+    expect(sameIngestOwner({ ...packet, driverId: 'another-driver' }, packet, canonical)).toBe(false);
+    expect(sameIngestOwner({ ...packet, packetId: 'another-pull' }, packet, canonical)).toBe(false);
+    expect(sameIngestOwner({ ...packet, idempotencyKey: 'another-key' }, packet, canonical)).toBe(false);
+  });
+});
+
 describe('ingest / reconcile server contract (source)', () => {
   const ingest = read('src/security/operational/packetIngest.ts');
   const ingestEdit = read('src/security/operational/ingestWbmEdit.ts');
@@ -109,7 +127,7 @@ describe('ingest / reconcile server contract (source)', () => {
     expect(ingest).toMatch(/packetId: canonicalPacketId, duplicate: true/);
     expect(ingest).toMatch(/packetId: canonicalPacketId, duplicate: false/);
     // Derived from the client-supplied canonical, never re-minted as authority.
-    expect(ingest).toMatch(/canonicalPacketId\s*=[\s\S]*packet\.packetId/);
+    expect(ingest).toContain('const canonicalPacketId = key;');
   });
 
   it('ingestDriverPacket still enforces auth + company + idempotency (no weakening)', () => {
@@ -118,6 +136,10 @@ describe('ingest / reconcile server contract (source)', () => {
     expect(ingest).toMatch(/existing\.exists\(\)/);        // idempotent replay guard
     expect(ingest).toMatch(/checkRateLimit/);              // rate limit intact
     expect(ingest).toMatch(/packet\.driverId = driver\.driverId/); // server stamps identity
+    expect(ingest).toContain('canonicalIngestStorageKey(packet)');
+    expect(ingest).toContain('sameIngestOwner(');
+    expect(ingest).toContain('packets/processed/${key}');
+    expect(ingest).toContain('packets/processed/${legacyKey}');
   });
 
   it('reconcileDriverPacket is a read-only, auth+tenant-gated callable', () => {

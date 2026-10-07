@@ -9,6 +9,24 @@ export function legacyIdemStorageKey(canonicalPacketId: string): string {
   return `idem_${id}`;
 }
 
+/** New intake stores a stable client identity verbatim; the trigger reuses it. */
+export function canonicalIngestStorageKey(packet: Record<string, unknown>): string | null {
+  const packetId = typeof packet.packetId === 'string' ? packet.packetId.trim() : '';
+  const idempotencyKey = typeof packet.idempotencyKey === 'string' ? packet.idempotencyKey.trim() : '';
+  return packetId || idempotencyKey || null;
+}
+
+export function sameIngestOwner(
+  existing: Record<string, unknown>,
+  packet: Record<string, unknown>,
+  canonicalKey: string,
+): boolean {
+  return existing.driverId === packet.driverId
+    && existing.companyId === packet.companyId
+    && (!existing.packetId || existing.packetId === canonicalKey)
+    && (!existing.idempotencyKey || existing.idempotencyKey === packet.idempotencyKey);
+}
+
 export function stripLegacyIdemPrefix(storageKey: string): string {
   const id = String(storageKey || '').trim();
   return id.startsWith('idem_') ? id.slice('idem_'.length) : id;
