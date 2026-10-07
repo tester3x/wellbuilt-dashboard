@@ -11,3 +11,10 @@ test('only approved Overlord commands respond once across restarts',async()=>{
  await c.receive({...m,id:'old',timestamp:1},send,{});assert.equal(sent.length,1);
  await c.receive({...m,id:'unknown',body:'Watchdog: do something arbitrary'},send,{});assert.match(sent[1],/Request saved for Codex/);assert.equal(q.data.codexRequests.unknown.request,'do something arbitrary');assert.match(sent[1],/Watchdog: status\nWatchdog: reviews\n/);
 });
+
+test('free-text queues when enabled and is never interpreted as a shell command',async()=>{
+ const q={data:{reviewAlerts:{groupId:'overlord'}},save(){},reviewInbox(){return []}};
+ const c=new OverlordCommands(q,{config:{enabled:true}}),sent=[];
+ const m={id:'free',channel:'overlord',timestamp:Date.now()/1000+1,body:'Watchdog: latest pull compare against prediction; echo example',senderId:'24240845779152@lid'};
+ await c.receive(m,async(g,b)=>sent.push(b),{});assert.equal(q.data.codexRequests.free.status,'queued');assert.match(q.data.codexRequests.free.request,/echo example/);assert.match(sent[0],/queued for Codex/);
+});

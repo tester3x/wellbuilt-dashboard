@@ -8,6 +8,7 @@ import {unzipSync,strFromU8} from 'fflate';
 import QRCode from 'qrcode';
 import {Queue,header,hash,newestReceiverMessages} from './core.mjs';
 import {Transport} from './transport.mjs';
+import {CodexBridge} from './codex-bridge.mjs';
 import {OverlordCommands} from './commands.mjs';
 import {ReviewAlerts} from './alerts.mjs';
 import {RemoteReviews} from './remote-review.mjs';
@@ -24,7 +25,9 @@ queue.save();
 let client=null,qr='',state='Stopped',paused=true,error='',chats=[],loadingGroups=false;
 async function loadGroups(){if(loadingGroups||!client||!['Connected','Syncing WhatsApp'].includes(state))throw Error('WhatsApp is not connected yet. Current state: '+state);loadingGroups=true;try{let available;try{available=await Promise.race([client.getChats(),new Promise((_,reject)=>setTimeout(()=>reject(Error('Chat list timed out')),8000))]);}catch{available=await client.pupPage.evaluate(()=>window.require('WAWebCollections').Chat.getModelsArray().filter(c=>c.id?.server==='g.us').map(c=>({id:{_serialized:c.id._serialized},name:c.name||c.formattedTitle||c.id._serialized,isGroup:true})));}chats=available.filter(c=>c.isGroup||c.id?._serialized?.endsWith('@g.us')).map(c=>({id:c.id._serialized,name:c.name||c.id._serialized}));error=chats.length?'':'WhatsApp is syncing groups; retrying shortly.';}catch(e){error='Group list is not ready; retrying shortly. '+String(e?.message||e);}finally{loadingGroups=false;}}
 const groupRetry=setInterval(()=>{if(['Connected','Syncing WhatsApp'].includes(state)&&!chats.length)void loadGroups().catch(e=>{error=e.message;});},10000);groupRetry.unref();
-const commands=new OverlordCommands(queue);
+const codexBridge=new CodexBridge(queue);
+const commands=new OverlordCommands(queue,codexBridge);
+const codexTimer=setInterval(()=>{if(client&&state==='Connected')void codexBridge.tick((id,body)=>client.sendMessage(id,body)).catch(e=>{error=e.message;});},5000);codexTimer.unref();
 let polling=false,lastReceiverCheck='',receiverMode='Starting',receiverGroups=[];
 async function pollReceiver(){
  transport.channelOptions=Object.fromEntries(channels.map(c=>[c.id,c.options]));
