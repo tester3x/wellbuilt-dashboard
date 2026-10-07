@@ -145,3 +145,18 @@ test('load policy cannot escape watched wells or accept invalid capacities',asyn
  expect((await call(setWatchdogBarrelPolicyV2,'setWatchdogBarrelPolicyV2',{...policy,wellLoadLimits:{Other:120}})).code).toBe(400);
  expect((await call(setWatchdogBarrelPolicyV2,'setWatchdogBarrelPolicyV2',{...policy,driverCapacities:{Driver:0}})).code).toBe(400);
 });
+
+test('unchanged confirmation completes after processor consumes no-op, without another pull',async()=>{
+ const body={...observation(),chat:observation().chat.replace('165 bbl','')};
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body),packet=database.get('packets/incoming/'+first.result.packetId);
+ const path='packets/processed/'+first.result.packetId;database.set(path,{...packet,tankAfterInches:133.5,canonicalProcessingComplete:true});
+ database.set('well_config/Kahuna 5',database.get('well_config')['Kahuna 5']);
+ const entry=documents.get('watchdog_v2_deliveries/'+first.result.identity);
+ const review={confirmed:true,dateTimeUTC:entry.dateTimeUTC,tankLevelFeet:entry.top,bottomLevelFeet:entry.reportedBottomFeet??entry.bottom,bblsTaken:entry.bbl,reason:''};
+ await call(reviewWatchdogDeliveredPullV2,'reviewWatchdogDeliveredPullV2',{identity:first.result.identity,decision:'confirm',review});
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity})).result.correctionPending).toBe(true);
+ const event=documents.get('watchdog_v2_deliveries/'+first.result.identity).pendingReview.eventId;
+ database.delete('packets/incoming/'+event);
+ const final=await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity});
+ expect(final.result).toMatchObject({status:'complete',needsReview:false,correctionPending:false,packetId:first.result.packetId});
+});

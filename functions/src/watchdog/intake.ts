@@ -113,7 +113,13 @@ export const getWatchdogPullReceiptV2=https.onRequest(options,async(req,res)=>{
  const db=admin.database();let packet=(await db.ref('packets/processed/'+entry.packetId).once('value')).val();
  if(entry.pendingReview){
   const outbox=(await db.ref('packets/editOutbox/'+entry.pendingReview.eventId).once('value')).val();
-  if(outbox?.completed===true&&outbox.originalPacketId===entry.packetId&&packet?.outgoingCommittedEventId===entry.pendingReview.eventId){
+  const pending=entry.pendingReview.review;
+  // An unchanged confirmation is consumed by the processor's material-change
+  // guard without an edit outbox. Confirm only the exact existing observation,
+  // after the incoming command has been consumed and canonical processing is complete.
+  const unchanged=pending.tankLevelFeet===entry.top&&pending.bottomLevelFeet===(entry.reportedBottomFeet??entry.bottom)&&pending.bblsTaken===entry.bbl&&pending.dateTimeUTC===entry.dateTimeUTC;
+  const consumedUnchanged=unchanged&&!outbox&&packet?.canonicalProcessingComplete===true&&packet?.watchdogProvenance?.observationDigest===identity&&!(await db.ref('packets/incoming/'+entry.pendingReview.eventId).once('value')).exists();
+  if((outbox?.completed===true&&outbox.originalPacketId===entry.packetId&&packet?.outgoingCommittedEventId===entry.pendingReview.eventId)||consumedUnchanged){
    const review=entry.pendingReview.review;
    if(packet.bblsTaken!==review.bblsTaken||packet.dateTimeUTC!==review.dateTimeUTC||packet.tankLevelFeet!==review.tankLevelFeet)throw Error('review_result_mismatch');
    const barrels={...entry.barrels,status:'confirmed',needsReview:false,confirmedAt:Date.now(),review:entry.pendingReview};
