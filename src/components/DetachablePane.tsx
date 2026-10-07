@@ -143,12 +143,20 @@ export function DetachablePane({
     // `child.closed` — the only cross-browser-reliable signal — and reattach.
     const reattach = () => onDock();
     child.addEventListener('pagehide', reattach); // best-effort, fast path
+    // A hard reload can destroy the opener's JS context without running React's
+    // effect cleanup. Close its portal window before the old document goes away;
+    // otherwise an inert copy of the previous release can remain on screen.
+    const closeOnParentExit = () => { try { child.close(); } catch { /* already closed */ } };
+    window.addEventListener('pagehide', closeOnParentExit);
+    window.addEventListener('beforeunload', closeOnParentExit);
     const poll = window.setInterval(() => {
       if (!child || child.closed) onDock();
     }, 400);
 
     return () => {
       window.clearInterval(poll);
+      window.removeEventListener('pagehide', closeOnParentExit);
+      window.removeEventListener('beforeunload', closeOnParentExit);
       try { child.removeEventListener('pagehide', reattach); } catch { /* cross-origin/closed */ }
       stopCopy();
       setContainer(null);
