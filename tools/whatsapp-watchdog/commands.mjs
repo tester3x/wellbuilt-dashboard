@@ -9,7 +9,7 @@ export class OverlordCommands {
   ledger[message.id]={at:Date.now(),status:'claimed'};this.queue.save();this.busy=true;
   try{
    const command=message.body.replace(/^watchdog:\s*/i,'').trim().toLowerCase();let reply;
-   if(/^(qc|quick commands)\b/.test(command))reply='Quick commands:\n\nWatchdog: status\nWatchdog: reviews\nWatchdog: latest G3\nWatchdog: latest G5\n\nOther requests: Watchdog: followed by your request';
+   if(/^(qc|quick commands?)\b/.test(command))reply='Quick commands:\n\nWatchdog: status\nWatchdog: reviews\nWatchdog: latest G3\nWatchdog: latest G5\n\nOther requests: Watchdog: followed by your request';
    else if(command==='status')reply=`${context.state} · ${context.paused?'Paused':'Watching'} · WB M: ${context.transportStatus}\n${this.queue.reviewInbox().length} pulls need review.`;
    else if(['reviews','review list'].includes(command))reply=this.queue.reviewInbox().map(({row})=>`${row.wellName} · ${row.dateTimeUTC} · ${row.tankLevelFeet} ft`).join('\n')||'No pulls need review.';
    else if(/^latest(?:\s+(?:g[35]|gunslinger [35]))?$/.test(command)){
