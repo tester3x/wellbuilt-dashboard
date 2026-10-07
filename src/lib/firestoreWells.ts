@@ -2,7 +2,9 @@
 // Uses the same `wellbuilt-sync` Firestore that WB Tickets populates via scripts/importWellData.ts
 // Collections: operators (ND ~103 + MT), wells (ND ~19K + MT ~13K), disposals (ND ~1K + MT)
 
-import { getFirestoreDb } from './firebase';
+import { getFirestoreDb, getFirebaseFunctions } from './firebase';
+import { httpsCallable } from 'firebase/functions';
+import { locationQueryMatches, rankLocationRows } from './builderWellSearch';
 import {
   collection,
   getDocs,
@@ -13,6 +15,8 @@ import {
 } from 'firebase/firestore';
 
 export interface NdicWell {
+  kind?: 'WELL' | 'SWD' | 'LOC';
+  usageCount?: number;
   well_name: string;
   operator: string;
   api_no: string;
@@ -59,12 +63,7 @@ export async function loadWellsForOperator(operatorName: string): Promise<NdicWe
   }
 
   const db = getFirestoreDb();
-  const q = query(
-    collection(db, 'wells'),
-    where('operator', '==', operatorName),
-    orderBy('well_name'),
-  );
-  const snapshot = await getDocs(q);
+  const snapshot = await getDocs(query(collection(db, 'wells'), where('operator', '==', operatorName), orderBy('well_name')));
   const wells = snapshot.docs.map(d => d.data() as NdicWell);
   wellsCacheByOperator[operatorName] = wells;
   console.log(`[firestoreWells] Loaded ${wells.length} wells for ${operatorName}`);
@@ -177,8 +176,7 @@ export async function loadDisposals(): Promise<NdicWell[]> {
   if (disposalsCache) return disposalsCache;
 
   const db = getFirestoreDb();
-  const q = query(collection(db, 'disposals'), orderBy('well_name'));
-  const snapshot = await getDocs(q);
+  const snapshot = await getDocs(query(collection(db, 'disposals'), orderBy('well_name')));
   disposalsCache = snapshot.docs.map(d => d.data() as NdicWell);
   console.log(`[firestoreWells] Loaded ${disposalsCache.length} disposals`);
   return disposalsCache;
@@ -197,10 +195,10 @@ export function searchDisposals(
   const matches = disposals.filter(disp => {
     const name = (disp.search_name || disp.well_name || '').toLowerCase();
     const op = (disp.search_operator || disp.operator || '').toLowerCase();
-    return words.every(w => name.includes(w) || op.includes(w));
+    return locationQueryMatches(lower, name) || locationQueryMatches(lower, op);
   });
 
-  return matches.slice(0, maxResults);
+  return rankLocationRows(matches, lower, row => row.well_name, maxResults);
 }
 
 // ── Search operators ────────────────────────────────────────────────────────
@@ -221,4 +219,15 @@ export function searchOperators(
   });
 
   return matches.slice(0, maxResults);
+}
+
+export interface CustomCatalogLocation {
+  locationName: string;
+  company: string;
+  latitude?: number;
+  longitude?: number;
+}
+export async function loadCustomCatalogLocations(): Promise<CustomCatalogLocation[]> {
+  const res = await httpsCallable(getFirebaseFunctions(), 'getCustomLocations')({});
+  return res.data as CustomCatalogLocation[];
 }

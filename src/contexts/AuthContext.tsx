@@ -20,6 +20,8 @@ const DEV_USER: WellBuiltUser = {
 
 interface AuthContextType {
   user: WellBuiltUser | null;
+  operatingCompanyId: string | null;
+  selectOperatingCompany: (id: string) => void;
   loading: boolean;
   /**
    * The user's company config, loaded once auth resolves and user.companyId is set.
@@ -44,6 +46,17 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<WellBuiltUser | null>(DEV_MODE ? DEV_USER : null);
+  const [selectedOperatingCompany, setSelectedOperatingCompany] = useState<string | null>(null);
+  useEffect(() => {
+    if (user?.uid) setSelectedOperatingCompany(localStorage.getItem(`wb-operating-company:${user.uid}`));
+    else setSelectedOperatingCompany(null);
+  }, [user?.uid]);
+  const selectOperatingCompany = (id: string) => {
+    if (!user || user.companyId) return;
+    localStorage.setItem(`wb-operating-company:${user.uid}`, id);
+    setSelectedOperatingCompany(id);
+  };
+  const operatingCompanyId = user?.companyId || selectedOperatingCompany;
   const [loading, setLoading] = useState(!DEV_MODE);
   const [userCompany, setUserCompany] = useState<CompanyConfig | null>(null);
   // Starts true (non-dev) so authResolved stays false through the window between
@@ -112,6 +125,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
+        operatingCompanyId,
+        selectOperatingCompany,
         loading,
         userCompany,
         companyLoading,

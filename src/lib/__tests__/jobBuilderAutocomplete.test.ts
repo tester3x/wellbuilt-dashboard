@@ -7,12 +7,11 @@ const comp = readFileSync(new URL('../../components/BuilderAutocomplete.tsx', im
 const hook = readFileSync(new URL('../useAutocompleteKeyboard.ts', import.meta.url), 'utf8');
 
 test('ALL Job Builder autocomplete fields use the ONE shared BuilderAutocomplete', () => {
-  // Eight create-form fields: PW well, PW SWD, SW well, SW non-split drop-off,
-  // SW split B destination, SW extra split destination, project operator and well.
+  // Eight create-form fields plus edit pickup use the shared component.
   const count = (page.match(/<BuilderAutocomplete/g) || []).length;
-  assert.equal(count, 8, 'all eight Builder autocomplete fields use the shared component');
+  assert.equal(count, 9, 'all eight create fields and edit pickup use the shared component');
   // The aria-labels prove each specific field is covered.
-  for (const label of ['Search wells', 'Search SWD disposal', 'Well / location', 'Operator / customer', 'Search wells to add to the project']) {
+  for (const label of ['Search wells', 'Search SWD disposal', 'Well / location', 'Drop-off (optional)', 'Operator / customer', 'Search wells to add to the project', 'Edit pickup location']) {
     assert.ok(page.includes(`ariaLabel="${label}"`), `field present: ${label}`);
   }
   assert.match(page, /ariaLabel="Drop-off \(optional\)"/);

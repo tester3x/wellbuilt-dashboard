@@ -12,6 +12,7 @@ import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } 
 import { orderSplitTicketChains } from '@/lib/splitTicketDisplayOrder';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
+import { CatalogSearchResult, LocationSearchResult } from '@/components/LocationSearchResult';
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
 import { combinedLocationResults, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
 import { useScrollRestore } from '@/lib/useScrollRestore';
@@ -37,7 +38,8 @@ import { adminGetDashboardCatalog, adminGetWellPool, classifiedReadFailure } fro
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { DetachablePane } from '@/components/DetachablePane';
-import { getFirestoreDb } from '@/lib/firebase';
+import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
@@ -274,7 +276,7 @@ type RowAssignment =
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 function DispatchPageInner() {
-  const { user, loading, userCompany } = useAuth();
+  const { user, loading, userCompany, operatingCompanyId } = useAuth();
   const router = useRouter();
   const dispatchPathname = usePathname();
   // Restore scroll position across refresh (session-scoped; restores after data lays out).
@@ -411,7 +413,7 @@ function DispatchPageInner() {
   const [shiftResolvedCompany, setShiftResolvedCompany] = useState<string | null>(null);
   const [shiftLoading, setShiftLoading] = useState(true);
   const [shiftError, setShiftError] = useState(false);
-  const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; dispatches?: string }>({});
+  const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; operatorCatalog?: string; dispatches?: string }>({});
   // True when the authoritative live-status read failed for the whole queue.
   // A failed read is a QUEUE-LEVEL UNAVAILABLE state — never 80 individual
   // Needs-Data classifications.
@@ -447,6 +449,7 @@ function DispatchPageInner() {
   const [disposalSearch, setDisposalSearch] = useState('');
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
   const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
+  const [customCatalogLocations, setCustomCatalogLocations] = useState<Array<{ locationName: string; company: string; usageCount?: number; latitude?: number; longitude?: number }>>([]);
   const [allOperatorWells, setAllOperatorWells] = useState<NdicWell[]>([]);
   const [assignedBuilderOperators, setAssignedBuilderOperators] = useState<string[]>([]);
   const [builderOperator, setBuilderOperator] = useState('');
@@ -763,24 +766,44 @@ function DispatchPageInner() {
     };
   }, [user, loading]);
 
-  // Load drivers + disposals
+  // Catalog callables must wait for the authenticated user.
   useEffect(() => {
+    if (!user || loading) return;
     loadDriversData();
-    loadDisposals().then(setAllDisposals).catch(() => {});
+
     loadOperators().then(setAllOperators).catch(console.error);
-  }, []);
+  }, [user, loading]);
+
+  const catalogRouteWells = useMemo(() => operatingCompanyId === 'liquid-gold' ? wells : wells.filter(w => !!operatingCompanyId && w.companyId === operatingCompanyId), [wells, operatingCompanyId]);
+  const locationCatalog = useMemo(() => {
+    const rows: NdicWell[] = [
+      ...allOperatorWells.map(w => ({ ...w, kind: 'WELL' as const })),
+      ...allDisposals.map(w => ({ ...w, kind: 'SWD' as const })),
+      ...customCatalogLocations.map(c => ({ well_name: c.locationName, operator: c.company, usageCount: c.usageCount, api_no: '', latitude: c.latitude, longitude: c.longitude, kind: 'LOC' as const })),
+      ...catalogRouteWells.map(w => ({ well_name: w.ndicName || w.wellName, operator: w.route || '', api_no: w.ndicApiNo || '', kind: 'WELL' as const })),
+    ];
+    const seen = new Set<string>();
+    return rows.filter(w => { const k = w.well_name.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  }, [allOperatorWells, allDisposals, customCatalogLocations, catalogRouteWells]);
+  const locationResults = (q: string) => searchDisposals(q, locationCatalog);
 
   // Load dynamic service types from job packages
-  // WB admin (no companyId): loads ALL packages so dispatch has full service type list
+  // WB admins resolve the operating company from the server-authorized catalog
   // Hauler admin: loads only their company's active packages
   useEffect(() => {
     if (!user) return;
+    let cancelled = false;
+    setAllOperatorWells([]);
+    setAllDisposals([]);
+    setCustomCatalogLocations([]);
     const loadPackageJobTypes = async () => {
       try {
-        // Use user's company, or for WB admin derive from first driver's company
-        let companyId: string | undefined = user.companyId;
-        if (!companyId && drivers.length > 0) {
-          companyId = drivers.find(d => d.companyId)?.companyId;
+        // Driver ordering is never authority for the operating company.
+        const companyId = operatingCompanyId || (await adminGetDashboardCatalog()).companyId;
+        if (cancelled) return;
+        if (!companyId) {
+          setReadErrors(prev => ({ ...prev, operatorCatalog: 'Select a company in the header to load its wells and locations.' }));
+          return;
         }
         let activeFilter: string[] | null = null;
         let companyConfig: any = null;
@@ -788,17 +811,17 @@ function DispatchPageInner() {
         if (companyId) {
           companyConfig = await loadCompanyById(companyId);
           setAssignedBuilderOperators(companyConfig?.assignedOperators || []);
-          activeFilter = companyConfig?.activePackages?.length ? companyConfig.activePackages : null;
+          activeFilter = companyConfig?.activePackages || [];
 
-          // Load all operator wells for SW well search (not just route wells)
-          if (companyConfig?.assignedOperators?.length && allOperatorWells.length === 0) {
-            Promise.all(
-              companyConfig.assignedOperators.map((op: string) => loadWellsForOperator(op))
-            ).then(results => {
-              setAllOperatorWells(results.flat());
-            }).catch(console.warn);
-          }
-          if (!companyConfig?.activePackages?.length) return; // no packages — keep fallback
+          // The full operator catalog is separate from WB-M monitored route wells.
+          // Replace it on scope changes; never retain another company's catalog.
+          const response = await httpsCallable(getFirebaseFunctions(), 'getDispatchLocationCatalog')({ companyId });
+          if (cancelled) return;
+          const catalog = response.data as { wells: NdicWell[]; disposals: NdicWell[]; customLocations: Array<{ locationName: string; company: string; usageCount?: number; latitude?: number; longitude?: number }> };
+          setAllOperatorWells(catalog.wells);
+          setAllDisposals(catalog.disposals);
+          setCustomCatalogLocations(catalog.customLocations);
+          setReadErrors(prev => ({ ...prev, operatorCatalog: undefined }));
         }
 
         const firestore = getFirestoreDb();
@@ -846,6 +869,7 @@ function DispatchPageInner() {
             }
           });
         }
+        if (cancelled) return;
         setCustomJobTypesList(collectedCustomTypes);
 
         if (allJobTypes.length > 0) {
@@ -855,12 +879,15 @@ function DispatchPageInner() {
           setJobTypeToPackageId(pkgMap);
         }
       } catch (err) {
+        if (cancelled) return;
+        setReadErrors(prev => ({ ...prev, operatorCatalog: classifiedReadFailure('company operator catalog', err) }));
         console.error('Failed to load job package types:', err);
         // Keep fallback on error
       }
     };
     loadPackageJobTypes();
-  }, [user, drivers.length]);
+    return () => { cancelled = true; };
+  }, [user, operatingCompanyId]);
 
   // Subscribe to active + completed dispatches in real-time.
   // Tenant containment (7/9): scoped users see only their company's
@@ -2539,11 +2566,12 @@ function DispatchPageInner() {
               {message}
             </div>
           )}
-          {(readErrors.dispatches || readErrors.drivers || readErrors.wells) && (
+          {(readErrors.dispatches || readErrors.drivers || readErrors.wells || readErrors.operatorCatalog) && (
             <div className="p-2.5 rounded text-sm mb-3 bg-red-900/50 text-red-200 space-y-1">
               {readErrors.dispatches && <div>{readErrors.dispatches}</div>}
               {readErrors.drivers && <div>{readErrors.drivers}</div>}
               {readErrors.wells && <div>{readErrors.wells}</div>}
+              {readErrors.operatorCatalog && <div>{readErrors.operatorCatalog}</div>}
             </div>
           )}
         </div>
@@ -2649,12 +2677,11 @@ function DispatchPageInner() {
                           value={assignWellSearch}
                           onValueChange={setAssignWellSearch}
                           items={assignWellSearch.length >= 2
-                            ? wellsForBuilderOperator(wells, allOperatorWells, builderOperator)
-                                .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).slice(0, 8)
+                            ? locationResults(assignWellSearch).filter(w => w.kind === 'WELL' && (!builderOperator || w.operator?.toLowerCase() === builderOperator.toLowerCase()))
                             : []}
-                          onSelect={(w) => { setAssignTarget(w); setAssignWellSearch(''); }}
-                          getItemKey={(w) => w.wellName}
-                          renderItem={(w) => (<>{w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{operatorForBuilderWell(w.wellName, allOperatorWells, w.ndicName) || w.route}</span></>)}
+                          onSelect={(w) => { setAssignTarget(wells.find(p => (p.ndicName || p.wellName) === w.well_name) || { wellName: w.well_name, ndicName: w.well_name, ndicApiNo: w.api_no, currentLevel: '', etaToMax: '', flowRate: '', timestamp: '' }); if (!builderOperator) setBuilderOperator(w.operator || ''); setAssignWellSearch(''); }}
+                          getItemKey={(w) => w.well_name}
+                          renderItem={(w) => <CatalogSearchResult row={w} />}
                           placeholder="Search wells or click Assign below..."
                           ariaLabel="Search wells"
                           minChars={2}
@@ -2724,11 +2751,11 @@ function DispatchPageInner() {
                       ) : (
                         <BuilderAutocomplete
                           value={disposalSearch}
-                          onValueChange={(v) => { setDisposalSearch(v); setDisposalResults(v.length >= 2 ? searchDisposals(v, allDisposals) : []); }}
+                          onValueChange={(v) => { setDisposalSearch(v); setDisposalResults(v.length >= 2 ? locationResults(v) : []); }}
                           items={assignDisposalWell ? [] : disposalResults}
                           onSelect={(d) => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
                           getItemKey={(d, i) => d.api_no || String(i)}
-                          renderItem={(d) => (<>{d.well_name} <span className="wb-option-sub text-gray-400 text-xs ml-1">{d.county || ''}</span></>)}
+                          renderItem={(d) => <CatalogSearchResult row={d} />}
                           placeholder="Search SWD..."
                           ariaLabel="Search SWD disposal"
                           inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
@@ -2801,13 +2828,14 @@ function DispatchPageInner() {
                               wells: wellsForBuilderOperator(wells, allOperatorWells, builderOperator),
                               operatorWells: builderOperator ? allOperatorWells.filter(w => w.operator?.toLowerCase() === builderOperator.toLowerCase()) : allOperatorWells,
                               disposalMatches: builderOperator ? [] : searchDisposals(swWellName.trim().toLowerCase(), allDisposals),
+                              customLocations: builderOperator ? customCatalogLocations.filter(c => c.company.toLowerCase() === builderOperator.toLowerCase()) : customCatalogLocations,
                             })}
                             onSelect={(item) => {
                               setSwWellName(item.value);
                               if (!builderOperator) setBuilderOperator(operatorForBuilderWell(item.value, allOperatorWells));
                             }}
                             getItemKey={(item, i) => `${item.value}-${i}`}
-                            renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
+                            renderItem={(item) => <LocationSearchResult item={item} />}
                             placeholder="Type to search..."
                             ariaLabel="Well / location"
                             minChars={2}
@@ -2826,10 +2854,10 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swDropoff}
                             onValueChange={setSwDropoff}
-                            items={combinedLocationResults(swDropoff, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals) })}
+                            items={combinedLocationResults(swDropoff, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations })}
                             onSelect={(item) => setSwDropoff(item.value)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
-                            renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
+                            renderItem={(item) => <LocationSearchResult item={item} />}
                             placeholder="SWD or well..."
                             ariaLabel="Drop-off (optional)"
                             minChars={2}
@@ -3205,12 +3233,10 @@ function DispatchPageInner() {
                       <BuilderAutocomplete
                         value={projectWellSearch}
                         onValueChange={setProjectWellSearch}
-                        items={projectWellSearch.length >= 2
-                          ? wells.filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName)).slice(0, 10)
-                          : []}
-                        onSelect={(w) => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
-                        getItemKey={(w) => w.wellName}
-                        renderItem={(w) => (<>{w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span></>)}
+                        items={locationResults(projectWellSearch).filter(w => !newProjectWells.includes(w.well_name))}
+                        onSelect={(w) => { setNewProjectWells(prev => [...prev, w.well_name]); setProjectWellSearch(''); }}
+                        getItemKey={(w) => w.well_name}
+                        renderItem={(w) => <CatalogSearchResult row={w} />}
                         placeholder="Search wells..."
                         ariaLabel="Search wells to add to the project"
                         minChars={2}
@@ -3334,7 +3360,7 @@ function DispatchPageInner() {
                                 name={driver.legalName || driver.displayName}
                                 disposal={newProjectDriverDisposals[hash]}
                                 borderColor="border-gray-700"
-                                allDisposals={allDisposals}
+                                allDisposals={locationCatalog}
                                 onRemove={() => {
                                   setNewProjectDriverHashes(prev => { const next = new Set(prev); next.delete(hash); return next; });
                                   setNewProjectDriverShifts(prev => { const next = new Map(prev); next.delete(hash); return next; });
@@ -3851,8 +3877,8 @@ function DispatchPageInner() {
                   <CompletedJobsPanel
                     jobs={dispatches.filter(d => d.status === 'completed')}
                     drivers={drivers}
-                    allWells={allOperatorWells}
-                    allDisposals={allDisposals}
+                    allWells={locationCatalog}
+                    allDisposals={locationCatalog}
                     highlightJobId={highlightJobId}
                     onHighlightClear={() => setHighlightJobId(null)}
                     authenticatedCompanyId={user?.companyId || null}
@@ -3873,7 +3899,7 @@ function DispatchPageInner() {
                     projectDispatches={projectDispatches}
                     projectInvoices={projectInvoices}
                     drivers={drivers}
-                    allDisposals={allDisposals}
+                    allDisposals={locationCatalog}
                     cancelDispatch={cancelDispatch}
                     onStatusChange={updateProjectStatus}
                     onAddDriver={(hash) => addDriverToProjectToday(selectedProject.id!, hash)}
@@ -3913,7 +3939,7 @@ function DispatchPageInner() {
         <AddPullModal
           wells={wells}
           drivers={drivers}
-          allDisposals={allDisposals}
+          allDisposals={locationCatalog}
           onClose={() => setShowAddPullModal(false)}
           onMessage={(msg) => { setMessage(msg); setTimeout(() => setMessage(''), 5000); }}
           navigateOnSuccess={false}
@@ -4097,27 +4123,19 @@ function DispatchPageInner() {
                 <div className="mb-4">
                   <label className="block text-sm text-gray-400 mb-1">Pickup Well</label>
                   <div className="relative">
-                    <input
-                      type="text"
+                    <BuilderAutocomplete
                       value={editSwWellName}
-                      onChange={(e) => setEditSwWellName(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                      onValueChange={setEditSwWellName}
+                      items={locationResults(editSwWellName)}
+                      onSelect={w => setEditSwWellName(w.well_name)}
+                      getItemKey={w => w.well_name}
+                      renderItem={w => <CatalogSearchResult row={w} />}
+                      ariaLabel="Edit pickup location"
+                      minChars={2}
+                      inputClassName="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm"
+                      listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
+                      optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 text-white text-sm"
                     />
-                    {editSwWellName.trim().length >= 2 && editSwWellName.trim() !== (editSwJob.ndicWellName || editSwJob.wellName) && wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(editSwWellName.trim().toLowerCase())).length > 0 && (
-                      <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-40 overflow-y-auto shadow-lg">
-                        {wells
-                          .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(editSwWellName.trim().toLowerCase()))
-                          .slice(0, 10)
-                          .map(w => (
-                            <button key={w.wellName} type="button" onClick={() => setEditSwWellName(w.ndicName || w.wellName)}
-                              className="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                              {w.ndicName || w.wellName}
-                              {w.route && <span className="wb-option-sub text-gray-500 text-xs ml-2">{w.route}</span>}
-                            </button>
-                          ))
-                        }
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -4130,7 +4148,7 @@ function DispatchPageInner() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setEditPwDisposal(val);
-                      setEditPwDisposalResults(val.length >= 2 ? searchDisposals(val, allDisposals) : []);
+                      setEditPwDisposalResults(val.length >= 2 ? locationResults(val) : []);
                       setEditPwShowDisposalDropdown(val.length >= 2);
                     }}
                     onFocus={() => { if (editPwDisposal.length >= 2) setEditPwShowDisposalDropdown(true); }}
@@ -4147,8 +4165,7 @@ function DispatchPageInner() {
                           onClick={() => { setEditPwDisposal(d.well_name); setEditPwShowDisposalDropdown(false); }}
                           className="wb-option-row px-3 py-2 text-sm text-white"
                         >
-                          <span>{d.well_name}</span>
-                          {d.operator && <span className="wb-option-sub text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                          <CatalogSearchResult row={d} />
                         </button>
                       ))}
                     </div>
@@ -4346,7 +4363,7 @@ function DispatchPageInner() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setEditSwDisposal(val);
-                      setEditSwDisposalResults(val.length >= 2 ? searchDisposals(val, allDisposals) : []);
+                      setEditSwDisposalResults(val.length >= 2 ? locationResults(val) : []);
                       setEditSwShowDisposalDropdown(val.length >= 2);
                     }}
                     onFocus={() => { if (editSwDisposal.length >= 2) setEditSwShowDisposalDropdown(true); }}
@@ -4363,8 +4380,7 @@ function DispatchPageInner() {
                           onClick={() => { setEditSwDisposal(d.well_name); setEditSwShowDisposalDropdown(false); }}
                           className="wb-option-row px-3 py-2 text-sm text-white"
                         >
-                          <span>{d.well_name}</span>
-                          {d.operator && <span className="wb-option-sub text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                          <CatalogSearchResult row={d} />
                         </button>
                       ))}
                     </div>
@@ -5666,7 +5682,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                             <button key={i} type="button"
                               onMouseDown={() => { setEditForm(f => ({ ...f, wellName: w.well_name, operator: w.operator || f.operator })); setShowWellDropdown(false); }}
                               className="w-full text-left px-2 py-1 text-xs text-gray-200 hover:bg-gray-700 truncate"
-                            >{w.well_name} <span className="text-gray-500">{w.operator}</span></button>
+                            ><CatalogSearchResult row={w} /></button>
                           ))}
                         </div>
                       )}
@@ -5691,7 +5707,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                             <button key={i} type="button"
                               onMouseDown={() => { setEditForm(f => ({ ...f, disposal: d.well_name })); setShowDisposalDropdown(false); }}
                               className="w-full text-left px-2 py-1 text-xs text-gray-200 hover:bg-gray-700 truncate"
-                            >{d.well_name} <span className="text-gray-500">{d.operator}</span></button>
+                            ><CatalogSearchResult row={d} /></button>
                           ))}
                         </div>
                       )}
@@ -6276,8 +6292,7 @@ function DriverDisposalRow({ hash, name, disposal, borderColor, allDisposals, on
                   }}
                   className="block w-full text-left px-2 py-1.5 hover:bg-gray-700 text-[11px]"
                 >
-                  <div className="text-white">{d.well_name}</div>
-                  {d.operator && <div className="text-gray-400 text-[10px]">{d.operator}</div>}
+                  <CatalogSearchResult row={d} />
                 </button>
               ))}
             </div>

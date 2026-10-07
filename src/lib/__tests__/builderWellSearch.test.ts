@@ -81,3 +81,18 @@ test('selected operator excludes other customers from pickup searches', () => {
   });
   assert.deepEqual(results.map(result => result.value), ['Gab 1']);
 });
+
+test('unmonitored operator wells and custom locations retain type and metadata', () => {
+  const catalog = { wells: [], operatorWells: [{ well_name: 'Mauser Federal 6', operator: 'Slawson', county: 'McKenzie' }], disposalMatches: [], customLocations: [{ locationName: 'Mauser Yard', company: 'Slawson' }] };
+  const rows = combinedLocationResults('mauser', catalog);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].kind, 'WELL');
+  assert.equal(rows[0].sub, 'Slawson');
+  assert.equal(rows[0].county, 'McKenzie');
+  assert.equal(rows[1].kind, 'LOC');
+});
+
+test('full well search ignores pad suffix and naturally ranks names before capping', () => {
+  const rows = combinedLocationResults('gab pad', { wells: [], operatorWells: [{ well_name: 'Gab 14' }, { well_name: 'Gab 5' }], disposalMatches: [] });
+  assert.deepEqual(rows.map(r => r.label), ['Gab 5', 'Gab 14']);
+});
