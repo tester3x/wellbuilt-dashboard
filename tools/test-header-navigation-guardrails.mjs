@@ -20,7 +20,9 @@ export const EXPECTED_TABS = [
   { id: 'equipment', label: 'eQuipment', href: '/equipment', capability: 'viewEQuipment' },
   { id: 'safety', label: 'Safety', href: '/safety', capability: 'viewSafety' },
   { id: 'settings', label: 'Settings', href: '/settings', capability: 'viewSettings' },
-  { id: 'watchdog', label: 'Watchdog', href: '/watchdog', capability: 'viewDispatch' },
+  ...(process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW === 'enabled'
+    ? [{ id: 'watchdog', label: 'Watchdog', href: '/watchdog', capability: 'viewDispatch' }]
+    : []),
 ];
 
 function transpileAndLoad(filePath, dependencies = {}) {
