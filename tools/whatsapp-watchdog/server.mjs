@@ -79,6 +79,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(req.method==='GET'&&url.pathname==='/style.css')return respond(res,200,readFileSync(path.join(root,'style.css'),'utf8'),'text/css');
  if(req.headers['x-watchdog-token']!==token)return respond(res,403,{error:'Unauthorized'});
  if(req.method==='GET'&&url.pathname==='/status')return respond(res,200,status());
+ if(req.method==='GET'&&url.pathname==='/review-alert-history'){const group=queue.data.reviewAlerts?.groupId;if(!client||state!=='Connected'||!group)throw Error('Alert history unavailable');const messages=await client.pupPage.evaluate(id=>{const collections=window.require('WAWebCollections');const chat=collections.Chat.getModelsArray().find(c=>c.id?._serialized===id);const all=[...(chat?.msgs?.getModelsArray?.()||[]),...collections.Msg.getModelsArray().filter(m=>m.id?.remote?._serialized===id)];return Array.from(new Map(all.map(m=>[m.id._serialized,m])).values()).sort((a,b)=>Number(a.t)-Number(b.t)).slice(-100).map(m=>({id:m.id._serialized,at:new Date(Number(m.t)*1000).toISOString(),fromMe:!!m.id.fromMe,body:typeof m.body==='string'?m.body:''}));},group);return respond(res,200,{messages,scope:'currently_synced'});}
  if(req.method==='GET'&&url.pathname==='/export')return respond(res,200,queue.export(url.searchParams.get('channel')),'text/plain; charset=utf-8');
  if(req.method!=='POST')return respond(res,404,{error:'Not found'});
  if(req.headers.origin&&req.headers.origin!=='http://127.0.0.1:8791'&&req.headers.origin!=='http://localhost:8791')return respond(res,403,{error:'Invalid origin'});
