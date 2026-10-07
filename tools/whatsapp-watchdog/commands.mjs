@@ -15,7 +15,12 @@ export class OverlordCommands {
     const filter=command.slice(6).trim().replace(/^g([35])$/,'gunslinger $1');
     const rows=Object.values(this.queue.data.messages).filter(m=>!m.deleted).flatMap(m=>m.rows).filter(r=>!filter||r.wellName.toLowerCase()===filter).sort((a,b)=>Date.parse(b.dateTimeUTC)-Date.parse(a.dateTimeUTC));
     const r=rows[0],d=r&&this.queue.data.deliveries?.[r.id];reply=r?`${r.wellName} · ${r.dateTimeUTC}\nTop ${r.tankLevelFeet} ft · bottom ${d?.measurements?.bottomLevelFeet??r.bottomLevelFeet} ft · ${d?.measurements?.bblsTaken??r.bblsTaken} bbl\nWB M: ${d?.status||'pending'}${d?.needsReview?' · needs review':''}`:'No matching pull found.';
-   }else reply=['Command not recognized. Try one of these:', '', 'Watchdog: status', 'Watchdog: reviews', 'Watchdog: latest G3', 'Watchdog: latest G5', '', 'These commands check Watchdog data. Free-text requests to Codex are not connected yet.'].join('\n');
+   }else {
+    const request=message.body.replace(/^watchdog:\s*/i,'').trim();
+    if(!request)reply='Put your request after Watchdog:.';
+    else if(request.length>8000)reply='Please keep the request under 8,000 characters.';
+    else {this.queue.data.codexRequests??={};this.queue.data.codexRequests[message.id]={request,channel:message.channel,senderId:message.senderId||'linked-account',createdAt:Date.now(),status:'awaiting_execution_setup'};this.queue.save();reply='Request saved for Codex. Automatic execution is awaiting setup approval; this request has not run.\n\nQuick commands:\nWatchdog: status\nWatchdog: reviews\nWatchdog: latest G3\nWatchdog: latest G5';}
+   }
    await send(message.channel,'Watchdog reply\n'+reply.slice(0,2500));ledger[message.id].status='sent';this.queue.save();
   }catch(e){ledger[message.id].status='failed';ledger[message.id].error=String(e.message||e);this.queue.save();}finally{this.busy=false;}return true;
  }
