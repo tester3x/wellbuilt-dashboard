@@ -23,6 +23,26 @@ export interface CombinedSearchSources {
 
 export const COMBINED_SEARCH_LIMIT = 15;
 
+export function wellsForBuilderOperator<T extends { wellName: string; ndicName?: string }>(
+  wells: T[],
+  operatorWells: CombinedSearchSources['operatorWells'],
+  selectedOperator: string,
+): T[] {
+  if (!selectedOperator) return wells;
+  return wells.filter(w => operatorForBuilderWell(w.wellName, operatorWells, w.ndicName).toLowerCase() === selectedOperator.toLowerCase());
+}
+
+/** The operator carried by a dispatch must match the selected well exactly. */
+export function operatorForBuilderWell(
+  wellName: string,
+  operatorWells: CombinedSearchSources['operatorWells'],
+  ndicName?: string,
+): string {
+  const names = [wellName, ndicName].map(name => (name || '').trim().toLowerCase()).filter(Boolean);
+  if (!names.length) return '';
+  return operatorWells.find(w => names.includes(w.well_name.trim().toLowerCase()) && w.operator?.trim())?.operator?.trim() || '';
+}
+
 /** True when the query exactly matches an existing location (so no list is shown). */
 export function hasExactLocationMatch(query: string, s: CombinedSearchSources): boolean {
   const q = query.trim().toLowerCase();
@@ -48,7 +68,8 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
     .map((w) => {
       const name = w.ndicName || w.wellName;
       seen.add(name.toLowerCase());
-      return { label: name, sub: w.route || '', value: name };
+      const operator = operatorForBuilderWell(w.wellName, s.operatorWells, w.ndicName);
+      return { label: name, sub: operator || w.route || '', value: name };
     });
   const operatorMatches: CombinedLocation[] = s.operatorWells
     .filter((w) => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))

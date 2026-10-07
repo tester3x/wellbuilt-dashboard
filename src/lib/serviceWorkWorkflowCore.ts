@@ -48,6 +48,7 @@ export interface ExecuteServiceWorkInput {
   selectedDrivers: ServiceWorkDriverInput[];
   wellName: string;
   ndicWellName: string;
+  operator?: string;
   serviceType: string;
   packageId?: string;
   dropoff?: string;
@@ -193,6 +194,7 @@ export async function executeServiceWorkWorkflow(
     selectedDrivers,
     wellName,
     ndicWellName,
+    operator,
     serviceType,
     packageId,
     dropoff,
@@ -248,6 +250,7 @@ export async function executeServiceWorkWorkflow(
       ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
       wellName: wellName.trim(),
       ndicWellName: ndicWellName.trim(),
+      ...(operator?.trim() ? { operator: operator.trim() } : {}),
       ...(dropoff?.trim() ? { disposal: dropoff.trim() } : {}),
       ...(onsiteBy ? { onsiteBy } : {}),
       jobType: 'service',

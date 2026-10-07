@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { combinedLocationResults, hasExactLocationMatch, COMBINED_SEARCH_LIMIT } from '../builderWellSearch.ts';
+import { combinedLocationResults, hasExactLocationMatch, operatorForBuilderWell, wellsForBuilderOperator, COMBINED_SEARCH_LIMIT } from '../builderWellSearch.ts';
 
 const sources = {
   wells: [
@@ -55,4 +55,29 @@ test('disposal sub-label is SWD; operator sub falls back to NDIC', () => {
   assert.equal(r[0].sub, 'Hess');
   const d = combinedLocationResults('stateline', sources);
   assert.equal(d[0].sub, 'SWD');
+});
+
+test('builder operator uses only the selected well, not a similarly named production well', () => {
+  const wells = [
+    { well_name: 'Gab 1', operator: 'WB Test Customer' },
+    { well_name: 'Gabriel 1', operator: 'SLAWSON EXPLORATION COMPANY, INC.' },
+  ];
+  assert.equal(operatorForBuilderWell('Gab 1', wells), 'WB Test Customer');
+  assert.equal(operatorForBuilderWell('Gabriel 1', wells), 'SLAWSON EXPLORATION COMPANY, INC.');
+  assert.equal(operatorForBuilderWell('Gab', wells), '');
+});
+
+test('selected operator excludes other customers from pickup searches', () => {
+  const operatorWells = [
+    { well_name: 'Gab 1', operator: 'WB Test Customer' },
+    { well_name: 'Gabriel 1', operator: 'SLAWSON EXPLORATION COMPANY, INC.' },
+  ];
+  const pool = [{ wellName: 'Gab 1' }, { wellName: 'Gabriel 1' }];
+  assert.deepEqual(wellsForBuilderOperator(pool, operatorWells, 'WB Test Customer'), [pool[0]]);
+  const results = combinedLocationResults('gab', {
+    wells: wellsForBuilderOperator(pool, operatorWells, 'WB Test Customer'),
+    operatorWells: operatorWells.filter(w => w.operator === 'WB Test Customer'),
+    disposalMatches: [],
+  });
+  assert.deepEqual(results.map(result => result.value), ['Gab 1']);
 });

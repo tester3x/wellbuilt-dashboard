@@ -13,7 +13,7 @@ import { orderSplitTicketChains } from '@/lib/splitTicketDisplayOrder';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
-import { combinedLocationResults } from '@/lib/builderWellSearch';
+import { combinedLocationResults, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
@@ -448,6 +448,12 @@ function DispatchPageInner() {
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
   const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
   const [allOperatorWells, setAllOperatorWells] = useState<NdicWell[]>([]);
+  const [assignedBuilderOperators, setAssignedBuilderOperators] = useState<string[]>([]);
+  const [builderOperator, setBuilderOperator] = useState('');
+  const builderOperatorOptions = Array.from(new Set([
+    ...assignedBuilderOperators,
+    ...allOperatorWells.map(w => w.operator || ''),
+  ].map(name => name.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
   const [assigning, setAssigning] = useState(false);
 
   // Multi-select dispatch state
@@ -781,17 +787,18 @@ function DispatchPageInner() {
 
         if (companyId) {
           companyConfig = await loadCompanyById(companyId);
-          if (!companyConfig?.activePackages?.length) return; // no packages — keep fallback
-          activeFilter = companyConfig.activePackages;
+          setAssignedBuilderOperators(companyConfig?.assignedOperators || []);
+          activeFilter = companyConfig?.activePackages?.length ? companyConfig.activePackages : null;
 
           // Load all operator wells for SW well search (not just route wells)
-          if (companyConfig.assignedOperators?.length && allOperatorWells.length === 0) {
+          if (companyConfig?.assignedOperators?.length && allOperatorWells.length === 0) {
             Promise.all(
               companyConfig.assignedOperators.map((op: string) => loadWellsForOperator(op))
             ).then(results => {
               setAllOperatorWells(results.flat());
             }).catch(console.warn);
           }
+          if (!companyConfig?.activePackages?.length) return; // no packages — keep fallback
         }
 
         const firestore = getFirestoreDb();
@@ -1230,6 +1237,7 @@ function DispatchPageInner() {
   function openAssignModal(well: WellResponse) {
     setSelectedWells(new Map()); // Exit multi-well mode
     setAssignTarget(well);
+    setBuilderOperator(operatorForBuilderWell(well.wellName, allOperatorWells, well.ndicName));
     setAssignDriverHash('');
     setAssignNotes('');
     setAssignLoadCount(1);
@@ -1278,6 +1286,8 @@ function DispatchPageInner() {
         driverFirstName,
         wellName: assignTarget.wellName,
         ndicWellName: resolvedNdicName,
+        ...((operatorForBuilderWell(assignTarget.wellName, allOperatorWells, resolvedNdicName) || builderOperator)
+          ? { operator: operatorForBuilderWell(assignTarget.wellName, allOperatorWells, resolvedNdicName) || builderOperator } : {}),
         route: assignTarget.route || '',
         jobType: 'pw',
         jobTypeId: 'pw',
@@ -1335,6 +1345,11 @@ function DispatchPageInner() {
 
   async function submitServiceWork() {
     if (!swWellName.trim() || !swServiceType.trim() || swDriverHashes.size === 0) return;
+    const linkedOperator = operatorForBuilderWell(swWellName, allOperatorWells);
+    if (builderOperator && linkedOperator && linkedOperator.toLowerCase() !== builderOperator.toLowerCase()) {
+      setSwError(`This well belongs to ${linkedOperator}. Choose that operator or another well.`);
+      return;
+    }
     if (swSplitTicket && !swDropoff.trim()) {
       setSwError('Choose the Split B location before dispatching linked jobs.');
       return;
@@ -1374,6 +1389,7 @@ function DispatchPageInner() {
         selectedDrivers,
         wellName: swResolvedWellName,
         ndicWellName: swNdicName,
+        operator: linkedOperator || builderOperator,
         serviceType: trimmedServiceType,
         packageId: swPackageId,
         customJobTypes: customJobTypesList,
@@ -2123,6 +2139,8 @@ function DispatchPageInner() {
           driverFirstName,
           wellName,
           ndicWellName: resolvedNdic,
+          ...(operatorForBuilderWell(wellName, allOperatorWells, resolvedNdic)
+            ? { operator: operatorForBuilderWell(wellName, allOperatorWells, resolvedNdic) } : {}),
           route: well?.route || '',
           jobType: 'pw',
           jobTypeId: 'pw',
@@ -2231,6 +2249,7 @@ function DispatchPageInner() {
         await staffUpdateDispatch(editSwJob.id, {
           wellName: selectedWell?.wellName || selectedOperatorWell?.well_name || selectedName,
           ndicWellName: selectedWell?.ndicName || selectedOperatorWell?.well_name || '',
+          operator: operatorForBuilderWell(selectedWell?.wellName || selectedOperatorWell?.well_name || selectedName, allOperatorWells, selectedWell?.ndicName),
         });
       }
 
@@ -2577,6 +2596,27 @@ function DispatchPageInner() {
                 )}
               </div>
 
+              {(builderTab === 'pw' || builderTab === 'sw') && (
+                <div className="mb-3">
+                  <label htmlFor="dispatch-builder-operator" className="block text-xs text-gray-400 mb-1">Customer / Operator</label>
+                  <select
+                    id="dispatch-builder-operator"
+                    value={builderOperator}
+                    onChange={e => {
+                      setBuilderOperator(e.target.value);
+                      setAssignTarget(null);
+                      setSelectedWells(new Map());
+                      setAssignWellSearch('');
+                      setSwWellName('');
+                    }}
+                    className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="">All operators</option>
+                    {builderOperatorOptions.map(name => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                </div>
+              )}
+
               {/* ── PW Tab ── */}
               {builderTab === 'pw' && (
                 <div className="flex-1 flex flex-col min-h-0">
@@ -2609,11 +2649,12 @@ function DispatchPageInner() {
                           value={assignWellSearch}
                           onValueChange={setAssignWellSearch}
                           items={assignWellSearch.length >= 2
-                            ? wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).slice(0, 8)
+                            ? wellsForBuilderOperator(wells, allOperatorWells, builderOperator)
+                                .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).slice(0, 8)
                             : []}
                           onSelect={(w) => { setAssignTarget(w); setAssignWellSearch(''); }}
                           getItemKey={(w) => w.wellName}
-                          renderItem={(w) => (<>{w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span></>)}
+                          renderItem={(w) => (<>{w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{operatorForBuilderWell(w.wellName, allOperatorWells, w.ndicName) || w.route}</span></>)}
                           placeholder="Search wells or click Assign below..."
                           ariaLabel="Search wells"
                           minChars={2}
@@ -2640,6 +2681,7 @@ function DispatchPageInner() {
                           <span className="text-gray-400">Flow: <span className="text-white font-mono">{assignTarget.flowRate || '--'}</span></span>
                           <span className="text-gray-400">TTP: <span className="text-white font-mono">{assignTarget.timeTillPull || '--'}</span></span>
                           <span className="text-gray-400">Route: <span className="text-white">{assignTarget.route || '--'}</span></span>
+                          <span className="text-gray-400 col-span-2">Operator: <span className="text-white">{operatorForBuilderWell(assignTarget.wellName, allOperatorWells, assignTarget.ndicName) || builderOperator || 'Not linked in well directory'}</span></span>
                           <span className="text-gray-400">BBL/day: <span className="text-white font-mono">{assignTarget.windowBblsDay || assignTarget.bbls24hrs || '--'}</span></span>
                           <span className="text-gray-400">ETA Max: <span className="text-white font-mono">{assignTarget.etaToMax || '--'}</span></span>
                         </div>
@@ -2755,8 +2797,15 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swWellName}
                             onValueChange={setSwWellName}
-                            items={combinedLocationResults(swWellName, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swWellName.trim().toLowerCase(), allDisposals) })}
-                            onSelect={(item) => setSwWellName(item.value)}
+                            items={combinedLocationResults(swWellName, {
+                              wells: wellsForBuilderOperator(wells, allOperatorWells, builderOperator),
+                              operatorWells: builderOperator ? allOperatorWells.filter(w => w.operator?.toLowerCase() === builderOperator.toLowerCase()) : allOperatorWells,
+                              disposalMatches: builderOperator ? [] : searchDisposals(swWellName.trim().toLowerCase(), allDisposals),
+                            })}
+                            onSelect={(item) => {
+                              setSwWellName(item.value);
+                              if (!builderOperator) setBuilderOperator(operatorForBuilderWell(item.value, allOperatorWells));
+                            }}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
                             placeholder="Type to search..."
@@ -2767,6 +2816,11 @@ function DispatchPageInner() {
                             optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
                         </div>
+                        {swWellName.trim() && (
+                          <div className="text-xs text-gray-400 mt-1">
+                            Operator: <span className="text-gray-200">{operatorForBuilderWell(swWellName, allOperatorWells) || builderOperator || 'Not linked in well directory'}</span>
+                          </div>
+                        )}
                         {!swSplitTicket && <div className="relative">
                           <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
                           <BuilderAutocomplete
@@ -3789,6 +3843,7 @@ function DispatchPageInner() {
                     onDismissDeclined={dismissDeclinedDispatch}
                     activeJobsReady={!driversLoading && dispatchesLoaded}
                     wells={wells}
+                    operatorWells={allOperatorWells}
                     nowMs={asOfMs}
                   />
                 )}
@@ -4560,7 +4615,7 @@ function JobTypeBadge({ type, serviceType }: { type: string; serviceType?: strin
 }
 
 // Single job row — shows all info a dispatcher needs
-function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss, isRecommendedNext, isWellDown }: {
+function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss, isRecommendedNext, isWellDown, operatorName }: {
   job: DispatchJob;
   cancelDispatch: (id: string) => void;
   compact?: boolean;
@@ -4571,6 +4626,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
   isRecommendedNext?: boolean;
   /** Canonical live well state is DOWN — show a prominent warning; the job stays actionable. */
   isWellDown?: boolean;
+  operatorName?: string;
 }) {
   const dropoff = job.hauledTo || job.disposal;
   const isClickable = !!onClickServiceWork;
@@ -4609,7 +4665,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
       </div>
 
       {/* Detail row — invoice #, drop-off, notes */}
-      {(job.invoiceNumber || job.ticketNumber || dropoff || job.notes) && (
+      {(job.invoiceNumber || job.ticketNumber || dropoff || operatorName || job.notes) && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 ml-[48px] text-xs">
           {(job.invoiceNumber || job.ticketNumber) && (
             <span className="text-gray-400 flex-shrink-0">
@@ -4621,6 +4677,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
               → {dropoff}
             </span>
           )}
+          {operatorName && <span className="text-gray-300 break-words" title={`Operator: ${operatorName}`}>Operator: {operatorName}</span>}
           {job.notes && (
             <span className="text-gray-500 italic break-words" title={job.notes}>
               {job.notes}
@@ -4715,7 +4772,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
 // Driver-centric active dispatch panel — groups ALL jobs by driver
 // Multi-driver SW jobs shown separately at bottom with all crew visible
-function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined, activeJobsReady = true, wells, nowMs }: {
+function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined, activeJobsReady = true, wells, operatorWells, nowMs }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
   drivers?: { key: string; driverId?: string; legacyAliases?: string[]; companyId?: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
@@ -4727,6 +4784,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   activeJobsReady?: boolean;
   /** Canonical well pool + shared clock — for the SAME physical-readiness order + live DOWN state as the Well Queue. */
   wells?: WellResponse[];
+  operatorWells?: NdicWell[];
   nowMs?: number;
 }) {
   // Expanded driver groups persist across refresh — session-scoped by uid+companyId+
@@ -4904,6 +4962,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   {job.disposal && (
                     <div className="text-cyan-400/70 break-words">→ {job.disposal}</div>
                   )}
+                  {job.operator && <div className="text-gray-300 break-words">Operator: {job.operator}</div>}
                   {(job.invoiceNumber || job.ticketNumber) && (
                     <div className="text-gray-400"><span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}</div>
                   )}
@@ -4973,6 +5032,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
             onReassign={onReassignDeclined}
             isRecommendedNext={job.jobType !== 'service' && recommendedByGroup.get(driverHash) === job.id}
             isWellDown={!!job.id && downByJobId.has(job.id)}
+            operatorName={job.operator || operatorForBuilderWell(job.wellName, operatorWells || [], job.ndicWellName)}
             onDismiss={(j) => {
               setConfirmDismissJob(j);
               setDismissError(null);
@@ -5113,6 +5173,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   {notes && (
                     <div className="text-gray-500 text-xs mt-1 italic truncate">{notes}</div>
                   )}
+                  {(firstJob.operator || operatorForBuilderWell(firstJob.wellName, operatorWells || [], firstJob.ndicWellName)) && <div className="text-gray-300 text-xs mt-1 truncate">Operator: {firstJob.operator || operatorForBuilderWell(firstJob.wellName, operatorWells || [], firstJob.ndicWellName)}</div>}
                 </div>
 
                 {/* Crew list — each driver with their stage */}
