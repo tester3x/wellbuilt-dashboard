@@ -1,3 +1,4 @@
+import { resolveTankBblPerFoot } from '../../tankCalibration';
 import {effectiveFlow} from '../../effectiveFlow';
 import {refreshFlowWindow} from '../../refreshFlowWindow';
 /**
@@ -203,8 +204,7 @@ export async function prepareEditOutbox(
   const freezeOriginal = !origPacket.originalSubmittedAt;
   const editedAtIso = new Date(nowMs).toISOString();
 
-  const tanks = config.tanks || config.numTanks || 1;
-  const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
+  const bblPerFoot = resolveTankBblPerFoot(config);
   const pullBbls = config.pullBbls || 100;
   const bottomInches = (config.bottomLevel || config.allowedBottom || 1) * 12;
   const loadLineInches = (config.loadLine ?? 0) * 12;
@@ -1005,7 +1005,7 @@ async function updateWellStatusRecalc(db: admin.database.Database, outbox: EditO
     const cfg = configSnap.val() || {};
     const tanks = cfg.tanks || cfg.numTanks || 1;
     const pullBbls = cfg.pullBbls || 100;
-    const bblPerFoot = Number(cfg.bblPerFoot) > 0 ? Number(cfg.bblPerFoot) : 20 * tanks;
+    const bblPerFoot = resolveTankBblPerFoot(cfg);
     const bottomInches = (cfg.bottomLevel || cfg.allowedBottom || 1) * 12;
 
     const pullHeightIn = (pullBbls / bblPerFoot) * 12;

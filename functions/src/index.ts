@@ -1,3 +1,4 @@
+import { resolveTankBblPerFoot } from './tankCalibration';
 import {refreshFlowWindow} from './refreshFlowWindow';
 import {effectiveFlow} from './effectiveFlow';
 import * as functionsV1 from 'firebase-functions/v1';
@@ -997,6 +998,7 @@ export const processIncomingPull = functionsV1.database
     const config = configSnap.val() || {};
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+    const bblPerFoot = Number(data.tankLevelFeet) > 0 ? resolveTankBblPerFoot(config) : 0;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
 
     // Get current outgoing response (previous row data)
@@ -1184,7 +1186,7 @@ export const processIncomingPull = functionsV1.database
       return null;
     }
 
-    const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
+    const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / bblPerFoot) * 12 : 0;
     let tankAfterInches = tankTopInches - bblsInInches;
     const reportedBottom=Number((data as any).watchdogProvenance?.reportedBottomFeet)*12;
     if(config.flowWindowMinimumRecoveryInches && (data as any).source==='whatsapp_watchdog' && (data as any).watchdogProvenance?.principalId==='laptop-watchdog-v2' && (data as any).watchdogProvenance?.reportedBottomFeet!=null && Number.isFinite(reportedBottom) && reportedBottom>=0 && reportedBottom<=tankTopInches && Math.abs(reportedBottom-tankAfterInches)<=2)tankAfterInches=reportedBottom;
@@ -1228,7 +1230,7 @@ export const processIncomingPull = functionsV1.database
     const afr = windowed?windowed.averageDays:await calculateAFR(wellName, flowRateDays);
 
     // Calculate window-averaged and overnight bbls/day
-    const bblPerFoot = tanks * 20;
+    // bblPerFoot is the configured total active bank calibration.
     const historicalPulls = await getHistoricalPulls(wellName, 500);
     const pullTimeMs = new Date(data.dateTimeUTC).getTime();
 
@@ -1247,7 +1249,7 @@ export const processIncomingPull = functionsV1.database
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);
 
     // Recovery Needed
-    const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+    const pullHeightInches = (pullBbls / bblPerFoot) * 12;
     const targetLevel = bottomInches + pullHeightInches;
     const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
 
@@ -1304,7 +1306,7 @@ export const processIncomingPull = functionsV1.database
     // BBLs per 24 hours
     let bbls24hrs = '0';
     if (afr > 0) {
-      const bbls24 = (1 / afr) * 20 * tanks;
+      const bbls24 = (1 / afr) * bblPerFoot;
       bbls24hrs = Math.round(bbls24).toString();
     }
 
@@ -1711,7 +1713,7 @@ export const processIncomingPull = functionsV1.database
     // These are fast Firestore writes, adds ~1-2s to packet processing but guarantees delivery.
     try {
       await Promise.all([
-        sendLevelToChat(data, packetId, { tankAfterInches, tanks }).catch(err => console.warn('[LevelChat] Send failed:', err)),
+        sendLevelToChat(data, packetId, { tankAfterInches, tanks, bblPerFoot }).catch(err => console.warn('[LevelChat] Send failed:', err)),
         trackJsaLocation(data).catch(err => console.warn('[JsaTrack] Tracking failed:', err)),
       ]);
     } catch (err) {
@@ -2089,7 +2091,7 @@ export const processDeleteRequest = functionsV1.database
         configSnap = await db.ref(`well_config/${cleanName}`).once('value');
       }
       const config = configSnap.val() || {};
-      const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+
       const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
       const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
 
@@ -2134,14 +2136,14 @@ export const processDeleteRequest = functionsV1.database
           console.log(`Delete: AFR for ${wellName} = ${afr}`);
 
           // Calculate windowBblsDay and overnightBblsDay from remaining historical pulls
-          const bblPerFoot = tanks * 20;
+          const bblPerFoot = resolveTankBblPerFoot(config);
           const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
           const historicalPulls = await getHistoricalPulls(wellName, 500);
           const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
           const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
 
           const tankAfterInches = latestPacket.tankAfterInches || 0;
-          const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+          const pullHeightInches = (pullBbls / bblPerFoot) * 12;
           const targetLevel = bottomInches + pullHeightInches;
           const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
 
@@ -2158,7 +2160,7 @@ export const processDeleteRequest = functionsV1.database
             estDateTimePull = latestPacket.dateTimeUTC;
           }
 
-          const bbls24 = afr > 0 ? (1 / afr) * 20 * tanks : 0;
+          const bbls24 = afr > 0 ? (1 / afr) * bblPerFoot : 0;
           const bbls24hrs = Math.round(bbls24).toString();
 
           // Delete old outgoing responses for this well and write new one
@@ -2691,7 +2693,7 @@ async function postSystemMessage(
 async function sendLevelToChat(
   data: PullPacket,
   packetId: string,
-  computed?: { tankAfterInches: number; tanks: number },
+  computed?: { tankAfterInches: number; tanks: number; bblPerFoot: number },
 ): Promise<void> {
   try {
     const driverHash = data.driverId;
@@ -2734,12 +2736,14 @@ async function sendLevelToChat(
     const wellName = data.wellName;
     const cleanName = wellName ? wellName.replace(/\s/g, '') : '';
     let tanks = 1;
+    let bblPerFt: number;
     let bottomInches: number;
     let sourceUsed: string;
 
     if (computed && Number.isFinite(computed.tankAfterInches)) {
       // Caller already computed the correct bottom (uses well_config.tanks). Use it directly.
       tanks = computed.tanks || 1;
+      bblPerFt = computed.bblPerFoot;
       bottomInches = computed.tankAfterInches;
       sourceUsed = `caller.tankAfterInches(tanks=${tanks})`;
     } else {
@@ -2751,15 +2755,17 @@ async function sendLevelToChat(
         }
         const cfg = (configSnap && configSnap.val()) || {};
         tanks = cfg.tanks || cfg.numTanks || 1;
+        bblPerFt = resolveTankBblPerFoot(cfg);
       } catch (e) {
-        console.warn('[LevelChat] well_config lookup failed, defaulting tanks=1:', e);
+        console.warn('[LevelChat] calibration lookup failed; refusing guessed bottom:', e);
+        return;
       }
-      const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / (20 * tanks)) * 12 : 0;
+      const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / bblPerFt!) * 12 : 0;
       bottomInches = topInches - bblsInInches;
       sourceUsed = `recompute(well_config.tanks=${tanks})`;
     }
 
-    const bblPerFt = 20 * tanks;
+
     const topStr = inchesToFeetInches(topInches);
     const bottomStr = inchesToFeetInches(Math.max(0, bottomInches));
 
