@@ -5,6 +5,7 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
+import { isActiveDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
@@ -96,6 +97,7 @@ interface ApprovedDriver {
 }
 
 interface DispatchJob {
+  reassignedTo?: string;
   id?: string;
   driverId?: string;
   // Tenant stamp (7/9): present on WB-T-era dispatch docs; legacy docs may
@@ -2825,7 +2827,7 @@ function DispatchPageInner() {
                             value={swWellName}
                             onValueChange={setSwWellName}
                             items={combinedLocationResults(swWellName, {
-                              wells: wellsForBuilderOperator(wells, allOperatorWells, builderOperator),
+                              wells: wellsForBuilderOperator(catalogRouteWells, allOperatorWells, builderOperator),
                               operatorWells: builderOperator ? allOperatorWells.filter(w => w.operator?.toLowerCase() === builderOperator.toLowerCase()) : allOperatorWells,
                               disposalMatches: builderOperator ? [] : searchDisposals(swWellName.trim().toLowerCase(), allDisposals),
                               customLocations: builderOperator ? customCatalogLocations.filter(c => c.company.toLowerCase() === builderOperator.toLowerCase()) : customCatalogLocations,
@@ -2854,7 +2856,7 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swDropoff}
                             onValueChange={setSwDropoff}
-                            items={combinedLocationResults(swDropoff, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations })}
+                            items={combinedLocationResults(swDropoff, { wells: catalogRouteWells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations })}
                             onSelect={(item) => setSwDropoff(item.value)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => <LocationSearchResult item={item} />}
@@ -3760,7 +3762,7 @@ function DispatchPageInner() {
                   >
                     Active Jobs
                     {(() => {
-                      const activeCount = dispatches.filter(d => !['completed', 'dismissed'].includes(d.status)).reduce((sum, d) => sum + ((d as any).loadCount || 1), 0);
+                      const activeCount = dispatches.filter(isActiveDispatchCard).reduce((sum, d) => sum + ((d as any).loadCount || 1), 0);
                       return activeCount > 0 ? (
                         <span className={`ml-1 px-1.5 py-0.5 text-[10px] rounded font-bold ${
                           rightPanelTab === 'jobs' ? 'bg-blue-500/40 text-blue-100' : 'bg-blue-600/20 text-blue-400'
@@ -3860,7 +3862,7 @@ function DispatchPageInner() {
               <div className="dispatch-jobs-body p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
-                    dispatches={dispatches.filter(d => d.status !== 'completed' && d.status !== 'dismissed')}
+                    dispatches={dispatches.filter(isActiveDispatchCard)}
                     cancelDispatch={cancelDispatch}
                     drivers={drivers}
                     assignTransfer={assignTransfer}

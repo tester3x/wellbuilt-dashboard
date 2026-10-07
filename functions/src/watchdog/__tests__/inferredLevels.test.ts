@@ -1,0 +1,4 @@
+import {corroborateInferredLevels} from '../inferredLevels';
+const row={wellName:'Test',dateTimeUTC:'2026-10-06T18:00:00Z',tankLevelFeet:8.8,bottomLevelFeet:6.9,bblsTaken:165};
+const prior={wellDown:false,wellName:'Test',dateTimeUTC:'2026-10-06T17:30:00Z',tankLevelFeet:10,tankAfterInches:99.6,flowRateDays:60/1440,canonicalProcessingComplete:true};
+test('only accepts historical recovery and calibrated drawdown corroboration',()=>{expect(corroborateInferredLevels(row,{prior},67.28)).toBe(true);for(const p of [{...prior,wellDown:true},{...prior,flowRateDays:0},{...prior,canonicalProcessingComplete:false},{...prior,tankAfterInches:12},{...prior,wellName:'Other'},{...prior,dateTimeUTC:'2026-10-04T17:30:00Z'}])expect(corroborateInferredLevels(row,{p},67.28)).toBe(false);expect(corroborateInferredLevels({...row,bblsTaken:400},{prior},67.28)).toBe(false);expect(corroborateInferredLevels(row,{prior},0)).toBe(false);});

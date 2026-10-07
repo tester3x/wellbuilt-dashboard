@@ -151,7 +151,7 @@ check('1j-2. PW bulk submit guard preserved',
   dispatchPageSrc.includes('disabled={!assignDriverHash || assigning}')
 );
 check('1j-3. SW submit guard preserved',
-  dispatchPageSrc.includes('disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}')
+  dispatchPageSrc.includes('disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || swExtraLegDraft !== null || (swSplitTicket && (!swDropoff.trim() || !!swBblPlan.error))}')
 );
 check('1j-4. Projects submit guard preserved',
   dispatchPageSrc.includes('disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}')

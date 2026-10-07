@@ -94,6 +94,7 @@ export const TABS: TabConfig[] = [
     capability: 'viewSettings',
     minRole: 'admin',
   },
+  {id:'watchdog',label:'Watchdog',href:'/watchdog',matchPrefixes:['/watchdog'],capability:'viewDispatch'},
 ];
 
 export function getActiveTab(pathname: string): string | null {

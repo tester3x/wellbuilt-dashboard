@@ -28,6 +28,7 @@ export const AUTH_ROUTES = [
   '/settings',
   '/tickets',
   '/well',
+  '/watchdog',
 ];
 
 function createStaticServer(rootDir) {

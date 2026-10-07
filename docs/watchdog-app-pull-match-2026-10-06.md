@@ -1,0 +1,13 @@
+Watchdog app-pull matching release
+
+Automatic suppression requires one preceding app pull within 90 minutes, same well and verified driver ID, equal barrels, top within one inch, reported bottom within two inches of the app bottom, completed canonical processing, and no intervening pull. Incoming, ambiguous, unowned and conflicting candidates are held for review. Matching returns the existing packet ID and UTC gauge time; no new incoming packet or delivery claim is created. Explicit confirmation can release uncertain candidates but cannot release a strong match. Existing aggregate containment protections remain.
+
+New watchdog packets include an explicit Central display time alongside UTC to avoid the server-local UTC display fallback. Existing history is untouched.
+
+Validation: Functions build; 22 focused Jest tests; 18 watchdog tests; exact previously duplicated observation dry-run matched its original app packet. Production release scope: ingestWatchdogPullV2 only. Remote review endpoints and Hosting remain outside this deployment.
+
+Deployment verified October 6, 2026: source ca784d1f; ingestWatchdogPullV2 successfully updated using functions:dashboard:ingestWatchdogPullV2. A signed historical app/report pair returned duplicate + alreadyRecorded + original packet/time from production. Local page refreshed; Connected, Ready, Watching. No historical pull mutations.
+
+Parser follow-up: a constrained four-number decimal pattern can propose a missing slash. It remains provisional until a completed preceding pull (within 24 hours, explicitly producing) with valid historical flow predicts the top within two inches, and calibrated drawdown plus up to 30 minutes inflow corroborates barrels within two inches rounding. Missing or contradictory evidence holds for manual correction. No current flow is substituted for historical flow. Original post retained; accepted inference is marked in packet provenance. Bare 1:00 resolving to a 1:19 PM post is already supported and has an explicit regression. Saved old review reasons are not retroactively cleared or sent.
+
+Parser release 6537845b deployed to ingestWatchdogPullV2 on October 6, 2026; local parser reloaded, Connected/Ready/Watching six groups verified. Functions build and 46 focused backend tests plus 19 watchdog tests pass. Historical malformed observation remains protected by activation cutoff; no prior completed historical calculation was available for its inference. No historical pull was sent or edited.

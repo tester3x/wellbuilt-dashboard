@@ -1,0 +1,14 @@
+# Watford watchdog and sender mapping — 2026-10-05
+
+Watford Wells enabled locally and in server intake policy with the seven Liquid Gold Watford well names. Today’s midnight Central activation boundary preserves older observations as unsent. Existing watched groups and sender bindings retained. No missing-barrel fallback assumed for Watford; written amounts are used.
+
+Marcial Lebaron’s active Liquid Gold profile has Watford and Dunn County assigned. The sender observed in Watford is mapped to this canonical profile; user explicitly confirmed the WhatsApp display name Anthony is Marcial. Exact sender ID is retained privately/server-side, never matched by display-name similarity. Dunn County WhatsApp group unavailable to watcher; user will request membership. It has not been enabled.
+
+Parser fix source 78d7d981 accepts whitespace after foot markers, including curly feet/inch quotes. Exact Kahuna 1 observation parses as top 11 ft 11 in, reported bottom 4 ft 11 in, 140 written barrels, timestamp 2026-10-05T21:17:08Z, zero parser issues. Invalid 12-inch and trailing-junk inputs remain rejected. 36 parser/intake/ownership tests and Functions build pass. All 12 local watcher tests pass after time-dependent fixture was pinned (03aadcf2).
+
+Scoped intake Function deployed from 78d7d981; local watcher restarted, linked session reconnected and watching confirmed. Live Kahuna 1 post no longer has Unreadable levels. It is correctly held for a possible existing pull: processed WB-M history contains a Marcial-owned pull with the same top and barrels approximately 21 minutes earlier. Duplicate review remains unresolved intentionally; no extra pull created. Screenshot retained privately as verification evidence.
+
+
+Deferred Dunn County follow-up: user identified Dagger 2 on the Dunn County route. Exact WhatsApp channel name is `Dunn County wells`; user reports membership is now available. Return to this later, verify the available group ID and server well scope before enabling it. Marcial's existing verified sender mapping already supports his assigned Dunn County route. This note does not enable the group or submit a pull.
+
+Dunn County mapping completed at user request: exact saved group `Dunn County wells` mapped server-side to the six authoritative Liquid Gold route wells Dagger 1, Dagger 2, Drone, Taboo, Turbo 1, Turbo 2. Cutoff remains Oct 5 midnight Central; other group options and sender bindings retained. Local watchdog lifecycle refreshed successfully to 26 scoped wells and receiver remains Connected/Watching. Marcial's verified existing sender binding and active assigned Dunn County profile apply without additional identity changes. Synced group data currently contains only an old group-name notice; no fresh Dunn County pull has been verified. No code change, app build, or Function deployment needed.

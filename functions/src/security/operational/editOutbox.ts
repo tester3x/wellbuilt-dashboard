@@ -1,3 +1,5 @@
+import {effectiveFlow} from '../../effectiveFlow';
+import {refreshFlowWindow} from '../../refreshFlowWindow';
 /**
  * Event-scoped durable edit outbox and state machine.
  *
@@ -381,6 +383,8 @@ export async function prepareEditOutbox(
     }
   }
 
+  const flowWindow=effectiveFlow({...prevOutgoingSnap.val(),[originalPacketId]:{...origPacket,packetId:originalPacketId,tankTopInches:newTankTopInches,tankAfterInches:newTankAfterInches,bblsTaken:newBblsTaken,dateTimeUTC:newDateTimeUTC,wellDown:nextEditIsDown}},config);
+  if(flowWindow){const sample=flowWindow.results.find(r=>r.packetId===originalPacketId);flowRateDays=sample?.flowRateDays||0;flowRate=flowRateDays?daysToHMMSS(flowRateDays):'';recoveryInches=sample?.recoveryInches||0;timeDifDays=sample?.timeDifDays||0;timeDif=timeDifDays?daysToHMM(timeDifDays):'';}
   // Calculate AFR across pulls
   const allPulls: any[] = [];
   prevOutgoingSnap.forEach((child) => {
@@ -412,6 +416,7 @@ export async function prepareEditOutbox(
     afr = flowRateDays;
   }
 
+  if(flowWindow)afr=flowWindow.averageDays;
   // Determine if latest pull — inspect both outgoing response and relative pull timestamps
   const outgoingSnap = await db.ref('packets/outgoing')
     .orderByChild('wellName')
@@ -684,6 +689,7 @@ export async function executeEditOutbox(
     await cascadeNextPacketRecovery(db, outbox);
     await updatePerformanceRow(db, outbox);
     await updateWellStatusRecalc(db, outbox);
+    await refreshFlowWindow(db,outbox.wellName);
 
     // Stamp outgoing committed marker on processed packet
     if (outbox.revision) {
