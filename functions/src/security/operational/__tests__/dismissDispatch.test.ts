@@ -42,19 +42,19 @@ describe('evaluateDismissDispatch', () => {
     })).toMatchObject({ ok: true, idempotent: true });
   });
 
-  it('blocks a split family with an in-progress sibling', () => {
+  it('dismisses only a cancelled split leg while another split is in progress', () => {
     expect(evaluateDismissDispatch({
-      job: { ...job, id: 'A', status: 'declined', splitGroupId: 's1' },
-      siblings: [{ id: 'B', status: 'in_progress', companyId: 'liquid-gold', splitGroupId: 's1' }],
+      job: { ...job, id: 'B', status: 'cancelled', splitGroupId: 's1' },
+      siblings: [{ id: 'A', status: 'in_progress', companyId: 'liquid-gold', splitGroupId: 's1' }],
       callerCompanyId: 'liquid-gold',
       isPlatformAdmin: false,
-    })).toEqual({ ok: false, reason: 'family_in_progress' });
+    })).toEqual({ ok: true, idempotent: false, dispatchIds: ['B'], preserveDecline: true });
   });
 
   it('blocks accepted, in_progress, and paused family members', () => {
     for (const status of ['accepted', 'in_progress', 'paused'] as const) {
       expect(evaluateDismissDispatch({
-        job: { ...job, id: 'A', status: 'declined', splitGroupId: 's1' },
+        job: { ...job, id: 'A', status: 'pending', splitGroupId: 's1' },
         siblings: [{ id: 'B', status, companyId: 'liquid-gold', splitGroupId: 's1' }],
         callerCompanyId: 'liquid-gold',
         isPlatformAdmin: false,
@@ -64,7 +64,7 @@ describe('evaluateDismissDispatch', () => {
 
   it('rejects a different-company sibling even for a platform administrator', () => {
     const decided = evaluateDismissDispatch({
-      job: { ...job, id: 'A', status: 'declined', splitGroupId: 's1' },
+      job: { ...job, id: 'A', status: 'pending', splitGroupId: 's1' },
       siblings: [{ id: 'B', status: 'pending', companyId: 'acme-hauling', splitGroupId: 's1' }],
       callerCompanyId: undefined,
       isPlatformAdmin: true,
@@ -94,7 +94,7 @@ describe('evaluateDismissDispatch', () => {
 
   it('rejects a split family whose sibling became in_progress after the preliminary read', () => {
     expect(evaluateDismissDispatch({
-      job: { ...job, id: 'A', status: 'declined', splitGroupId: 's1' },
+      job: { ...job, id: 'A', status: 'pending', splitGroupId: 's1' },
       siblings: [{ id: 'B', status: 'accepted', companyId: 'liquid-gold', splitGroupId: 's1' }],
       callerCompanyId: 'liquid-gold',
       isPlatformAdmin: false,
@@ -110,7 +110,7 @@ describe('evaluateDismissDispatch', () => {
     })).toEqual({ ok: false, reason: 'not_dismissable' });
   });
 
-  it('dismisses same-company pending siblings and preserves decline fields', () => {
+  it('does not dismiss a pending sibling when removing a declined split leg', () => {
     const decided = evaluateDismissDispatch({
       job: { ...job, id: 'A', status: 'declined', splitGroupId: 's1' },
       siblings: [{ id: 'B', status: 'pending', companyId: 'liquid-gold', splitGroupId: 's1' }],
@@ -120,7 +120,7 @@ describe('evaluateDismissDispatch', () => {
     expect(decided).toEqual({
       ok: true,
       idempotent: false,
-      dispatchIds: ['A', 'B'],
+      dispatchIds: ['A'],
       preserveDecline: true,
     });
   });

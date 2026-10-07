@@ -51,6 +51,11 @@ export function evaluateDismissDispatch(input: {
     if (!siblingCompany) return { ok: false, reason: 'sibling_unscoped' };
     if (siblingCompany !== companyId) return { ok: false, reason: 'sibling_cross_company' };
   }
+  // A cancelled/declined split leg is terminal on its own. Removing its card
+  // must not dismiss a pending sibling or be blocked by an active sibling.
+  if (st === 'cancelled' || st === 'declined') {
+    return { ok: true, idempotent: false, dispatchIds: [job.id], preserveDecline: true };
+  }
   if (family.some((s) => (STARTED_STATUSES as readonly string[]).includes(statusOf(s)))) {
     return { ok: false, reason: 'family_in_progress' };
   }

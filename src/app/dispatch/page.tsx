@@ -4647,6 +4647,12 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
   operatorName?: string;
 }) {
   const dropoff = job.hauledTo || job.disposal;
+  // Resequencing changes the ticket letter without rewriting the original
+  // planning note. Show the current letter from the dispatch sequence.
+  const displayNotes = job.splitGroupId && typeof job.splitSequence === 'number'
+    ? (job.notes || '').replace(/^Split ticket [A-Z](?=\s*[—-])/i,
+      `Split ticket ${String.fromCharCode(64 + job.splitSequence)}`)
+    : job.notes;
   const isClickable = !!onClickServiceWork;
 
   // Split ticket visual — light tint so linked jobs stand out
@@ -4683,7 +4689,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
       </div>
 
       {/* Detail row — invoice #, drop-off, notes */}
-      {(job.invoiceNumber || job.ticketNumber || dropoff || operatorName || job.notes) && (
+      {(job.invoiceNumber || job.ticketNumber || dropoff || operatorName || displayNotes) && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 ml-[48px] text-xs">
           {(job.invoiceNumber || job.ticketNumber) && (
             <span className="text-gray-400 flex-shrink-0">
@@ -4696,9 +4702,9 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
             </span>
           )}
           {operatorName && <span className="text-gray-300 break-words" title={`Operator: ${operatorName}`}>Operator: {operatorName}</span>}
-          {job.notes && (
-            <span className="text-gray-500 italic break-words" title={job.notes}>
-              {job.notes}
+          {displayNotes && (
+            <span className="text-gray-500 italic break-words" title={displayNotes}>
+              {displayNotes}
             </span>
           )}
         </div>
