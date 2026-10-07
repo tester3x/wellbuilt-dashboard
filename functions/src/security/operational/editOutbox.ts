@@ -149,6 +149,14 @@ export function outgoingCompanyId(config: { companyId?: unknown } | null | undef
 
 // ── Outbox Preparation ────────────────────────────────────────────────────────
 
+/** Firebase child keys cannot contain audit-path slashes. Encode only at rest. */
+export function storedEditHistoryPaths(paths: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(paths).map(([path, value]) => [Buffer.from(path).toString('base64url'), value]));
+}
+export function expandedEditHistoryPaths(paths: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(paths).map(([key, value]) => [key.startsWith('packets/') ? key : Buffer.from(key, 'base64url').toString('utf8'), value]));
+}
+
 export async function prepareEditOutbox(
   db: admin.database.Database,
   incomingPacketId: string,
@@ -316,7 +324,7 @@ export async function prepareEditOutbox(
       deliveredDispatchIds: [],
       pendingDispatchIds: [],
     };
-    await db.ref(`packets/editOutbox/${editEventId}`).set(record);
+    await db.ref(`packets/editOutbox/${editEventId}`).set({...record, historyPaths: storedEditHistoryPaths(record.historyPaths)});
     return record;
   }
 
@@ -570,7 +578,7 @@ export async function prepareEditOutbox(
   };
 
   // Atomically persist outbox record BEFORE any mutation
-  await db.ref(`packets/editOutbox/${editEventId}`).set(record);
+  await db.ref(`packets/editOutbox/${editEventId}`).set({...record, historyPaths: storedEditHistoryPaths(record.historyPaths)});
   return record;
 }
 
@@ -626,7 +634,7 @@ export async function executeEditOutbox(
       ...Object.fromEntries(
         Object.entries(updates).map(([k, v]) => [`packets/processed/${outbox.originalPacketId}/${k}`, v]),
       ),
-      ...outbox.historyPaths,
+      ...expandedEditHistoryPaths(outbox.historyPaths),
     });
 
     await db.ref(`wells/${outbox.wellName}/status/isDown`).set(outbox.nextEditIsDown);
