@@ -3,6 +3,7 @@ export interface PullImportOptions {
   defaultWell?: string;
   wellNames?: string[];
   defaultBbls?: number;
+  driverDefaultBbls?: Record<string, number>;
   timeZone?: string;
   dateOrder?: 'mdy' | 'dmy';
   startDate?: string;
@@ -118,8 +119,11 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       const top = labelled ? parseFeet(labelled[1]) : pair ? parseFeet(pair[1]) : unlabelled ? levelLines[0] : null;
       const low = bottom ? parseFeet(bottom[1]) : pair ? parseFeet(pair[2]) : unlabelled ? levelLines[1] : null;
       const amount = /\b(\d+(?:\.\d+)?)\s*bbls?\b/i.exec(segment.body);
-      const bareAmount = (pair || unlabelled) ? /^\s*(\d{2,3})(?:\.(?!\d))?\s*(.*)$/.exec(lines[pair ? 1 : 2] || '') : null;
-      const bbls = amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : options.defaultBbls || null;
+      const amountLine = lines[pair ? 1 : 2] || '';
+      const isClockLine = /^\d{1,2}:\d{2}(?:\s*[ap](?:m)?)?$|^\d{1,4}\s*[ap](?:m)?$/i.test(amountLine);
+      const bareAmount = (pair || unlabelled) && !isClockLine ? /^\s*(\d{2,3})(?:\.(?!\d))?\s*(.*)$/.exec(lines[pair ? 1 : 2] || '') : null;
+      const driverDefault = Object.entries(options.driverDefaultBbls || {}).find(([name]) => name.trim().toLowerCase() === message.author.trim().toLowerCase())?.[1];
+      const bbls = amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : driverDefault || options.defaultBbls || null;
       // A routing instruction containing a well and barrels is not a pull.
       if (!labelled && !pair && !unlabelled) {
         if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s+)?\d/i.test(segment.body)) { let timestamp='';try{timestamp=chatTimestamp(message.date,message.time,options.timeZone,options.dateOrder);}catch{} rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp, tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false }); }
@@ -129,7 +133,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       let postedAt = '';
       try { postedAt = chatTimestamp(message.date, message.time, options.timeZone, options.dateOrder); } catch (error) { issues.push(String(error)); }
       let eventTime = postedAt;
-      const explicit = inlineTime || lines.find((line, index) => index >= (pair ? 2 : unlabelled ? 3 : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
+      const explicit = inlineTime || lines.find((line, index) => index >= (pair ? (bareAmount ? 2 : 1) : unlabelled ? (bareAmount ? 3 : 2) : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
       if (explicit && clock(explicit)) {
         let resolved = explicit;
         // Bare 1:30 can mean AM or PM. Choose nearest post only within two hours.

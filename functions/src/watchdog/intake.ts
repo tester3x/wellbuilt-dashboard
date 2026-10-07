@@ -35,7 +35,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const channel=policy.channels?.[body.chatId];if(!channel)throw Error('channel_not_allowed');
  const fallback=Object.prototype.hasOwnProperty.call(body,'defaultBbls')?body.defaultBbls:channel.defaultBbls;
  if(fallback!=null&&fallback!==0&&(!Number.isFinite(fallback)||fallback<=0||fallback>1000))throw Error('invalid_barrel_fallback');
- const rows=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined});
+ const rows=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined,driverDefaultBbls:channel.driverDefaultBbls||{}});
  let row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
  const senderKey=body.senderId===undefined?null:watchdogSenderKey(body.senderId);
  const originalTime=row.dateTimeUTC;

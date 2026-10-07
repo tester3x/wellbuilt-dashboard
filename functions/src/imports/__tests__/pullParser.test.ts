@@ -81,3 +81,11 @@ test('bare one oclock resolves to a nearby afternoon post; inferred separator re
  const [r]=parsePullChat('[10/6/26, 1:19:44 PM] Driver: Kahuna 5\n8.8\n7.7\n185\n1:00');expect(r.dateTimeUTC).toBe('2026-10-06T18:00:00.000Z');expect(r.issues).toEqual([]);
  const [typo]=parsePullChat('[10/6/26, 1:19:44 PM] Driver: Kahuna 5- 8.8.6.9\n165 bbls');expect(typo.tankLevelFeet).toBe(8.8);expect(typo.bottomLevelFeet).toBe(6.9);expect(typo.inferredSeparator).toBe(true);
 });
+
+test('clock after T/B levels is time, never barrels; driver default beats group fallback',()=>{
+ const chat='[10/07/2026, 12:52:55] Test Driver: Gunslinger 3\nT 15-1\nB 12-5\n12:22 pm';
+ const [row]=parsePullChat(chat,{defaultBbls:165,driverDefaultBbls:{'Test Driver':185}});
+ expect(row.bblsTaken).toBe(185);expect(row.dateTimeUTC).toBe('2026-10-07T17:22:00.000Z');expect(row.issues).toEqual([]);
+ expect(parsePullChat(chat)[0].bblsTaken).toBeNull();
+ expect(parsePullChat(chat.replace('12:22 pm','170 bbls\n12:22 pm'),{driverDefaultBbls:{'Test Driver':185}})[0].bblsTaken).toBe(170);
+});
