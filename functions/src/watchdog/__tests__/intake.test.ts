@@ -100,3 +100,13 @@ test('same verified owner later report never creates another app pull',async()=>
  expect(result.result).toMatchObject({status:'duplicate',alreadyRecorded:true,matchedPacketId:'app'});
  expect([...database.keys()].some(k=>k.startsWith('packets/incoming/'))).toBe(false);
 });
+
+test('separator candidate passes only corroborated historical recovery, otherwise stays reviewable',async()=>{
+ const body={...observation(),chat:observation().chat.replace('Top 12.5\nBottom 11.125','12.5.11.2')};
+ const prior={wellDown:false,packetId:'previous',requestType:'pull',wellName:'Kahuna 5',dateTimeUTC:new Date(Date.now()-30*60000).toISOString(),tankLevelFeet:14,bblsTaken:240,tankAfterInches:144,flowRateDays:60/1440,canonicalProcessingComplete:true};
+ database.set('packets/processed/previous',prior);
+ const result=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(result.result.status).toBe('queued');
+ expect(database.get('packets/incoming/'+result.result.packetId).watchdogProvenance.parserInference.historicallyCorroborated).toBe(true);
+ database.set('packets/processed/previous',{...prior,tankAfterInches:12});database.delete('packets/incoming/'+result.result.packetId);
+ const held=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,messageId:'other'});expect(held.result.status).toBe('review');
+});

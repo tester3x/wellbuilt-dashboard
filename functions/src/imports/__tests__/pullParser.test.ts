@@ -34,7 +34,7 @@ describe('historical pull parser', () => {
     expect(parsePullChat(text)).toEqual([]);
   });
   test('malformed slash levels are surfaced instead of guessed', () => {
-    expect(parsePullChat(msg('Kahuna 5- 7.8.6.9\n165 bbls'))[0].issues).toContain('Unreadable levels');
+    expect(parsePullChat(msg('Kahuna 5- 7.8.6.9\n165 bbls'))[0].issues).toContain('Inferred level separator needs historical validation');
   });
   test('date filtering keeps an auditable excluded row', () => {
     expect(parsePullChat(msg('Kahuna 5- 8.2/7.2\n185 bbls'), { startDate: '2026-09-21' })[0].excluded).toBe(true);
@@ -75,4 +75,9 @@ test('Watford post with spaced curly quotes preserves top bottom written barrels
  const [row]=parsePullChat('[10/5/2026, 4:17:08 PM] Driver: Kahuna 1\n11’ 11”\n4’ 11”\n140 bbl',{wellNames:['Kahuna 1'],defaultBbls:165});
  expect(row.wellName).toBe('Kahuna 1');expect(row.tankLevelFeet).toBeCloseTo(11+11/12);expect(row.bottomLevelFeet).toBeCloseTo(4+11/12);expect(row.bblsTaken).toBe(140);expect(row.dateTimeUTC).toBe('2026-10-05T21:17:08.000Z');expect(row.issues).toEqual([]);
  expect(parseFeet('11’ 12”')).toBeNull();expect(parseFeet('11’ 11” junk')).toBeNull();
+});
+
+test('bare one oclock resolves to a nearby afternoon post; inferred separator remains provisional',()=>{
+ const [r]=parsePullChat('[10/6/26, 1:19:44 PM] Driver: Kahuna 5\n8.8\n7.7\n185\n1:00');expect(r.dateTimeUTC).toBe('2026-10-06T18:00:00.000Z');expect(r.issues).toEqual([]);
+ const [typo]=parsePullChat('[10/6/26, 1:19:44 PM] Driver: Kahuna 5- 8.8.6.9\n165 bbls');expect(typo.tankLevelFeet).toBe(8.8);expect(typo.bottomLevelFeet).toBe(6.9);expect(typo.inferredSeparator).toBe(true);
 });

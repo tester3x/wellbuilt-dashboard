@@ -20,6 +20,7 @@ export interface PullImportRow {
   source: string;
   issues: string[];
   excluded: boolean;
+  inferredSeparator?: boolean;
 }
 export interface ChatMessage { index: number; date: string; time: string; author: string; body: string }
 const header = /^(?:\[(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*([^\]]+)\]\s*|(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*(.*?)\s+-\s+)(.*)$/;
@@ -110,7 +111,8 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       });
       const labelled = /\btop\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
       const bottom = /\bbottom\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
-      const pair = /^\s*[-:]?\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*\/\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*(?:\n|$)/.exec(segment.body);
+      const typoPair = /^\s*[-:]?\s*(\d{1,2}\.\d{1,2})\.(\d{1,2}\.\d{1,2})\s*(?:\n|$)/.exec(segment.body);
+      const pair = /^\s*[-:]?\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*\/\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*(?:\n|$)/.exec(segment.body) || typoPair;
       const levelLines = lines.map(line => parseFeet(line));
       const unlabelled = !labelled && !pair && levelLines.length >= 2 && levelLines[0] !== null && levelLines[1] !== null;
       const top = labelled ? parseFeet(labelled[1]) : pair ? parseFeet(pair[1]) : unlabelled ? levelLines[0] : null;
@@ -123,7 +125,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
         if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s+)?\d/i.test(segment.body)) { let timestamp='';try{timestamp=chatTimestamp(message.date,message.time,options.timeZone,options.dateOrder);}catch{} rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp, tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false }); }
         continue;
       }
-      const issues: string[] = [];
+      const issues: string[] = typoPair ? ['Inferred level separator needs historical validation'] : [];
       let postedAt = '';
       try { postedAt = chatTimestamp(message.date, message.time, options.timeZone, options.dateOrder); } catch (error) { issues.push(String(error)); }
       let eventTime = postedAt;
@@ -147,7 +149,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       if (!(bbls && bbls > 0)) issues.push('Missing barrels');
       const date = `${message.date.split('/')[2]?.padStart(4, '20')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 1 : 0]?.padStart(2, '0')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 0 : 1]?.padStart(2, '0')}`;
       const excluded = !!((options.startDate && date < options.startDate) || (options.endDate && date > options.endDate));
-      rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded });
+      rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded, ...(typoPair ? {inferredSeparator:true} : {}) });
     }
   }
   if (rows.filter(row => !row.excluded).length > 2000) throw new Error('More than 2,000 pulls; split the export into smaller batches.');
