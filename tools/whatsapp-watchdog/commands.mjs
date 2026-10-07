@@ -9,7 +9,8 @@ export class OverlordCommands {
   ledger[message.id]={at:Date.now(),status:'claimed'};this.queue.save();this.busy=true;
   try{
    const command=message.body.replace(/^watchdog:\s*/i,'').trim().toLowerCase();let reply;
-   if(command==='status')reply=`${context.state} · ${context.paused?'Paused':'Watching'} · WB M: ${context.transportStatus}\n${this.queue.reviewInbox().length} pulls need review.`;
+   if(/^(qc|quick commands)\b/.test(command))reply='Quick commands:\n\nWatchdog: status\nWatchdog: reviews\nWatchdog: latest G3\nWatchdog: latest G5\n\nOther requests: Watchdog: followed by your request';
+   else if(command==='status')reply=`${context.state} · ${context.paused?'Paused':'Watching'} · WB M: ${context.transportStatus}\n${this.queue.reviewInbox().length} pulls need review.`;
    else if(['reviews','review list'].includes(command))reply=this.queue.reviewInbox().map(({row})=>`${row.wellName} · ${row.dateTimeUTC} · ${row.tankLevelFeet} ft`).join('\n')||'No pulls need review.';
    else if(/^latest(?:\s+(?:g[35]|gunslinger [35]))?$/.test(command)){
     const filter=command.slice(6).trim().replace(/^g([35])$/,'gunslinger $1');
@@ -19,7 +20,7 @@ export class OverlordCommands {
     const request=message.body.replace(/^watchdog:\s*/i,'').trim();
     if(!request)reply='Put your request after Watchdog:.';
     else if(request.length>8000)reply='Please keep the request under 8,000 characters.';
-    else {this.queue.data.codexRequests??={};this.queue.data.codexRequests[message.id]={request,channel:message.channel,senderId:message.senderId||'linked-account',createdAt:Date.now(),status:this.bridge?.config?.enabled?'queued':'awaiting_execution_setup'};this.queue.save();reply=(this.bridge?.config?.enabled?'Request queued for Codex. I will post the result here.':'Request saved for Codex. Execution is not configured; this request has not run.')+'\n\nQuick commands:\nWatchdog: status\nWatchdog: reviews\nWatchdog: latest G3\nWatchdog: latest G5';}
+    else {this.queue.data.codexRequests??={};this.queue.data.codexRequests[message.id]={request,channel:message.channel,senderId:message.senderId||'linked-account',createdAt:Date.now(),status:this.bridge?.config?.enabled?'queued':'awaiting_execution_setup'};this.queue.save();reply=(this.bridge?.config?.enabled?'Request queued for Codex. I will post the result here.':'Request saved for Codex. Execution is not configured; this request has not run.');}
    }
    await send(message.channel,'Watchdog reply\n'+reply.slice(0,2500));ledger[message.id].status='sent';this.queue.save();
   }catch(e){ledger[message.id].status='failed';ledger[message.id].error=String(e.message||e);this.queue.save();}finally{this.busy=false;}return true;
