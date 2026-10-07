@@ -1,6 +1,6 @@
 import {corroborateInferredLevels} from './inferredLevels';
 import {matchExistingAppPull} from './existingAppPull';
-import {applyReviewCorrections} from './reviewCorrections';
+import {applyReviewCorrections,normalizeReviewReason} from './reviewCorrections';
 import {diagnosticFlowWindow} from '../flowWindows';
 import {possibleAggregateOverlap} from './aggregateOverlap';
 import {watchdogSenderKey,resolveWatchdogOwner} from './senderOwnership';
@@ -39,7 +39,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  let row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
  const senderKey=body.senderId===undefined?null:watchdogSenderKey(body.senderId);
  const originalTime=row.dateTimeUTC;
- const review=body.review;
+ const review=body.review?normalizeReviewReason(row,body.review):null;
  const originalMeasurements={tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken};
  row=applyReviewCorrections(row,review);
 
@@ -145,7 +145,7 @@ export const reviewWatchdogDeliveredPullV2=https.onRequest(options,async(req,res
  const packet=(await admin.database().ref('packets/processed/'+entry.packetId).once('value')).val();
  if(!packet?.canonicalProcessingComplete||packet.watchdogProvenance?.observationDigest!==b.identity)throw Error('pull_not_complete');
  const original={id:'review',wellName:entry.wellName,postedAt:entry.dateTimeUTC,dateTimeUTC:packet.dateTimeUTC,tankLevelFeet:packet.tankLevelFeet,bottomLevelFeet:entry.reportedBottomFeet??entry.bottom,bblsTaken:packet.bblsTaken,author:'',source:'',issues:[],excluded:false};
- const review=b.review;if(typeof review?.reason!=='string'||review.reason.trim().length<3||review.reason.length>300)throw Error('invalid_review');
+ const review=b.decision==='confirm'?normalizeReviewReason(original,b.review):b.review;if(typeof review?.reason!=='string'||(b.decision==='exclude'&&review.reason.trim().length<3)||review.reason.length>300)throw Error('invalid_review');
  if(b.decision==='exclude'){
   const barrels={...entry.barrels,needsReview:false,dismissedAt:Date.now(),dismissalReason:review.reason};
   await admin.database().ref('packets/processed/'+entry.packetId+'/watchdogProvenance/barrels').set(barrels);
