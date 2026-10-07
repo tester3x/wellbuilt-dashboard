@@ -1867,13 +1867,14 @@ export const processEditRequest = functionsV1
     if (editResolvedViaFallback) {
       console.log(
         `[EDIT_FALLBACK_RESOLVED] ${wellName}: requested ${requestedPacketId} missing — ` +
-          `resolved by exact invoiceDocId to processed ${originalPacketId}`,
+          `resolved by ${resolution.via} to processed ${originalPacketId}`,
       );
     }
     const origPacket = resolution.packet as Record<string, any>;
     const fallbackAuditFields = editResolvedViaFallback
       ? {
-          editResolvedVia: 'invoiceDocId_fallback',
+          editResolvedVia: resolution.kind === 'fallback' && resolution.via === 'legacy_idem'
+            ? 'legacy_idem_fallback' : 'invoiceDocId_fallback',
           editRequestedPacketId: requestedPacketId,
         }
       : {};

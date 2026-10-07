@@ -45,6 +45,30 @@ function makeDb(
 }
 
 describe('resolveEditTarget', () => {
+  test('WB-T legacy idem_ parent resolves to its actual processed key', async () => {
+    const canonical = '20261007_090425_Gabriel7_qz0oq3';
+    const legacyKey = `idem_${canonical}`;
+    const legacyPull = {
+      ...processedPull,
+      packetId: legacyKey,
+      idempotencyKey: canonical,
+      invoiceDocId: 'current-job',
+    };
+    const db = makeDb({ [legacyKey]: legacyPull });
+    const r = await resolveEditTarget(db, canonical, undefined);
+    expect(r).toEqual({ kind: 'fallback', via: 'legacy_idem', packetId: legacyKey, packet: legacyPull });
+    expect(db.queries).toHaveLength(0);
+  });
+
+  test('legacy path cannot match a different idempotency identity or an edit artifact', async () => {
+    const canonical = '20261007_090425_Gabriel7_qz0oq3';
+    const legacyKey = `idem_${canonical}`;
+    const db = makeDb({ [legacyKey]: { ...processedPull, idempotencyKey: 'someone-else' } });
+    expect(await resolveEditTarget(db, canonical, undefined)).toEqual({ kind: 'not_found' });
+    const artifact = makeDb({ [legacyKey]: { ...processedPull, idempotencyKey: canonical, requestType: 'edit' } });
+    expect(await resolveEditTarget(artifact, canonical, undefined)).toEqual({ kind: 'not_found' });
+  });
+
   test('1. valid originalPacketId resolves exactly — behavior unchanged', async () => {
     const db = makeDb({ [PROCESSED_ID]: processedPull });
     const r = await resolveEditTarget(db, PROCESSED_ID, INVOICE);
@@ -146,7 +170,7 @@ describe('processEditRequest wiring (structural)', () => {
   });
 
   test('fallback stamps audit fields, never the phantom as identity', () => {
-    expect(fn).toContain("editResolvedVia: 'invoiceDocId_fallback'");
+    expect(fn).toContain("? 'legacy_idem_fallback' : 'invoiceDocId_fallback'");
     expect(fn).toContain('editRequestedPacketId: requestedPacketId');
     expect(fn).toContain('...fallbackAuditFields');
     // No write path uses the requested id as a record identity.

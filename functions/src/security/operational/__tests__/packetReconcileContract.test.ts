@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { decideProcessedPullReconcile } from '../packetReconcileCore';
+import { decideProcessedPullReconcile, selectProcessedPullParent } from '../packetReconcileCore';
 
 const functionsRoot = join(__dirname, '../../../..');
 const read = (rel: string) => readFileSync(join(functionsRoot, rel), 'utf8');
@@ -64,12 +64,45 @@ describe('decideProcessedPullReconcile — server reconcile backstop', () => {
   });
 });
 
+describe('selectProcessedPullParent — WB-T correction authorization', () => {
+  const canonical = '20261007_090425_Gabriel7_qz0oq3';
+  const parent = { ...rec(), idempotencyKey: canonical, requestType: 'pull' };
+  const input = {
+    canonicalPacketId: canonical,
+    driverId: base.driverId,
+    companyId: base.companyId,
+    exact: null,
+    legacyIdem: parent,
+  };
+
+  it('accepts the deterministic idem_ parent for the same driver and company', () => {
+    expect(selectProcessedPullParent(input)).toEqual({ record: parent, location: 'legacy_idem' });
+  });
+
+  it('rejects a different idempotency identity, non-pull, or other tenant', () => {
+    expect(selectProcessedPullParent({ ...input, legacyIdem: { ...parent, idempotencyKey: 'other' } }))
+      .toEqual({ record: null, reason: 'missing_original' });
+    expect(selectProcessedPullParent({ ...input, legacyIdem: { ...parent, requestType: 'edit' } }))
+      .toEqual({ record: null, reason: 'missing_original' });
+    expect(selectProcessedPullParent({ ...input, legacyIdem: { ...parent, companyId: 'other-company' } }))
+      .toEqual({ record: null, reason: 'cross_tenant' });
+  });
+});
+
 describe('ingest / reconcile server contract (source)', () => {
   const ingest = read('src/security/operational/packetIngest.ts');
+  const ingestEdit = read('src/security/operational/ingestWbmEdit.ts');
   const reconcile = read('src/security/operational/reconcileDriverPacket.ts');
   const opIndex = read('src/security/operational/index.ts');
   const secIndex = read('src/security/index.ts');
   const index = read('src/index.ts');
+
+  it('authorizes a WB-T correction using the exact or deterministic legacy parent', () => {
+    expect(ingestEdit).toContain('selectProcessedPullParent({');
+    expect(ingestEdit).toContain('legacyIdemStorageKey(origIdGuess)');
+    expect(ingestEdit).toContain('exact: origSnap.exists()');
+    expect(ingestEdit).toContain('legacyIdem: legacyOrigSnap.exists()');
+  });
 
   it('ingestDriverPacket returns the canonical packetId on fresh AND duplicate ingest', () => {
     // Both return branches echo the canonical id so the client retires immediately.

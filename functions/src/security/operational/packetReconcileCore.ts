@@ -116,7 +116,10 @@ export function selectProcessedPullParent(input: {
   const exact = pick(input.exact, 'exact');
   if (exact && 'blocked' in exact) return { record: null, reason: exact.blocked };
   if (exact && 'record' in exact) return exact;
-  const legacy = pick(input.legacyIdem, 'legacy_idem');
+  const legacyRecord = input.legacyIdem;
+  const legacy = legacyRecord?.idempotencyKey === canonical
+    && (legacyRecord.requestType ?? 'pull') === 'pull'
+    ? pick(legacyRecord, 'legacy_idem') : null;
   if (legacy && 'blocked' in legacy) return { record: null, reason: legacy.blocked };
   if (legacy && 'record' in legacy) return legacy;
   return { record: null, reason: 'missing_original' };

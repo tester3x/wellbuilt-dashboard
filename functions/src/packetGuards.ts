@@ -307,7 +307,7 @@ export interface EditResolutionDb {
 
 export type EditTargetResolution =
   | { kind: 'exact'; packetId: string; packet: Record<string, unknown> }
-  | { kind: 'fallback'; packetId: string; packet: Record<string, unknown> }
+  | { kind: 'fallback'; via: 'legacy_idem' | 'invoiceDocId'; packetId: string; packet: Record<string, unknown> }
   | { kind: 'not_found' }
   | { kind: 'ambiguous'; candidateIds: string[] };
 
@@ -318,6 +318,20 @@ export async function resolveEditTarget(
 ): Promise<EditTargetResolution> {
   const exact = await dbi.readProcessed(originalPacketId);
   if (exact) return { kind: 'exact', packetId: originalPacketId, packet: exact };
+
+  // WB-T's legacy ingest stored processed pulls under idem_<canonical id>,
+  // while the invoice and correction outbox retain the canonical id. Resolve
+  // only that deterministic parent, and only when its own idempotencyKey
+  // confirms the same canonical identity. Never infer from a well or time.
+  if (/^\d{8}_\d{6}_/.test(originalPacketId)
+    && !['.', '#', '$', '[', ']', '/'].some(ch => originalPacketId.includes(ch))) {
+    const legacyKey = `idem_${originalPacketId}`;
+    const legacy = await dbi.readProcessed(legacyKey);
+    if (legacy && legacy.idempotencyKey === originalPacketId
+      && (legacy.requestType ?? 'pull') === 'pull') {
+      return { kind: 'fallback', via: 'legacy_idem', packetId: legacyKey, packet: legacy };
+    }
+  }
 
   const inv = typeof invoiceDocId === 'string' ? invoiceDocId.trim() : '';
   if (!inv) return { kind: 'not_found' };
@@ -331,7 +345,7 @@ export async function resolveEditTarget(
   if (candidates.length > 1) {
     return { kind: 'ambiguous', candidateIds: candidates.map((c) => c.key).sort() };
   }
-  return { kind: 'fallback', packetId: candidates[0].key, packet: candidates[0].val };
+  return { kind: 'fallback', via: 'invoiceDocId', packetId: candidates[0].key, packet: candidates[0].val };
 }
 
 // ─── 7/25 — normalized revision comparison + ordering safety ────────────────

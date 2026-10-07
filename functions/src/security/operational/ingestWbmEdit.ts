@@ -18,6 +18,7 @@ import {
   evaluateWbmEdit,
   wbmEditIncomingPath,
 } from './wbmEditAuthorize';
+import { legacyIdemStorageKey, selectProcessedPullParent } from './packetReconcileCore';
 
 const ARG = new Set([
   'packet_required', 'packet_too_large', 'unsupported_request_type', 'unexpected_field',
@@ -55,11 +56,14 @@ export const ingestWbmEdit = httpsV2.onCall(
       return typeof raw === 'string' ? raw.trim() : '';
     })();
 
-    const [profSnap, wellSnap, origSnap] = await Promise.all([
+    const [profSnap, wellSnap, origSnap, legacyOrigSnap] = await Promise.all([
       admin.database().ref(`drivers/profiles/${driver.driverId}`).once('value'),
       admin.database().ref('well_config').once('value'),
       origIdGuess
         ? admin.database().ref(`packets/processed/${origIdGuess}`).once('value')
+        : Promise.resolve({ exists: () => false, val: () => null } as admin.database.DataSnapshot),
+      origIdGuess && !origIdGuess.startsWith('idem_')
+        ? admin.database().ref(`packets/processed/${legacyIdemStorageKey(origIdGuess)}`).once('value')
         : Promise.resolve({ exists: () => false, val: () => null } as admin.database.DataSnapshot),
     ]);
     if (!profSnap.exists()) {
@@ -68,7 +72,21 @@ export const ingestWbmEdit = httpsV2.onCall(
     const profile = (profSnap.val() || {}) as Record<string, unknown>;
     assertWbmWriter(profile, driver.roles);
     const wellConfig = wellSnap.exists() ? (wellSnap.val() as Record<string, unknown>) : {};
-    const original = origSnap.exists() ? (origSnap.val() as Record<string, unknown>) : null;
+    // WB-T's legacy ingest stores a canonical pull under `idem_${packetId}`.
+    // Keep the driver's canonical ID in the edit request, but authorize against
+    // the exact parent or that one deterministic legacy path. No well/time
+    // guessing and no cross-tenant fallback.
+    const parent = selectProcessedPullParent({
+      canonicalPacketId: origIdGuess,
+      driverId: driver.driverId,
+      companyId: authority.companyId,
+      exact: origSnap.exists() ? (origSnap.val() as Record<string, unknown>) : null,
+      legacyIdem: legacyOrigSnap.exists() ? (legacyOrigSnap.val() as Record<string, unknown>) : null,
+    });
+    if (!parent.record && parent.reason === 'cross_tenant') {
+      throw new httpsV2.HttpsError('permission-denied', 'cross_driver_or_company');
+    }
+    const original = parent.record;
 
     const decided = evaluateWbmEdit({
       packet: data.packet,

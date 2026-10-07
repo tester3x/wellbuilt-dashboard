@@ -331,6 +331,23 @@ describe('Edit Outbox & Durable Retry Lifecycle — Comprehensive Acceptance Sui
     return { rtdb, firestore };
   }
 
+  test('legacy idem_ pull keeps its storage key separate from the invoice packet id', async () => {
+    const { rtdb } = createBaseFixture();
+    const origPacket = (await rtdb.ref(`packets/processed/${PACKET_ID}`).once('value')).val();
+    const config = (await rtdb.ref(`well_config/${CONFIG_KEY}`).once('value')).val();
+    const outbox = await prepareEditOutbox(rtdb, 'legacy-edit', {
+      canonicalPacketId: `idem_${PACKET_ID}`,
+      originalPacketId: PACKET_ID,
+      packetId: PACKET_ID,
+      wellName: WELL_NAME,
+      tankTopInches: 120,
+      bblsTaken: 80,
+      driverId: DRIVER_ID,
+    }, { ...origPacket, idempotencyKey: PACKET_ID }, config, WELL_NAME, CONFIG_KEY);
+    expect(outbox.originalPacketId).toBe(`idem_${PACKET_ID}`);
+    expect(outbox.invoicePacketId).toBe(PACKET_ID);
+  });
+
   test('Scenario 1: processed/history write succeeds, outgoing fails, handler retried — outgoing and dispatch eventually receive correction exactly once, incoming not consumed prematurely', async () => {
     const { rtdb, firestore } = createBaseFixture();
     const incomingId = 'inc_edit_1';

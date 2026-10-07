@@ -57,6 +57,7 @@ export interface EditOutboxRecord {
   eventId: string;
   incomingPacketId: string;
   originalPacketId: string;
+  invoicePacketId?: string;
   wellName: string;
   companyId: string;
   driverId: string | null;
@@ -158,6 +159,10 @@ export async function prepareEditOutbox(
   configKey: string,
 ): Promise<EditOutboxRecord> {
   const originalPacketId = data.canonicalPacketId || data.originalPacketId || data.packetId;
+  const requestedPacketId = String(data.originalPacketId || data.packetId || '').trim();
+  const invoicePacketId = originalPacketId === `idem_${requestedPacketId}`
+    && origPacket.idempotencyKey === requestedPacketId
+    ? requestedPacketId : originalPacketId;
   const editEventId = resolveEditEventId({
     incomingPacketId,
     clientEventId: data.editEventId,
@@ -524,6 +529,7 @@ export async function prepareEditOutbox(
     eventId: editEventId,
     incomingPacketId,
     originalPacketId,
+    invoicePacketId,
     wellName,
     companyId: outgoingCompanyId(config),
     driverId: origPacket.driverId || data.driverId || null,
@@ -1066,7 +1072,9 @@ async function cascadeToFirestore(
 ): Promise<void> {
   if (!firestore) return;
   try {
-    const originalPacketId = outbox.originalPacketId;
+    // The RTDB storage key may be idem_<canonical>, while invoice and ticket
+    // documents retain the canonical packetId. Keep both identities distinct.
+    const originalPacketId = outbox.invoicePacketId || outbox.originalPacketId;
     const newTopFI = inchesToFeetInches(outbox.measurements.tankTopInches);
     const newBottomFI = inchesToFeetInches(outbox.measurements.tankAfterInches);
     const newBblsTaken = outbox.measurements.bblsTaken;
