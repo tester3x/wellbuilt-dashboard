@@ -1,3 +1,4 @@
+import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecision';
 import { resolveTankBblPerFoot } from './tankCalibration';
 import {refreshFlowWindow} from './refreshFlowWindow';
 import {effectiveFlow} from './effectiveFlow';
@@ -532,6 +533,7 @@ interface HistoricalPull {
   tankLevelFeet: number;
   bblsTaken: number;
   wellDown: boolean;
+  provisional?: boolean;
 }
 
 /**
@@ -589,6 +591,7 @@ async function getHistoricalPulls(wellName: string, limit: number = 50): Promise
         tankLevelFeet: parseFloat(packet.tankLevelFeet) || 0,
         bblsTaken: parseFloat(packet.bblsTaken) || 0,
         wellDown: packet.wellDown === true || packet.wellDown === 'true',
+        provisional: isProvisionalPull(packet),
       });
     }
 
@@ -658,7 +661,7 @@ function calculateWindowBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot
   for (let i = 1; i < historicalPulls.length; i++) {
     const current = historicalPulls[i];
     const previous = historicalPulls[i - 1];
-    if (current.wellDown || previous.wellDown) continue;
+    if (current.wellDown || previous.wellDown || current.provisional || previous.provisional) continue;
 
     const timeDifDays = (current.timestamp - previous.timestamp) / (1000 * 60 * 60 * 24);
     if (timeDifDays <= 0) continue;
@@ -716,7 +719,7 @@ function calculateOvernightBblsPerDay(historicalPulls: HistoricalPull[], bblPerF
   }
 
   if (!firstPullToday || !lastPullPrevDay) return 0;
-  if (firstPullToday.wellDown || lastPullPrevDay.wellDown) return 0;
+  if (firstPullToday.wellDown || lastPullPrevDay.wellDown || firstPullToday.provisional || lastPullPrevDay.provisional) return 0;
 
   const timeDifDays = (firstPullToday.timestamp - lastPullPrevDay.timestamp) / (1000 * 60 * 60 * 24);
   if (timeDifDays <= 0) return 0;
@@ -896,7 +899,7 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     const data = child.val();
     const key = child.key || '';
     // Skip edit/delete/history packets
-    if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_')) return;
+    if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_') || isProvisionalPull(data)) return;
     if (data.flowRateDays && data.flowRateDays > 0) {
       // Sort by timestamp. Prefer dateTimeUTC (always a valid ISO string) over
       // dateTime (locale-formatted by the WB M client and sometimes malformed,
@@ -1187,7 +1190,7 @@ export const processIncomingPull = functionsV1.database
     }
 
     const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / bblPerFoot) * 12 : 0;
-    let tankAfterInches = tankTopInches - bblsInInches;
+    let tankAfterInches = reportedTrackingBottom(data,tankTopInches) ?? (tankTopInches - bblsInInches);
     const reportedBottom=Number((data as any).watchdogProvenance?.reportedBottomFeet)*12;
     if(config.flowWindowMinimumRecoveryInches && (data as any).source==='whatsapp_watchdog' && (data as any).watchdogProvenance?.principalId==='laptop-watchdog-v2' && (data as any).watchdogProvenance?.reportedBottomFeet!=null && Number.isFinite(reportedBottom) && reportedBottom>=0 && reportedBottom<=tankTopInches && Math.abs(reportedBottom-tankAfterInches)<=2)tankAfterInches=reportedBottom;
 
@@ -1223,11 +1226,12 @@ export const processIncomingPull = functionsV1.database
       }
     }
 
+    if(isProvisionalPull(data)||prevResponse?.provisionalBarrels===true){flowRateDays=0;flowRate='';}
     const flowHistorySnap=Number(config.flowWindowMinimumRecoveryInches)>=3
       ? await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value') : null;
-    const windowed=flowHistorySnap?effectiveFlow({...flowHistorySnap.val(),[packetId]:{...data,packetId,tankTopInches,tankAfterInches,wellDown:nextIsDown}},config):null;
+    const windowed=flowHistorySnap&&!isProvisionalPull(data)?effectiveFlow({...flowHistorySnap.val(),[packetId]:{...data,packetId,tankTopInches,tankAfterInches,wellDown:nextIsDown}},config):null;
     if(windowed){const sample=windowed.results.find(r=>r.packetId===packetId);flowRateDays=sample?.flowRateDays||0;flowRate=flowRateDays>0?daysToHMMSS(flowRateDays):'';recoveryInches=sample?.recoveryInches||0;timeDifDays=sample?.timeDifDays||0;timeDif=timeDifDays>0?daysToHMM(timeDifDays):'';}
-    const afr = windowed?windowed.averageDays:await calculateAFR(wellName, flowRateDays);
+    const afr = isProvisionalPull(data)?(Number(config.avgFlowRateMinutes)/1440||await calculateAFR(wellName,0)):(windowed?windowed.averageDays:await calculateAFR(wellName, flowRateDays));
 
     // Calculate window-averaged and overnight bbls/day
     // bblPerFoot is the configured total active bank calibration.
@@ -1241,6 +1245,7 @@ export const processIncomingPull = functionsV1.database
       tankLevelFeet: parseFloat(String(data.tankLevelFeet)) || 0,
       bblsTaken: parseFloat(String(data.bblsTaken)) || 0,
       wellDown: data.wellDown === true || data.wellDown === ('true' as any),
+      provisional: isProvisionalPull(data),
     });
     historicalPulls.sort((a, b) => a.timestamp - b.timestamp);
 
@@ -1316,6 +1321,7 @@ export const processIncomingPull = functionsV1.database
       wellName,
       currentLevel: inchesToFeetInches(currentLevelInches),
       flowRate: initialFlowRate,
+      ...({provisionalBarrels:isProvisionalPull(data),flowRateMeasuredAtUTC:isProvisionalPull(data)||prevResponse?.provisionalBarrels===true?(prevResponse?.flowRateMeasuredAtUTC||prevResponse?.lastPullDateTimeUTC||''):data.dateTimeUTC} as any),
       bbls24hrs,
       timeTillPull: nextIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
       nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
@@ -1443,6 +1449,7 @@ export const processIncomingPull = functionsV1.database
       calculated: {
         flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
         flowRateMinutes: Math.round(afrMinutes * 100) / 100,
+        ...({provisionalBarrels:isProvisionalPull(data),flowRateMeasuredAtUTC:isProvisionalPull(data)||prevResponse?.provisionalBarrels===true?(prevResponse?.flowRateMeasuredAtUTC||prevResponse?.lastPullDateTimeUTC||''):data.dateTimeUTC} as any),
         bbls24hrs: parseInt(bbls24hrs) || 0,
         nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
         nextPullTimeUTC: estDateTimePull || '',
@@ -4081,3 +4088,5 @@ export { ingestWatchdogPullV2, getWatchdogPullReceiptV2, stopWatchdogWellV2, get
 export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';
 
 export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './watchdog/remoteReview';
+
+export {reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from './watchdog/intake';

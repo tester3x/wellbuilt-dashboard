@@ -60,7 +60,7 @@ test('sender IDs survive queue restart and automatic delivery without trusting d
 test('review inbox retains old holds beyond feed limits and removes resolved holds',()=>{const dir=mkdtempSync(path.join(os.tmpdir(),'wb-inbox-'));try{const q=new Queue(dir);q.ingest({id:'old',channel:'quiet',chat:header('2026-10-03T01:00:00Z','Driver','Kahuna 5\nTop 12\n165 bbl')});const row=Object.values(q.data.messages)[0].rows[0];q.data.deliveries={[row.id]:{status:'review'}};for(let i=0;i<205;i++)q.ingest({id:'new'+i,channel:'busy',chat:header(Date.now(),'Driver','Kahuna 5\nTop 12\n165 bbl')});assert.ok(!q.snapshot().messages.some(p=>p.id==='old'));assert.equal(q.snapshot().reviewInbox.length,1);assert.equal(q.snapshot().reviewInbox[0].post.channel,'quiet');q.data.deliveries[row.id].status='excluded';assert.equal(q.reviewInbox().length,0);q.data.deliveries[row.id].status='complete';assert.equal(q.reviewInbox().length,0);}finally{rmSync(dir,{recursive:true,force:true});}});
 
 import {ReviewAlerts} from './alerts.mjs';
-test('review alerts persist one-time notifications across restarts and retry failures',async()=>{const dir=mkdtempSync(path.join(os.tmpdir(),'wb-alerts-'));try{let q=new Queue(dir);q.ingest({id:'pull',channel:'route',chat:header(Date.now(),'Driver','Kahuna 5\nTop 12\n165 bbl')});const row=Object.values(q.data.messages)[0].rows[0];q.data.deliveries={[row.id]:{status:'review'}};q.data.reviewAlerts={enabled:true,groupId:'overlord'};let a=new ReviewAlerts(q),calls=0;const send=async(id,body)=>{calls++;assert.equal(id,'overlord');assert.match(body,/1 held pull/);};await a.tick(async()=>{throw Error('offline')},{},100000);assert.equal(q.data.reviewAlerts.lastSentAt,undefined);await a.tick(send,{},160000);assert.equal(calls,1);q=new Queue(dir);a=new ReviewAlerts(q);await a.tick(send,{},170000);assert.equal(calls,1);await a.tick(send,{},3760000);assert.equal(calls,1);q.data.deliveries[row.id].status='excluded';await a.tick(send,{},7400000);assert.equal(calls,1);}finally{rmSync(dir,{recursive:true,force:true});}});
+test('review alerts persist one-time notifications across restarts and retry failures',async()=>{const dir=mkdtempSync(path.join(os.tmpdir(),'wb-alerts-'));try{let q=new Queue(dir);q.ingest({id:'pull',channel:'route',chat:header(Date.now(),'Driver','Kahuna 5\nTop 12\n165 bbl')});const row=Object.values(q.data.messages)[0].rows[0];q.data.deliveries={[row.id]:{status:'review'}};q.data.reviewAlerts={enabled:true,groupId:'overlord'};let a=new ReviewAlerts(q),calls=0;const send=async(id,body)=>{calls++;assert.equal(id,'overlord');assert.match(body,/1 pull/);};await a.tick(async()=>{throw Error('offline')},{},100000);assert.equal(q.data.reviewAlerts.lastSentAt,undefined);await a.tick(send,{},160000);assert.equal(calls,1);q=new Queue(dir);a=new ReviewAlerts(q);await a.tick(send,{},170000);assert.equal(calls,1);await a.tick(send,{},3760000);assert.equal(calls,1);q.data.deliveries[row.id].status='excluded';await a.tick(send,{},7400000);assert.equal(calls,1);}finally{rmSync(dir,{recursive:true,force:true});}});
 
 import {RemoteReviews} from './remote-review.mjs';
 const {applyReviewCorrections}=require('../../functions/lib/watchdog/reviewCorrections.js');
@@ -79,7 +79,28 @@ test('a new review alerts once without repeating old group counts or overwriting
  q.ingest({id:'new',channel:'new-route',chat:header(Date.now()+1000,'Driver','Kahuna 5\nTop 13\n165 bbl')});
  const latest=Object.values(q.data.messages).find(p=>p.id==='new').rows[0];q.data.deliveries[latest.id]={status:'review'};
  await a.tick(async(_id,body)=>messages.push(body),{'old-route':'Old route','new-route':'New route'},200000);
- assert.equal(messages.length,2);assert.match(messages[1],/1 new pull needs review/);assert.match(messages[1],/2 held pulls total/);assert.match(messages[1],/New route: 1/);assert.doesNotMatch(messages[1],/Old route/);
+ assert.equal(messages.length,2);assert.match(messages[1],/1 new pull needs review/);assert.match(messages[1],/2 pulls total/);assert.match(messages[1],/New route: 1/);assert.doesNotMatch(messages[1],/Old route/);
  assert.equal(q.data.reviewAlerts.notified[old.id],100000);await a.tick(async(_id,body)=>messages.push(body),{},9000000);assert.equal(messages.length,2);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+
+test('sent provisional pulls stay reviewable and corrections edit the original identity',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'wb-provisional-'));try{
+ const q=new Queue(dir);q.ingest({id:'estimate',channel:'g',chat:header(Date.now(),'Driver','Kahuna 5\nTop 12\nBottom 10')});
+ const post=Object.values(q.data.messages)[0],row=post.rows[0];q.data.deliveries={[row.id]:{status:'complete',needsReview:true,identity:'original',packetId:'original-packet'}};
+ assert.equal(q.reviewInbox().length,1);assert.equal(canReviewPost(post,q.data.deliveries,row.id),true);
+ const t=new Transport(q);t.secret='synthetic';t.config={enabled:true,enabledAt:0};t.lastLifecycleCheck=Date.now();const endpoints=[];
+ t.request=async(endpoint,body)=>{endpoints.push(endpoint);assert.equal(body.identity,'original');return {ok:true,status:endpoint==='getWatchdogPullReceiptV2'?'complete':'queued',identity:'original',packetId:'original-packet',needsReview:true,correctionPending:endpoint!=='getWatchdogPullReceiptV2'};};
+ await t.tick(false);await t.tick(false);assert.deepEqual(endpoints,['getWatchdogPullReceiptV2']);
+ await t.review(row.id,'confirm',row.dateTimeUTC,'Measured actual load',{tankLevelFeet:12,bottomLevelFeet:10,bblsTaken:140});
+ assert.deepEqual(endpoints,['getWatchdogPullReceiptV2','reviewWatchdogDeliveredPullV2']);assert.equal(q.data.deliveries[row.id].packetId,'original-packet');assert.equal(canReviewPost(post,q.data.deliveries,row.id),false);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+test('remote review keeps checking sent estimates for later commands',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'wb-provisional-remote-'));try{
+ const q=new Queue(dir);q.ingest({id:'estimate',channel:'g',chat:header(Date.now(),'Driver','Kahuna 5\nTop 12\nBottom 10')});const row=Object.values(q.data.messages)[0].rows[0];q.data.deliveries={[row.id]:{status:'complete',needsReview:true,identity:'original'}};
+ let polls=0,reviews=0;const t={secret:'synthetic',busy:false,request:async(_endpoint,payload)=>{assert.equal(payload.status,'review');return ++polls===2?{command:{id:'later',decision:'exclude',reason:'Verified estimate'}}:{};},review:async()=>{reviews++;}};
+ const r=new RemoteReviews(q,t);await r.tick([]);await r.tick([]);assert.equal(polls,2);assert.equal(reviews,1);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });

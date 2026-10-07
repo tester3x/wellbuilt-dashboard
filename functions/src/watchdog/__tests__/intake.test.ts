@@ -5,9 +5,9 @@ const doc=(key:string)=>({key,get:async()=>({exists:documents.has(key),data:()=>
 jest.mock('firebase-functions/v2/https',()=>({onRequest:(_opts:any,fn:any)=>fn}));
 jest.mock('firebase-admin',()=>({
  firestore:()=>({doc,collection:(p:string)=>({doc:(id:string)=>doc(p+'/'+id)}),runTransaction:async(fn:any)=>fn({get:(ref:any)=>ref.get(),set:(ref:any,value:any)=>documents.set(ref.key,value),create:(ref:any,value:any)=>{if(documents.has(ref.key))throw Error('exists');documents.set(ref.key,value);}})}),
- database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),set:async(value:any)=>{database.set(key,value);},orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
+ database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),set:async(value:any)=>{database.set(key,value);},update:async(values:any)=>{const data=database.get(key)||{};for(const [path,value]of Object.entries(values)){const parts=path.split('/');let parent=data;for(const name of parts.slice(0,-1))parent=parent[name]??={};parent[parts[parts.length-1]]=value;}database.set(key,data);},orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
 }));
-import {ingestWatchdogPullV2,getWatchdogPullReceiptV2,stopWatchdogWellV2,getWatchdogWellLifecycleV2} from '../intake';
+import {ingestWatchdogPullV2,getWatchdogPullReceiptV2,stopWatchdogWellV2,getWatchdogWellLifecycleV2,reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from '../intake';
 async function call(endpoint:any,name:string,body:any,tampered=false){const rawBody=Buffer.from(JSON.stringify(body)),timestamp=String(Date.now()),nonce=randomBytes(16).toString('hex');const signature=createHmac('sha256','synthetic-only-key').update(`v1:${name}:POST:${timestamp}:${nonce}:${createHash('sha256').update(rawBody).digest('hex')}`).digest('hex');const req={method:'POST',body,rawBody,headers:{'x-watchdog-key-id':'V1','x-watchdog-timestamp':timestamp,'x-watchdog-nonce':nonce,'x-watchdog-signature':tampered?'0'.repeat(64):signature}};let code=200,result:any;const res={status:(n:number)=>{code=n;return res;},json:(v:any)=>{result=v;return res;}};await (endpoint as any)(req,res);return {code,result};}
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});database.set('packets/outgoing/response_existing',{wellName:'Kahuna 5',wellDown:false,currentLevel:'12',lastPullPacketId:'actual-pull',flowRate:'1:00:00'});});
 const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
@@ -109,4 +109,39 @@ test('separator candidate passes only corroborated historical recovery, otherwis
  expect(database.get('packets/incoming/'+result.result.packetId).watchdogProvenance.parserInference.historicallyCorroborated).toBe(true);
  database.set('packets/processed/previous',{...prior,tankAfterInches:12});database.delete('packets/incoming/'+result.result.packetId);
  const held=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,messageId:'other'});expect(held.result.status).toBe('review');
+});
+
+test('missing barrels send a provisional estimate immediately, retain bottom, and remain reviewable',async()=>{
+ const channel=documents.get('watchdog_v2_config/laptop').channels.group;channel.maxLoadBbls=185;channel.wellLoadLimits={'Kahuna 5':140};
+ database.set('wells/Kahuna 5/status',{isDown:false,calculated:{flowRateMinutes:120},lastPull:{dateTimeUTC:new Date(Date.now()-3600000).toISOString()}});
+ const body={...observation(),chat:observation().chat.replace('165 bbl','')};
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ expect(first.result).toMatchObject({status:'queued',needsReview:true,barrelSource:'estimated'});
+ const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.bblsTaken).toBe(140);expect(packet.bottomLevelFeet).toBe(11.125);expect(packet.watchdogProvenance.barrels.status).toBe('provisional');
+ database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5,canonicalProcessingBottomInches:133.5,canonicalProcessingComplete:true});
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity})).result).toMatchObject({status:'complete',needsReview:true});
+ // Changing AFR must not re-identify and duplicate this already delivered observation.
+ database.get('wells/Kahuna 5/status').calculated.flowRateMinutes=60;
+ const again=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(again.result.packetId).toBe(first.result.packetId);
+});
+test('review creates an edit of the same provisional packet, and receipt finalizes only completed corrections',async()=>{
+ const body={...observation(),chat:observation().chat.replace('165 bbl','')};
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body),packet=database.get('packets/incoming/'+first.result.packetId);
+ const path='packets/processed/'+first.result.packetId;database.set(path,{...packet,tankAfterInches:133.5,canonicalProcessingComplete:true});
+ database.set('well_config/Kahuna 5',database.get('well_config')['Kahuna 5']);
+ const review={confirmed:true,dateTimeUTC:packet.dateTimeUTC,tankLevelFeet:12.5,bottomLevelFeet:11.125,bblsTaken:140,reason:'Driver confirmed partial load'};
+ const result=await call(reviewWatchdogDeliveredPullV2,'reviewWatchdogDeliveredPullV2',{identity:first.result.identity,decision:'confirm',review});expect(result.result.correctionPending).toBe(true);
+ const entry=documents.get('watchdog_v2_deliveries/'+first.result.identity),event=entry.pendingReview.eventId,edit=database.get('packets/incoming/'+event);
+ expect(edit.requestType).toBe('edit');expect(edit.originalPacketId).toBe(first.result.packetId);expect(edit.bblsTaken).toBe(140);
+ // Retry the same correction after a lost response, without another pull or edit.
+ expect((await call(reviewWatchdogDeliveredPullV2,'reviewWatchdogDeliveredPullV2',{identity:first.result.identity,decision:'confirm',review})).result.packetId).toBe(first.result.packetId);
+ database.set('packets/editOutbox/'+event,{completed:true,originalPacketId:first.result.packetId});
+ database.set(path,{...packet,bblsTaken:140,tankAfterInches:133.5,canonicalProcessingComplete:true,outgoingCommittedEventId:event});
+ const final=await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity});expect(final.result).toMatchObject({status:'complete',needsReview:false});expect(database.get(path).watchdogProvenance.barrels.status).toBe('confirmed');
+});
+test('load policy cannot escape watched wells or accept invalid capacities',async()=>{
+ const policy={channel:'group',maxLoadBbls:185,driverCapacities:{Driver:165},wellLoadLimits:{'Kahuna 5':120}};
+ expect((await call(setWatchdogBarrelPolicyV2,'setWatchdogBarrelPolicyV2',policy)).code).toBe(200);
+ expect((await call(setWatchdogBarrelPolicyV2,'setWatchdogBarrelPolicyV2',{...policy,wellLoadLimits:{Other:120}})).code).toBe(400);
+ expect((await call(setWatchdogBarrelPolicyV2,'setWatchdogBarrelPolicyV2',{...policy,driverCapacities:{Driver:0}})).code).toBe(400);
 });

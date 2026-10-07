@@ -1,3 +1,4 @@
+import {isProvisionalPull} from '../../watchdog/barrelDecision';
 import { resolveTankBblPerFoot } from '../../tankCalibration';
 import {effectiveFlow} from '../../effectiveFlow';
 import {refreshFlowWindow} from '../../refreshFlowWindow';
@@ -226,7 +227,7 @@ export async function prepareEditOutbox(
   const newBblsTaken = data.bblsTaken !== undefined ? data.bblsTaken : origPacket.bblsTaken;
   const newDateTimeUTC = data.dateTimeUTC || origPacket.dateTimeUTC;
   const rawDateTime = data.dateTime || origPacket.dateTime;
-  const newDateTime = rawDateTime ? rawDateTime.replace(/:(\d{2})\s*(AM|PM)/i, ' $2') : '';
+  const newDateTime = rawDateTime ? rawDateTime.replace(/(\d{1,2}:\d{2}):\d{2}\s*(AM|PM)/i, '$1 $2') : '';
 
   const newWellDown =
     data.wellDown !== undefined
@@ -331,7 +332,9 @@ export async function prepareEditOutbox(
   // Recalculate tankAfter
   const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / bblPerFoot) * 12 : 0;
   const rawNewTankAfterInches = newTankTopInches - bblsInInches;
-  const newTankAfterInches = Math.max(rawNewTankAfterInches, loadLineInches);
+  const reportedReviewBottom=Number(data.bottomLevelFeet??origPacket.watchdogProvenance?.reportedBottomFeet)*12;
+  const useReportedBottom=isProvisionalPull(origPacket)&&Number.isFinite(reportedReviewBottom)&&reportedReviewBottom>=0&&reportedReviewBottom<=newTankTopInches;
+  const newTankAfterInches = useReportedBottom?reportedReviewBottom:Math.max(rawNewTankAfterInches, loadLineInches);
   const editHitLoadLine = rawNewTankAfterInches < loadLineInches;
 
   // Previous pull for interval flow rate
@@ -343,6 +346,7 @@ export async function prepareEditOutbox(
   const editedTime = new Date(newDateTimeUTC).getTime();
   let prevTankAfterInches = 0;
   let prevTimestamp = '';
+  let previousProvisional=false;
 
   prevOutgoingSnap.forEach((child) => {
     if (child.key === originalPacketId) return;
@@ -352,6 +356,7 @@ export async function prepareEditOutbox(
       if (!prevTimestamp || pktTime > new Date(prevTimestamp).getTime()) {
         prevTankAfterInches = pkt.tankAfterInches || 0;
         prevTimestamp = pkt.dateTimeUTC;
+        previousProvisional=isProvisionalPull(pkt);
       }
     }
   });
@@ -410,7 +415,7 @@ export async function prepareEditOutbox(
   allPulls.sort((a, b) => new Date(b.dateTimeUTC).getTime() - new Date(a.dateTimeUTC).getTime());
   const validRates: number[] = [];
   for (const p of allPulls) {
-    const fr = Number(p.flowRateDays) || 0;
+    const fr = isProvisionalPull(p)?0:Number(p.flowRateDays) || 0;
     if (fr > 0 && fr < 365) {
       validRates.push(fr);
       if (validRates.length >= 5) break;
@@ -425,6 +430,7 @@ export async function prepareEditOutbox(
   }
 
   if(flowWindow)afr=flowWindow.averageDays;
+  if(isProvisionalPull(origPacket)||previousProvisional){afr=Number(config.avgFlowRateMinutes)/1440||afr;flowRateDays=0;flowRate='';}
   // Determine if latest pull — inspect both outgoing response and relative pull timestamps
   const outgoingSnap = await db.ref('packets/outgoing')
     .orderByChild('wellName')
@@ -544,6 +550,7 @@ export async function prepareEditOutbox(
     stage: 'prepared',
     completed: false,
     measurements: {
+      ...(useReportedBottom?{bottomLevelFeet:reportedReviewBottom/12}:{}),
       tankTopInches: newTankTopInches,
       tankLevelFeet: newTankTopInches / 12,
       bblsTaken: newBblsTaken,
@@ -969,7 +976,7 @@ async function cascadeNextPacketRecovery(db: admin.database.Database, outbox: Ed
       const nextTimeDifDays = (closestNextTime - editedTime) / (1000 * 60 * 60 * 24);
       let nextFlowRateDays = 0;
       let nextFlowRate = '';
-      if (nextRecovery > 0 && nextTimeDifDays > 0) {
+      if (!isProvisionalPull(nextPacket)&&!isProvisionalPull(prevOutgoingSnap.val()?.[outbox.originalPacketId])&&nextRecovery > 0 && nextTimeDifDays > 0) {
         nextFlowRateDays = (nextTimeDifDays / nextRecovery) * 12;
         nextFlowRate = daysToHMMSS(nextFlowRateDays);
       }

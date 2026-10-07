@@ -4,6 +4,7 @@ function node(tag,text,parent){const el=document.createElement(tag);el.textConte
 async function refresh(){current=await api('/status');$('status').textContent=`${current.state} · ${current.receiverMode||''} · WB M: ${current.transportStatus||'Not configured'} · ${current.paused?'Paused':'Watching'} · ${current.pullCount} parsed pulls · ${current.messageCount} captured messages${current.error?' · '+current.error:''}`;$('qr').hidden=!current.qr;if(current.qr)$('qr').src=current.qr;
  renderReviews();
  renderAlertSettings();
+ renderBarrelPolicy();
  renderBarrelTest();
  renderLiveFeed();
  renderReviews();
@@ -40,14 +41,16 @@ function renderLiveFeed(){
 $('live-filter').onchange=()=>renderLiveFeed();$('freeze-feed').onclick=()=>{feedFrozen=!feedFrozen;$('freeze-feed').textContent=feedFrozen?'Resume feed':'Freeze feed';renderLiveFeed();};
 
 function reviewControls(row,post,card){
- const diagnostic=current.deliveries?.[row.id];if(diagnostic?.estimate){const e=diagnostic.estimate;node('p',`Barrels: ${row.bblsTaken} (${diagnostic.barrelSource==='default'?'assumed default':'written'}). Level estimate: ${e.estimatedBbls!==null?e.estimatedBbls+' bbl; range ':''}${e.lowBbls}${e.highBbls!==null?'–'+e.highBbls:''} bbl. Comparison only; assuming 20-minute loading (range 10–30 min).`,card);}
+ row={...row,...current.deliveries?.[row.id]?.measurements};
+ const diagnostic=current.deliveries?.[row.id];if(diagnostic?.estimate){const e=diagnostic.estimate;node('p',`Barrels: ${row.bblsTaken} (${diagnostic.barrelSource==='estimated'?'estimated':diagnostic.barrelSource==='default'?'assumed default':'written'}). Level estimate: ${e.estimatedBbls!==null?e.estimatedBbls+' bbl; range ':''}${e.lowBbls}${e.highBbls!==null?'–'+e.highBbls:''} bbl. Uses 20-minute estimated loading (range 10–30 min).`,card);}
 
- const delivery=current.deliveries?.[row.id];if(delivery?.status!=='review'||delivery.identity||!canReviewPost(post))return;
+ const delivery=current.deliveries?.[row.id];if(!(delivery?.status==='review'||delivery?.needsReview)||!canReviewPost(post,row.id))return;
+ row={...row,...delivery.measurements};
  const box=node('div','',card);node('p',row.wellName+' · Review measurement time (Central)',box);
  const time=node('input','',box);time.type='datetime-local';const parsed=Date.parse(delivery.review?.dateTimeUTC||row.dateTimeUTC);const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(Number.isFinite(parsed)?parsed:Date.now())).map(p=>[p.type,p.value]));time.value=Number.isFinite(parsed)?parts.year+'-'+parts.month+'-'+parts.day+'T'+parts.hour+':'+parts.minute:'';time.setAttribute('aria-label','Measurement time for '+row.wellName);
  const measurements={};for(const [key,label,value] of (current.reviewCorrectionsEnabled?[['tankLevelFeet','Top level (decimal feet)',row.tankLevelFeet],['bottomLevelFeet','Bottom level (decimal feet, optional)',row.bottomLevelFeet],['bblsTaken','Barrels',row.bblsTaken]]:[])){const field=node('input','',box);field.type='number';field.step='any';field.min='0';field.value=value??'';field.placeholder=label;field.setAttribute('aria-label',label+' for '+row.wellName);measurements[key]=field;}
  const reason=node('input','',box);reason.placeholder='Reason for confirmation or exclusion';reason.maxLength=300;reason.setAttribute('aria-label','Review reason for '+row.wellName);
- for(const [decision,label] of [['confirm','Confirm and send'],['exclude','Exclude']]){const button=node('button',label,box);button.onclick=()=>action(()=>api('/review',JSON.stringify({rowId:row.id,decision,time:time.value,reason:reason.value,corrections:Object.fromEntries(Object.entries(measurements).map(([key,field])=>[key,field.value===''?null:Number(field.value)]))})),button,decision==='confirm'?'Review submitted. Check the WB M status.':'Entry excluded; nothing sent.');}
+ for(const [decision,label] of [['confirm',delivery.identity?'Confirm / correct existing pull':'Confirm and send'],['exclude',delivery.identity?'Dismiss review; keep pull':'Exclude']]){const button=node('button',label,box);button.onclick=()=>action(()=>api('/review',JSON.stringify({rowId:row.id,decision,time:time.value,reason:reason.value,corrections:Object.fromEntries(Object.entries(measurements).map(([key,field])=>[key,field.value===''?null:Number(field.value)]))})),button,decision==='confirm'?'Review submitted. The existing pull is updated when already sent.':'Review dismissed. An already sent pull remains recorded.');}
 }
 
 function renderBarrelTest(){
@@ -55,7 +58,7 @@ function renderBarrelTest(){
  const body=$('barrel-test-rows');const signature=JSON.stringify(entries);if(body.dataset.signature===signature)return;body.dataset.signature=signature;body.replaceChildren();
  $('barrel-test-summary').textContent=entries.length?entries.length+' captured pulls · '+entries.filter(e=>e.delivery?.estimate).length+' estimates · updates every four seconds. Missing estimates are shown explicitly; older pulls are not resent.':'Waiting for the next Gunslinger pull processed with the estimator. Older completed pulls are not changed or resent.';
  for(const {post,row,delivery:d} of entries){const e=d?.estimate,tr=node('tr','',body);if(!e){const parsed=Date.parse(row.dateTimeUTC);for(const value of [Number.isFinite(parsed)?new Date(parsed).toLocaleString('en-US',{timeZone:'America/Chicago'}):'Time needs review',row.wellName+' / '+(post.author||row.author||'Driver'),row.bblsTaken==null?'Missing barrels':row.bblsTaken+' bbl (source not recorded)', '—','No estimate recorded','—','—',d?.status||'waiting'])node('td',value,tr);continue;}const point=e.estimatedBbls;const diff=point==null?null:point-row.bblsTaken;
- const cells=[new Date(d.review?.dateTimeUTC||row.dateTimeUTC).toLocaleString('en-US',{timeZone:'America/Chicago'}),row.wellName+' / '+(post.author||row.author||'Driver'),row.bblsTaken+' ('+(d.barrelSource==='default'?'assumed':'written')+')',e.observedDropBbls+' bbl',point==null?'AFR unavailable':point+' bbl',e.highBbls==null?'No production estimate':e.lowBbls+'–'+e.highBbls+' bbl',diff==null?'—':(diff>0?'+':'')+diff+' bbl',d.status];
+ const cells=[new Date(d.review?.dateTimeUTC||row.dateTimeUTC).toLocaleString('en-US',{timeZone:'America/Chicago'}),row.wellName+' / '+(post.author||row.author||'Driver'),(d.measurements?.bblsTaken??row.bblsTaken)+' ('+(d.barrelSource==='estimated'?'estimated':d.barrelSource==='default'?'assumed':'written')+')',e.observedDropBbls+' bbl',point==null?'AFR unavailable':point+' bbl',e.highBbls==null?'No production estimate':e.lowBbls+'–'+e.highBbls+' bbl',diff==null?'—':(diff>0?'+':'')+diff+' bbl',d.status];
  for(const value of cells)node('td',value,tr);
  }
 }
@@ -90,11 +93,31 @@ function renderReviews(){
  const list=$('review-items');if(list.contains(document.activeElement))return;
  const shown=entries.filter(e=>!filter.value||e.post.channel===filter.value),signature=JSON.stringify(shown.map(e=>[e,current.deliveries?.[e.row.id]]));if(list.dataset.signature===signature)return;list.dataset.signature=signature;list.replaceChildren();
  if(!shown.length)node('p','No pulls waiting for review.',list);
- for(const {post,row} of shown){const card=node('article','',list);node('h3',row.wellName+' / '+(current.channels.find(c=>c.id===post.channel)?.name||post.channel),card);node('p',(post.author||'Driver')+' / '+new Date(post.postedAt||post.updatedAt).toLocaleString('en-US',{timeZone:'America/Chicago'}),card);node('pre',post.body||post.chat,card);node('p',(current.deliveries?.[row.id]?.issues||row.issues||[]).join('; ')||'Held for review',card).className='warn';reviewControls(row,post,card);if(!canReviewPost(post)||current.deliveries?.[row.id]?.identity)node('p','This hold needs reconciliation before it can be sent again.',card);}
+ for(const {post,row} of shown){const card=node('article','',list);node('h3',row.wellName+' / '+(current.channels.find(c=>c.id===post.channel)?.name||post.channel),card);node('p',(post.author||'Driver')+' / '+new Date(post.postedAt||post.updatedAt).toLocaleString('en-US',{timeZone:'America/Chicago'}),card);node('pre',post.body||post.chat,card);node('p',(current.deliveries?.[row.id]?.issues||row.issues||[]).join('; ')||'Held for review',card).className='warn';reviewControls(row,post,card);if(current.deliveries?.[row.id]?.needsReview)node('p',current.deliveries[row.id].correctionPending?'Correction is processing; tracking continues.':'Already sent with provisional barrels; tracking continues. Review updates this same pull.',card);else if(!canReviewPost(post,row.id))node('p','This hold needs reconciliation before it can be sent again.',card);}
 }
 $('review-filter').onchange=()=>renderReviews();
 
 function renderAlertSettings(){const config=current.reviewAlerts||{},select=$('alerts-group'),signature=JSON.stringify(current.chats);if(!select.parentElement.parentElement.contains(document.activeElement)){if(select.dataset.signature!==signature){select.replaceChildren();node('option','Choose alert group',select).value='';for(const c of current.chats||[])node('option',c.name,select).value=c.id;select.dataset.signature=signature;}select.value=config.groupId||'';$('alerts-enabled').checked=!!config.enabled;}$('alerts-status').textContent=(config.enabled?'WhatsApp alerts enabled':'WhatsApp alerts off')+(config.lastSentAt?' / Last sent: '+new Date(config.lastSentAt).toLocaleString('en-US',{timeZone:'America/Chicago'}):'')+(config.error?' / Send failed: '+config.error:'');}
 $('alerts-save').onclick=()=>action(()=>api('/review-alerts',JSON.stringify({enabled:$('alerts-enabled').checked,groupId:$('alerts-group').value})),$('alerts-save'),'Review alert settings saved.');
 
-function canReviewPost(post){return !post.deleted&&!Object.entries(current.deliveries||{}).some(([id,d])=>id.startsWith(post.key+':')&&(d.identity||['complete','duplicate','queued','incomplete'].includes(d.status)));}
+function canReviewPost(post,rowId){if(rowId&&current.deliveries?.[rowId]?.needsReview)return !post.deleted&&current.deliveries[rowId].status==='complete'&&!current.deliveries[rowId].correctionPending;return !post.deleted&&!Object.entries(current.deliveries||{}).some(([id,d])=>id.startsWith(post.key+':')&&(d.identity||['complete','duplicate','queued','incomplete'].includes(d.status)));}
+
+function renderBarrelPolicy(force=false){
+ const select=$('barrel-policy-group'),fields=$('barrel-policy-fields');
+ const groups=JSON.stringify(current.channels.map(c=>[c.id,c.name]));
+ if(select.dataset.groups!==groups){const old=select.value;select.replaceChildren();for(const c of current.channels)node('option',c.name,select).value=c.id;select.value=current.channels.some(c=>c.id===old)?old:(current.channels[0]?.id||'');select.dataset.groups=groups;}
+ const selected=current.channels.find(c=>c.id===select.value);if(!selected)return;
+ const wells=(current.wellLifecycle||[]).filter(w=>w.channels?.includes(selected.id)).map(w=>w.wellName);
+ const signature=JSON.stringify([selected,wells]);if(!force&&(fields.dataset.signature===signature||fields.contains(document.activeElement)))return;
+ fields.dataset.signature=signature;fields.replaceChildren();
+ const label=node('label','Group / company maximum (bbls) ',fields),maximum=node('input','',label);maximum.type='number';maximum.min='1';maximum.max='1000';maximum.value=selected.options.maxLoadBbls||185;
+ node('h3','Driver capacities',fields);node('p','Use the posted driver name or stable WhatsApp sender ID. Capacity is a ceiling, not the amount of every load.',fields);
+ const drivers=node('div','',fields),driverInputs=[];
+ function addDriver(name='',capacity=185){const row=node('div','',drivers),who=node('input','',row),amount=node('input','',row);who.value=name;who.placeholder='Driver name or sender ID';who.setAttribute('aria-label','Driver name or sender ID');amount.type='number';amount.min='1';amount.max='1000';amount.value=capacity;amount.setAttribute('aria-label','Capacity in barrels');const remove=node('button','Remove',row);remove.onclick=()=>{row.remove();driverInputs.splice(driverInputs.findIndex(e=>e.who===who),1);};driverInputs.push({who,amount});}
+ for(const [name,capacity]of Object.entries(selected.options.driverCapacities||selected.options.driverDefaultBbls||{}))addDriver(name,capacity);
+ const add=node('button','Add driver',fields);add.onclick=()=>addDriver();
+ node('h3','Current well / job limits',fields);const wellInputs={};
+ for(const name of wells){const label=node('label',name+' ',fields),amount=node('input','',label);amount.type='number';amount.min='1';amount.max='1000';amount.value=selected.options.wellLoadLimits?.[name]??'';amount.placeholder='No extra limit';amount.setAttribute('aria-label','Load limit for '+name);wellInputs[name]=amount;}
+ const save=node('button','Save load limits',fields);save.onclick=()=>action(()=>api('/barrel-policy',JSON.stringify({channel:selected.id,maxLoadBbls:Number(maximum.value),driverCapacities:Object.fromEntries(driverInputs.filter(e=>e.who.value.trim()).map(e=>[e.who.value.trim(),Number(e.amount.value)])),wellLoadLimits:Object.fromEntries(Object.entries(wellInputs).filter(([,e])=>e.value!=='').map(([name,e])=>[name,Number(e.value)]))})),save,'Load limits saved locally and in Firebase.');
+}
+$('barrel-policy-group').onchange=()=>renderBarrelPolicy(true);
