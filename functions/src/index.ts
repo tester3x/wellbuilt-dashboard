@@ -3936,8 +3936,9 @@ export {
 // ============================================================
 // Governed addSplitLeg: secure-driver auth, exact child dispatchId,
 // parent packet re-verification, complete four-field child pin.
-// V9 WB-T does not send dispatchId — fail closed (child_dispatch_id_required).
+// WB-T supplies a stable child dispatchId for retry-safe field-added legs.
 export { addSplitLeg } from './security/addSplitLegCallable';
+export { startPickupSplit } from './security/startPickupSplitCallable';
 export { getDriverPayroll } from './security/getDriverPayroll';
 
 export {
