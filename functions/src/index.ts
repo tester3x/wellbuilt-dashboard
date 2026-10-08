@@ -3938,6 +3938,7 @@ export {
 // parent packet re-verification, complete four-field child pin.
 // WB-T supplies a stable child dispatchId for retry-safe field-added legs.
 export { addSplitLeg } from './security/addSplitLegCallable';
+export { removeSplitLeg } from './security/removeSplitLegCallable';
 export { startPickupSplit } from './security/startPickupSplitCallable';
 export { getDriverPayroll } from './security/getDriverPayroll';
 
