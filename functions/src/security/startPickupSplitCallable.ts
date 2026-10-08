@@ -82,8 +82,12 @@ export const startPickupSplit = httpsV2.onCall(
       if (!pins.ok) throw new httpsV2.HttpsError('failed-precondition', 'dispatch_packet_pins_invalid');
       const jobTypeId = name(parent.jobTypeId) || name(parent.jobType);
       if (!['service-work', 'pw'].includes(jobTypeId)) throw new httpsV2.HttpsError('failed-precondition', 'job_type_not_supported');
-      const jobType = resolveCanonicalJobType(jobTypeId, verified.envelope.jobTypes, customTypes);
-      if (!jobType.ok || !jobType.capabilities?.includes('splitTicket')) throw new httpsV2.HttpsError('failed-precondition', 'split_ticket_not_authorized');
+      const targetJobTypeId = jobTypeId === 'pw' ? 'service-work' : jobTypeId;
+      const targetJobType = resolveCanonicalJobType(targetJobTypeId, verified.envelope.jobTypes, customTypes);
+      // PW has no splitTicket grant. A pickup split explicitly converts it to
+      // Service Work, whose grant must be present in this pinned revision.
+      if (!targetJobType.ok || !targetJobType.capabilities?.includes('splitTicket')) throw new httpsV2.HttpsError('failed-precondition', 'split_ticket_not_authorized');
+      const convertedToServiceWork = jobTypeId === 'pw';
       const status = name(parent.status);
       if (['completed', 'cancelled', 'declined', 'dismissed'].includes(status)) throw new httpsV2.HttpsError('failed-precondition', 'job_closed');
       const stage = name(parent.driverStage);
@@ -96,7 +100,8 @@ export const startPickupSplit = httpsV2.onCall(
             name(snap.data()?.parentDispatchId) === parsed.dispatchId &&
             name(snap.data()?.disposal) === requestedStops[i].name);
         if (!replay) throw new httpsV2.HttpsError('already-exists', 'job_already_split');
-        return { result: 'already_exists' as const };
+        return { result: 'already_exists' as const,
+          convertedToServiceWork: name(parent.splitConvertedFromJobTypeId) === 'pw' };
       }
       if (childSnaps.some(snap => snap.exists)) throw new httpsV2.HttpsError('already-exists', 'child_dispatch_id_in_use');
       const timeline = Array.isArray(invoice.timeline) ? invoice.timeline as Array<Record<string, unknown>> : [];
@@ -112,7 +117,9 @@ export const startPickupSplit = httpsV2.onCall(
         disposalLat: stop.latitude ?? null,
         disposalLng: stop.longitude ?? null,
         destinationType: stop.destinationType ?? null,
-        jobType: parent.jobType, jobTypeId, serviceType: parent.serviceType ?? null,
+        jobType: convertedToServiceWork ? 'Service Work' : parent.jobType,
+        jobTypeId: targetJobTypeId,
+        serviceType: convertedToServiceWork ? 'Service Work' : (parent.serviceType ?? null),
         ...bound.binding, priority: parent.priority ?? 5, onsiteBy: parent.onsiteBy ?? null,
         splitGroupId, splitSequence: sequence, splitTotal: total,
         parentDispatchId: parsed.dispatchId, status: 'pending',
@@ -121,6 +128,10 @@ export const startPickupSplit = httpsV2.onCall(
         assignedAt: FieldValue.serverTimestamp(), createdAt: FieldValue.serverTimestamp(),
       });
       tx.update(parentRef, {
+        ...(convertedToServiceWork ? {
+          jobType: 'Service Work', jobTypeId: 'service-work', serviceType: 'Service Work',
+          splitConvertedFromJobTypeId: 'pw',
+        } : {}),
         disposal: first.name,
         disposalLat: first.latitude ?? null,
         disposalLng: first.longitude ?? null,
@@ -129,6 +140,7 @@ export const startPickupSplit = httpsV2.onCall(
         splitGroupId, splitSequence: 1, splitTotal: total, updatedAt: FieldValue.serverTimestamp(),
       });
       tx.update(invoiceRef, {
+        ...(convertedToServiceWork ? { commodityType: 'Service Work', jobTypeId: 'service-work' } : {}),
         hauledTo: first.name,
         hauledToLat: first.latitude ?? null,
         hauledToLng: first.longitude ?? null,
@@ -138,7 +150,7 @@ export const startPickupSplit = httpsV2.onCall(
       });
       tx.create(childRefs[0], child(first, 2));
       if (remaining) tx.create(childRefs[1], child(remaining, 3));
-      return { result: 'created' as const };
+      return { result: 'created' as const, convertedToServiceWork };
     });
     return { ok: true, ...result, splitGroupId, splitTotal: remaining ? 3 : 2,
       childDispatchIds: [first.dispatchId, ...(remaining ? [remaining.dispatchId] : [])] };
