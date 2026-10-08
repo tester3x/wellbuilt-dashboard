@@ -3938,6 +3938,7 @@ export {
 // parent packet re-verification, complete four-field child pin.
 // V9 WB-T does not send dispatchId — fail closed (child_dispatch_id_required).
 export { addSplitLeg } from './security/addSplitLegCallable';
+export { getDriverPayroll } from './security/getDriverPayroll';
 
 export {
   recoverHandoffOrphan,
