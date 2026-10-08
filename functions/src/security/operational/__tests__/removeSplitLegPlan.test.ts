@@ -26,4 +26,10 @@ describe('split removal route continuity', () => {
     expect(planSplitLegRemoval([{ ...family[0], status: 'in_progress' }, ...family.slice(1)], 'b'))
       .toEqual({ ok: false, reason: 'anchor_already_started' });
   });
+
+  it('marks a final B removal for anchor cleanup', () => {
+    expect(planSplitLegRemoval(family.slice(0, 2), 'b')).toEqual({
+      ok: true, order: [{ id: 'a', splitSequence: 1 }], lastStopAnchorId: 'a',
+    });
+  });
 });

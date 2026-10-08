@@ -12,7 +12,7 @@ const started = new Set(['accepted', 'in_progress', 'paused']);
 
 export function planSplitLegRemoval(legs: SplitRemovalLeg[], targetId: string):
   | { ok: false; reason: string }
-  | { ok: true; order: Array<{ id: string; splitSequence: number }>; rerouteAnchor?: { id: string; destination: string } } {
+  | { ok: true; order: Array<{ id: string; splitSequence: number }>; rerouteAnchor?: { id: string; destination: string }; lastStopAnchorId?: string } {
   const live = legs.filter(leg => !terminal.has(leg.status))
     .sort((a, b) => a.splitSequence - b.splitSequence);
   if (live.length < 2 || live.some(leg => !Number.isInteger(leg.splitSequence) || leg.splitSequence < 1)) {
@@ -30,6 +30,10 @@ export function planSplitLegRemoval(legs: SplitRemovalLeg[], targetId: string):
   const survivors = live.filter(leg => leg.id !== targetId);
   const base = live[0].splitSequence;
   const order = survivors.map((leg, index) => ({ id: leg.id, splitSequence: base + index }));
+
+  if (targetIndex === 1 && survivors.length === 1) {
+    return { ok: true, order, lastStopAnchorId: survivors[0].id };
+  }
 
   // B is the first on-site stop. Removing it skips the destination that A
   // currently travels to, so A must travel to the new first on-site stop.
