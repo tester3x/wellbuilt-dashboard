@@ -9,7 +9,6 @@ import {
   runAddSplitLeg,
 } from './operational/addSplitLeg';
 import { REVISION_COLLECTION } from './operational/jobPacketRevisionStore';
-import { loadAuthorizedWellNames } from './operational/dispatchPinRuntime';
 
 function throwFail(decided: { ok: false; reason: string; field?: string }): never {
   const msg = decided.reason === CHILD_DISPATCH_ID_REQUIRED
@@ -34,7 +33,6 @@ export const addSplitLeg = httpsV2.onCall(
         throw new httpsV2.HttpsError('invalid-argument', `Unexpected field: ${key}`);
       }
     }
-    const wells = await loadAuthorizedWellNames();
     const fs = admin.firestore();
     const outcome = await fs.runTransaction(async (tx) => {
       const decided = await runAddSplitLeg({
@@ -43,7 +41,6 @@ export const addSplitLeg = httpsV2.onCall(
         dispatchId: raw.dispatchId,
         callerDriverHash: raw.callerDriverHash,
         legSpec: raw.legSpec,
-        authorizedWells: wells,
         getDispatch: async (id) => {
           const snap = await tx.get(fs.collection('dispatches').doc(id));
           return snap.exists ? (snap.data() as Record<string, unknown>) : null;

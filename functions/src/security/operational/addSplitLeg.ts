@@ -1,7 +1,6 @@
 import { fail, revisionDocId, type StoreResult } from './jobPacketRevisionStore';
 import {
   evaluateCreateIfAbsent,
-  evaluateWellAuthorized,
   loadVerifiedRevisionFromData,
   parseDispatchId,
   parsePacketRef,
@@ -268,7 +267,8 @@ export async function runAddSplitLeg(input: {
   dispatchId: unknown;
   callerDriverHash?: unknown;
   legSpec?: unknown;
-  authorizedWells: readonly string[];
+  /** Legacy test harness input; monitored well_config is not a dispatch destination allowlist. */
+  authorizedWells?: readonly string[];
   getDispatch: (id: string) => Promise<Record<string, unknown> | null>;
   getRevision: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
   getCompany?: (id: string) => Promise<Record<string, unknown> | null>;
@@ -327,12 +327,9 @@ export async function runAddSplitLeg(input: {
 
   const parentWell = readCanonicalWell(parent);
   if (!parentWell.ok) return parentWell;
-  const wellGate = evaluateWellAuthorized(
-    parentWell.well.wellName,
-    parentWell.well.ndicWellName,
-    input.authorizedWells,
-  );
-  if (!wellGate.ok) return wellGate;
+  // Ownership and immutable packet pins above authorize extending this
+  // dispatch family. well_config only lists monitored wells and excludes many
+  // legitimate Slawson/NDIC split stops, so it cannot gate this operation.
 
   const requestedType = (spec.jobType as string) || str(parent.jobTypeId) || str(parent.jobType);
   const jobType = resolveCanonicalJobType(requestedType, loaded.envelope.jobTypes, customJobTypes);

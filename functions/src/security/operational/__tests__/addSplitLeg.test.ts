@@ -765,7 +765,8 @@ describe('F4 split-leg replay identity', () => {
     const parent = parentJob(rev, { wellName: 'Thor 1', ndicWellName: '', disposal: 'Thor 1', splitSequence: 3 });
     const harness = io({ parent, store });
     const result = await harness.run({
-      authorizedWells: ['Thor 1'],
+      // Thor is a valid dispatch stop even when it is not in monitored well_config.
+      authorizedWells: [],
       legSpec: { disposal: 'Kahuna 5', destinationType: 'well' },
     });
     expect(result.ok).toBe(true);
