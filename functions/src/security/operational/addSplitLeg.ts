@@ -45,6 +45,25 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
 }
 
+function splitChildWell(parent: Record<string, unknown>, destination: string, destinationType: string): WellIdentity {
+  const kind = destinationType.toLowerCase();
+  // An on-site split is recorded at its own stop. A disposal continuation
+  // leaves from the current stop and travels to the selected SWD.
+  if (kind === 'well' || kind === 'location' || kind === 'custom') {
+    return { wellName: destination, ndicWellName: '' };
+  }
+  if (kind === 'swd') {
+    const currentStop = str(parent.disposal) || str(parent.wellName);
+    return {
+      wellName: currentStop,
+      ndicWellName: currentStop === str(parent.wellName) ? str(parent.ndicWellName) : '',
+    };
+  }
+  // Older callers did not send a typed location. Preserve their existing
+  // behavior; the updated app requires a selected, typed search result.
+  return { wellName: str(parent.wellName), ndicWellName: str(parent.ndicWellName) };
+}
+
 export function matchOptionalCallerDriverHash(
   callerDriverId: string,
   callerDriverHash: unknown,
@@ -209,6 +228,7 @@ function materializeChild(input: {
   splitSequence: number;
   splitTotal: number;
   fields: Record<string, unknown>;
+  loadOriginWellName: string;
 }): Record<string, unknown> {
   return {
     driverId: input.caller.driverId,
@@ -217,6 +237,9 @@ function materializeChild(input: {
     driverFirstName: input.parent.driverFirstName ?? null,
     wellName: input.well.wellName,
     ndicWellName: input.well.ndicWellName,
+    pickupWellName: input.well.wellName,
+    splitLoadOriginWellName: input.loadOriginWellName,
+    splitPreviousStopName: str(input.parent.disposal) || str(input.parent.wellName),
     operator: input.parent.operator ?? null,
     companyId: input.caller.companyId,
     priority: typeof input.parent.priority === 'number' ? input.parent.priority : 5,
@@ -325,7 +348,7 @@ export async function runAddSplitLeg(input: {
     driverId: input.caller.driverId,
     jobTypeId: jobType.jobTypeId,
     binding: stampDispatchBinding(loaded.envelope),
-    well: parentWell.well,
+    well: splitChildWell(parent, spec.disposal, str(spec.fields.destinationType)),
     disposal: spec.disposal,
     destinationType: str(spec.fields.destinationType),
     serviceType: str(spec.fields.serviceType),
@@ -353,6 +376,13 @@ export async function runAddSplitLeg(input: {
     ? siblings
     : [...siblings, { id: parentId.dispatchId, data: parent }];
   if (!sibs.length) return fail('split_siblings_missing', 'splitGroupId');
+  const parentSequence = typeof parent.splitSequence === 'number' ? parent.splitSequence : 0;
+  if (sibs.some((sib) => sib.id !== parentId.dispatchId
+    && typeof sib.data.splitSequence === 'number'
+    && sib.data.splitSequence > parentSequence
+    && !['cancelled', 'declined', 'dismissed'].includes(str(sib.data.status).toLowerCase()))) {
+    return fail('next_split_exists', 'parentDispatchId');
+  }
   let maxSequence = 0;
   for (const sib of sibs) {
     const seq = typeof sib.data.splitSequence === 'number' ? sib.data.splitSequence : 0;
@@ -360,6 +390,9 @@ export async function runAddSplitLeg(input: {
   }
   const splitSequence = maxSequence + 1;
   const splitTotal = sibs.length + 1;
+  const anchor = sibs.find((sib) => sib.data.splitSequence === 1);
+  const loadOriginWellName = str(parent.splitLoadOriginWellName)
+    || str(anchor?.data.wellName) || str(parent.wellName);
   const fields = materializeChild({
     caller: input.caller,
     parent,
@@ -371,6 +404,7 @@ export async function runAddSplitLeg(input: {
     splitSequence,
     splitTotal,
     fields: spec.fields,
+    loadOriginWellName,
   });
   input.applyCreate(childId.dispatchId, fields);
   if (input.applySiblingTotal) {

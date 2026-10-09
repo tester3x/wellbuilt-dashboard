@@ -758,4 +758,55 @@ describe('F4 split-leg replay identity', () => {
     expect(child.ndicWellName).toBe('PYTHON 1');
     expect(child.jobType).toBe('pw');
   });
+
+  it('records a new well split at that well for both pickup and drop-off', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const parent = parentJob(rev, { wellName: 'Thor 1', ndicWellName: '', disposal: 'Thor 1', splitSequence: 3 });
+    const harness = io({ parent, store });
+    const result = await harness.run({
+      authorizedWells: ['Thor 1'],
+      legSpec: { disposal: 'Kahuna 5', destinationType: 'well' },
+    });
+    expect(result.ok).toBe(true);
+    const child = harness.creates[0].data;
+    expect(child.wellName).toBe('Kahuna 5');
+    expect(child.pickupWellName).toBe('Kahuna 5');
+    expect(child.disposal).toBe('Kahuna 5');
+    expect(child.splitPreviousStopName).toBe('Thor 1');
+  });
+
+  it('records an SWD remainder haul from the current stop to the selected SWD', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const parent = parentJob(rev, { wellName: 'Thor 1', ndicWellName: '', disposal: 'Thor 1', splitSequence: 3 });
+    const harness = io({ parent, store });
+    const result = await harness.run({
+      authorizedWells: ['Thor 1'],
+      legSpec: { disposal: 'Hydro Clear SWD', destinationType: 'swd', bbls: 10 },
+    });
+    expect(result.ok).toBe(true);
+    const child = harness.creates[0].data;
+    expect(child.wellName).toBe('Thor 1');
+    expect(child.pickupWellName).toBe('Thor 1');
+    expect(child.disposal).toBe('Hydro Clear SWD');
+    expect(child.bbls).toBe(10);
+  });
+
+  it('does not add another continuation when a later active split already exists', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const parent = parentJob(rev, { splitSequence: 3, splitTotal: 4 });
+    const harness = io({ parent, store });
+    const result = await harness.run({
+      listSiblings: async () => [
+        { id: 'parent-1', data: parent },
+        { id: 'next-1', data: parentJob(rev, { splitSequence: 4, status: 'pending' }) },
+      ],
+      legSpec: { disposal: 'Kahuna 5', destinationType: 'well' },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('next_split_exists');
+    expect(harness.creates).toHaveLength(0);
+  });
 });
