@@ -61,7 +61,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  }
  const config=configs[mapped.wellName],status=(await db.ref('wells/'+mapped.wellName+'/status').once('value')).val();
  const noDefault=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',wellNames:channel.wells||[]})[body.rowIndex];
- const writtenBarrels=review?.bblsTaken??noDefault?.bblsTaken??null;
+ const writtenBarrels=review?.bblsTaken!=null&&review.bblsTaken!==originalMeasurements.bblsTaken?review.bblsTaken:noDefault?.bblsTaken??null;
  const earlyAppMatch=matchExistingAppPull({...row,wellName:mapped.wellName,bblsTaken:writtenBarrels},history[mapped.wellName],owner?.driverId??null,mapped.bank,writtenBarrels!==null);
  if(earlyAppMatch.status==='matched'){res.json({ok:true,status:'duplicate',alreadyRecorded:true,matchedPacketId:earlyAppMatch.packetIds[0],matchedDateTimeUTC:earlyAppMatch.dateTimeUTC,issues:['Already recorded through the app; original gauge time preserved']});return;}
  const driverCapacity=channel.driverCapacities?.[body.senderId]??channel.driverCapacities?.[row.author];
