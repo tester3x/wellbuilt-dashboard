@@ -52,7 +52,11 @@ function splitChildWell(parent: Record<string, unknown>, destination: string, de
     return { wellName: destination, ndicWellName: '' };
   }
   if (kind === 'swd') {
-    const currentStop = str(parent.disposal) || str(parent.wellName);
+    // The anchor is closed at pickup before the driver chooses the next
+    // destination. Continuation legs close at their on-site drop-off.
+    const currentStop = parent.splitSequence === 1
+      ? str(parent.wellName)
+      : str(parent.disposal) || str(parent.wellName);
     return {
       wellName: currentStop,
       ndicWellName: currentStop === str(parent.wellName) ? str(parent.ndicWellName) : '',
@@ -337,6 +341,9 @@ export async function runAddSplitLeg(input: {
 
   const splitGroupId = str(parent.splitGroupId);
   if (!splitGroupId) return fail('parent_not_split_chain', 'splitGroupId');
+  if (['cancelled', 'declined', 'dismissed'].includes(str(parent.status).toLowerCase())) {
+    return fail('parent_not_active', 'parentDispatchId');
+  }
 
   const identity: SplitLegBirthIdentity = {
     parentDispatchId: parentId.dispatchId,
@@ -373,21 +380,19 @@ export async function runAddSplitLeg(input: {
     ? siblings
     : [...siblings, { id: parentId.dispatchId, data: parent }];
   if (!sibs.length) return fail('split_siblings_missing', 'splitGroupId');
-  const parentSequence = typeof parent.splitSequence === 'number' ? parent.splitSequence : 0;
-  if (sibs.some((sib) => sib.id !== parentId.dispatchId
-    && typeof sib.data.splitSequence === 'number'
-    && sib.data.splitSequence > parentSequence
-    && !['cancelled', 'declined', 'dismissed'].includes(str(sib.data.status).toLowerCase()))) {
-    return fail('next_split_exists', 'parentDispatchId');
-  }
+  const liveSibs = sibs.filter(sib =>
+    !['cancelled', 'declined', 'dismissed'].includes(str(sib.data.status).toLowerCase()));
+  // New destinations append to the family regardless of which owned split
+  // the driver is currently working. The driver chooses the next stop at
+  // handoff; sequence is a display order, not an execution lock.
   let maxSequence = 0;
-  for (const sib of sibs) {
+  for (const sib of liveSibs) {
     const seq = typeof sib.data.splitSequence === 'number' ? sib.data.splitSequence : 0;
     if (seq > maxSequence) maxSequence = seq;
   }
   const splitSequence = maxSequence + 1;
-  const splitTotal = sibs.length + 1;
-  const anchor = sibs.find((sib) => sib.data.splitSequence === 1);
+  const splitTotal = liveSibs.length + 1;
+  const anchor = liveSibs.find((sib) => sib.data.splitSequence === 1);
   const loadOriginWellName = str(parent.splitLoadOriginWellName)
     || str(anchor?.data.wellName) || str(parent.wellName);
   const fields = materializeChild({
@@ -405,7 +410,7 @@ export async function runAddSplitLeg(input: {
   });
   input.applyCreate(childId.dispatchId, fields);
   if (input.applySiblingTotal) {
-    for (const sib of sibs) input.applySiblingTotal(sib.id, splitTotal);
+    for (const sib of liveSibs) input.applySiblingTotal(sib.id, splitTotal);
   }
   if (input.applyInvoiceTotal) {
     for (const inv of invoiceIds) input.applyInvoiceTotal(inv.id, splitTotal);

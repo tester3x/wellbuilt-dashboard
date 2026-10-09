@@ -794,7 +794,18 @@ describe('F4 split-leg replay identity', () => {
     expect(child.bbls).toBe(10);
   });
 
-  it('does not add another continuation when a later active split already exists', async () => {
+  it('starts an SWD continuation added at pickup from the anchor well', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const parent = parentJob(rev, { wellName: 'Barnstormer', disposal: 'Phazor 3', splitSequence: 1 });
+    const harness = io({ parent, store });
+    const result = await harness.run({ legSpec: { disposal: 'Hydro Clear SWD', destinationType: 'swd' } });
+    expect(result.ok).toBe(true);
+    expect(harness.creates[0].data.wellName).toBe('Barnstormer');
+    expect(harness.creates[0].data.disposal).toBe('Hydro Clear SWD');
+  });
+
+  it('appends another continuation while later planned splits already exist', async () => {
     const store = new MemoryStore();
     const rev = await publishRevision(store);
     const parent = parentJob(rev, { splitSequence: 3, splitTotal: 4 });
@@ -806,8 +817,8 @@ describe('F4 split-leg replay identity', () => {
       ],
       legSpec: { disposal: 'Kahuna 5', destinationType: 'well' },
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe('next_split_exists');
-    expect(harness.creates).toHaveLength(0);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.splitSequence).toBe(5);
+    expect(harness.creates).toHaveLength(1);
   });
 });
