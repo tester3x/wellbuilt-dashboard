@@ -104,3 +104,5 @@ test('remote review keeps checking sent estimates for later commands',async()=>{
  const r=new RemoteReviews(q,t);await r.tick([]);await r.tick([]);assert.equal(polls,2);assert.equal(reviews,1);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('a processed sibling does not lock a separate held well in an unchanged post',()=>{const post={key:'post',deleted:false,edited:false};const deliveries={'post:0':{status:'complete',identity:'sent'},'post:1':{status:'review'}};assert.equal(canReviewPost(post,deliveries,'post:1'),true);assert.equal(canReviewPost(post,deliveries,'post:0'),false);assert.equal(canReviewPost({...post,edited:true},deliveries,'post:1'),false);});

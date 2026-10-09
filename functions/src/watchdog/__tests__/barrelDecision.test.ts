@@ -17,3 +17,5 @@ test('only scoped provisional watchdog pulls can use reported bottom for trackin
  expect(reportedTrackingBottom({...p,source:'wb_t'},144)).toBeNull();
  expect(reportedTrackingBottom(p,100)).toBeNull();
 });
+
+test('small rounding over a configured load ceiling stays provisional without mandatory review',()=>{expect(decideBarrels({...base,top:11.25,bottom:8.75,bank:67.2,rateMinutesPerFoot:0,driverCapacity:165})).toMatchObject({bbls:165,provisional:true,needsReview:false});expect(decideBarrels({...base,top:12,bottom:8,rateMinutesPerFoot:0,driverCapacity:165})).toMatchObject({needsReview:true});});

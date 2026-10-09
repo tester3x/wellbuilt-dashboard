@@ -3,7 +3,7 @@ import {canonicalHistory,type JsonRecord} from '../imports/pullImportModel';
  * Time alone never suppresses a load. Missing ownership/levels or conflicting
  * candidates remain reviewable. The 90-minute ceiling includes loading and paperwork.
  */
-export function matchExistingAppPull(row:any,history:JsonRecord,driverId:string|null,bank:number){
+export function matchExistingAppPull(row:any,history:JsonRecord,driverId:string|null,bank:number,barrelsExplicit=true){
  const time=Date.parse(row.dateTimeUTC);const all=canonicalHistory(history);
  const candidates=all.filter(p=>p.wellName===row.wellName && !String(p.source||'').startsWith('whatsapp_watchdog') && p.requestType==='pull' &&
    time-Date.parse(p.dateTimeUTC)>=0 && time-Date.parse(p.dateTimeUTC)<=90*60000 &&
@@ -13,8 +13,8 @@ export function matchExistingAppPull(row:any,history:JsonRecord,driverId:string|
  if(candidates.length!==1)return {status:'review' as const,packetIds:ids};
  const p=candidates[0];const bottom=Number.isFinite(p.tankAfterInches)?p.tankAfterInches/12:
    Number.isFinite(p.bottomLevelFeet)?p.bottomLevelFeet:Number(p.tankLevelFeet)-Number(p.bblsTaken)/bank;
- const intervening=all.some(q=>q!==p&&Date.parse(q.dateTimeUTC)>Date.parse(p.dateTimeUTC)&&Date.parse(q.dateTimeUTC)<=time);
- const strong=p.watchdogProcessed===true && p.canonicalProcessingComplete===true && driverId && p.driverId===driverId && Number(p.bblsTaken)===row.bblsTaken &&
+ const intervening=all.some(q=>q!==p&&q.wellName===row.wellName&&Date.parse(q.dateTimeUTC)>Date.parse(p.dateTimeUTC)&&Date.parse(q.dateTimeUTC)<=time);
+ const strong=p.watchdogProcessed===true && p.canonicalProcessingComplete===true && driverId && p.driverId===driverId && (!barrelsExplicit||Number(p.bblsTaken)===row.bblsTaken) &&
    typeof row.bottomLevelFeet==='number' && Number.isFinite(bottom) && Math.abs(bottom-row.bottomLevelFeet)<=2/12+1e-8 && !intervening;
  return strong?{status:'matched' as const,packetIds:ids,dateTimeUTC:p.dateTimeUTC}:
    {status:'review' as const,packetIds:ids};
