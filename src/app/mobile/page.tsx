@@ -785,7 +785,7 @@ function RouteTable({
             <thead className="bg-gray-700">
               <tr>
                 <SortHeader label="Well" field="wellName" sortState={sortState} onSort={onSort} />
-                <th className="px-4 py-2 text-left text-sm font-medium text-gray-400">Location</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-400">Operator</th>
                 <SortHeader label="Tank @ Level" field="tanks" sortState={sortState} onSort={onSort} />
                 <SortHeader label="Next Pull" field="nextPull" sortState={sortState} onSort={onSort} />
                 <SortHeader label="Current Level (Est.)" field="level" sortState={sortState} onSort={onSort} />
@@ -849,7 +849,9 @@ function WellRow({ well }: { well: WellResponse }) {
           {well.wellName}
         </Link>
       </td>
-      <td className="px-4 py-3 text-gray-500 font-mono">--</td>
+      <td className="px-4 py-3 text-xs leading-tight text-gray-300 min-w-36 max-w-72" title={well.operator || undefined}>
+        {well.operator || '—'}
+      </td>
       <td className="px-4 py-3 text-white font-mono">{formatTankLevel()}</td>
       <td className="px-4 py-3 text-white font-mono text-sm">{formatNextPull()}</td>
       <td className="px-4 py-3 text-white font-mono">{levelDisplay}</td>

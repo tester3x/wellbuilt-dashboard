@@ -41,6 +41,7 @@ export interface WellResponse {
   overnightBblsDay?: string; // Overnight bbls/day from Cloud Function
   status?: string;           // Status from VBA
   location?: string;         // GPS/address placeholder for future
+  operator?: string;         // Canonical operator, independent of the route
   // Last pull info from Cloud Function
   lastPullDateTime?: string;
   lastPullDateTimeUTC?: string;
@@ -114,6 +115,7 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
       flowRate: typeof config.avgFlowRate === 'string' ? config.avgFlowRate : 'Unknown',
       timestamp: '',
       route: typeof config.route === 'string' ? config.route : 'Unrouted',
+      operator: typeof config.operator === 'string' ? config.operator : undefined,
       tanks,
       pullBbls,
       tankAtLevel,

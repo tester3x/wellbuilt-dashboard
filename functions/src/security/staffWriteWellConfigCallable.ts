@@ -18,6 +18,21 @@ import {
 
 const ALLOWED = new Set(['op', 'wellName', 'config']);
 
+// The operator is catalog metadata, not a client-supplied well setting. Resolve
+// it from the linked NDIC record when a new configured well is created.
+async function canonicalOperatorForWell(apiNo: string, ndicName: string): Promise<string | undefined> {
+  const wells = admin.firestore().collection('wells');
+  const byApi = await wells.where('api_no', '==', apiNo).limit(3).get();
+  const matches = byApi.empty
+    ? await wells.where('well_name', '==', ndicName).limit(3).get()
+    : byApi;
+  const operators = new Set(matches.docs
+    .map(doc => doc.data().operator)
+    .filter((value): value is string => typeof value === 'string' && !!value.trim())
+    .map(value => value.trim()));
+  return operators.size === 1 ? [...operators][0] : undefined;
+}
+
 async function rewritePacketWellName(
   rtdb: admin.database.Database,
   collection: 'packets/processed' | 'packets/outgoing',
@@ -172,7 +187,14 @@ export const staffWriteWellConfig = httpsV2.onCall(
       };
     }
 
-    await rtdb.ref(`well_config/${decided.wellName}`).set(decided.payload);
+    const canonicalOperator = await canonicalOperatorForWell(
+      decided.payload.ndicApiNo,
+      decided.payload.ndicName,
+    );
+    const createdConfig = canonicalOperator
+      ? { ...decided.payload, operator: canonicalOperator }
+      : decided.payload;
+    await rtdb.ref(`well_config/${decided.wellName}`).set(createdConfig);
 
     await writeSecurityAudit({
       action: 'staffWriteWellConfig',
@@ -186,7 +208,7 @@ export const staffWriteWellConfig = httpsV2.onCall(
       created: true,
       updated: false,
       idempotent: false,
-      config: decided.payload,
+      config: createdConfig,
     };
   },
 );

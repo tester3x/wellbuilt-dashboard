@@ -294,7 +294,8 @@ describe('Add Well wiring pins', () => {
     expect(callable).not.toContain('requireManageDrivers');
     expect(callable).toContain('evaluateStaffWriteWellConfig');
     expect(callable).toContain('well_config/${decided.wellName}');
-    expect(callable).toContain('.set(decided.payload)');
+    expect(callable).toContain('canonicalOperatorForWell');
+    expect(callable).toContain('.set(createdConfig)');
     expect(callable).toContain('.update(decided.patch)');
     expect(callable).toContain("raw.op !== 'create' && raw.op !== 'update'");
     expect(WELL_CONFIG_CREATE_ALLOWLIST).toContain('ndicApiNo');

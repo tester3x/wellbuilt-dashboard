@@ -89,6 +89,7 @@ export const PENDING_ALLOWLIST = [
  */
 export const WELL_CONFIG_ALLOWLIST = [
   'route',
+  'operator',
   'routeColor',
   'maxLevel',
   'bottomLevel',
