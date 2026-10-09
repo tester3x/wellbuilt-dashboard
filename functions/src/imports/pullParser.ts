@@ -93,14 +93,15 @@ const wellPattern = /\b(Gunslinger(?:\s+Federal)?\s*[35](?:-\d+(?:-\d+)*[Hh])?|C
 export function normalizeWell(text: string): string { return text.toLowerCase().replace(/[^a-z0-9]/g, ''); }
 export function parsePullChat(text: string, options: PullImportOptions = {}): PullImportRow[] {
   const rows: PullImportRow[] = [];
+  const pesekCanonical = (options.wellNames || []).find(name => normalizeWell(name) === 'pesek10');
   const catalogueNames = (options.wellNames || []).filter(Boolean).sort((a, b) => b.length - a.length).map(name => [...name].map(character => String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
   const boundary = String.fromCharCode(92) + 'b';
-  const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + wellPattern.source + '|' + catalogueNames.join('|') + ')' + boundary, 'ig') : wellPattern;
+  const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + wellPattern.source + '|' + catalogueNames.join('|') + (pesekCanonical ? '|Pesek(?![ \t]*\\d)' : '') + ')' + boundary, 'ig') : wellPattern;
   for (const message of splitChat(text)) {
     const body = message.body.trim();
     if (/message was deleted|<.*omitted>|message_history_notice|end-to-end encrypted/i.test(body)) continue;
     const matches = [...body.matchAll(namesPattern)];
-    const segments = matches.length ? matches.map((match, i) => ({ well: match[0], body: body.slice((match.index || 0) + match[0].length, matches[i + 1]?.index ?? body.length) })) : [{ well: options.defaultWell || '', body }];
+    const segments = matches.length ? matches.map((match, i) => ({ well: pesekCanonical && normalizeWell(match[0]) === 'pesek' ? pesekCanonical : match[0], body: body.slice((match.index || 0) + match[0].length, matches[i + 1]?.index ?? body.length) })) : [{ well: options.defaultWell || '', body }];
     for (let part = 0; part < segments.length; part++) {
       const segment = segments[part];
       let inlineTime = '';

@@ -89,3 +89,11 @@ test('clock after T/B levels is time, never barrels; driver default beats group 
  expect(parsePullChat(chat)[0].bblsTaken).toBeNull();
  expect(parsePullChat(chat.replace('12:22 pm','170 bbls\n12:22 pm'),{driverDefaultBbls:{'Test Driver':185}})[0].bblsTaken).toBe(170);
 });
+
+ test('Pesek shorthand resolves only to the configured Pesek 10 well',()=>{
+ const chat='[10/09/2026, 10:27:38] Anthony: Pesek\n12’ 3”\n3’ 9”\n170 bbl';
+ const rows=parsePullChat(chat,{wellNames:['Pesek 10']});
+ expect(rows).toHaveLength(1);expect(rows[0].wellName).toBe('Pesek 10');expect(rows[0].tankLevelFeet).toBe(12.25);expect(rows[0].bblsTaken).toBe(170);
+ expect(parsePullChat(chat,{wellNames:['Atlas 1']})).toHaveLength(0);
+ expect(parsePullChat(chat.replace('Pesek\n','Pesek 12\n'),{wellNames:['Pesek 10']})).toHaveLength(0);
+ });
