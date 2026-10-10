@@ -35,6 +35,18 @@ export function wellsForBuilderOperator<T extends { wellName: string; ndicName?:
   return wells.filter(w => operatorForBuilderWell(w.wellName, operatorWells, w.ndicName).toLowerCase() === selectedOperator.toLowerCase());
 }
 
+/** Keep destination wells and custom places in the selected operator's catalog; SWDs remain global. */
+export function dropoffSourcesForBuilderOperator(s: CombinedSearchSources, selectedOperator: string): CombinedSearchSources {
+  const operator = selectedOperator.trim().toLowerCase();
+  if (!operator) return s;
+  return {
+    ...s,
+    wells: wellsForBuilderOperator(s.wells, s.operatorWells, selectedOperator),
+    operatorWells: s.operatorWells.filter(w => w.operator?.trim().toLowerCase() === operator),
+    customLocations: s.customLocations?.filter(c => c.company.trim().toLowerCase() === operator),
+  };
+}
+
 /** The operator carried by a dispatch must match the selected well exactly. */
 export function operatorForBuilderWell(
   wellName: string,

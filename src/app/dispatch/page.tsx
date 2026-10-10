@@ -15,7 +15,7 @@ import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { CatalogSearchResult, LocationSearchResult } from '@/components/LocationSearchResult';
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
-import { combinedLocationResults, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
+import { combinedLocationResults, dropoffSourcesForBuilderOperator, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
@@ -2856,7 +2856,7 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swDropoff}
                             onValueChange={setSwDropoff}
-                            items={combinedLocationResults(swDropoff, { wells: catalogRouteWells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations })}
+                            items={combinedLocationResults(swDropoff, dropoffSourcesForBuilderOperator({ wells: catalogRouteWells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations }, builderOperator))}
                             onSelect={(item) => setSwDropoff(item.value)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => <LocationSearchResult item={item} />}
@@ -2962,7 +2962,7 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swDropoff}
                             onValueChange={setSwDropoff}
-                            items={combinedLocationResults(swDropoff, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals) })}
+                            items={combinedLocationResults(swDropoff, dropoffSourcesForBuilderOperator({ wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals) }, builderOperator))}
                             onSelect={(item) => setSwDropoff(item.value)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
@@ -3029,7 +3029,7 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swExtraLegDraft.disposal}
                             onValueChange={(value) => setSwExtraLegDraft(d => d ? { ...d, disposal: value } : d)}
-                            items={combinedLocationResults(swExtraLegDraft.disposal, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swExtraLegDraft.disposal.trim().toLowerCase(), allDisposals) })}
+                            items={combinedLocationResults(swExtraLegDraft.disposal, dropoffSourcesForBuilderOperator({ wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swExtraLegDraft.disposal.trim().toLowerCase(), allDisposals) }, builderOperator))}
                             onSelect={(item) => setSwExtraLegDraft(d => d ? { ...d, disposal: item.value } : d)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}

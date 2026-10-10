@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { combinedLocationResults, hasExactLocationMatch, operatorForBuilderWell, wellsForBuilderOperator, COMBINED_SEARCH_LIMIT } from '../builderWellSearch.ts';
+import { combinedLocationResults, dropoffSourcesForBuilderOperator, hasExactLocationMatch, operatorForBuilderWell, wellsForBuilderOperator, COMBINED_SEARCH_LIMIT } from '../builderWellSearch.ts';
 
 const sources = {
   wells: [
@@ -80,6 +80,23 @@ test('selected operator excludes other customers from pickup searches', () => {
     disposalMatches: [],
   });
   assert.deepEqual(results.map(result => result.value), ['Gab 1']);
+});
+
+test('drop-off search excludes another customer’s well while keeping SWDs', () => {
+  const operator = 'SLAWSON EXPLORATION COMPANY, INC.';
+  const filtered = dropoffSourcesForBuilderOperator({
+    wells: [{ wellName: 'Gab 1' }, { wellName: 'Gabriel 1' }],
+    operatorWells: [
+      { well_name: 'Gab 1', operator: 'WB Test Customer' },
+      { well_name: 'Gabriel 1', operator },
+    ],
+    disposalMatches: [{ well_name: 'Gab SWD' }],
+    customLocations: [
+      { locationName: 'Gab Yard', company: 'WB Test Customer' },
+      { locationName: 'Gab Shop', company: operator },
+    ],
+  }, operator);
+  assert.deepEqual(combinedLocationResults('gab', filtered).map(row => row.value), ['Gab Shop', 'Gab SWD', 'Gabriel 1']);
 });
 
 test('unmonitored operator wells and custom locations retain type and metadata', () => {
