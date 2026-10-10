@@ -18,9 +18,10 @@ import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { CatalogSearchResult, LocationSearchResult } from '@/components/LocationSearchResult';
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
 import { combinedLocationResults, dropoffSourcesForBuilderOperator, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
+import { heavyWaterWellResults } from '@/lib/heavyWaterWellSearch';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
-import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, compareHeavyWaterQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
+import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
 import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
@@ -744,6 +745,33 @@ function DispatchPageInner() {
   }, [user, loading]);
 
   const catalogRouteWells = useMemo(() => operatingCompanyId === 'liquid-gold' ? wells : wells.filter(w => !!operatingCompanyId && w.companyId === operatingCompanyId), [wells, operatingCompanyId]);
+  const swWellOptions = useMemo(() => {
+    const scopedWells = wellsForBuilderOperator(catalogRouteWells, allOperatorWells, builderOperator);
+    const scopedOperatorWells = builderOperator
+      ? allOperatorWells.filter(w => w.operator?.toLowerCase() === builderOperator.toLowerCase())
+      : allOperatorWells;
+    const sources = {
+      wells: scopedWells,
+      operatorWells: scopedOperatorWells,
+      disposalMatches: builderOperator ? [] : searchDisposals(swWellName.trim().toLowerCase(), allDisposals),
+      customLocations: builderOperator ? customCatalogLocations.filter(c => c.company.toLowerCase() === builderOperator.toLowerCase()) : customCatalogLocations,
+    };
+    if (!swHeavyWater) return combinedLocationResults(swWellName, sources);
+    const ranked = heavyWaterWellResults(swWellName, scopedWells.map(w => {
+      const estimate = classifyWell(w, asOfMs);
+      return { ...w, estimatedFeet: estimate.estFeet, estimatedLevel: estimate.estDisplay };
+    }), scopedOperatorWells);
+    // Unmonitored operator wells and custom locations are still searchable. They
+    // have no measured weight/level, so place them after the configured wells.
+    const fallback = swWellName.trim().length >= 2 ? combinedLocationResults(swWellName, sources) : [];
+    const seen = new Set(ranked.map(item => item.value.toLowerCase()));
+    return [...ranked, ...fallback.filter(item => {
+      const key = item.value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).map(item => item.kind === 'WELL' ? { ...item, showWaterDetails: true } : item)];
+  }, [catalogRouteWells, allOperatorWells, builderOperator, allDisposals, customCatalogLocations, swWellName, swHeavyWater, asOfMs]);
   const locationCatalog = useMemo(() => {
     const rows: NdicWell[] = [
       ...allOperatorWells.map(w => ({ ...w, kind: 'WELL' as const })),
@@ -1224,9 +1252,7 @@ function DispatchPageInner() {
   }, [routeWells, search, asOfMs, pwAssignmentByWell]);
 
   const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
-  const queueRows = swHeavyWater
-    ? [...(showingSearchHits ? searchHits : pwQueue)].sort(compareHeavyWaterQueueRows)
-    : showingSearchHits ? searchHits : pwQueue;
+  const queueRows = showingSearchHits ? searchHits : pwQueue;
   const searchActive = wellQueueSearchActive(search);
 
 
@@ -2794,6 +2820,47 @@ function DispatchPageInner() {
                 <div className="flex flex-col flex-shrink-0">
                   <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-2">Dispatch Service Work</div>
                   <div className="flex flex-col gap-2">
+                    {/* Decide the load before choosing its pickup well. */}
+                    <div className="flex items-center gap-4 flex-shrink-0 flex-wrap rounded border border-purple-700/40 bg-gray-900/60 px-3 py-2">
+                      <label className="flex items-center gap-2 cursor-pointer group">
+                        <input type="checkbox" checked={swSplitTicket} onChange={(e) => {
+                          const checked = e.target.checked;
+                          setSwSplitTicket(checked);
+                          if (!checked) {
+                            setSwExtraSplitLegs([]);
+                            setSwExtraLegDraft(null);
+                          }
+                        }}
+                          className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500" />
+                        <span className={`text-xs ${swSplitTicket ? 'text-purple-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
+                          Split Ticket
+                        </span>
+                        {swSplitTicket && (
+                          <span className="text-[9px] text-purple-500 bg-purple-900/30 px-1.5 py-0.5 rounded">
+                            {2 + swExtraSplitLegs.length} {swDropoff.trim() ? 'linked jobs' : 'planned jobs'}
+                          </span>
+                        )}
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer group">
+                        <input type="checkbox" checked={swHeavyWater} onChange={(e) => setSwHeavyWater(e.target.checked)}
+                          title="Show configured SW pickup wells by water weight group, then estimated level"
+                          className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-amber-600 focus:ring-amber-500" />
+                        <span className={`text-xs ${swHeavyWater ? 'text-amber-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
+                          Heavy Water (10+ lb)
+                        </span>
+                      </label>
+                      {swSplitTicket && (
+                        <button
+                          type="button"
+                          onClick={() => setSwExtraLegDraft({ disposal: '', bbls: '', notes: '' })}
+                          disabled={swExtraLegDraft !== null}
+                          className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded bg-purple-900/40 hover:bg-purple-900/60 text-purple-200 disabled:opacity-50 disabled:cursor-not-allowed border border-purple-700/50"
+                          title="Add another split job (C, D, E…)"
+                        >
+                          + Add Split Job
+                        </button>
+                      )}
+                    </div>
                     {/* Top row: Well/Drop-off stacked left, Service Type + Onsite By stacked right */}
                     <div className="flex gap-3 flex-shrink-0">
                       {/* Left: Well + Drop-off stacked */}
@@ -2803,26 +2870,22 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swWellName}
                             onValueChange={setSwWellName}
-                            items={combinedLocationResults(swWellName, {
-                              wells: wellsForBuilderOperator(catalogRouteWells, allOperatorWells, builderOperator),
-                              operatorWells: builderOperator ? allOperatorWells.filter(w => w.operator?.toLowerCase() === builderOperator.toLowerCase()) : allOperatorWells,
-                              disposalMatches: builderOperator ? [] : searchDisposals(swWellName.trim().toLowerCase(), allDisposals),
-                              customLocations: builderOperator ? customCatalogLocations.filter(c => c.company.toLowerCase() === builderOperator.toLowerCase()) : customCatalogLocations,
-                            })}
+                            items={swWellOptions}
                             onSelect={(item) => {
                               setSwWellName(item.value);
                               if (!builderOperator) setBuilderOperator(operatorForBuilderWell(item.value, allOperatorWells));
                             }}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => <LocationSearchResult item={item} />}
-                            placeholder="Type to search..."
+                            placeholder={swHeavyWater ? 'Tap to see wells by weight and level...' : 'Type to search...'}
                             ariaLabel="Well / location"
-                            minChars={2}
+                            minChars={swHeavyWater ? 0 : 2}
                             inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                            listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
+                            listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-64 overflow-y-auto shadow-lg"
                             optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
                         </div>
+                        {swHeavyWater && <div className="text-[11px] text-amber-300">10+ lb/gal wells first by estimated level, then 9.9, 9.8…; unknown weights last.</div>}
                         {swWellName.trim() && (
                           <div className="text-xs text-gray-400 mt-1">
                             Operator: <span className="text-gray-200">{operatorForBuilderWell(swWellName, allOperatorWells) || builderOperator || 'Not linked in well directory'}</span>
@@ -2887,48 +2950,6 @@ function DispatchPageInner() {
                         </div>
                       </div>
                     </div>{/* end top row */}
-                    {/* Options row: Split Ticket + Heavy Water */}
-                    <div className="flex items-center gap-4 flex-shrink-0 flex-wrap">
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input type="checkbox" checked={swSplitTicket} onChange={(e) => {
-                          const checked = e.target.checked;
-                          setSwSplitTicket(checked);
-                          if (!checked) {
-                            // Clear extras + close any open draft when Split Ticket is turned off.
-                            setSwExtraSplitLegs([]);
-                            setSwExtraLegDraft(null);
-                          }
-                        }}
-                          className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500" />
-                        <span className={`text-xs ${swSplitTicket ? 'text-purple-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
-                          Split Ticket
-                        </span>
-                        {swSplitTicket && (
-                          <span className="text-[9px] text-purple-500 bg-purple-900/30 px-1.5 py-0.5 rounded">
-                            {2 + swExtraSplitLegs.length} {swDropoff.trim() ? 'linked jobs' : 'planned jobs'}
-                          </span>
-                        )}
-                      </label>
-                      {swSplitTicket && (
-                        <button
-                          type="button"
-                          onClick={() => setSwExtraLegDraft({ disposal: '', bbls: '', notes: '' })}
-                          disabled={swExtraLegDraft !== null}
-                          className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded bg-purple-900/40 hover:bg-purple-900/60 text-purple-200 disabled:opacity-50 disabled:cursor-not-allowed border border-purple-700/50"
-                          title="Add another split job (C, D, E…)"
-                        >
-                          + Add Split Job
-                        </button>
-                      )}
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input type="checkbox" checked={swHeavyWater} onChange={(e) => setSwHeavyWater(e.target.checked)}
-                          title="Sort Well Queue by configured water weight, then estimated level"
-                          className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-amber-600 focus:ring-amber-500" />
-                        <span className={`text-xs ${swHeavyWater ? 'text-amber-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
-                          Heavy Water (10+ lb)
-                        </span>
-                      </label>
-                    </div>
                     {/* A carries the pickup quantity. B's destination is also A's drop-off. */}
                     {swSplitTicket && (
                       <div className="flex-shrink-0 rounded-lg border border-purple-700/50 bg-gray-900 p-4">
@@ -3443,7 +3464,6 @@ function DispatchPageInner() {
                   {routes.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <span className="flex-1" />
-                {swHeavyWater && <span className="text-[11px] text-amber-300 flex-shrink-0" title="Measured pounds per gallon first; estimated level breaks ties; unknown weight remains in the list">Weight ↓ · Level ↓</span>}
                 <button
                   type="button"
                   onClick={() => dockQueue(!queueDetached)}
@@ -3502,7 +3522,6 @@ function DispatchPageInner() {
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 w-24 min-w-[88px]">Priority</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 min-w-[130px]">Coverage</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Well</th>
-                        {swHeavyWater && <th className="px-2 py-2 text-left text-[11px] font-medium text-amber-300 whitespace-nowrap">lb/gal ↓</th>}
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Current Level (Est.)</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Flow</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">TTP</th>
@@ -3567,7 +3586,6 @@ function DispatchPageInner() {
                               )}
                               <div className="text-gray-500 text-[10px]">{well.route || 'Unrouted'}</div>
                             </td>
-                            {swHeavyWater && <td className={`px-2 py-1.5 font-mono text-[10px] whitespace-nowrap ${well.waterWeight != null && well.waterWeight >= 10 ? 'text-amber-300 font-bold' : 'text-gray-400'}`}>{well.waterWeight != null ? well.waterWeight.toFixed(2).replace(/0+$/, '').replace(/\.$/, '') : 'Unknown'}</td>}
                             <td className="px-2 py-1.5 font-mono text-[10px]">
                               {(() => {
                                 const c = classifyWell(well, asOfMs);

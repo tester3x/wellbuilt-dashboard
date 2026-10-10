@@ -41,11 +41,12 @@ test('governed merge carries the WB‑M estimator inputs from outgoing status + 
 
 test('governed well pool carries configured water weight without inventing a value for unmeasured wells', () => {
   const wells = mergeWellPool({
-    Heavy: { ...CFG, waterWeight: 10.4 },
+    Heavy: { ...CFG, waterWeight: 10.4, tankHeight: 24 },
     Unknown: { ...CFG },
     Invalid: { ...CFG, waterWeight: -1 },
   });
   assert.equal(wells.find(w => w.wellName === 'Heavy')?.waterWeight, 10.4);
+  assert.equal(wells.find(w => w.wellName === 'Heavy')?.tankHeight, 24);
   assert.equal(wells.find(w => w.wellName === 'Unknown')?.waterWeight, undefined);
   assert.equal(wells.find(w => w.wellName === 'Invalid')?.waterWeight, undefined);
 });

@@ -12,6 +12,10 @@ export interface CombinedLocation {
   value: string;
   kind?: 'WELL' | 'SWD' | 'LOC';
   county?: string;
+  waterWeight?: number;
+  tankHeight?: number;
+  estimatedLevel?: string;
+  showWaterDetails?: boolean;
 }
 
 export interface CombinedSearchSources {

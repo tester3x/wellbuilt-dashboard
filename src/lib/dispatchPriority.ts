@@ -434,23 +434,3 @@ export function compareQueueRows(a: QueueRowItem, b: QueueRowItem): number {
 export function sortQueueRows<T extends QueueRowItem>(items: T[]): T[] {
   return [...items].sort(compareQueueRows);
 }
-
-/** Heavy-water dispatch view: measured pounds/gal first, then the same live
- * estimated level shown in the queue. Unknown weights remain visible last. */
-export function compareHeavyWaterQueueRows(a: QueueRowItem, b: QueueRowItem): number {
-  const weight = (row: QueueRowItem) => {
-    const value = row.well.waterWeight;
-    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
-  };
-  const aWeight = weight(a);
-  const bWeight = weight(b);
-  if (aWeight !== null && bWeight === null) return -1;
-  if (aWeight === null && bWeight !== null) return 1;
-  if (aWeight !== null && bWeight !== null && aWeight !== bWeight) return bWeight - aWeight;
-  const aLevel = a.priority.estFeet;
-  const bLevel = b.priority.estFeet;
-  if (aLevel !== null && bLevel === null) return -1;
-  if (aLevel === null && bLevel !== null) return 1;
-  if (aLevel !== null && bLevel !== null && aLevel !== bLevel) return bLevel - aLevel;
-  return compareQueueRows(a, b);
-}
