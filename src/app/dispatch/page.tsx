@@ -12,6 +12,7 @@ import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
 import { orderSplitTicketChains } from '@/lib/splitTicketDisplayOrder';
 import { dispatchTimestampToDate } from '@/lib/dispatchTimestampToDate';
+import { formatDispatchOnsiteByInput, parseDispatchOnsiteByInput } from '@/lib/dispatchOnsiteByInput';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { CatalogSearchResult, LocationSearchResult } from '@/components/LocationSearchResult';
@@ -479,7 +480,9 @@ function DispatchPageInner() {
   const [swSplitBNotes, setSwSplitBNotes] = useState('');
   const [swServiceType, setSwServiceType] = useState('');
   const [swOnsiteBy, setSwOnsiteBy] = useState('');
+  const [swOnsiteByText, setSwOnsiteByText] = useState('');
   const [swOnsiteByInputKey, setSwOnsiteByInputKey] = useState(0);
+  const [swKeyboardDateInput, setSwKeyboardDateInput] = useState(false);
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
@@ -498,6 +501,12 @@ function DispatchPageInner() {
   const [swExtraLegDraft, setSwExtraLegDraft] = useState<{ disposal: string; bbls: string; notes: string } | null>(null);
   const [swError, setSwError] = useState<string | null>(null);
   const [customJobTypesList, setCustomJobTypesList] = useState<any[]>([]);
+
+  useEffect(() => {
+    // Mobile datetime-local pickers do not offer keyboard entry. Use one
+    // keyboard-editable field on touch devices while retaining the picker icon.
+    setSwKeyboardDateInput(navigator.maxTouchPoints > 0 || window.matchMedia('(any-pointer: coarse)').matches);
+  }, []);
 
   // Add Pull modal state (shared component handles its own form state)
   const [showAddPullModal, setShowAddPullModal] = useState(false);
@@ -1332,6 +1341,10 @@ function DispatchPageInner() {
 
   async function submitServiceWork() {
     if (!swWellName.trim() || !swServiceType.trim() || swDriverHashes.size === 0) return;
+    if (swOnsiteByText.trim() && !swOnsiteBy) {
+      setSwError('Enter a valid Be onsite by date and time, or clear the field.');
+      return;
+    }
     const linkedOperator = operatorForBuilderWell(swWellName, allOperatorWells);
     if (builderOperator && linkedOperator && linkedOperator.toLowerCase() !== builderOperator.toLowerCase()) {
       setSwError(`This well belongs to ${linkedOperator}. Choose that operator or another well.`);
@@ -1443,6 +1456,7 @@ function DispatchPageInner() {
           setSwSplitBNotes('');
           setSwServiceType('');
           setSwOnsiteBy('');
+          setSwOnsiteByText('');
           setSwOnsiteByInputKey(key => key + 1);
           setSwNotes('');
           setSwDriverHashes(new Set());
@@ -1483,6 +1497,7 @@ function DispatchPageInner() {
     setSwSplitBNotes('');
     setSwServiceType('');
     setSwOnsiteBy('');
+    setSwOnsiteByText('');
     setSwOnsiteByInputKey(key => key + 1);
     setSwNotes('');
     setSwDriverHashes(new Set());
@@ -2843,19 +2858,62 @@ function DispatchPageInner() {
                         </div>
                         <div>
                           <label htmlFor="sw-onsite-by" className="block text-xs text-gray-400 mb-1">Be onsite by</label>
-                          <input
-                            key={swOnsiteByInputKey}
-                            id="sw-onsite-by"
-                            type="datetime-local"
-                            value={swOnsiteBy}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val && val.length > 16) return;
-                              setSwOnsiteBy(val);
-                            }}
-                            max="2099-12-31T23:59"
-                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
-                          />
+                          {swKeyboardDateInput ? (
+                            <div className="relative">
+                              <input
+                                id="sw-onsite-by"
+                                type="text"
+                                inputMode="text"
+                                autoComplete="off"
+                                value={swOnsiteByText}
+                                onChange={(e) => {
+                                  const text = e.target.value;
+                                  setSwOnsiteByText(text);
+                                  setSwOnsiteBy(parseDispatchOnsiteByInput(text) || '');
+                                }}
+                                onBlur={() => {
+                                  if (swOnsiteBy) setSwOnsiteByText(formatDispatchOnsiteByInput(swOnsiteBy));
+                                }}
+                                placeholder="MM/DD/YYYY h:mm AM/PM"
+                                aria-invalid={!!swOnsiteByText.trim() && !swOnsiteBy}
+                                className="w-full px-3 pr-12 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                              />
+                              <svg aria-hidden="true" className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.7">
+                                <rect x="3" y="5" width="18" height="16" rx="2" /><path d="M7 3v4m10-4v4M3 10h18" />
+                              </svg>
+                              <input
+                                key={swOnsiteByInputKey}
+                                type="datetime-local"
+                                value={swOnsiteBy}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val && val.length > 16) return;
+                                  setSwOnsiteBy(val);
+                                  setSwOnsiteByText(formatDispatchOnsiteByInput(val));
+                                }}
+                                max="2099-12-31T23:59"
+                                aria-label="Choose Be onsite by date and time"
+                                onClick={(e) => {
+                                  try { e.currentTarget.showPicker(); } catch { /* Native tap remains available. */ }
+                                }}
+                                className="absolute right-0 top-0 h-full w-10 opacity-0 cursor-pointer"
+                              />
+                            </div>
+                          ) : (
+                            <input
+                              key={swOnsiteByInputKey}
+                              id="sw-onsite-by"
+                              type="datetime-local"
+                              value={swOnsiteBy}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val && val.length > 16) return;
+                                setSwOnsiteBy(val);
+                              }}
+                              max="2099-12-31T23:59"
+                              className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
+                            />
+                          )}
                         </div>
                       </div>
                     </div>{/* end top row */}
