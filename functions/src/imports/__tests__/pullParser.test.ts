@@ -97,3 +97,13 @@ test('clock after T/B levels is time, never barrels; driver default beats group 
  expect(parsePullChat(chat,{wellNames:['Atlas 1']})).toHaveLength(0);
  expect(parsePullChat(chat.replace('Pesek\n','Pesek 12\n'),{wellNames:['Pesek 10']})).toHaveLength(0);
  });
+
+test('double slash keeps Kahuna decimal levels and explicit barrels', () => {
+  for (const [top, bottom] of [[7.3, 6.4], [7.0, 6.1]]) {
+    const [row] = parsePullChat(msg(`Kahuna 5- ${top}//${bottom}\n165 bbls`), { defaultWell: 'Kahuna 5' });
+    expect(row.tankLevelFeet).toBe(top);
+    expect(row.bottomLevelFeet).toBe(bottom);
+    expect(row.bblsTaken).toBe(165);
+    expect(row.issues).toEqual([]);
+  }
+});

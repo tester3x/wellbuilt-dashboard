@@ -114,7 +114,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       const labelled = /\btop\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
       const bottom = /\bbottom\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
       const typoPair = /^\s*[-:]?\s*(\d{1,2}\.\d{1,2})\.(\d{1,2}\.\d{1,2})\s*(?:\n|$)/.exec(segment.body);
-      const pair = /^\s*[-:]?\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*\/\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*(?:\n|$)/.exec(segment.body) || typoPair;
+      const pair = /^\s*[-:]?\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*\/{1,2}\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*(?:\n|$)/.exec(segment.body) || typoPair;
       const levelLines = lines.map(line => parseFeet(line));
       const unlabelled = !labelled && !pair && levelLines.length >= 2 && levelLines[0] !== null && levelLines[1] !== null;
       const top = labelled ? parseFeet(labelled[1]) : pair ? parseFeet(pair[1]) : unlabelled ? levelLines[0] : null;
@@ -164,6 +164,6 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
 export interface PullChatNotice { messageIndex: number; source: string; reason: string }
 /** Operational changes require dated calibration review, never automatic config writes. */
 export function findPullChatNotices(text: string): PullChatNotice[] {
-  return splitChat(text).filter(message => /(?:opened|closed|active|inactive|added|removed|tank setup|tanks?\s+(?:on|off))[^\n]{0,50}tank|tank[^\n]{0,50}(?:opened|closed|active|inactive|setup)|\bbbls?\s*\/\s*ft/i.test(message.body)).map(message => ({ messageIndex: message.index, source: message.body, reason: 'Tank configuration may have changed; confirm the calibration and applicable date range.' }));
+  return splitChat(text).filter(message => /(?:opened|closed|active|inactive|added|removed|tank setup|tanks?\s+(?:on|off))[^\n]{0,50}tank|tank[^\n]{0,50}(?:opened|closed|active|inactive|setup)|\bbbls?\s*\/{1,2}\s*ft/i.test(message.body)).map(message => ({ messageIndex: message.index, source: message.body, reason: 'Tank configuration may have changed; confirm the calibration and applicable date range.' }));
 }
 
