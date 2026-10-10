@@ -12,7 +12,6 @@ import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
 import { orderSplitTicketChains } from '@/lib/splitTicketDisplayOrder';
 import { dispatchTimestampToDate } from '@/lib/dispatchTimestampToDate';
-import { formatDispatchOnsiteByInput, parseDispatchOnsiteByInput } from '@/lib/dispatchOnsiteByInput';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { CatalogSearchResult, LocationSearchResult } from '@/components/LocationSearchResult';
@@ -46,7 +45,6 @@ import { httpsCallable } from 'firebase/functions';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
-import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/driverEta';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch as _dismissDispatch } from '@/lib/dismissDispatch';
@@ -163,7 +161,7 @@ interface DispatchJob {
   driverGpsAt?: string;
   // Service work fields
   disposalName?: string;  // LEGACY — old SW docs used this. New ones write `disposal`
-  onsiteBy?: string;  // "Be onsite by" deadline (HH:MM)
+  onsiteBy?: string;  // Legacy service-work arrival target on existing dispatches
   // Live job info — written by WB T as driver progresses
   invoiceNumber?: string;  // Invoice # for this dispatch (i+t mode)
   ticketNumber?: string;  // Ticket # for this dispatch (s_t mode)
@@ -480,10 +478,6 @@ function DispatchPageInner() {
   const [swSplitBBbls, setSwSplitBBbls] = useState('');
   const [swSplitBNotes, setSwSplitBNotes] = useState('');
   const [swServiceType, setSwServiceType] = useState('');
-  const [swOnsiteBy, setSwOnsiteBy] = useState('');
-  const [swOnsiteByText, setSwOnsiteByText] = useState('');
-  const [swOnsiteByInputKey, setSwOnsiteByInputKey] = useState(0);
-  const [swTypeOnsiteBy, setSwTypeOnsiteBy] = useState(false);
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
@@ -500,57 +494,8 @@ function DispatchPageInner() {
   type ExtraSplitLeg = { id: string; disposal: string; bbls: string; notes: string };
   const [swExtraSplitLegs, setSwExtraSplitLegs] = useState<ExtraSplitLeg[]>([]);
   const [swExtraLegDraft, setSwExtraLegDraft] = useState<{ disposal: string; bbls: string; notes: string } | null>(null);
-  const [swDriverETAs, setSwDriverETAs] = useState<Map<string, DriverEtaResult>>(new Map());
-  const [swEtaLoading, setSwEtaLoading] = useState(false);
   const [swError, setSwError] = useState<string | null>(null);
   const [customJobTypesList, setCustomJobTypesList] = useState<any[]>([]);
-
-  // Touch browsers often expose only the native date picker for datetime-local.
-  // Show a real text input by default there so tapping it opens the keyboard.
-  useEffect(() => {
-    if (window.matchMedia('(pointer: coarse)').matches) setSwTypeOnsiteBy(true);
-  }, []);
-
-  // Calculate driver ETAs when SW onsiteBy + well are set
-  useEffect(() => {
-    if (!swOnsiteBy || !swWellName.trim()) {
-      setSwDriverETAs(new Map());
-      return;
-    }
-
-    // Parse onsiteBy (datetime-local format: "2026-03-24T22:00") to minutes from now
-    const target = new Date(swOnsiteBy);
-    if (isNaN(target.getTime())) return;
-    const onsiteByMinutes = (target.getTime() - Date.now()) / 60000;
-    if (onsiteByMinutes <= 0) return; // Past deadline
-
-    // Find target well GPS coords
-    const matchedWell = wells.find(w =>
-      (w.ndicName || w.wellName).toLowerCase() === swWellName.trim().toLowerCase()
-    );
-    const targetNdic = allOperatorWells.find(w =>
-      w.well_name.toLowerCase() === swWellName.trim().toLowerCase()
-    );
-    const targetLat = (matchedWell as any)?.expectedLat ?? targetNdic?.latitude ?? null;
-    const targetLng = (matchedWell as any)?.expectedLng ?? targetNdic?.longitude ?? null;
-    if (!targetLat || !targetLng) {
-      // No GPS for target — can't calculate drive times
-      return;
-    }
-
-    // Calculate ETAs for all drivers
-    setSwEtaLoading(true);
-    const driverHashes = drivers.map(d => d.key);
-    calculateDriverETAs(driverHashes, dispatches, { lat: targetLat, lng: targetLng, name: swWellName.trim() })
-      .then(results => {
-        const withDeadline = applyDeadline(results, onsiteByMinutes);
-        const map = new Map<string, DriverEtaResult>();
-        withDeadline.forEach(r => map.set(r.driverHash, r));
-        setSwDriverETAs(map);
-      })
-      .catch(console.warn)
-      .finally(() => setSwEtaLoading(false));
-  }, [swOnsiteBy, swWellName, dispatches, drivers, wells, allOperatorWells]);
 
   // Add Pull modal state (shared component handles its own form state)
   const [showAddPullModal, setShowAddPullModal] = useState(false);
@@ -584,7 +529,6 @@ function DispatchPageInner() {
   const [editSwDisposal, setEditSwDisposal] = useState('');
   const [editSwDisposalResults, setEditSwDisposalResults] = useState<NdicWell[]>([]);
   const [editSwShowDisposalDropdown, setEditSwShowDisposalDropdown] = useState(false);
-  const [editSwOnsiteBy, setEditSwOnsiteBy] = useState('');
 
   // Reassign declined job state
   const [reassignJob, setReassignJob] = useState<DispatchJob | null>(null);
@@ -1385,10 +1329,6 @@ function DispatchPageInner() {
 
   async function submitServiceWork() {
     if (!swWellName.trim() || !swServiceType.trim() || swDriverHashes.size === 0) return;
-    if (swOnsiteByText.trim() && !swOnsiteBy) {
-      setSwError('Enter a valid onsite date and time, or use the date picker.');
-      return;
-    }
     const linkedOperator = operatorForBuilderWell(swWellName, allOperatorWells);
     if (builderOperator && linkedOperator && linkedOperator.toLowerCase() !== builderOperator.toLowerCase()) {
       setSwError(`This well belongs to ${linkedOperator}. Choose that operator or another well.`);
@@ -1441,7 +1381,6 @@ function DispatchPageInner() {
         splitABbls: swSplitABbls,
         splitBBbls: swSplitBBbls,
         splitBNotes: swSplitBNotes,
-        onsiteBy: swOnsiteBy || undefined,
         notes: swNotes || undefined,
         isSplitTicket: swSplitTicket,
         isHeavyWater: swHeavyWater,
@@ -1499,9 +1438,6 @@ function DispatchPageInner() {
           setSwSplitBBbls('');
           setSwSplitBNotes('');
           setSwServiceType('');
-          setSwOnsiteBy('');
-          setSwOnsiteByText('');
-          setSwOnsiteByInputKey(key => key + 1);
           setSwNotes('');
           setSwDriverHashes(new Set());
           setSwSplitTicket(false);
@@ -1540,9 +1476,6 @@ function DispatchPageInner() {
     setSwSplitBBbls('');
     setSwSplitBNotes('');
     setSwServiceType('');
-    setSwOnsiteBy('');
-    setSwOnsiteByText('');
-    setSwOnsiteByInputKey(key => key + 1);
     setSwNotes('');
     setSwDriverHashes(new Set());
     setSwSplitTicket(false);
@@ -2259,7 +2192,6 @@ function DispatchPageInner() {
     setEditSwDisposal(job.disposal || job.disposalName || '');
     setEditSwDisposalResults([]);
     setEditSwShowDisposalDropdown(false);
-    setEditSwOnsiteBy(job.onsiteBy || '');
   }
 
   // Get all dispatches in the same service group
@@ -2309,14 +2241,11 @@ function DispatchPageInner() {
         }
       }
 
-      // 1b2. Update disposal + onsiteBy if changed (SW jobs)
+      // 1b2. Update disposal if changed (SW jobs)
       if (editSwJob.jobType === 'service' && editSwJob.id) {
         const swUpdates: Record<string, any> = {};
         if (editSwDisposal.trim() !== (editSwJob.disposal || editSwJob.disposalName || '')) {
           swUpdates.disposal = editSwDisposal.trim();
-        }
-        if (editSwOnsiteBy !== (editSwJob.onsiteBy || '')) {
-          swUpdates.onsiteBy = editSwOnsiteBy || null;
         }
         if (Object.keys(swUpdates).length > 0) {
           // Update all jobs in the service group
@@ -2888,7 +2817,7 @@ function DispatchPageInner() {
                           />
                         </div>}
                       </div>{/* end left: Well + Drop-off */}
-                      {/* Right: Service Type + Onsite By stacked */}
+                      {/* Right: Service Type */}
                       <div className="flex-1 space-y-2">
                         <div>
                           <label className="block text-xs text-gray-400 mb-1">Service Type</label>
@@ -2899,60 +2828,6 @@ function DispatchPageInner() {
                               <option key={st} value={st}>{st}</option>
                             ))}
                           </select>
-                        </div>
-                        <div>
-                          <div className="flex items-center justify-between gap-2 mb-1">
-                            <label htmlFor="sw-onsite-by" className="block text-xs text-gray-400">Be onsite by</label>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSwTypeOnsiteBy(!swTypeOnsiteBy);
-                                setSwOnsiteByText(swTypeOnsiteBy ? '' : formatDispatchOnsiteByInput(swOnsiteBy));
-                              }}
-                              className="text-xs text-purple-300 underline underline-offset-2"
-                              aria-expanded={swTypeOnsiteBy}
-                              aria-controls="sw-onsite-by-keyboard"
-                            >
-                              {swTypeOnsiteBy ? 'Hide typing' : 'Type date/time'}
-                            </button>
-                          </div>
-                          <input
-                            key={swOnsiteByInputKey}
-                            id="sw-onsite-by"
-                            type="datetime-local"
-                            value={swOnsiteBy}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val && val.length > 16) return;
-                              setSwOnsiteBy(val);
-                              setSwOnsiteByText('');
-                            }}
-                            max="2099-12-31T23:59"
-                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
-                          />
-                          {swTypeOnsiteBy && (
-                            <div id="sw-onsite-by-keyboard" className="mt-2">
-                              <label htmlFor="sw-onsite-by-text" className="block text-xs text-gray-400 mb-1">Type the deadline</label>
-                              <input
-                                id="sw-onsite-by-text"
-                                type="text"
-                                inputMode="text"
-                                autoComplete="off"
-                                value={swOnsiteByText}
-                                onChange={(e) => {
-                                  const text = e.target.value;
-                                  setSwOnsiteByText(text);
-                                  setSwOnsiteBy(parseDispatchOnsiteByInput(text) || '');
-                                }}
-                                placeholder="MM/DD/YYYY h:mm AM/PM"
-                                aria-invalid={!!swOnsiteByText.trim() && !swOnsiteBy}
-                                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                              />
-                              {swOnsiteByText.trim() && !swOnsiteBy && (
-                                <p className="mt-1 text-xs text-amber-400">Use MM/DD/YYYY h:mm AM/PM.</p>
-                              )}
-                            </div>
-                          )}
                         </div>
                       </div>
                     </div>{/* end top row */}
@@ -3171,19 +3046,13 @@ function DispatchPageInner() {
                         <label className="block text-xs text-gray-400 mb-1">
                           Driver{swDriverHashes.size > 1 ? 's' : ''}
                           {swDriverHashes.size > 0 && <span className="ml-1 px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full">{swDriverHashes.size}</span>}
-                          {swEtaLoading && <span className="ml-1 text-gray-500 text-[10px]">calculating ETAs...</span>}
                         </label>
                         <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto">
                           {drivers.map(d => {
                             const checked = swDriverHashes.has(d.key);
                             const shiftDot = driverShiftDot(d);
-                            const eta = swDriverETAs.get(d.key);
                             const activeJob = dispatches.find(j => j.driverHash === d.key && ['accepted', 'in_progress', 'paused'].includes(j.status));
                             const stageLabel = activeJob?.driverStage?.replace(/_/g, ' ') || (activeJob ? 'on job' : '');
-                            const etaColor = eta?.status === 'can_make_it' ? '#22c55e'
-                              : eta?.status === 'tight' ? '#eab308'
-                              : eta?.status === 'cant_make_it' ? '#ef4444'
-                              : '#666';
                             return (
                               <button key={d.key} type="button" onClick={() => { setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(d.key)) next.delete(d.key); else next.add(d.key); return next; }); }}
                                 className={`w-full flex items-center gap-2 px-2 py-1 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
@@ -3192,9 +3061,6 @@ function DispatchPageInner() {
                                 <span className="flex-1 min-w-0 truncate">{operationalDriverName(d)}</span>
                                 {activeJob && (
                                   <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-900/50 text-blue-400 border border-blue-800">On Job</span>
-                                )}
-                                {eta && swOnsiteBy && (
-                                  <span className="flex-shrink-0 font-bold text-[10px]" style={{ color: etaColor }}>{eta.display}</span>
                                 )}
                                 {stageLabel && (
                                   <span className="flex-shrink-0 text-[10px] text-gray-500">{stageLabel}</span>
@@ -4446,18 +4312,6 @@ function DispatchPageInner() {
                       ))}
                     </div>
                   )}
-                </div>
-
-                {/* Be Onsite By */}
-                <div className="mb-4">
-                  <label className="block text-sm text-gray-400 mb-1">Be onsite by</label>
-                  <input
-                    type="datetime-local"
-                    value={editSwOnsiteBy}
-                    onChange={(e) => setEditSwOnsiteBy(e.target.value)}
-                    max="9999-12-31T23:59"
-                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
-                  />
                 </div>
 
                 {/* Edit Notes */}
