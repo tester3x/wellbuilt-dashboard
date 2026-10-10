@@ -479,7 +479,6 @@ function DispatchPageInner() {
   const [swSplitABbls, setSwSplitABbls] = useState('');
   const [swSplitBBbls, setSwSplitBBbls] = useState('');
   const [swSplitBNotes, setSwSplitBNotes] = useState('');
-  const [swSplitBSaved, setSwSplitBSaved] = useState(false);
   const [swServiceType, setSwServiceType] = useState('');
   const [swOnsiteBy, setSwOnsiteBy] = useState('');
   const [swOnsiteByDraft, setSwOnsiteByDraft] = useState(false);
@@ -493,14 +492,13 @@ function DispatchPageInner() {
   const [swHeavyWater, setSwHeavyWater] = useState(false);
   // Pre-dispatch extra split legs (C/D/E…). Companion to swSplitTicket:
   // when the dispatcher needs more than the implicit 2-leg chain, they
-  // click "+ Add Leg" and fill a compact inline editor. Each saved entry
+  // click "+ Add Split Job" and fill an editable card. Each entry
   // becomes one additional dispatch doc on submit, sharing the same
   // splitGroupId with monotonic splitSequence (3, 4, 5…) and splitTotal
   // updated everywhere atomically. NOT Multi-Haul. Cleared when
   // swSplitTicket toggles off or after a successful submit.
   type ExtraSplitLeg = { id: string; disposal: string; bbls: string; notes: string };
   const [swExtraSplitLegs, setSwExtraSplitLegs] = useState<ExtraSplitLeg[]>([]);
-  const [swExtraLegDraft, setSwExtraLegDraft] = useState<{ disposal: string; bbls: string; notes: string } | null>(null);
   const [swError, setSwError] = useState<string | null>(null);
   const [customJobTypesList, setCustomJobTypesList] = useState<any[]>([]);
 
@@ -1449,8 +1447,12 @@ function DispatchPageInner() {
       setSwError('Choose the Split B location before dispatching linked jobs.');
       return;
     }
-    if (swSplitTicket && !swSplitBSaved) {
-      setSwError('Save Split B before dispatching linked jobs.');
+    if (swSplitTicket && swExtraSplitLegs.some(leg => !leg.disposal.trim())) {
+      setSwError('Choose a destination for every split before dispatching linked jobs.');
+      return;
+    }
+    if (swSplitTicket && swBblPlan.error) {
+      setSwError('Enter non-negative numbers for BBLs, or leave the fields blank.');
       return;
     }
     setSwSubmitting(true);
@@ -1553,7 +1555,6 @@ function DispatchPageInner() {
           setSwSplitABbls('');
           setSwSplitBBbls('');
           setSwSplitBNotes('');
-          setSwSplitBSaved(false);
           setSwServiceType('');
           setSwOnsiteBy('');
           setSwOnsiteByDraft(false);
@@ -1563,7 +1564,6 @@ function DispatchPageInner() {
           setSwSplitTicket(false);
           setSwHeavyWater(false);
           setSwExtraSplitLegs([]);
-          setSwExtraLegDraft(null);
           setTimeout(() => setMessage(''), 4000);
 
           // Mint new workflow identity for the next deliberate service job
@@ -1595,7 +1595,6 @@ function DispatchPageInner() {
     setSwSplitABbls('');
     setSwSplitBBbls('');
     setSwSplitBNotes('');
-    setSwSplitBSaved(false);
     setSwServiceType('');
     setSwOnsiteBy('');
     setSwOnsiteByDraft(false);
@@ -1605,7 +1604,6 @@ function DispatchPageInner() {
     setSwSplitTicket(false);
     setSwHeavyWater(false);
     setSwExtraSplitLegs([]);
-    setSwExtraLegDraft(null);
     setSwWorkflow(createServiceWorkWorkflow());
   }
 
@@ -2554,12 +2552,11 @@ function DispatchPageInner() {
     if (!swSplitTicket) return { plan: null, error: '' };
     try {
       const deliveries = [swSplitBBbls, ...swExtraSplitLegs.map(leg => leg.bbls)];
-      if (swExtraLegDraft) deliveries.push(swExtraLegDraft.bbls);
       return { plan: evaluateSplitBblPlan(swSplitABbls, deliveries), error: '' };
     } catch (error) {
       return { plan: null, error: error instanceof Error ? error.message : 'split_bbls_invalid' };
     }
-  }, [swSplitTicket, swSplitABbls, swSplitBBbls, swExtraSplitLegs, swExtraLegDraft]);
+  }, [swSplitTicket, swSplitABbls, swSplitBBbls, swExtraSplitLegs]);
 
   // ─── Render Guards ─────────────────────────────────────────────────────────
 
@@ -2900,9 +2897,7 @@ function DispatchPageInner() {
                           const checked = e.target.checked;
                           setSwSplitTicket(checked);
                           if (!checked) {
-                            setSwSplitBSaved(false);
                             setSwExtraSplitLegs([]);
-                            setSwExtraLegDraft(null);
                           }
                         }}
                           className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500" />
@@ -3062,9 +3057,9 @@ function DispatchPageInner() {
                           <label htmlFor="sw-split-b-destination" className="block text-sm text-gray-300 mb-1">Destination / location (required)</label>
                           <BuilderAutocomplete
                             value={swDropoff}
-                            onValueChange={(value) => { setSwDropoff(value); setSwSplitBSaved(false); }}
+                            onValueChange={setSwDropoff}
                             items={swDestinationOptions(swDropoff)}
-                            onSelect={(item) => { setSwDropoff(item.value); setSwSplitBSaved(false); }}
+                            onSelect={(item) => setSwDropoff(item.value)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => <LocationSearchResult item={item} />}
                             placeholder="Search well, location, or SWD..."
@@ -3080,40 +3075,36 @@ function DispatchPageInner() {
                           <div>
                             <label htmlFor="sw-split-b-bbls" className="block text-sm text-gray-300 mb-1">Planned delivery BBLs (optional)</label>
                             <input id="sw-split-b-bbls" type="text" inputMode="decimal" value={swSplitBBbls}
-                              onChange={(e) => { setSwSplitBBbls(e.target.value); setSwSplitBSaved(false); }} placeholder="BBLs"
+                              onChange={(e) => setSwSplitBBbls(e.target.value)} placeholder="BBLs"
                               className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
                           </div>
                           <div>
                             <label htmlFor="sw-split-b-notes" className="block text-sm text-gray-300 mb-1">Notes (optional)</label>
                             <input id="sw-split-b-notes" type="text" value={swSplitBNotes}
-                              onChange={(e) => { setSwSplitBNotes(e.target.value); setSwSplitBSaved(false); }} placeholder="Special instructions for this split job"
+                              onChange={(e) => setSwSplitBNotes(e.target.value)} placeholder="Special instructions for this split job"
                               className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
                           </div>
                         </div>
                         <div className="flex flex-wrap justify-end items-center gap-2">
-                          {swSplitBSaved && <span role="status" className="text-xs text-green-400 mr-auto">Split B saved</span>}
-                          <button type="button"
-                            onClick={() => { if (swDropoff.trim() && !swBblPlan.error) setSwSplitBSaved(true); }}
-                            disabled={!swDropoff.trim() || !!swBblPlan.error || swSplitBSaved}
-                            className="px-4 py-2 text-sm font-medium rounded bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white">
-                            Save Split B
-                          </button>
-                          <button type="button"
-                            onClick={() => setSwExtraLegDraft({ disposal: '', bbls: '', notes: '' })}
-                            disabled={!swSplitBSaved || swExtraLegDraft !== null}
+                          {swExtraSplitLegs.length === 0 && <button type="button"
+                            onClick={() => setSwExtraSplitLegs([{ id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, disposal: '', bbls: '', notes: '' }])}
+                            disabled={!swDropoff.trim() || !!swBblPlan.error}
                             className="px-4 py-2 text-sm font-medium rounded border border-purple-700/50 bg-purple-900/40 hover:bg-purple-900/60 text-purple-200 disabled:opacity-50 disabled:cursor-not-allowed"
                             title="Add another split job (C, D, E…)">
                             + Add Split Job
-                          </button>
+                          </button>}
                         </div>
                       </div>
                     )}
                     {swSplitTicket && swExtraSplitLegs.map((leg, idx) => {
                       const letter = String.fromCharCode(67 + idx); // C, D, E…
                       return (
-                        <div key={leg.id} className="flex-shrink-0 rounded-lg border border-purple-700/50 bg-gray-900 p-3 sm:p-4">
+                        <div key={leg.id} className="relative z-20 flex flex-col gap-4 flex-shrink-0 bg-gray-900 border border-purple-700/50 rounded-lg p-4">
                           <div className="flex items-start justify-between gap-3">
-                            <h3 className="text-base font-semibold text-purple-200">Split {letter}</h3>
+                            <div>
+                              <h3 className="text-base font-semibold text-purple-200">Split {letter}</h3>
+                              <p className="text-xs text-gray-400">Next linked Service Work job, on site at its destination</p>
+                            </div>
                             <button type="button"
                               onClick={() => setSwExtraSplitLegs(prev => prev.filter(l => l.id !== leg.id))}
                               className="text-xs text-purple-300 hover:text-white underline"
@@ -3121,93 +3112,52 @@ function DispatchPageInner() {
                               Remove
                             </button>
                           </div>
-                          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                            <div><span className="text-gray-400">Location: </span><span className="text-white font-medium">{leg.disposal}</span></div>
-                            <div><span className="text-gray-400">On site at: </span><span className="text-white font-medium">{leg.disposal}</span></div>
-                            {leg.bbls && <div><span className="text-gray-400">Planned delivery: </span><span className="text-white">{leg.bbls} BBL</span></div>}
-                            {leg.notes && <div><span className="text-gray-400">Notes: </span><span className="text-white">{leg.notes}</span></div>}
+                          <div className="w-full">
+                            <label htmlFor={`sw-split-${leg.id}-destination`} className="block text-sm text-gray-300 mb-1">Destination / location (required)</label>
+                            <BuilderAutocomplete
+                              value={leg.disposal}
+                              onValueChange={(value) => setSwExtraSplitLegs(prev => prev.map(item => item.id === leg.id ? { ...item, disposal: value } : item))}
+                              items={swDestinationOptions(leg.disposal)}
+                              onSelect={(item) => setSwExtraSplitLegs(prev => prev.map(entry => entry.id === leg.id ? { ...entry, disposal: item.value } : entry))}
+                              getItemKey={(item, i) => `${item.value}-${i}`}
+                              renderItem={(item) => <LocationSearchResult item={item} />}
+                              placeholder="Search well, location, or SWD..."
+                              ariaLabel={`Split ${letter} destination`}
+                              inputId={`sw-split-${leg.id}-destination`}
+                              minChars={swHeavyWater ? 0 : 2}
+                              inputClassName="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                              listClassName="relative z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-56 overflow-y-auto shadow-lg"
+                              optionClassName="wb-option-row w-full px-3 py-2 border-b border-gray-700/50 last:border-0 text-left text-white text-sm"
+                            />
                           </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-end gap-3">
+                            <div>
+                              <label htmlFor={`sw-split-${leg.id}-bbls`} className="block text-sm text-gray-300 mb-1">Planned delivery BBLs (optional)</label>
+                              <input id={`sw-split-${leg.id}-bbls`} type="text" inputMode="decimal" value={leg.bbls}
+                                onChange={(e) => setSwExtraSplitLegs(prev => prev.map(item => item.id === leg.id ? { ...item, bbls: e.target.value } : item))}
+                                placeholder="BBLs"
+                                className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                            </div>
+                            <div>
+                              <label htmlFor={`sw-split-${leg.id}-notes`} className="block text-sm text-gray-300 mb-1">Notes (optional)</label>
+                              <input id={`sw-split-${leg.id}-notes`} type="text" value={leg.notes}
+                                onChange={(e) => setSwExtraSplitLegs(prev => prev.map(item => item.id === leg.id ? { ...item, notes: e.target.value } : item))}
+                                placeholder="Special instructions for this split job"
+                                className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                            </div>
+                          </div>
+                          {idx === swExtraSplitLegs.length - 1 && <div className="flex justify-end">
+                            <button type="button"
+                              onClick={() => setSwExtraSplitLegs(prev => [...prev, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, disposal: '', bbls: '', notes: '' }])}
+                              disabled={!leg.disposal.trim() || !!swBblPlan.error}
+                              className="px-4 py-2 text-sm font-medium rounded border border-purple-700/50 bg-purple-900/40 hover:bg-purple-900/60 text-purple-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Add another split job">
+                              + Add Split Job
+                            </button>
+                          </div>}
                         </div>
                       );
                     })}
-                    {/* Full-size split job editor stays in the builder. */}
-                    {swSplitTicket && swExtraLegDraft && (
-                      <div className="relative z-20 flex flex-col gap-4 flex-shrink-0 bg-gray-900 border border-purple-700/50 rounded-lg p-4">
-                        <div>
-                          <h3 className="text-base font-semibold text-purple-200">
-                            Split {String.fromCharCode(67 + swExtraSplitLegs.length)}
-                          </h3>
-                          <p className="text-xs text-gray-400">Next linked Service Work job</p>
-                        </div>
-                        <div className="w-full">
-                          <label htmlFor="sw-extra-destination" className="block text-sm text-gray-300 mb-1">
-                            Destination / location
-                          </label>
-                          <BuilderAutocomplete
-                            value={swExtraLegDraft.disposal}
-                            onValueChange={(value) => setSwExtraLegDraft(d => d ? { ...d, disposal: value } : d)}
-                            items={swDestinationOptions(swExtraLegDraft.disposal)}
-                            onSelect={(item) => setSwExtraLegDraft(d => d ? { ...d, disposal: item.value } : d)}
-                            getItemKey={(item, i) => `${item.value}-${i}`}
-                            renderItem={(item) => <LocationSearchResult item={item} />}
-                            placeholder="Search well, location, or SWD..."
-                            ariaLabel={`Split ${String.fromCharCode(67 + swExtraSplitLegs.length)} destination`}
-                            inputId="sw-extra-destination"
-                            minChars={swHeavyWater ? 0 : 2}
-                            autoFocus
-                            inputClassName="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                            listClassName="relative z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-56 overflow-y-auto shadow-lg"
-                            optionClassName="wb-option-row w-full px-3 py-2 border-b border-gray-700/50 last:border-0 text-left text-white text-sm"
-                          />
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-end gap-3">
-                          <div>
-                            <label htmlFor="sw-extra-bbls" className="block text-sm text-gray-300 mb-1">Planned delivery BBLs (optional)</label>
-                            <input id="sw-extra-bbls" type="text" inputMode="decimal"
-                              value={swExtraLegDraft.bbls}
-                              onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, bbls: e.target.value } : d)}
-                              placeholder="BBLs"
-                              className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                            />
-                          </div>
-                          <div>
-                            <label htmlFor="sw-extra-notes" className="block text-sm text-gray-300 mb-1">Notes (optional)</label>
-                            <input id="sw-extra-notes" type="text"
-                              value={swExtraLegDraft.notes}
-                              onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, notes: e.target.value } : d)}
-                              placeholder="Special instructions for this split job"
-                              className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                            />
-                          </div>
-                        </div>
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setSwExtraLegDraft(null)}
-                            className="px-4 py-2 text-sm rounded border border-gray-600 hover:border-gray-500 text-gray-300"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const draft = swExtraLegDraft;
-                              if (!draft || !draft.disposal.trim() || swBblPlan.error) return;
-                              const id = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-                              setSwExtraSplitLegs(prev => [
-                                ...prev,
-                                { id, disposal: draft.disposal.trim(), bbls: draft.bbls.trim(), notes: draft.notes.trim() },
-                              ]);
-                              setSwExtraLegDraft(null);
-                            }}
-                            disabled={!swExtraLegDraft.disposal.trim() || !!swBblPlan.error}
-                            className="px-4 py-2 text-sm font-medium rounded bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white"
-                          >
-                            Save Split {String.fromCharCode(67 + swExtraSplitLegs.length)}
-                          </button>
-                        </div>
-                      </div>
-                    )}
                     {swSplitTicket && (swBblPlan.error || swBblPlan.plan?.warning || (swBblPlan.plan?.pickupBbls != null && swBblPlan.plan.plannedTotal > 0)) && (
                       <div role="status" className={`rounded border px-3 py-2 text-sm ${swBblPlan.error ? 'border-red-600/60 bg-red-950/30 text-red-200' : swBblPlan.plan?.warning ? 'border-amber-600/60 bg-amber-950/30 text-amber-200' : 'border-purple-700/50 bg-gray-900 text-gray-300'}`}>
                         {swBblPlan.error
@@ -3286,9 +3236,9 @@ function DispatchPageInner() {
                       Clear
                     </button>
                     <button onClick={submitServiceWork}
-                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || swExtraLegDraft !== null || (swSplitTicket && (!swDropoff.trim() || !swSplitBSaved || !!swBblPlan.error))}
+                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || (swSplitTicket && (!swDropoff.trim() || swExtraSplitLegs.some(leg => !leg.disposal.trim()) || !!swBblPlan.error))}
                       className="flex-1 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
-                      {swSubmitting ? 'Sending...' : swExtraLegDraft ? `Save Split ${String.fromCharCode(67 + swExtraSplitLegs.length)} first` : swSplitTicket && !swDropoff.trim() ? 'Set Split B location' : swSplitTicket && !swSplitBSaved ? 'Save Split B first' : 'Dispatch'}
+                      {swSubmitting ? 'Sending...' : swSplitTicket && !swDropoff.trim() ? 'Set Split B location' : swSplitTicket && swExtraSplitLegs.some(leg => !leg.disposal.trim()) ? 'Set every split location' : 'Dispatch'}
                     </button>
                   </div>
                 </div>

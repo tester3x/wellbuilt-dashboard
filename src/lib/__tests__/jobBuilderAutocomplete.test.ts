@@ -17,7 +17,7 @@ test('ALL Job Builder autocomplete fields use the ONE shared BuilderAutocomplete
   assert.match(page, /ariaLabel="Drop-off \(optional\)"/);
   assert.match(page, /ariaLabel="Split B destination"/);
   assert.match(page, /ariaLabel="Split A pickup well \/ location"/);
-  assert.match(page, /ariaLabel=\{`Split \$\{String\.fromCharCode\(67 \+ swExtraSplitLegs\.length\)\} destination`\}/);
+  assert.match(page, /ariaLabel=\{`Split \$\{letter\} destination`\}/);
   // No bespoke inline suggestion list survives in the Builder create forms.
   assert.ok(!page.includes('No wells found'), 'the old inline PW well list was removed');
 });

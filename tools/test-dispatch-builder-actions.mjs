@@ -150,12 +150,16 @@ check('1j-1. PW single-well submit guard preserved',
 check('1j-2. PW bulk submit guard preserved',
   dispatchPageSrc.includes('disabled={!assignDriverHash || assigning}')
 );
-check('1j-3. SW submit guard preserved',
-  dispatchPageSrc.includes('disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || swExtraLegDraft !== null || (swSplitTicket && (!swDropoff.trim() || !swSplitBSaved || !!swBblPlan.error))}')
+check('1j-3. SW submit requires every split destination and valid BBLs',
+  dispatchPageSrc.includes('disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || (swSplitTicket && (!swDropoff.trim() || swExtraSplitLegs.some(leg => !leg.disposal.trim()) || !!swBblPlan.error))}')
 );
-check('1j-3a. Split B must be saved before adding another split or dispatching',
-  dispatchPageSrc.includes('disabled={!swSplitBSaved || swExtraLegDraft !== null}') &&
-  dispatchPageSrc.includes("setSwError('Save Split B before dispatching linked jobs.')") &&
+check('1j-3a. Split cards stay editable and Add follows the last card',
+  dispatchPageSrc.includes('swExtraSplitLegs.length === 0 && <button') &&
+  dispatchPageSrc.includes('idx === swExtraSplitLegs.length - 1 && <div') &&
+  dispatchPageSrc.includes('value={leg.disposal}') &&
+  dispatchPageSrc.includes('value={leg.bbls}') &&
+  dispatchPageSrc.includes('value={leg.notes}') &&
+  !dispatchPageSrc.includes('Save Split B') &&
   dispatchPageSrc.includes('Pickup - Split A')
 );
 check('1j-4. Projects submit guard preserved',
