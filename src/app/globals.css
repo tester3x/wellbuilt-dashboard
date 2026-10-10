@@ -304,3 +304,11 @@ body {
 .wb-option-row[data-active="true"] .wb-option-sub {
   color: rgba(255, 255, 255, 0.8);
 }
+
+/* Keep the SW arrival picker legible even when the dashboard uses a dark theme. */
+.sw-onsite-picker {
+  color-scheme: only light;
+}
+.sw-onsite-visible-picker::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
