@@ -588,7 +588,6 @@ function DispatchPageInner() {
   const [newProjectDriverDisposals, setNewProjectDriverDisposals] = useState<{ [hash: string]: { name: string; lat?: number; lng?: number } }>({});
   const [newProjectJobType, setNewProjectJobType] = useState<'service' | 'pw'>('service');
   const [newProjectServiceType, setNewProjectServiceType] = useState('');
-  const [npbTab, setNpbTab] = useState<'details' | 'drivers' | 'notes'>('details');
   const [creatingProject, setCreatingProject] = useState(false);
   const [projectWorkflow, setProjectWorkflow] = useState<CreateProjectWorkflowState>(() => createProjectWorkflow());
   const [projectWellSearch, setProjectWellSearch] = useState('');
@@ -3201,24 +3200,9 @@ function DispatchPageInner() {
               {/* ── Projects Tab ── */}
               {builderTab === 'projects' && (
                 <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                  {/* NPB Sub-tabs */}
-                  <div className="flex items-center gap-1 mb-3 border-b border-gray-700 pb-2">
-                    {([
-                      { key: 'details' as const, label: 'Details', badge: newProjectName ? newProjectWells.length > 0 ? '✓' : '' : '' },
-                      { key: 'drivers' as const, label: 'Drivers', badge: newProjectDriverHashes.size > 0 ? `${newProjectDriverHashes.size}` : '' },
-                      { key: 'notes' as const, label: 'Notes', badge: newProjectNotes.trim() ? '✓' : '' },
-                    ]).map(tab => (
-                      <button key={tab.key} onClick={() => setNpbTab(tab.key)}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors ${npbTab === tab.key ? 'bg-emerald-600/30 text-emerald-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}>
-                        {tab.label}
-                        {tab.badge && <span className="ml-1.5 px-1 py-0.5 bg-emerald-600/20 text-emerald-400 text-[9px] rounded font-bold">{tab.badge}</span>}
-                      </button>
-                    ))}
-                  </div>
-                {/* Details tab */}
-                {npbTab === 'details' && (
-                  <div className="space-y-2 overflow-y-auto flex-1">
-                    <div className="flex gap-3">
+                  <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 pr-1">
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="flex-1">
                         <label className="block text-xs text-gray-400 mb-1">Project Name</label>
                         <input type="text" value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
@@ -3243,7 +3227,7 @@ function DispatchPageInner() {
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-400 mb-1">Wells ({newProjectWells.length} selected)</label>
+                      <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
                       <BuilderAutocomplete
                         value={projectWellSearch}
                         onValueChange={setProjectWellSearch}
@@ -3251,8 +3235,8 @@ function DispatchPageInner() {
                         onSelect={(w) => { setNewProjectWells(prev => [...prev, w.well_name]); setProjectWellSearch(''); }}
                         getItemKey={(w) => w.well_name}
                         renderItem={(w) => <CatalogSearchResult row={w} />}
-                        placeholder="Search wells..."
-                        ariaLabel="Search wells to add to the project"
+                        placeholder={newProjectWells.length > 0 ? 'Add another well or location...' : 'Search for a well or location...'}
+                        ariaLabel="Search wells or locations to add to the project"
                         minChars={2}
                         inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500"
                         listClassName="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto mt-1"
@@ -3269,7 +3253,7 @@ function DispatchPageInner() {
                         </div>
                       )}
                     </div>
-                    <div className="flex gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="flex-1">
                         <label className="block text-xs text-gray-400 mb-1">Service Type</label>
                         <select
@@ -3295,11 +3279,9 @@ function DispatchPageInner() {
                       </div>
                     </div>
                   </div>
-                )}
-                {/* Drivers tab */}
-                {npbTab === 'drivers' && (
-                  <div className="flex-1 overflow-y-auto">
-                    <div className="grid grid-cols-2 gap-3 h-full">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:flex-1">
+                  <div className="flex flex-col min-h-0">
+                    <div className="grid grid-cols-2 gap-3 min-h-[220px] md:flex-1">
                       {/* Day shift column */}
                       <div className="flex flex-col">
                         <div className="text-amber-400 text-[10px] font-bold uppercase tracking-wider mb-1">Day Shift ({Array.from(newProjectDriverHashes).filter(h => (newProjectDriverShifts.get(h) || 'day') === 'day').length})</div>
@@ -3395,16 +3377,14 @@ function DispatchPageInner() {
                       </div>
                     )}
                   </div>
-                )}
-                {/* Notes tab */}
-                {npbTab === 'notes' && (
-                  <div className="flex-1 flex flex-col">
+                  <div className="flex flex-col min-h-[320px]">
                     <label className="block text-xs text-gray-400 mb-1">Job Description & Instructions</label>
                     <textarea value={newProjectNotes} onChange={(e) => setNewProjectNotes(e.target.value)}
                       placeholder={"Be on location loaded at 7:00am\n\nEmpty truck to Pad 379. Suck up rain water by the Recycle pump. Haul to SWD.\n\nYou will meet the roustabout crew around 1:30-2:00pm to clear the Recycle line at Pad 379.\n\nOnce finished follow the crew to Atlas Pad."}
-                      className="w-full flex-1 min-h-[180px] sm:min-h-[240px] px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-y" />
+                      className="w-full flex-1 min-h-[300px] px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-y" />
                   </div>
-                )}
+                  </div>
+                  </div>
                 {/* Bottom Action Row: Clear + Create Project */}
                 <div className="flex gap-2 mt-2 flex-shrink-0">
                   <button

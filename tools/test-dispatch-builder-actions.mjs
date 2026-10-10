@@ -6,14 +6,14 @@
  *    - PW Dispatch button aligned with flex-1 px-4 py-1.5.
  *    - cancelPWDispatch resets single-well, multi-well, drivers, disposals, notes, searches.
  *    - Projects Clear & Create Project moved to bottom action row, matching PW/SW height & sizing.
- *    - Projects actions present across all sub-tabs (Details, Drivers, Notes).
+ *    - Projects details, drivers, and notes visible in one form.
  *    - Existing submit disabled/enabled states preserved.
  *    - Title badges converted to accessible buttons mapped to needs-pull, next-24h, needs-data.
  *    - Title badge counts, split breakdown, and base colors preserved.
  *
  * 2. Playwright Layout & DOM Verification:
  *    - Action row button heights, placement, and relative sizing at Desktop (1440px) & Narrow/Fold (344px).
- *    - Projects actions rendered on Details, Drivers, Notes sub-tabs.
+ *    - Projects driver columns and notes sit side by side at desktop width.
  *    - Title badges interactive state, hover/focus, and active selected ring.
  *
  * 3. DetachablePane & Shared State:
@@ -104,12 +104,17 @@ check('1e. cancelPWDispatch does not reset SW or Projects state',
   !cancelPWSlice.includes('setNewProjectName')
 );
 
-// 1f. Projects sub-tab header does NOT contain Clear or Create Project buttons
-const projectsHeaderMatch = dispatchPageSrc.match(/{\/\* NPB Sub-tabs \*\/}[\s\S]*?<\/div>/);
-check('1f. Projects sub-tab header does not contain Clear or Create Project',
-  projectsHeaderMatch !== null &&
-  !projectsHeaderMatch[0].includes('cancelProject') &&
-  !projectsHeaderMatch[0].includes('createProject')
+// 1f. Projects fields share one form rather than hiding behind sub-tabs
+const projectsBlockSlice = dispatchPageSrc.slice(
+  dispatchPageSrc.indexOf("{builderTab === 'projects' && ("),
+  dispatchPageSrc.indexOf(")}{/* end Projects tab */}")
+);
+check('1f. Projects details, drivers, and notes share one form',
+  !projectsBlockSlice.includes('npbTab') &&
+  projectsBlockSlice.includes('Well / Location') &&
+  projectsBlockSlice.includes('Day Shift') &&
+  projectsBlockSlice.includes('Night Shift') &&
+  projectsBlockSlice.includes('Job Description & Instructions')
 );
 
 // 1g. Projects bottom action row exists with matching classes
@@ -124,15 +129,11 @@ check('1g-2. Projects tab has flexible Create Project button',
   dispatchPageSrc.includes('className="flex-1 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"')
 );
 
-// 1h. Projects bottom action row is rendered outside sub-tab blocks (present on details, drivers, notes)
-const projectsBlockSlice = dispatchPageSrc.slice(
-  dispatchPageSrc.indexOf("{builderTab === 'projects' && ("),
-  dispatchPageSrc.indexOf(")}{/* end Projects tab */}")
-);
-const lastSubTabEnd = projectsBlockSlice.lastIndexOf("{npbTab === 'notes' && (");
+// 1h. Projects bottom action row follows the combined form
+const notesIndex = projectsBlockSlice.indexOf('Job Description & Instructions');
 const bottomActionIndex = projectsBlockSlice.indexOf('{/* Bottom Action Row: Clear + Create Project */}');
-check('1h. Projects bottom action row is placed after sub-tab contents, accessible across all tabs',
-  bottomActionIndex > lastSubTabEnd
+check('1h. Projects bottom action row follows the combined form',
+  notesIndex > 0 && bottomActionIndex > notesIndex
 );
 
 // 1i. SW action row has matching layout and sizing
@@ -266,15 +267,16 @@ async function runBrowserTests() {
       </div>
     </div>
 
-    <!-- Projects Box with subtabs -->
+    <!-- Projects Box with one combined form -->
     <div id="projects-panel" class="bg-gray-800 p-4 rounded-lg border border-emerald-600/40 flex flex-col h-[400px]">
-      <div class="flex items-center gap-1 mb-3 border-b border-gray-700 pb-2 flex-shrink-0">
-        <button id="tab-details" class="px-3 py-1 text-xs font-medium rounded bg-emerald-600/30 text-emerald-400">Details</button>
-        <button id="tab-drivers" class="px-3 py-1 text-xs font-medium rounded text-gray-400 hover:text-white">Drivers</button>
-        <button id="tab-notes" class="px-3 py-1 text-xs font-medium rounded text-gray-400 hover:text-white">Notes</button>
-      </div>
-      <div id="projects-subtab-content" class="flex-1 overflow-y-auto">
-        Project Details content
+      <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4">
+        <div id="projects-details">Project Name · Operator · Well / Location · Service Type · End Date</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div id="projects-drivers" class="grid grid-cols-2 gap-3">
+            <div>Day Shift</div><div>Night Shift</div>
+          </div>
+          <div id="projects-notes">Job Description & Instructions</div>
+        </div>
       </div>
       <div id="projects-action-row" class="flex gap-2 mt-2 flex-shrink-0">
         <button id="projects-clear-btn" type="button" class="px-3 py-1.5 border border-gray-600 hover:border-gray-500 text-gray-300 text-xs rounded transition-colors">
@@ -351,18 +353,6 @@ async function runBrowserTests() {
     document.getElementById('badge-next-24h').onclick = () => window.setQueueView('next-24h');
     document.getElementById('badge-needs-data').onclick = () => window.setQueueView('needs-data');
 
-    // Switch Projects subtabs
-    window.switchProjectsSubtab = function(tab) {
-      const contents = {
-        'details': 'Project Details content with inputs...',
-        'drivers': 'Drivers checklist for Day and Night shifts...',
-        'notes': 'Job Description and Instructions textarea...',
-      };
-      document.getElementById('projects-subtab-content').textContent = contents[tab];
-    };
-    document.getElementById('tab-details').onclick = () => window.switchProjectsSubtab('details');
-    document.getElementById('tab-drivers').onclick = () => window.switchProjectsSubtab('drivers');
-    document.getElementById('tab-notes').onclick = () => window.switchProjectsSubtab('notes');
   </script>
 </body>
 </html>
@@ -411,13 +401,15 @@ async function runBrowserTests() {
     `pw=${pwClearBox.width}, sw=${swClearBox.width}, proj=${projClearBox.width}`
   );
 
-  // 2c. Sub-tab switching in Projects keeps action row visible and at bottom
-  for (const tab of ['details', 'drivers', 'notes']) {
-    await page.click(`#tab-${tab}`);
-    const clearVisible = await page.locator('#projects-clear-btn').isVisible();
-    const createVisible = await page.locator('#projects-create-btn').isVisible();
-    check(`2c-${tab}. Projects action row is visible on ${tab} subtab`, clearVisible && createVisible);
-  }
+  // 2c. Combined Projects form shows each section and keeps actions below it
+  const detailsBox = await page.locator('#projects-details').boundingBox();
+  const driversBox = await page.locator('#projects-drivers').boundingBox();
+  const notesBox = await page.locator('#projects-notes').boundingBox();
+  check('2c. Projects details, drivers, and notes show together at desktop width',
+    !!detailsBox && !!driversBox && !!notesBox &&
+    driversBox.y > detailsBox.y && Math.abs(driversBox.y - notesBox.y) < 1 &&
+    notesBox.x > driversBox.x && await page.locator('#projects-create-btn').isVisible()
+  );
 
   // 2d. Narrow / Fold viewport (344px)
   await page.setViewportSize({ width: 344, height: 800 });

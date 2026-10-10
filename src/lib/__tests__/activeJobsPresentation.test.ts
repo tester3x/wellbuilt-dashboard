@@ -71,9 +71,9 @@ test('job-type badges are their OWN compact ~40x20 group — NOT the 104px categ
   assert.doesNotMatch(rowSource, /<JobTypeBadge[^/]*\bslot\b/, 'job-type badge is not put in the 104px slot');
 });
 
-test('driver-group and header job-type summaries use the same two-letter mapping', () => {
-  assert.match(source, /\{pwLoads\} \{jobTypeCode\('pw'\)\}/, 'header PW load count uses the mapping');
-  assert.match(source, /\{swLoads\} \{jobTypeCode\('service'\)\}/, 'header SW load count uses the mapping');
+test('driver-group summaries use the two-letter mapping without global header totals', () => {
+  assert.doesNotMatch(source, /\{pwLoads\} \{jobTypeCode\('pw'\)\}/, 'header omits misleading global PW load total');
+  assert.doesNotMatch(source, /\{swLoads\} \{jobTypeCode\('service'\)\}/, 'header omits misleading global SW load total');
   assert.match(source, /\{pwCount\} \{jobTypeCode\('pw'\)\}/, 'driver-group PW summary uses the mapping');
   assert.match(source, /\{swCount\} \{jobTypeCode\('service'\)\}/, 'driver-group SW summary uses the mapping');
 });
