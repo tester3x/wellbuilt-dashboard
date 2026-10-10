@@ -12,6 +12,7 @@ import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
 import { orderSplitTicketChains } from '@/lib/splitTicketDisplayOrder';
 import { dispatchTimestampToDate } from '@/lib/dispatchTimestampToDate';
+import { formatDispatchOnsiteByInput, parseDispatchOnsiteByInput } from '@/lib/dispatchOnsiteByInput';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { CatalogSearchResult, LocationSearchResult } from '@/components/LocationSearchResult';
@@ -480,6 +481,8 @@ function DispatchPageInner() {
   const [swSplitBNotes, setSwSplitBNotes] = useState('');
   const [swServiceType, setSwServiceType] = useState('');
   const [swOnsiteBy, setSwOnsiteBy] = useState('');
+  const [swOnsiteByText, setSwOnsiteByText] = useState('');
+  const [swTypeOnsiteBy, setSwTypeOnsiteBy] = useState(false);
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
@@ -500,6 +503,12 @@ function DispatchPageInner() {
   const [swEtaLoading, setSwEtaLoading] = useState(false);
   const [swError, setSwError] = useState<string | null>(null);
   const [customJobTypesList, setCustomJobTypesList] = useState<any[]>([]);
+
+  // Touch browsers often expose only the native date picker for datetime-local.
+  // Show a real text input by default there so tapping it opens the keyboard.
+  useEffect(() => {
+    if (window.matchMedia('(pointer: coarse)').matches) setSwTypeOnsiteBy(true);
+  }, []);
 
   // Calculate driver ETAs when SW onsiteBy + well are set
   useEffect(() => {
@@ -1375,6 +1384,10 @@ function DispatchPageInner() {
 
   async function submitServiceWork() {
     if (!swWellName.trim() || !swServiceType.trim() || swDriverHashes.size === 0) return;
+    if (swOnsiteByText.trim() && !swOnsiteBy) {
+      setSwError('Enter a valid onsite date and time, or use the date picker.');
+      return;
+    }
     const linkedOperator = operatorForBuilderWell(swWellName, allOperatorWells);
     if (builderOperator && linkedOperator && linkedOperator.toLowerCase() !== builderOperator.toLowerCase()) {
       setSwError(`This well belongs to ${linkedOperator}. Choose that operator or another well.`);
@@ -1486,6 +1499,7 @@ function DispatchPageInner() {
           setSwSplitBNotes('');
           setSwServiceType('');
           setSwOnsiteBy('');
+          setSwOnsiteByText('');
           setSwNotes('');
           setSwDriverHashes(new Set());
           setSwSplitTicket(false);
@@ -1525,6 +1539,7 @@ function DispatchPageInner() {
     setSwSplitBNotes('');
     setSwServiceType('');
     setSwOnsiteBy('');
+    setSwOnsiteByText('');
     setSwNotes('');
     setSwDriverHashes(new Set());
     setSwSplitTicket(false);
@@ -2883,18 +2898,57 @@ function DispatchPageInner() {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-400 mb-1">Be onsite by</label>
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <label htmlFor="sw-onsite-by" className="block text-xs text-gray-400">Be onsite by</label>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSwTypeOnsiteBy(!swTypeOnsiteBy);
+                                setSwOnsiteByText(swTypeOnsiteBy ? '' : formatDispatchOnsiteByInput(swOnsiteBy));
+                              }}
+                              className="text-xs text-purple-300 underline underline-offset-2"
+                              aria-expanded={swTypeOnsiteBy}
+                              aria-controls="sw-onsite-by-keyboard"
+                            >
+                              {swTypeOnsiteBy ? 'Hide typing' : 'Type date/time'}
+                            </button>
+                          </div>
                           <input
+                            id="sw-onsite-by"
                             type="datetime-local"
                             value={swOnsiteBy}
                             onChange={(e) => {
                               const val = e.target.value;
                               if (val && val.length > 16) return;
                               setSwOnsiteBy(val);
+                              setSwOnsiteByText('');
                             }}
                             max="2099-12-31T23:59"
                             className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
                           />
+                          {swTypeOnsiteBy && (
+                            <div id="sw-onsite-by-keyboard" className="mt-2">
+                              <label htmlFor="sw-onsite-by-text" className="block text-xs text-gray-400 mb-1">Type the deadline</label>
+                              <input
+                                id="sw-onsite-by-text"
+                                type="text"
+                                inputMode="text"
+                                autoComplete="off"
+                                value={swOnsiteByText}
+                                onChange={(e) => {
+                                  const text = e.target.value;
+                                  setSwOnsiteByText(text);
+                                  setSwOnsiteBy(parseDispatchOnsiteByInput(text) || '');
+                                }}
+                                placeholder="MM/DD/YYYY h:mm AM/PM"
+                                aria-invalid={!!swOnsiteByText.trim() && !swOnsiteBy}
+                                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                              />
+                              {swOnsiteByText.trim() && !swOnsiteBy && (
+                                <p className="mt-1 text-xs text-amber-400">Use MM/DD/YYYY h:mm AM/PM.</p>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>{/* end top row */}
