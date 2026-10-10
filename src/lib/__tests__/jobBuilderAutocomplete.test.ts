@@ -7,15 +7,16 @@ const comp = readFileSync(new URL('../../components/BuilderAutocomplete.tsx', im
 const hook = readFileSync(new URL('../useAutocompleteKeyboard.ts', import.meta.url), 'utf8');
 
 test('ALL Job Builder autocomplete fields use the ONE shared BuilderAutocomplete', () => {
-  // Eight create-form fields plus edit pickup use the shared component.
+  // Nine create-form fields (including the split-only pickup) plus edit pickup use the shared component.
   const count = (page.match(/<BuilderAutocomplete/g) || []).length;
-  assert.equal(count, 9, 'all eight create fields and edit pickup use the shared component');
+  assert.equal(count, 10, 'all nine create fields and edit pickup use the shared component');
   // The aria-labels prove each specific field is covered.
   for (const label of ['Search wells', 'Search SWD disposal', 'Well / location', 'Drop-off (optional)', 'Operator / customer', 'Search wells to add to the project', 'Edit pickup location']) {
     assert.ok(page.includes(`ariaLabel="${label}"`), `field present: ${label}`);
   }
   assert.match(page, /ariaLabel="Drop-off \(optional\)"/);
   assert.match(page, /ariaLabel="Split B destination"/);
+  assert.match(page, /ariaLabel="Split A pickup well \/ location"/);
   assert.match(page, /ariaLabel=\{`Split \$\{String\.fromCharCode\(67 \+ swExtraSplitLegs\.length\)\} destination`\}/);
   // No bespoke inline suggestion list survives in the Builder create forms.
   assert.ok(!page.includes('No wells found'), 'the old inline PW well list was removed');

@@ -479,6 +479,7 @@ function DispatchPageInner() {
   const [swSplitABbls, setSwSplitABbls] = useState('');
   const [swSplitBBbls, setSwSplitBBbls] = useState('');
   const [swSplitBNotes, setSwSplitBNotes] = useState('');
+  const [swSplitBSaved, setSwSplitBSaved] = useState(false);
   const [swServiceType, setSwServiceType] = useState('');
   const [swOnsiteBy, setSwOnsiteBy] = useState('');
   const [swOnsiteByDraft, setSwOnsiteByDraft] = useState(false);
@@ -772,6 +773,27 @@ function DispatchPageInner() {
       return true;
     }).map(item => item.kind === 'WELL' ? { ...item, showWaterDetails: true } : item)];
   }, [catalogRouteWells, allOperatorWells, builderOperator, allDisposals, customCatalogLocations, swWellName, swHeavyWater, asOfMs]);
+  function swDestinationOptions(query: string) {
+    const sources = dropoffSourcesForBuilderOperator({
+      wells: catalogRouteWells,
+      operatorWells: allOperatorWells,
+      disposalMatches: searchDisposals(query.trim().toLowerCase(), allDisposals),
+      customLocations: customCatalogLocations,
+    }, builderOperator);
+    if (!swHeavyWater) return combinedLocationResults(query, sources);
+    const ranked = heavyWaterWellResults(query, wellsForBuilderOperator(catalogRouteWells, allOperatorWells, builderOperator).map(w => {
+      const estimate = classifyWell(w, asOfMs);
+      return { ...w, estimatedFeet: estimate.estFeet, estimatedLevel: estimate.estDisplay };
+    }), sources.operatorWells);
+    const fallback = combinedLocationResults(query, sources);
+    const seen = new Set(ranked.map(item => item.value.toLowerCase()));
+    return [...ranked, ...fallback.filter(item => {
+      const key = item.value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).map(item => item.kind === 'WELL' ? { ...item, showWaterDetails: true } : item)];
+  }
   const locationCatalog = useMemo(() => {
     const rows: NdicWell[] = [
       ...allOperatorWells.map(w => ({ ...w, kind: 'WELL' as const })),
@@ -1382,6 +1404,10 @@ function DispatchPageInner() {
       setSwError('Choose the Split B location before dispatching linked jobs.');
       return;
     }
+    if (swSplitTicket && !swSplitBSaved) {
+      setSwError('Save Split B before dispatching linked jobs.');
+      return;
+    }
     setSwSubmitting(true);
     setSwError(null);
     try {
@@ -1482,6 +1508,7 @@ function DispatchPageInner() {
           setSwSplitABbls('');
           setSwSplitBBbls('');
           setSwSplitBNotes('');
+          setSwSplitBSaved(false);
           setSwServiceType('');
           setSwOnsiteBy('');
           setSwOnsiteByDraft(false);
@@ -1523,6 +1550,7 @@ function DispatchPageInner() {
     setSwSplitABbls('');
     setSwSplitBBbls('');
     setSwSplitBNotes('');
+    setSwSplitBSaved(false);
     setSwServiceType('');
     setSwOnsiteBy('');
     setSwOnsiteByDraft(false);
@@ -2827,6 +2855,7 @@ function DispatchPageInner() {
                           const checked = e.target.checked;
                           setSwSplitTicket(checked);
                           if (!checked) {
+                            setSwSplitBSaved(false);
                             setSwExtraSplitLegs([]);
                             setSwExtraLegDraft(null);
                           }
@@ -2849,22 +2878,11 @@ function DispatchPageInner() {
                           Heavy Water (10+ lb)
                         </span>
                       </label>
-                      {swSplitTicket && (
-                        <button
-                          type="button"
-                          onClick={() => setSwExtraLegDraft({ disposal: '', bbls: '', notes: '' })}
-                          disabled={swExtraLegDraft !== null}
-                          className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded bg-purple-900/40 hover:bg-purple-900/60 text-purple-200 disabled:opacity-50 disabled:cursor-not-allowed border border-purple-700/50"
-                          title="Add another split job (C, D, E…)"
-                        >
-                          + Add Split Job
-                        </button>
-                      )}
                     </div>
                     {/* Top row: Well/Drop-off stacked left, Service Type + Onsite By stacked right */}
                     <div className="flex gap-3 flex-shrink-0">
                       {/* Left: Well + Drop-off stacked */}
-                      <div className="flex-1 space-y-2">
+                      {!swSplitTicket && <div className="flex-1 space-y-2">
                         <div className="relative">
                           <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
                           <BuilderAutocomplete
@@ -2891,26 +2909,26 @@ function DispatchPageInner() {
                             Operator: <span className="text-gray-200">{operatorForBuilderWell(swWellName, allOperatorWells) || builderOperator || 'Not linked in well directory'}</span>
                           </div>
                         )}
-                        {!swSplitTicket && <div className="relative">
+                        <div className="relative">
                           <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
                           <BuilderAutocomplete
                             value={swDropoff}
                             onValueChange={setSwDropoff}
-                            items={combinedLocationResults(swDropoff, dropoffSourcesForBuilderOperator({ wells: catalogRouteWells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals), customLocations: customCatalogLocations }, builderOperator))}
+                            items={swDestinationOptions(swDropoff)}
                             onSelect={(item) => setSwDropoff(item.value)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
                             renderItem={(item) => <LocationSearchResult item={item} />}
                             placeholder="SWD or well..."
                             ariaLabel="Drop-off (optional)"
-                            minChars={2}
+                            minChars={swHeavyWater ? 0 : 2}
                             inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                             listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
                             optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
-                        </div>}
-                      </div>{/* end left: Well + Drop-off */}
+                        </div>
+                      </div>}{/* end left: Well + Drop-off */}
                       {/* Right: Service Type + Onsite By */}
-                      <div className="flex-1 space-y-2">
+                      <div className={`${swSplitTicket ? 'w-full grid grid-cols-1 sm:grid-cols-2 gap-3 sm:items-start' : 'flex-1 space-y-2'}`}>
                         <div>
                           <label className="block text-xs text-gray-400 mb-1">Service Type</label>
                           <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
@@ -2953,8 +2971,34 @@ function DispatchPageInner() {
                     {/* A carries the pickup quantity. B's destination is also A's drop-off. */}
                     {swSplitTicket && (
                       <div className="flex-shrink-0 rounded-lg border border-purple-700/50 bg-gray-900 p-4">
-                        <h3 className="text-base font-semibold text-purple-200">Split A</h3>
-                        <p className="text-xs text-gray-400">Pickup at {swWellName.trim() || 'the location above'}; drop-off at {swDropoff.trim() || 'Split B’s location below'}</p>
+                        <h3 className="text-base font-semibold text-purple-200">Pickup - Split A</h3>
+                        <p className="text-xs text-gray-400">Drop-off at {swDropoff.trim() || 'Split B’s location below'}</p>
+                        <div className="relative mt-3">
+                          <label className="block text-sm text-gray-300 mb-1">Pickup well / location (required)</label>
+                          <BuilderAutocomplete
+                            value={swWellName}
+                            onValueChange={setSwWellName}
+                            items={swWellOptions}
+                            onSelect={(item) => {
+                              setSwWellName(item.value);
+                              if (!builderOperator) setBuilderOperator(operatorForBuilderWell(item.value, allOperatorWells));
+                            }}
+                            getItemKey={(item, i) => `${item.value}-${i}`}
+                            renderItem={(item) => <LocationSearchResult item={item} />}
+                            placeholder={swHeavyWater ? 'Tap to see wells by weight and level...' : 'Type to search...'}
+                            ariaLabel="Split A pickup well / location"
+                            minChars={swHeavyWater ? 0 : 2}
+                            inputClassName="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-64 overflow-y-auto shadow-lg"
+                            optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
+                          />
+                        </div>
+                        {swHeavyWater && <div className="mt-1 text-[11px] text-amber-300">10+ lb/gal wells first by estimated level, then 9.9, 9.8…; unknown weights last.</div>}
+                        {swWellName.trim() && (
+                          <div className="text-xs text-gray-400 mt-1">
+                            Operator: <span className="text-gray-200">{operatorForBuilderWell(swWellName, allOperatorWells) || builderOperator || 'Not linked in well directory'}</span>
+                          </div>
+                        )}
                         <div className="mt-3 w-full sm:w-[140px]">
                           <label htmlFor="sw-split-a-bbls" className="block text-sm text-gray-300 mb-1">Pickup BBLs (optional)</label>
                           <input id="sw-split-a-bbls" type="text" inputMode="decimal" value={swSplitABbls}
@@ -2973,15 +3017,15 @@ function DispatchPageInner() {
                           <label htmlFor="sw-split-b-destination" className="block text-sm text-gray-300 mb-1">Destination / location (required)</label>
                           <BuilderAutocomplete
                             value={swDropoff}
-                            onValueChange={setSwDropoff}
-                            items={combinedLocationResults(swDropoff, dropoffSourcesForBuilderOperator({ wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals) }, builderOperator))}
-                            onSelect={(item) => setSwDropoff(item.value)}
+                            onValueChange={(value) => { setSwDropoff(value); setSwSplitBSaved(false); }}
+                            items={swDestinationOptions(swDropoff)}
+                            onSelect={(item) => { setSwDropoff(item.value); setSwSplitBSaved(false); }}
                             getItemKey={(item, i) => `${item.value}-${i}`}
-                            renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
+                            renderItem={(item) => <LocationSearchResult item={item} />}
                             placeholder="Search well, location, or SWD..."
                             ariaLabel="Split B destination"
                             inputId="sw-split-b-destination"
-                            minChars={2}
+                            minChars={swHeavyWater ? 0 : 2}
                             inputClassName="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                             listClassName="relative z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-56 overflow-y-auto shadow-lg"
                             optionClassName="wb-option-row w-full px-3 py-2 border-b border-gray-700/50 last:border-0 text-left text-white text-sm"
@@ -2991,15 +3035,31 @@ function DispatchPageInner() {
                           <div>
                             <label htmlFor="sw-split-b-bbls" className="block text-sm text-gray-300 mb-1">Planned delivery BBLs (optional)</label>
                             <input id="sw-split-b-bbls" type="text" inputMode="decimal" value={swSplitBBbls}
-                              onChange={(e) => setSwSplitBBbls(e.target.value)} placeholder="BBLs"
+                              onChange={(e) => { setSwSplitBBbls(e.target.value); setSwSplitBSaved(false); }} placeholder="BBLs"
                               className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
                           </div>
                           <div>
                             <label htmlFor="sw-split-b-notes" className="block text-sm text-gray-300 mb-1">Notes (optional)</label>
                             <input id="sw-split-b-notes" type="text" value={swSplitBNotes}
-                              onChange={(e) => setSwSplitBNotes(e.target.value)} placeholder="Special instructions for this split job"
+                              onChange={(e) => { setSwSplitBNotes(e.target.value); setSwSplitBSaved(false); }} placeholder="Special instructions for this split job"
                               className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
                           </div>
+                        </div>
+                        <div className="flex flex-wrap justify-end items-center gap-2">
+                          {swSplitBSaved && <span role="status" className="text-xs text-green-400 mr-auto">Split B saved</span>}
+                          <button type="button"
+                            onClick={() => { if (swDropoff.trim() && !swBblPlan.error) setSwSplitBSaved(true); }}
+                            disabled={!swDropoff.trim() || !!swBblPlan.error || swSplitBSaved}
+                            className="px-4 py-2 text-sm font-medium rounded bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white">
+                            Save Split B
+                          </button>
+                          <button type="button"
+                            onClick={() => setSwExtraLegDraft({ disposal: '', bbls: '', notes: '' })}
+                            disabled={!swSplitBSaved || swExtraLegDraft !== null}
+                            className="px-4 py-2 text-sm font-medium rounded border border-purple-700/50 bg-purple-900/40 hover:bg-purple-900/60 text-purple-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Add another split job (C, D, E…)">
+                            + Add Split Job
+                          </button>
                         </div>
                       </div>
                     )}
@@ -3041,14 +3101,14 @@ function DispatchPageInner() {
                           <BuilderAutocomplete
                             value={swExtraLegDraft.disposal}
                             onValueChange={(value) => setSwExtraLegDraft(d => d ? { ...d, disposal: value } : d)}
-                            items={combinedLocationResults(swExtraLegDraft.disposal, dropoffSourcesForBuilderOperator({ wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swExtraLegDraft.disposal.trim().toLowerCase(), allDisposals) }, builderOperator))}
+                            items={swDestinationOptions(swExtraLegDraft.disposal)}
                             onSelect={(item) => setSwExtraLegDraft(d => d ? { ...d, disposal: item.value } : d)}
                             getItemKey={(item, i) => `${item.value}-${i}`}
-                            renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
+                            renderItem={(item) => <LocationSearchResult item={item} />}
                             placeholder="Search well, location, or SWD..."
                             ariaLabel={`Split ${String.fromCharCode(67 + swExtraSplitLegs.length)} destination`}
                             inputId="sw-extra-destination"
-                            minChars={2}
+                            minChars={swHeavyWater ? 0 : 2}
                             autoFocus
                             inputClassName="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                             listClassName="relative z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-56 overflow-y-auto shadow-lg"
@@ -3181,9 +3241,9 @@ function DispatchPageInner() {
                       Clear
                     </button>
                     <button onClick={submitServiceWork}
-                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || swExtraLegDraft !== null || (swSplitTicket && (!swDropoff.trim() || !!swBblPlan.error))}
+                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || swExtraLegDraft !== null || (swSplitTicket && (!swDropoff.trim() || !swSplitBSaved || !!swBblPlan.error))}
                       className="flex-1 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
-                      {swSubmitting ? 'Sending...' : swExtraLegDraft ? `Save Split ${String.fromCharCode(67 + swExtraSplitLegs.length)} first` : swSplitTicket && !swDropoff.trim() ? 'Set Split B location' : 'Dispatch'}
+                      {swSubmitting ? 'Sending...' : swExtraLegDraft ? `Save Split ${String.fromCharCode(67 + swExtraSplitLegs.length)} first` : swSplitTicket && !swDropoff.trim() ? 'Set Split B location' : swSplitTicket && !swSplitBSaved ? 'Save Split B first' : 'Dispatch'}
                     </button>
                   </div>
                 </div>
