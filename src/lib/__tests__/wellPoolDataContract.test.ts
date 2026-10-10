@@ -39,6 +39,17 @@ test('governed merge carries the WB‑M estimator inputs from outgoing status + 
   assert.equal(c.state, 'approaching');
 });
 
+test('governed well pool carries configured water weight without inventing a value for unmeasured wells', () => {
+  const wells = mergeWellPool({
+    Heavy: { ...CFG, waterWeight: 10.4 },
+    Unknown: { ...CFG },
+    Invalid: { ...CFG, waterWeight: -1 },
+  });
+  assert.equal(wells.find(w => w.wellName === 'Heavy')?.waterWeight, 10.4);
+  assert.equal(wells.find(w => w.wellName === 'Unknown')?.waterWeight, undefined);
+  assert.equal(wells.find(w => w.wellName === 'Invalid')?.waterWeight, undefined);
+});
+
 test('REASON CODES: missing_baseline / missing_timestamp / no_flow_data are distinct', () => {
   // missing_baseline: config present but no outgoing status at all
   const [noStatus] = mergeWellPool({ Lonely: { ...CFG } }, {});

@@ -20,7 +20,7 @@ import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
 import { combinedLocationResults, dropoffSourcesForBuilderOperator, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
-import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
+import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, compareHeavyWaterQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
 import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
@@ -1224,7 +1224,9 @@ function DispatchPageInner() {
   }, [routeWells, search, asOfMs, pwAssignmentByWell]);
 
   const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
-  const queueRows = showingSearchHits ? searchHits : pwQueue;
+  const queueRows = swHeavyWater
+    ? [...(showingSearchHits ? searchHits : pwQueue)].sort(compareHeavyWaterQueueRows)
+    : showingSearchHits ? searchHits : pwQueue;
   const searchActive = wellQueueSearchActive(search);
 
 
@@ -2920,6 +2922,7 @@ function DispatchPageInner() {
                       )}
                       <label className="flex items-center gap-2 cursor-pointer group">
                         <input type="checkbox" checked={swHeavyWater} onChange={(e) => setSwHeavyWater(e.target.checked)}
+                          title="Sort Well Queue by configured water weight, then estimated level"
                           className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-amber-600 focus:ring-amber-500" />
                         <span className={`text-xs ${swHeavyWater ? 'text-amber-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
                           Heavy Water (10+ lb)
@@ -3440,6 +3443,7 @@ function DispatchPageInner() {
                   {routes.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <span className="flex-1" />
+                {swHeavyWater && <span className="text-[11px] text-amber-300 flex-shrink-0" title="Measured pounds per gallon first; estimated level breaks ties; unknown weight remains in the list">Weight ↓ · Level ↓</span>}
                 <button
                   type="button"
                   onClick={() => dockQueue(!queueDetached)}
@@ -3498,6 +3502,7 @@ function DispatchPageInner() {
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 w-24 min-w-[88px]">Priority</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 min-w-[130px]">Coverage</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Well</th>
+                        {swHeavyWater && <th className="px-2 py-2 text-left text-[11px] font-medium text-amber-300 whitespace-nowrap">lb/gal ↓</th>}
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Current Level (Est.)</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Flow</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">TTP</th>
@@ -3562,6 +3567,7 @@ function DispatchPageInner() {
                               )}
                               <div className="text-gray-500 text-[10px]">{well.route || 'Unrouted'}</div>
                             </td>
+                            {swHeavyWater && <td className={`px-2 py-1.5 font-mono text-[10px] whitespace-nowrap ${well.waterWeight != null && well.waterWeight >= 10 ? 'text-amber-300 font-bold' : 'text-gray-400'}`}>{well.waterWeight != null ? well.waterWeight.toFixed(2).replace(/0+$/, '').replace(/\.$/, '') : 'Unknown'}</td>}
                             <td className="px-2 py-1.5 font-mono text-[10px]">
                               {(() => {
                                 const c = classifyWell(well, asOfMs);

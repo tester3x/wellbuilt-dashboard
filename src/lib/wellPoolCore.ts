@@ -56,6 +56,7 @@ export interface WellResponse {
   currentLevelInches?: number; // Total inches — used by Add Pull modal
   // Tank dimensions from well_config
   bblPerFoot?: number;         // Stored BBL/ft (overrides numTanks * 20 default)
+  waterWeight?: number;        // Configured pounds per gallon; absent means unknown
 }
 
 /** Parse a "F'I"" level string to total inches (0 when unparseable). */
@@ -107,6 +108,8 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
     const bblPerFoot = typeof (config as Record<string, unknown>).bblPerFoot === 'number'
       ? (config as Record<string, unknown>).bblPerFoot as number : undefined;
     const bblPerFootPerTank = bblPerFoot ? bblPerFoot / tanks : 20;
+    const waterWeight = typeof config.waterWeight === 'number' && Number.isFinite(config.waterWeight) && config.waterWeight > 0
+      ? config.waterWeight : undefined;
     const { tankAtLevel } = calcTankAtLevel(tanks, pullBbls, bottomInches, bblPerFootPerTank);
     return {
       wellName,
@@ -122,6 +125,7 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
       bottomLevel: bottomLevelFeet,
       maxLevel: typeof config.maxLevel === 'number' ? config.maxLevel : undefined,
       bblPerFoot,
+      waterWeight,
       ndicName: typeof config.ndicName === 'string' ? config.ndicName : '',
       // Canonical identity carried from the governed config (already in the
       // WELL_CONFIG_ALLOWLIST). Enables canonical (company + API) linking instead

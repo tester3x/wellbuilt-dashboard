@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import {
   classifyWell,
   compareQueueRows,
+  compareHeavyWaterQueueRows,
   sortQueueRows,
   type QueueRowItem,
   type WellClassification,
@@ -40,6 +41,21 @@ function createTestWell(name: string, overrides: Partial<WellResponse> = {}): We
     ...overrides,
   };
 }
+
+test('heavy-water order uses configured weight, then estimated level, and keeps unknown weights visible', () => {
+  const row = (name: string, weight: number | undefined, feet: number): QueueRowItem => ({
+    well: createTestWell(name, { waterWeight: weight }),
+    priority: { state: 'pull-now', estFeet: feet, predictedReadyAtMs: BASE } as QueueRowItem['priority'],
+  });
+  const sorted = [
+    row('unknown low', undefined, 8),
+    row('ten low', 10, 7),
+    row('heavy', 10.5, 4),
+    row('ten high', 10, 12),
+    row('unknown high', undefined, 13),
+  ].sort(compareHeavyWaterQueueRows);
+  assert.deepEqual(sorted.map(r => r.well.wellName), ['heavy', 'ten high', 'ten low', 'unknown high', 'unknown low']);
+});
 
 test('matchWellInPool matches exact short names and NDIC names', () => {
   const pool: WellResponse[] = [
