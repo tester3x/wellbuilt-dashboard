@@ -3499,7 +3499,7 @@ function DispatchPageInner() {
                   ] as [QueueView, string][]).map(([v, label]) => (
                     <button
                       key={v}
-                      onClick={() => setQueueView(v)}
+                      onClick={() => { setQueueView(v); setWellQueueExpanded(true); }}
                       className={`px-2.5 py-1 text-xs font-medium transition-colors ${
                         queueView === v ? 'bg-blue-600 text-white' : 'bg-gray-900 text-gray-400 hover:bg-gray-700'
                       }`}
@@ -3517,7 +3517,7 @@ function DispatchPageInner() {
                 />
                 <select
                   value={routeFilter}
-                  onChange={(e) => setRouteFilter(e.target.value)}
+                  onChange={(e) => { setRouteFilter(e.target.value); setWellQueueExpanded(true); }}
                   className="dispatch-queue-route px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500"
                 >
                   <option value="all">All Routes</option>

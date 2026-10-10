@@ -46,6 +46,9 @@ check('stacked well queue is collapsed unless expanded',
   dispatchPage.includes('wellQueueExpanded') &&
   dispatchPage.includes('dispatch-queue-toggle') &&
   dispatchPage.includes('aria-controls="dispatch-queue-body"'));
+check('choosing a queue view or route opens the tablet list',
+  dispatchPage.includes('onClick={() => { setQueueView(v); setWellQueueExpanded(true); }}') &&
+  dispatchPage.includes('onChange={(e) => { setRouteFilter(e.target.value); setWellQueueExpanded(true); }}'));
 check('search box lives in the well queue title row', (() => {
   const title = dispatchPage.indexOf('>Well Queue<');
   const searchBox = dispatchPage.indexOf('placeholder="Search wells..."', title);
