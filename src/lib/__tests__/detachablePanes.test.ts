@@ -16,15 +16,17 @@ test('both panes use the shared DetachablePane with a reattach (onDock -> dock*(
 });
 
 test('both panes expose a Pop-Out/Reattach toggle button wired to dock*(!detached)', () => {
-  assert.match(page, /onClick=\{\(\) => dockQueue\(!queueDetached\)\}/);
-  assert.match(page, /onClick=\{\(\) => dockJobs\(!jobsDetached\)\}/);
+  assert.match(page, /onClick=\{\(\) => \{ if \(!queueDetached\) setWorkspaceTab\('build'\); dockQueue\(!queueDetached\); \}\}/);
+  assert.match(page, /onClick=\{\(\) => \{ if \(!jobsDetached\) setWorkspaceTab\('build'\); dockJobs\(!jobsDetached\); \}\}/);
   assert.match(page, /\{queueDetached \? '⧉ Reattach' : '⧉ Pop Out'\}/);
   assert.match(page, /\{jobsDetached \? '⧉ Reattach' : '⧉ Pop Out'\}/);
 });
 
 test('REGRESSION: Reattach is always visible when detached (both panes) and never hidden in the pop-out', () => {
-  assert.match(page, /\$\{queueDetached \? 'inline-flex' : 'hidden xl:inline-flex'\}/);
-  assert.match(page, /\$\{jobsDetached \? 'inline-flex' : 'hidden xl:inline-flex'\}/);
+  assert.match(page, /\$\{queueDetached \? 'inline-flex' : 'dispatch-popout-control'\}/);
+  assert.match(page, /\$\{jobsDetached \? 'inline-flex' : 'dispatch-popout-control'\}/);
+  assert.match(css, /\.dispatch-popout-control \{ display: none; \}/);
+  assert.match(css, /@media \(min-width: 1280px\) and \(min-height: 900px\) \{\s*\.dispatch-popout-control \{ display: inline-flex; \}/);
   // Old broken form (hard-coded hidden) must not return.
   assert.doesNotMatch(page, /className="hidden xl:inline-flex items-center gap-1 px-2 py-1 text-\[11px\] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0"/);
 });

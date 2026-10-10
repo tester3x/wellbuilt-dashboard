@@ -37,14 +37,24 @@ test('part 5: /well resolves by canonical identity, exact match, no name fallbac
   assert.match(wellPage, /canonicalUnavailable/, 'canonical-not-found renders unavailable');
 });
 
-test('part 6: detach reflow — no docked placeholder, wrappers hide, grid drops the area', () => {
+test('part 6: workspace tabs preserve mounted panes and detached windows hide docked wrappers', () => {
   assert.ok(!/Well Queue is in its own window/.test(dispatch), 'queue docked placeholder card removed');
   assert.ok(!/Active Jobs is in its own window/.test(dispatch), 'jobs docked placeholder card removed');
   assert.match(dispatch, /is-queue-detached/, 'workspace flags queue-detached');
   assert.match(dispatch, /is-jobs-detached/, 'workspace flags jobs-detached');
   assert.match(dispatch, /dispatch-queue.*\$\{queueDetached \? ' is-detached'/, 'queue wrapper hides when detached');
   assert.match(css, /\.dispatch-queue\.is-detached,\s*\n\s*\.dispatch-pane-jobs\.is-detached \{\s*\n\s*display: none/, 'detached wrapper occupies no space');
-  assert.match(css, /\.dispatch-workspace\.is-queue-detached \{[\s\S]*?grid-template-areas:\s*"builder"\s*"jobs"/, 'grid drops queue area');
+  assert.match(dispatch, /workspaceTab !== 'build' \? 'is-inactive '/, 'builder remains mounted across workspace tabs');
+  assert.match(dispatch, /workspaceTab !== 'queue' \? ' is-inactive'/, 'queue remains mounted across workspace tabs');
+  assert.match(dispatch, /workspaceTab !== 'jobs' \? ' is-inactive'/, 'jobs remain mounted across workspace tabs');
+  assert.match(css, /\.dispatch-builder\.is-inactive,[\s\S]*?\.dispatch-pane-jobs\.is-inactive \{\s*display: none/, 'inactive docked panes take no space');
+});
+
+test('queue selection still fills the PW builder when switching workspace tabs', () => {
+  assert.match(dispatch, /function openAssignModal\(well: WellResponse\) \{[\s\S]*?setAssignTarget\(well\);[\s\S]*?handleBuilderTabChange\('pw'\);\s*setWorkspaceTab\('build'\);/, 'single-well Assign opens populated PW builder');
+  assert.match(dispatch, /onClick=\{\(\) => \{ handleBuilderTabChange\('pw'\); setWorkspaceTab\('build'\); \}\}/, 'multi-well selection has a Build PW Job action');
+  assert.match(dispatch, /function toggleWellSelection\(wellName: string\) \{[\s\S]*?handleBuilderTabChange\('pw'\);/, 'selecting wells prepares the PW builder even when another form was open');
+  assert.match(dispatch, /\{selectedWells\.size > 0 \? \([\s\S]*?\{selectedWells\.size\} well/, 'PW builder reads the shared multi-well selection');
 });
 
 test('part 6: Reattach lives in the portaled header; named window prevents duplicates', () => {

@@ -392,8 +392,9 @@ function DispatchPageInner() {
   const [jobsDetached, setJobsDetached] = useState(false);
   useEffect(() => {
     try {
-      setQueueDetached(localStorage.getItem('wb.dispatch.queueDetached') === '1');
-      setJobsDetached(localStorage.getItem('wb.dispatch.jobsDetached') === '1');
+      const desktopPopout = window.matchMedia('(min-width: 1280px) and (min-height: 900px)').matches;
+      setQueueDetached(desktopPopout && localStorage.getItem('wb.dispatch.queueDetached') === '1');
+      setJobsDetached(desktopPopout && localStorage.getItem('wb.dispatch.jobsDetached') === '1');
     } catch { /* storage unavailable — stay docked */ }
   }, []);
   const dockQueue = useCallback((v: boolean) => {
@@ -437,7 +438,7 @@ function DispatchPageInner() {
     return (v === 'needs-pull' || v === 'next-24h' || v === 'all' || v === 'needs-data') ? v : 'needs-pull';
   });
   // Z Fold recovery — collapsed-queue + stacked-layout UI state.
-  const [wellQueueExpanded, setWellQueueExpanded] = useState(false);
+  const [wellQueueExpanded, setWellQueueExpanded] = useState(true);
   const [stackedLayout, setStackedLayout] = useState(isStackedDispatchLayout);
   const [message, setMessage] = useState('');
 
@@ -523,6 +524,7 @@ function DispatchPageInner() {
     setBuilderTab(tab);
     localStorage.setItem('dispatch_builder_tab', tab);
   }, []);
+  const [workspaceTab, setWorkspaceTab] = useState<'build' | 'queue' | 'jobs'>('build');
 
   // Edit dispatch modal state (shared for PW + SW)
   const [editSwJob, setEditSwJob] = useState<DispatchJob | null>(null);
@@ -1334,6 +1336,8 @@ function DispatchPageInner() {
     setAssignDisposalWell(null);
     setDisposalSearch('');
     setDisposalResults([]);
+    handleBuilderTabChange('pw');
+    setWorkspaceTab('build');
   }
 
   function cancelPWDispatch() {
@@ -2169,6 +2173,7 @@ function DispatchPageInner() {
   function toggleWellSelection(wellName: string) {
     // Entering multi-well mode clears single-well assignment
     setAssignTarget(null);
+    handleBuilderTabChange('pw');
     setSelectedWells(prev => {
       const next = new Map(prev);
       if (next.has(wellName)) {
@@ -2190,6 +2195,7 @@ function DispatchPageInner() {
 
   function toggleSelectAll() {
     setAssignTarget(null); // Clear single-well mode
+    handleBuilderTabChange('pw');
     // Only actionable (unassigned, dispatchable) rows are bulk-selectable — the
     // assigned-but-not-started group has no Assign/checkbox.
     const selectableWells = queueRows.filter(q => !q.assignment && q.priority.state !== 'down').map(q => q.well.wellName);
@@ -2578,63 +2584,7 @@ function DispatchPageInner() {
 
       <main data-dashboard-scroll="dispatch" data-dispatch-scroll="primary" className="dispatch-scroll-main px-4 py-4">
 
-        {/* ═══════════════════════════════════════════════════════════════════════
-            DISPATCH TOOLBAR — Always visible at top. Quick actions + inline forms.
-            ═══════════════════════════════════════════════════════════════════════ */}
-        <div className="flex-shrink-0 mb-4">
-          {/* Top bar: title + priority badges + action buttons */}
-          <div className="flex items-center gap-4 mb-3">
-            <h2 className="text-lg font-semibold text-white flex-shrink-0">Dispatch</h2>
-
-            {/* Height-first actionable counts (time-first Overdue/Soon chips removed). */}
-            <div className="flex items-center gap-1.5 flex-shrink-0 text-xs">
-              <button
-                type="button"
-                onClick={() => setQueueView('needs-pull')}
-                aria-pressed={queueView === 'needs-pull'}
-                aria-label={`View Pull Now queue (${queueReady ? needsPullSplit.total : 0} wells)`}
-                className={`px-2 py-0.5 rounded bg-red-600 text-white font-bold whitespace-nowrap cursor-pointer transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-1 focus-visible:ring-offset-gray-900 ${
-                  queueView === 'needs-pull'
-                    ? 'ring-2 ring-white shadow-md'
-                    : 'opacity-85 hover:opacity-100 hover:brightness-110'
-                }`}
-              >
-                {queueReady ? needsPullSplit.total : '—'} Pull Now
-                {queueReady && needsPullSplit.assigned > 0 && (
-                  <span className="font-medium opacity-90"> · {needsPullSplit.unassigned} Unassigned · {needsPullSplit.assigned} Assigned</span>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => setQueueView('next-24h')}
-                aria-pressed={queueView === 'next-24h'}
-                aria-label={`View Next 24h queue (${queueReady ? viewCounts['next-24h'] : 0} wells)`}
-                className={`px-2 py-0.5 rounded bg-yellow-600 text-black font-bold cursor-pointer transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-1 focus-visible:ring-offset-gray-900 ${
-                  queueView === 'next-24h'
-                    ? 'ring-2 ring-white shadow-md'
-                    : 'opacity-85 hover:opacity-100 hover:brightness-110'
-                }`}
-              >
-                {queueReady ? viewCounts['next-24h'] : '—'} Next 24h
-              </button>
-              <button
-                type="button"
-                onClick={() => setQueueView('needs-data')}
-                aria-pressed={queueView === 'needs-data'}
-                aria-label={`View Needs Data queue (${queueReady ? viewCounts['needs-data'] : 0} wells)`}
-                className={`px-2 py-0.5 rounded bg-amber-600 text-white font-bold cursor-pointer transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-1 focus-visible:ring-offset-gray-900 ${
-                  queueView === 'needs-data'
-                    ? 'ring-2 ring-white shadow-md'
-                    : 'opacity-85 hover:opacity-100 hover:brightness-110'
-                }`}
-              >
-                {queueReady ? viewCounts['needs-data'] : '—'} Needs Data
-              </button>
-            </div>
-
-            <span className="flex-1" />
-          </div>
-
+        {(message || readErrors.dispatches || readErrors.drivers || readErrors.wells || readErrors.operatorCatalog) && <div className="flex-shrink-0 mb-4">
           {/* Status message */}
           {message && (
             <div className={`p-2.5 rounded text-sm mb-3 ${message.startsWith('Error') || message.startsWith('Dismiss failed') ? 'bg-red-900/50 text-red-200' : 'bg-blue-900/60 text-blue-200'}`}>
@@ -2649,23 +2599,27 @@ function DispatchPageInner() {
               {readErrors.operatorCatalog && <div>{readErrors.operatorCatalog}</div>}
             </div>
           )}
-        </div>
+        </div>}
 
-        {/* ═══════════════════════════════════════════════════════════════════════
-            MAIN WORKSPACE (Checkpoint 2). Desktop grid, right-biased:
-              ┌──────────┬───────────────┐
-              │ Builder  │               │  Builder pinned upper-left (natural height)
-              ├──────────┤   Well Queue  │  Active Jobs scroll below the builder
-              │ Active   │  (full height,│  Well Queue owns the full-height right column
-              │ Jobs ↕   │   scroll ↕)   │  Builder + Queue always simultaneously visible
-              └──────────┴───────────────┘
-            Each column owns its own internal scroll (min-height:0). Short / narrow
-            / Fold: stacked document flow (jobs-first) with page-level scroll.
-            ═══════════════════════════════════════════════════════════════════════ */}
+        <nav aria-label="Dispatch workspace" className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-2">
+          {([
+            ['build', 'Build Job'],
+            ['queue', 'Well Queue'],
+            ['jobs', 'Jobs'],
+          ] as const).map(([tab, label]) => (
+            <button key={tab} type="button" aria-pressed={workspaceTab === tab}
+              disabled={(tab === 'queue' && queueDetached) || (tab === 'jobs' && jobsDetached)}
+              onClick={() => setWorkspaceTab(tab)}
+              className={`px-4 py-2 rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${workspaceTab === tab ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'}`}>
+              {label}{tab === 'queue' && selectedWells.size > 0 ? ` · ${selectedWells.size} selected` : ''}
+            </button>
+          ))}
+        </nav>
+
         <div className={`dispatch-workspace${queueDetached ? ' is-queue-detached' : ''}${jobsDetached ? ' is-jobs-detached' : ''}`}>
 
             {/* ── Tabbed Dispatch Builder (PW / SW / Projects) ── */}
-            <div className={`dispatch-builder bg-gray-800 border rounded-lg p-4 flex flex-col ${
+            <div className={`dispatch-builder bg-gray-800 border rounded-lg p-4 flex flex-col ${workspaceTab !== 'build' ? 'is-inactive ' : ''}${
               builderTab === 'pw' ? 'border-blue-600/40' : builderTab === 'sw' ? 'border-purple-600/40' : 'border-emerald-600/40'
             }`}>
               {/* Builder tab bar + Add Pull */}
@@ -3473,8 +3427,8 @@ function DispatchPageInner() {
               )}{/* end Projects tab */}
             </div>{/* end Tabbed Builder panel */}
 
-            {/* ═══════ Well Queue (right column; detachable — CP3) ═══════ */}
-            <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}${searchActive ? ' has-search' : ''}${queueDetached ? ' is-detached' : ''}`}>
+            {/* ═══════ Well Queue workspace tab (detachable on desktop) ═══════ */}
+            <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${workspaceTab !== 'queue' ? ' is-inactive' : ''}${wellQueueExpanded ? ' is-expanded' : ''}${searchActive ? ' has-search' : ''}${queueDetached ? ' is-detached' : ''}`}>
             <DetachablePane
               detached={queueDetached}
               onDock={() => dockQueue(false)}
@@ -3503,6 +3457,11 @@ function DispatchPageInner() {
                     </button>
                   ))}
                 </div>
+                {queueView === 'needs-pull' && queueReady && (
+                  <span className="text-xs text-gray-300 whitespace-nowrap">
+                    {needsPullSplit.unassigned} Unassigned · {needsPullSplit.assigned} Assigned
+                  </span>
+                )}
                 <input
                   type="text"
                   placeholder="Search wells..."
@@ -3521,12 +3480,12 @@ function DispatchPageInner() {
                 <span className="flex-1" />
                 <button
                   type="button"
-                  onClick={() => dockQueue(!queueDetached)}
+                  onClick={() => { if (!queueDetached) setWorkspaceTab('build'); dockQueue(!queueDetached); }}
                   title={queueDetached ? 'Return the Well Queue to the dashboard' : 'Open the Well Queue in its own window'}
-                  // Pop-Out is a wide-screen convenience (xl only); once detached, the
+                  // Pop-Out is a tall desktop convenience; once detached, the
                   // pop-out window is narrow (~560px) so Reattach must ALWAYS be visible
                   // there — otherwise there is no way to dock back from inside the window.
-                  className={`${queueDetached ? 'inline-flex' : 'hidden xl:inline-flex'} items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0`}
+                  className={`${queueDetached ? 'inline-flex' : 'dispatch-popout-control'} items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0`}
                 >{queueDetached ? '⧉ Reattach' : '⧉ Pop Out'}</button>
                 <button
                   type="button"
@@ -3554,6 +3513,10 @@ function DispatchPageInner() {
                     {totalSelectedLoads !== selectedWells.size && <span className="text-blue-300 ml-1">({totalSelectedLoads} loads)</span>}
                   </span>
                   <span className="flex-1" />
+                  <button type="button" onClick={() => { handleBuilderTabChange('pw'); setWorkspaceTab('build'); }}
+                    className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">
+                    Build PW Job
+                  </button>
                   <button onClick={() => { cancelScopedCreation('multi-assign-modal'); setSelectedWells(new Map()); setAssignTarget(null); }} className="text-gray-400 hover:text-white text-xs">Clear</button>
                 </div>
               )}
@@ -3793,9 +3756,8 @@ function DispatchPageInner() {
             </DetachablePane>
             </div>
 
-          {/* ═══════ Active Jobs / Projects — left column, below the builder
-                     (jobs-first on Fold/narrow via order); detachable — CP3 ═══════ */}
-          <div className={`dispatch-pane dispatch-pane-jobs${jobsDetached ? ' is-detached' : ''}`}>
+          {/* ═══════ Jobs workspace tab (detachable on desktop) ═══════ */}
+          <div className={`dispatch-pane dispatch-pane-jobs${workspaceTab !== 'jobs' ? ' is-inactive' : ''}${jobsDetached ? ' is-detached' : ''}`}>
             <div className="dispatch-jobs bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
             <DetachablePane
               detached={jobsDetached}
@@ -3862,12 +3824,12 @@ function DispatchPageInner() {
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => dockJobs(!jobsDetached)}
+                    onClick={() => { if (!jobsDetached) setWorkspaceTab('build'); dockJobs(!jobsDetached); }}
                     title={jobsDetached ? 'Return Active Jobs to the dashboard' : 'Open Active Jobs in its own window'}
-                    // Same rule as the Well Queue: Pop-Out is xl-only, but the Reattach
+                    // Same rule as the Well Queue: Pop-Out is tall-desktop only, but Reattach
                     // control MUST be visible in the narrow detached window so Active Jobs
                     // can always be docked back. (Fixes the missing-Reattach pop-out bug.)
-                    className={`${jobsDetached ? 'inline-flex' : 'hidden xl:inline-flex'} items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0`}
+                    className={`${jobsDetached ? 'inline-flex' : 'dispatch-popout-control'} items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0`}
                   >{jobsDetached ? '⧉ Reattach' : '⧉ Pop Out'}</button>
                   {rightPanelTab === 'jobs' && (
                     <>

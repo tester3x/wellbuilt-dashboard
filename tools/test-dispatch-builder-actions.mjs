@@ -166,41 +166,23 @@ check('1j-4. Projects submit guard preserved',
   dispatchPageSrc.includes('disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}')
 );
 
-// 1k. Title badges beside Dispatch title are buttons mapped to queue views
-check('1k-1. Pull Now title badge is button mapped to needs-pull',
-  dispatchPageSrc.includes("onClick={() => setQueueView('needs-pull')}") &&
-  dispatchPageSrc.includes("aria-pressed={queueView === 'needs-pull'}")
+check('1k. Dispatch has Build Job, Well Queue, and Jobs workspace tabs',
+  dispatchPageSrc.includes("['build', 'Build Job']") &&
+  dispatchPageSrc.includes("['queue', 'Well Queue']") &&
+  dispatchPageSrc.includes("['jobs', 'Jobs']") &&
+  dispatchPageSrc.includes('aria-pressed={workspaceTab === tab}')
 );
-check('1k-2. Next 24h title badge is button mapped to next-24h',
-  dispatchPageSrc.includes("onClick={() => setQueueView('next-24h')}") &&
-  dispatchPageSrc.includes("aria-pressed={queueView === 'next-24h'}")
+check('1l. Priority views and their counts live in Well Queue',
+  dispatchPageSrc.includes("['needs-pull', 'Needs Pull']") &&
+  dispatchPageSrc.includes("['next-24h', 'Next 24h']") &&
+  dispatchPageSrc.includes("['needs-data', 'Needs Data']") &&
+  dispatchPageSrc.includes('queueReady && viewCounts[v] > 0') &&
+  !dispatchPageSrc.includes('<h2 className="text-lg font-semibold text-white flex-shrink-0">Dispatch</h2>')
 );
-check('1k-3. Needs Data title badge is button mapped to needs-data',
-  dispatchPageSrc.includes("onClick={() => setQueueView('needs-data')}") &&
-  dispatchPageSrc.includes("aria-pressed={queueView === 'needs-data'}")
-);
-
-// 1l. Title badges preserve counts, split breakdown, and base colors
-check('1l-1. Pull Now preserves count, unassigned/assigned split, and bg-red-600',
-  dispatchPageSrc.includes("needsPullSplit.total : '—'} Pull Now") &&
-  dispatchPageSrc.includes("needsPullSplit.unassigned} Unassigned · {needsPullSplit.assigned} Assigned") &&
-  dispatchPageSrc.includes('bg-red-600 text-white font-bold')
-);
-check('1l-2. Next 24h preserves count and bg-yellow-600 text-black',
-  dispatchPageSrc.includes("viewCounts['next-24h'] : '—'} Next 24h") &&
-  dispatchPageSrc.includes('bg-yellow-600 text-black font-bold')
-);
-check('1l-3. Needs Data preserves count and bg-amber-600 text-white',
-  dispatchPageSrc.includes("viewCounts['needs-data'] : '—'} Needs Data") &&
-  dispatchPageSrc.includes('bg-amber-600 text-white font-bold')
-);
-
-// 1m. Title badges have visible selected ring, hover, focus, and aria attributes
-check('1m. Title badges have selected ring-2 ring-white, hover, and focus styling',
-  /queueView === 'needs-pull'[\s\S]*?ring-2 ring-white shadow-md/.test(dispatchPageSrc) &&
-  /queueView === 'next-24h'[\s\S]*?ring-2 ring-white shadow-md/.test(dispatchPageSrc) &&
-  /queueView === 'needs-data'[\s\S]*?ring-2 ring-white shadow-md/.test(dispatchPageSrc) &&
-  dispatchPageSrc.includes('focus-visible:ring-2 focus-visible:ring-white')
+check('1m. Queue Assign opens the PW builder and multi-select can return to it',
+  dispatchPageSrc.includes("handleBuilderTabChange('pw');") &&
+  dispatchPageSrc.includes("setWorkspaceTab('build');") &&
+  dispatchPageSrc.includes('Build PW Job')
 );
 
 console.log('\n=== Section 2: Playwright Layout & DOM Verification ===');

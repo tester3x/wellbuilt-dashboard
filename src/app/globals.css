@@ -46,9 +46,8 @@ body {
   padding-bottom: max(1.5rem, env(safe-area-inset-bottom, 0px));
 }
 
-/* Dispatch-only: page-level vertical scroll. Do not nest another 100dvh.
-   Short/narrow/Fold: stacked document flow. Tall wide desktop: side-by-side
-   columns that still grow so this main scroller can reach the bottom. */
+/* Dispatch-only: page-level scroll on small screens; internal pane scroll on
+   tall desktop screens. Do not nest another 100dvh below the app header. */
 .dispatch-scroll-main {
   flex: 1 1 0%;
   min-height: 0;
@@ -58,14 +57,20 @@ body {
   padding-bottom: calc(max(1.5rem, env(safe-area-inset-bottom, 0px)) + var(--dispatch-keyboard-inset, 0px));
 }
 
-/* Mobile / narrow / short: stacked document flow; the page (.dispatch-scroll-main)
-   owns vertical scroll. Jobs (activity) first so the well list is not a touch
-   trap on the way to a job card. */
+/* The active workspace pane fills the available width on every screen. */
 .dispatch-workspace {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
   min-width: 0;
+}
+
+/* Workspace tabs keep all three panes mounted, preserving builder drafts and
+   queue selections while giving the active pane the available width. */
+.dispatch-builder.is-inactive,
+.dispatch-queue.is-inactive,
+.dispatch-pane-jobs.is-inactive {
+  display: none;
 }
 
 .dispatch-pane {
@@ -83,25 +88,21 @@ body {
   min-width: 0;
 }
 
-/* CP3 reflow: a popped-out pane occupies NO docked space (no blank placeholder);
-   the remaining panes reflow to fill it. The pane's subtree stays mounted (it is
-   portaled into the child window), so this only removes it from the docked layout.
-   The desktop grid additionally drops the vacated grid area (see the media query). */
+/* A popped-out pane occupies no docked space. Its subtree remains mounted in
+   the child window so queue selections and jobs share the same React state. */
 .dispatch-queue.is-detached,
 .dispatch-pane-jobs.is-detached {
   display: none;
 }
 
-/* The Well Queue is a size container in EVERY layout (grid column, stacked
-   mobile, or a detached CP3 window) so its table can condense to its own width
-   rather than the viewport's. */
+/* The Well Queue table condenses to its own width, including in a pop-out. */
 .dispatch-queue {
   container-type: inline-size;
   container-name: wellqueue;
 }
 
 .dispatch-pane-jobs {
-  order: -1;
+  order: 0;
 }
 
 .dispatch-queue-toggle {
@@ -128,45 +129,35 @@ body {
   max-width: 9rem;
 }
 
-.dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
-  display: none;
-}
+.dispatch-queue-toggle { display: none; }
+.dispatch-popout-control { display: none; }
 
-/* ── Checkpoint 2 desktop workspace ──────────────────────────────────────
-   Tall + wide desktop: a fixed-height, right-biased two-column grid. The page
-   scroller stops scrolling (overflow hidden) and hands its height to the grid,
-   so each column owns its own internal scroll (min-height:0). Builder is pinned
-   upper-left at natural height; Active Jobs scrolls below it; the Well Queue
-   fills the full-height right column and scrolls its own body. Builder and Queue
-   are therefore always simultaneously visible. */
+/* Tall desktop: the active workspace tab fills the page below the app header. */
 @media (min-width: 1280px) and (min-height: 900px) {
+  .dispatch-popout-control { display: inline-flex; }
   .dispatch-scroll-main {
     display: flex;
     flex-direction: column;
     overflow: hidden;              /* the columns scroll, not the page */
   }
   .dispatch-workspace {
-    display: grid;
     flex: 1 1 0%;
-    min-height: 0;                 /* allow the grid (and its columns) to shrink */
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.55fr); /* right-biased */
-    grid-template-rows: auto minmax(0, 1fr);
-    grid-template-areas:
-      "builder queue"
-      "jobs    queue";
-    align-items: stretch;
+    min-height: 0;
+  }
+  .dispatch-workspace > .dispatch-builder,
+  .dispatch-workspace > .dispatch-queue,
+  .dispatch-workspace > .dispatch-pane-jobs {
+    flex: 1 1 0%;
+    min-height: 0;
   }
   .dispatch-builder {
-    grid-area: builder;
-    max-height: calc(100dvh - 13rem);
+    min-height: 0;
     overflow-y: auto;
     overscroll-behavior-y: contain;
   }
   .dispatch-pane-jobs {
-    grid-area: jobs;
-    order: 0;
-    min-height: 0;                 /* internal scroll owner */
-    overflow: hidden;             /* the inner .dispatch-jobs card scrolls */
+    min-height: 0;
+    overflow: hidden;
   }
   .dispatch-pane-jobs .dispatch-jobs {
     min-height: 0;
@@ -179,31 +170,12 @@ body {
     overscroll-behavior-y: contain;
   }
   .dispatch-queue {
-    grid-area: queue;
-    min-height: 0;                 /* internal scroll owner */
+    min-height: 0;
     align-self: stretch;
-  }
-  /* CP3 reflow (desktop grid): drop the vacated area so builder/jobs/queue fill
-     the freed space instead of leaving a blank column/row. */
-  .dispatch-workspace.is-queue-detached {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "builder"
-      "jobs";
-  }
-  .dispatch-workspace.is-jobs-detached {
-    grid-template-rows: minmax(0, 1fr);
-    grid-template-areas: "builder queue";
-  }
-  .dispatch-workspace.is-queue-detached.is-jobs-detached {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
-    grid-template-areas: "builder";
   }
   /* The queue toolbar/header stay put; only the body scrolls. */
   .dispatch-queue { display: flex; flex-direction: column; }
-  .dispatch-queue .dispatch-queue-body,
-  .dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
+  .dispatch-queue .dispatch-queue-body {
     display: block;
     flex: 1 1 0%;
     min-height: 0;

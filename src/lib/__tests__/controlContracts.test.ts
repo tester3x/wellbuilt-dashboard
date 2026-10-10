@@ -455,7 +455,7 @@ test('Dispatch actionable queue is WB‑M-parity (classifyWell) + Current Level 
   assert.match(page, /predictedReadyAtMs \?\? Number\.POSITIVE_INFINITY/, 'sorted by absolute predicted ready time');
   // cold-start guard: counts gated on readiness
   assert.match(page, /const queueReady = !loading && !dataLoading && !statusUnavailable && wells\.length > 0/, 'cold-auth count guard present');
-  assert.match(page, /queueReady \? viewCounts/, 'counts hidden until ready');
+  assert.match(page, /queueReady && viewCounts\[v\] > 0/, 'queue counts hidden until ready');
   assert.ok(!/priorityFilter/.test(page), 'legacy time-first priority filter removed');
   for (const label of ['Needs Pull', 'Next 24h', 'All Wells', 'Needs Data']) {
     assert.ok(page.includes(label), `view control has ${label}`);
