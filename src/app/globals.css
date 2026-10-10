@@ -55,7 +55,7 @@ body {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
-  padding-bottom: max(1.5rem, env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(max(1.5rem, env(safe-area-inset-bottom, 0px)) + var(--dispatch-keyboard-inset, 0px));
 }
 
 /* Mobile / narrow / short: stacked document flow; the page (.dispatch-scroll-main)

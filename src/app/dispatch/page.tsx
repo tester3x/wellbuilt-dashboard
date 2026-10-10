@@ -665,6 +665,51 @@ function DispatchPageInner() {
     return () => mq.removeEventListener('change', apply);
   }, []);
 
+  // Android's keyboard can cover a newly focused split field without shrinking
+  // the CSS viewport. Give the page scroller room below the keyboard, then move
+  // the focused SW input into the visual viewport as the keyboard animates.
+  useEffect(() => {
+    if (builderTab !== 'sw') return;
+    const main = document.querySelector<HTMLElement>('[data-dispatch-scroll="primary"]');
+    if (!main) return;
+    const viewport = window.visualViewport;
+    const timers = new Set<number>();
+    const adjust = () => {
+      const active = document.activeElement as HTMLElement | null;
+      if (!active?.matches('input, textarea, select') || !active.closest('[data-sw-builder]')) {
+        main.style.removeProperty('--dispatch-keyboard-inset');
+        return;
+      }
+      const visibleBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+      const overlap = Math.max(0, Math.ceil(main.getBoundingClientRect().bottom - visibleBottom));
+      main.style.setProperty('--dispatch-keyboard-inset', `${overlap}px`);
+      requestAnimationFrame(() => {
+        if (document.activeElement !== active) return;
+        const rect = active.getBoundingClientRect();
+        if (rect.bottom > visibleBottom - 20) main.scrollTop += rect.bottom - visibleBottom + 20;
+      });
+    };
+    const schedule = () => {
+      adjust();
+      const timer = window.setTimeout(() => { timers.delete(timer); adjust(); }, 250);
+      timers.add(timer);
+    };
+    document.addEventListener('focusin', schedule);
+    document.addEventListener('focusout', schedule);
+    viewport?.addEventListener('resize', schedule);
+    viewport?.addEventListener('scroll', schedule);
+    window.addEventListener('resize', schedule);
+    return () => {
+      document.removeEventListener('focusin', schedule);
+      document.removeEventListener('focusout', schedule);
+      viewport?.removeEventListener('resize', schedule);
+      viewport?.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      timers.forEach(timer => window.clearTimeout(timer));
+      main.style.removeProperty('--dispatch-keyboard-inset');
+    };
+  }, [builderTab]);
+
   // Subscribe to well data — tenant containment (7/9): the RTDB well queue is
   // the global (Liquid Gold) pool with no tenancy dimension. Scoped
   // non-liquid-gold companies get an empty queue (see lib/tenantScope.ts).
@@ -2845,7 +2890,7 @@ function DispatchPageInner() {
 
               {/* ── SW Tab ── */}
               {builderTab === 'sw' && (
-                <div className="flex flex-col flex-shrink-0">
+                <div data-sw-builder className="flex flex-col flex-shrink-0">
                   <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-2">Dispatch Service Work</div>
                   <div className="flex flex-col gap-2">
                     {/* Decide the load before choosing its pickup well. */}
