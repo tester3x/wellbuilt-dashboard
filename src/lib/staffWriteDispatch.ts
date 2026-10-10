@@ -52,6 +52,7 @@ export type {
   ServiceWorkWorkflowState,
   ServiceWorkDriverInput,
   ExtraSplitLegInput,
+  SplitLoadPlanInput,
   ExecuteServiceWorkInput,
   ExecuteServiceWorkResult,
 } from './serviceWorkWorkflowCore';

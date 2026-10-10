@@ -84,6 +84,8 @@ export interface ExecuteCreateProjectInput {
   tenantId?: string;
   userId?: string;
   onUiComplete?: (projectId: string) => Promise<void> | void;
+  /** Projects with variable pickup sites start as a roster, without issuing loads. */
+  autoDispatchInitial?: boolean;
 }
 
 export interface ExecuteCreateProjectResult {
@@ -176,10 +178,11 @@ export async function executeCreateProjectWorkflow(
     tenantId,
     userId,
     onUiComplete,
+    autoDispatchInitial = true,
   } = input;
 
   if (!projectData.name.trim()) throw new Error('project_name_required');
-  if (projectData.wellNames.length === 0) throw new Error('project_wells_required');
+  if (autoDispatchInitial && projectData.wellNames.length === 0) throw new Error('project_wells_required');
 
   // Step 1: Idempotent Firestore project document creation
   const existingDoc = await projectWriter.getDoc(workflow.projectId);
@@ -200,7 +203,7 @@ export async function executeCreateProjectWorkflow(
   }
 
   // Step 2: Create dispatches for today's assigned drivers
-  const assignedDriverHashes = Array.from(projectData.driverSchedule[projectData.startDate] || []);
+  const assignedDriverHashes = autoDispatchInitial ? Array.from(projectData.driverSchedule[projectData.startDate] || []) : [];
   const dispatches: Array<{ dispatchId: string; unitId: string }> = [];
 
   if (assignedDriverHashes.length > 0) {

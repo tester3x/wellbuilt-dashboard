@@ -571,6 +571,72 @@ test('Item 15: Post-server-success client failure followed by retry does not dup
   assert.equal(coord.getAction(wf.actionId), undefined, 'finalized after second onUiComplete succeeded');
 });
 
+test('Repeated split plans mint one A/B family per physical load and retain identities on retry', async () => {
+  const coordinator = new DispatchCreationCoordinator();
+  const workflow = createServiceWorkWorkflow();
+  const records: Array<Record<string, any>> = [];
+  let failUi = true;
+  const params = {
+    workflow, coordinator,
+    invoke: (async (payload: any) => {
+      records.push(payload.record);
+      return { data: { dispatchId: payload.dispatchId } };
+    }) as CallableInvoker,
+    selectedDrivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    wellName: 'Pickup A', ndicWellName: 'Pickup A', dropoff: 'SWD',
+    splitABbls: '100', splitBBbls: '100', splitLoadCount: 2,
+    splitLoadPlans: [{ id: 'pickup-b', wellName: 'Pickup B', ndicWellName: 'Pickup B',
+      pickupBbls: '80', loadCount: 3, dropoff: 'SWD', splitBBbls: '80' }],
+    isSplitTicket: true, serviceType: 'Flowback', assignedBy: 'tester', projectId: 'project-1',
+    onUiComplete: async () => { if (failUi) { failUi = false; throw new Error('ui_failed'); } },
+  };
+  await assert.rejects(() => executeServiceWorkWorkflow(params), /ui_failed/);
+  assert.equal(records.length, 10, 'five loads create five A/B pairs');
+  const groups = new Map<string, Array<Record<string, any>>>();
+  for (const record of records) {
+    assert.equal(record.projectId, 'project-1');
+    const family = groups.get(record.splitGroupId) || [];
+    family.push(record);
+    groups.set(record.splitGroupId, family);
+  }
+  assert.equal(groups.size, 5, 'each load has a distinct split ID');
+  for (const family of groups.values()) {
+    assert.deepEqual(family.map(record => record.splitSequence), [1, 2]);
+    assert.equal(family[0].disposal, 'SWD');
+    assert.equal(family[1].wellName, 'SWD');
+  }
+  assert.equal(records.filter(record => record.splitSequence === 1 && record.wellName === 'Pickup A').length, 2);
+  assert.equal(records.filter(record => record.splitSequence === 1 && record.wellName === 'Pickup B').length, 3);
+  await executeServiceWorkWorkflow(params);
+  assert.equal(records.length, 10, 'retry after client error creates no duplicate dispatches');
+});
+
+test('Variable-site project creation saves the roster without dispatching a guessed well', async () => {
+  const coordinator = new DispatchCreationCoordinator();
+  const workflow = createProjectWorkflow();
+  const written: Array<Record<string, unknown>> = [];
+  let dispatchCalls = 0;
+  const result = await executeCreateProjectWorkflow({
+    workflow, coordinator, autoDispatchInitial: false,
+    invoke: (async () => { dispatchCalls++; throw new Error('unexpected dispatch'); }) as CallableInvoker,
+    projectWriter: {
+      getDoc: async () => ({ exists: false, data: () => undefined }),
+      setDoc: async (_id, data) => { written.push(data); },
+    },
+    projectData: {
+      name: 'Changing Sites', wellNames: [], operatorName: 'Customer', companyId: 'company-1',
+      createdBy: 'dispatch', startDate: '2026-10-10', projectedEndDate: null,
+      status: 'active', jobType: 'service', serviceType: 'Flowback', notes: null,
+      driverSchedule: { '2026-10-10': ['d1'] }, dayDriverHashes: ['d1'],
+    },
+    wells: [], drivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    assignedBy: 'dispatch',
+  });
+  assert.equal(written.length, 1);
+  assert.equal(dispatchCalls, 0);
+  assert.deepEqual(result.dispatches, []);
+});
+
 // ── Create Project Workflow Identity (Items 16 – 31) ──────────────────────────
 
 test('Item 16: Open create-project workflow', () => {

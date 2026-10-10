@@ -111,7 +111,7 @@ const projectsBlockSlice = dispatchPageSrc.slice(
 );
 check('1f. Projects details, drivers, and notes share one form',
   !projectsBlockSlice.includes('npbTab') &&
-  projectsBlockSlice.includes('Well / Location') &&
+  projectsBlockSlice.includes('Starting well / location (optional)') &&
   projectsBlockSlice.includes('Day Shift') &&
   projectsBlockSlice.includes('Night Shift') &&
   projectsBlockSlice.includes('Job Description & Instructions')
@@ -125,7 +125,7 @@ check('1g-1. Projects tab has bottom action row with Clear button',
 );
 check('1g-2. Projects tab has flexible Create Project button',
   dispatchPageSrc.includes('onClick={createProject}') &&
-  dispatchPageSrc.includes('disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}') &&
+  dispatchPageSrc.includes('disabled={!newProjectName.trim() || creatingProject}') &&
   dispatchPageSrc.includes('className="flex-1 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"')
 );
 
@@ -152,7 +152,7 @@ check('1j-2. PW bulk submit guard preserved',
   dispatchPageSrc.includes('disabled={!assignDriverHash || assigning}')
 );
 check('1j-3. SW submit requires every split destination and valid BBLs',
-  dispatchPageSrc.includes('disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || (swSplitTicket && (!swDropoff.trim() || swExtraSplitLegs.some(leg => !leg.disposal.trim()) || !!swBblPlan.error))}')
+  dispatchPageSrc.includes('disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || (swSplitTicket && (!swDropoff.trim() || swExtraSplitLegs.some(leg => !leg.disposal.trim()) || !!swBblPlan.error || !!swSplitRepeatError))}')
 );
 check('1j-3a. Split cards stay editable and Add follows the last card',
   dispatchPageSrc.includes('swExtraSplitLegs.length === 0 && <button') &&
@@ -163,8 +163,9 @@ check('1j-3a. Split cards stay editable and Add follows the last card',
   !dispatchPageSrc.includes('Save Split B') &&
   dispatchPageSrc.includes('Pickup - Split A')
 );
-check('1j-4. Projects submit guard preserved',
-  dispatchPageSrc.includes('disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}')
+check('1j-4. Projects require a name and allow per-load sites',
+  dispatchPageSrc.includes('disabled={!newProjectName.trim() || creatingProject}') &&
+  dispatchPageSrc.includes('autoDispatchInitial: false')
 );
 
 check('1k. Dispatch has Build Job, Well Queue, and Jobs workspace tabs',

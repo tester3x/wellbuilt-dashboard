@@ -26,6 +26,7 @@ export interface ServiceWorkWorkflowState {
   actionId: string;
   serviceGroupId?: string;
   splitGroupId?: string;
+  splitFamilyIds?: Record<string, string>;
   createdAt: number;
 }
 
@@ -39,6 +40,18 @@ export interface ExtraSplitLegInput {
   disposal: string;
   bbls?: string | number; // Planned delivery at this stop, not load entering it.
   notes?: string;
+}
+
+export interface SplitLoadPlanInput {
+  id: string;
+  wellName: string;
+  ndicWellName?: string;
+  pickupBbls?: string | number;
+  loadCount: number;
+  dropoff: string;
+  splitBBbls?: string | number;
+  splitBNotes?: string;
+  extraSplitLegs?: ExtraSplitLegInput[];
 }
 
 export interface ExecuteServiceWorkInput {
@@ -55,6 +68,9 @@ export interface ExecuteServiceWorkInput {
   splitABbls?: string | number; // Total load picked up on A.
   splitBBbls?: string | number; // Planned delivery at B.
   splitBNotes?: string;
+  splitLoadCount?: number;
+  splitLoadPlans?: SplitLoadPlanInput[];
+  projectId?: string;
   onsiteBy?: string;
   notes?: string;
   isSplitTicket?: boolean;
@@ -161,6 +177,7 @@ export function createServiceWorkWorkflow(initial?: Partial<ServiceWorkWorkflowS
     actionId,
     serviceGroupId: initial?.serviceGroupId,
     splitGroupId: initial?.splitGroupId,
+    splitFamilyIds: initial?.splitFamilyIds || {},
     createdAt: initial?.createdAt || Date.now(),
   };
 }
@@ -201,6 +218,9 @@ export async function executeServiceWorkWorkflow(
     splitABbls,
     splitBBbls,
     splitBNotes,
+    splitLoadCount = 1,
+    splitLoadPlans = [],
+    projectId,
     onsiteBy,
     notes,
     isSplitTicket,
@@ -218,11 +238,17 @@ export async function executeServiceWorkWorkflow(
   if (!serviceType.trim()) throw new Error('service_type_required');
   if (selectedDrivers.length === 0) throw new Error('no_drivers_selected');
   if (isSplitTicket && !dropoff?.trim()) throw new Error('split_dropoff_required');
-  const bblPlan = isSplitTicket
-    ? evaluateSplitBblPlan(splitABbls, [splitBBbls, ...(extraSplitLegs || []).map(leg => leg.bbls)])
-    : null;
-  const aBbls = bblPlan?.pickupBbls;
-  const bDeliveryBbls = bblPlan?.deliveryBbls[0];
+  const plans: SplitLoadPlanInput[] = isSplitTicket
+    ? [{ id: 'base', wellName, ndicWellName, pickupBbls: splitABbls, loadCount: splitLoadCount,
+        dropoff: dropoff || '', splitBBbls, splitBNotes, extraSplitLegs }, ...splitLoadPlans]
+    : [];
+  for (const plan of plans) {
+    if (!plan.id.trim() || !plan.wellName.trim() || !plan.dropoff.trim()) throw new Error('split_plan_location_required');
+    if (!Number.isInteger(plan.loadCount) || plan.loadCount < 1 || plan.loadCount > 20) throw new Error('split_load_count_invalid');
+    if (plan.extraSplitLegs?.some(leg => !leg.disposal.trim())) throw new Error('split_dropoff_required');
+    evaluateSplitBblPlan(plan.pickupBbls, [plan.splitBBbls, ...(plan.extraSplitLegs || []).map(leg => leg.bbls)]);
+  }
+  if (plans.reduce((sum, plan) => sum + plan.loadCount, 0) > 20) throw new Error('split_total_load_count_invalid');
 
   // Allocate group IDs once per workflow; retain across all retries
   ensureServiceWorkGroupIds(workflow, selectedDrivers.length > 1, !!isSplitTicket);
@@ -232,7 +258,6 @@ export async function executeServiceWorkWorkflow(
     return d.displayName || d.key;
   };
   const assignedDrivers = selectedDrivers.length > 1 ? selectedDrivers.map(getFirstName) : undefined;
-  const splitTotal = isSplitTicket ? 2 + (extraSplitLegs?.length || 0) : undefined;
   const resolvedPackageId = (packageId && packageId !== 'custom') ? packageId : 'water-hauling';
 
   coordinator.beginAction({
@@ -245,86 +270,81 @@ export async function executeServiceWorkWorkflow(
   const dispatches: Array<{ dispatchId: string; unitId: string }> = [];
 
   const driverPromises = selectedDrivers.map(async driver => {
-    const baseJob: Record<string, unknown> = {
-      ...assignmentIdentityForDriver(driver),
-      ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
-      wellName: wellName.trim(),
-      ndicWellName: ndicWellName.trim(),
-      ...(operator?.trim() ? { operator: operator.trim() } : {}),
-      ...(dropoff?.trim() ? { disposal: dropoff.trim() } : {}),
-      ...(onsiteBy ? { onsiteBy } : {}),
-      jobType: 'service',
-      serviceType: serviceType.trim(),
-      jobTypeId: canonicalJobTypeIdForServiceType(serviceType, customJobTypes),
-      packageId: resolvedPackageId,
-      packetRevision: 4,
-      status: 'pending',
-      notes: notes || '',
-      priority: 5,
-      assignedAt: new Date().toISOString(),
-      assignedBy: userEmail || assignedBy || 'dashboard',
-      ...(workflow.serviceGroupId ? { serviceGroupId: workflow.serviceGroupId } : {}),
-      ...(assignedDrivers ? { assignedDrivers } : {}),
-      ...(isHeavyWater ? { isHeavyWater: true } : {}),
-      ...(workflow.splitGroupId ? { splitGroupId: workflow.splitGroupId, splitSequence: 1, ...(splitTotal != null ? { splitTotal } : {}) } : {}),
-    };
-
-    const unit1Id = `${driver.key}::leg1`;
-    // The coordinator stamps dispatchId onto its input for retries. Keep the
-    // template free of leg A's ID before deriving subsequent split legs.
-    const res1 = await coordinator.executeUnit(invoke, { ...baseJob, ...(aBbls != null ? { bbls: aBbls } : {}) }, {
-      actionId: workflow.actionId,
-      actionScope: 'service-work-modal',
-      unitId: unit1Id,
-    });
-    dispatches.push({ dispatchId: res1.dispatchId, unitId: unit1Id });
-
-    if (isSplitTicket && dropoff?.trim()) {
-      const job2: Record<string, unknown> = {
-        ...baseJob,
-        wellName: dropoff.trim(),
-        ndicWellName: '',
-        disposal: dropoff.trim(),
-        notes: `Split ticket B — ${bDeliveryBbls != null ? `Planned delivery ${bDeliveryBbls} BBL — ` : ''}${splitBNotes?.trim() || notes || serviceType.trim()}`,
-        // WB T treats dispatch.bbls as the load entering this leg. Leave it
-        // unset so the actual load carried from A pre-fills B.
-        splitGroupId: workflow.splitGroupId!,
-        splitSequence: 2,
-        ...(splitTotal != null ? { splitTotal } : {}),
-      };
-      const unit2Id = `${driver.key}::leg2`;
-      const res2 = await coordinator.executeUnit(invoke, job2, {
-        actionId: workflow.actionId,
-        actionScope: 'service-work-modal',
-        unitId: unit2Id,
-      });
-      dispatches.push({ dispatchId: res2.dispatchId, unitId: unit2Id });
-    }
-
-    if (isSplitTicket && extraSplitLegs && extraSplitLegs.length > 0) {
-      for (let idx = 0; idx < extraSplitLegs.length; idx++) {
-        const extra = extraSplitLegs[idx];
-        const letter = String.fromCharCode(67 + idx);
-        const plannedDelivery = bblPlan?.deliveryBbls[idx + 1];
-        const extraJob: Record<string, unknown> = {
-          ...baseJob,
-          wellName: extra.disposal.trim(),
-          ndicWellName: '',
-          disposal: extra.disposal.trim(),
-          notes: `Split ticket ${letter} — ${plannedDelivery != null ? `Planned delivery ${plannedDelivery} BBL — ` : ''}${extra.notes || serviceType.trim()}`,
-          splitGroupId: workflow.splitGroupId!,
-          splitSequence: 3 + idx,
-          ...(splitTotal != null ? { splitTotal } : {}),
-          // The actual remainder from the previous stop must prefill this leg.
-          // An explicit dispatch.bbls here would override that carry-forward.
+    const driverPlans = isSplitTicket ? plans : [{ id: 'base', wellName, ndicWellName, dropoff: dropoff || '', loadCount: 1 }];
+    for (const plan of driverPlans) {
+      const bblPlan = isSplitTicket
+        ? evaluateSplitBblPlan(plan.pickupBbls, [plan.splitBBbls, ...(plan.extraSplitLegs || []).map(leg => leg.bbls)])
+        : null;
+      const splitTotal = isSplitTicket ? 2 + (plan.extraSplitLegs?.length || 0) : undefined;
+      for (let loadIndex = 0; loadIndex < plan.loadCount; loadIndex++) {
+        const familyKey = `${driver.key}::${plan.id}::${loadIndex}`;
+        let familyId: string | undefined;
+        if (isSplitTicket) {
+          workflow.splitFamilyIds ||= {};
+          familyId = workflow.splitFamilyIds[familyKey];
+          if (!familyId) {
+            familyId = Object.keys(workflow.splitFamilyIds).length === 0 && workflow.splitGroupId
+              ? workflow.splitGroupId : `split_${mintDispatchId()}`;
+            workflow.splitFamilyIds[familyKey] = familyId;
+          }
+        }
+        const unitPrefix = plan.id === 'base' && loadIndex === 0 ? driver.key : familyKey;
+        const baseJob: Record<string, unknown> = {
+          ...assignmentIdentityForDriver(driver),
+          ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
+          wellName: plan.wellName.trim(),
+          ndicWellName: (plan.ndicWellName || '').trim(),
+          ...(operator?.trim() ? { operator: operator.trim() } : {}),
+          ...(plan.dropoff.trim() ? { disposal: plan.dropoff.trim() } : {}),
+          ...(onsiteBy ? { onsiteBy } : {}),
+          jobType: 'service',
+          serviceType: serviceType.trim(),
+          jobTypeId: canonicalJobTypeIdForServiceType(serviceType, customJobTypes),
+          packageId: resolvedPackageId,
+          packetRevision: 4,
+          status: 'pending',
+          notes: notes || '',
+          priority: 5,
+          assignedAt: new Date().toISOString(),
+          assignedBy: userEmail || assignedBy || 'dashboard',
+          ...(projectId ? { projectId } : {}),
+          ...(workflow.serviceGroupId ? { serviceGroupId: workflow.serviceGroupId } : {}),
+          ...(assignedDrivers ? { assignedDrivers } : {}),
+          ...(isHeavyWater ? { isHeavyWater: true } : {}),
+          ...(familyId ? { splitGroupId: familyId, splitSequence: 1, splitTotal } : {}),
         };
-        const extraUnitId = `${driver.key}::leg${3 + idx}`;
-        const resExtra = await coordinator.executeUnit(invoke, extraJob, {
-          actionId: workflow.actionId,
-          actionScope: 'service-work-modal',
-          unitId: extraUnitId,
+        const createLeg = async (leg: number, job: Record<string, unknown>) => {
+          const unitId = `${unitPrefix}::leg${leg}`;
+          const result = await coordinator.executeUnit(invoke, job, {
+            actionId: workflow.actionId,
+            actionScope: 'service-work-modal',
+            unitId,
+          });
+          dispatches.push({ dispatchId: result.dispatchId, unitId });
+        };
+        await createLeg(1, { ...baseJob, ...(bblPlan?.pickupBbls != null ? { bbls: bblPlan.pickupBbls } : {}) });
+        if (!isSplitTicket) continue;
+        await createLeg(2, {
+          ...baseJob,
+          wellName: plan.dropoff.trim(),
+          ndicWellName: '',
+          notes: `Split ticket B — ${bblPlan?.deliveryBbls[0] != null ? `Planned delivery ${bblPlan.deliveryBbls[0]} BBL — ` : ''}${plan.splitBNotes?.trim() || notes || serviceType.trim()}`,
+          splitSequence: 2,
+          // The carry from A supplies the amount entering B.
         });
-        dispatches.push({ dispatchId: resExtra.dispatchId, unitId: extraUnitId });
+        for (let idx = 0; idx < (plan.extraSplitLegs?.length || 0); idx++) {
+          const extra = plan.extraSplitLegs![idx];
+          const letter = String.fromCharCode(67 + idx);
+          const plannedDelivery = bblPlan?.deliveryBbls[idx + 1];
+          await createLeg(3 + idx, {
+            ...baseJob,
+            wellName: extra.disposal.trim(),
+            ndicWellName: '',
+            disposal: extra.disposal.trim(),
+            notes: `Split ticket ${letter} — ${plannedDelivery != null ? `Planned delivery ${plannedDelivery} BBL — ` : ''}${extra.notes || serviceType.trim()}`,
+            splitSequence: 3 + idx,
+          });
+        }
       }
     }
   });

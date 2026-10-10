@@ -65,6 +65,7 @@ import {
   canonicalJobTypeIdForServiceType,
   evaluateSplitBblPlan,
   type ServiceWorkWorkflowState,
+  type SplitLoadPlanInput,
   createProjectWorkflow,
   executeCreateProjectWorkflow,
   cancelCreateProjectWorkflow,
@@ -226,6 +227,16 @@ interface ProjectInvoice {
   createdAt: any;
   status?: string;
   ticketCount?: number;
+}
+
+interface ProjectLoadDraft {
+  driverHash: string;
+  pickup: string;
+  dropoff: string;
+  loadCount: number;
+  splitTicket: boolean;
+  pickupBbls: string;
+  deliveryBbls: string;
 }
 
 
@@ -500,6 +511,8 @@ function DispatchPageInner() {
   // swSplitTicket toggles off or after a successful submit.
   type ExtraSplitLeg = { id: string; disposal: string; bbls: string; notes: string };
   const [swExtraSplitLegs, setSwExtraSplitLegs] = useState<ExtraSplitLeg[]>([]);
+  const [swSplitLoadCount, setSwSplitLoadCount] = useState(1);
+  const [swSplitLoadPlans, setSwSplitLoadPlans] = useState<SplitLoadPlanInput[]>([]);
   const [swError, setSwError] = useState<string | null>(null);
   const [customJobTypesList, setCustomJobTypesList] = useState<any[]>([]);
 
@@ -1458,6 +1471,14 @@ function DispatchPageInner() {
       setSwError('Enter non-negative numbers for BBLs, or leave the fields blank.');
       return;
     }
+    if (swSplitRepeatError) { setSwError(swSplitRepeatError); return; }
+    if (swSplitTicket && swSplitLoadPlans.some(plan => {
+      const planOperator = operatorForBuilderWell(plan.wellName, allOperatorWells);
+      return !!builderOperator && !!planOperator && planOperator.toLowerCase() !== builderOperator.toLowerCase();
+    })) {
+      setSwError('A copied pickup belongs to a different operator. Use a separate dispatch for that pickup.');
+      return;
+    }
     setSwSubmitting(true);
     setSwError(null);
     try {
@@ -1501,6 +1522,8 @@ function DispatchPageInner() {
         splitABbls: swSplitABbls,
         splitBBbls: swSplitBBbls,
         splitBNotes: swSplitBNotes,
+        splitLoadCount: swSplitLoadCount,
+        splitLoadPlans: swSplitLoadPlans,
         onsiteBy: swOnsiteBy || undefined,
         notes: swNotes || undefined,
         isSplitTicket: swSplitTicket,
@@ -1567,6 +1590,8 @@ function DispatchPageInner() {
           setSwSplitTicket(false);
           setSwHeavyWater(false);
           setSwExtraSplitLegs([]);
+          setSwSplitLoadCount(1);
+          setSwSplitLoadPlans([]);
           setTimeout(() => setMessage(''), 4000);
 
           // Mint new workflow identity for the next deliberate service job
@@ -1607,6 +1632,8 @@ function DispatchPageInner() {
     setSwSplitTicket(false);
     setSwHeavyWater(false);
     setSwExtraSplitLegs([]);
+    setSwSplitLoadCount(1);
+    setSwSplitLoadPlans([]);
     setSwWorkflow(createServiceWorkWorkflow());
   }
 
@@ -1637,7 +1664,7 @@ function DispatchPageInner() {
 
   async function createProject() {
     if (!guardCreateDispatch()) return;
-    if (!newProjectName.trim() || newProjectWells.length === 0) return;
+    if (!newProjectName.trim()) return;
     setCreatingProject(true);
     try {
       const firestore = getFirestoreDb();
@@ -1699,6 +1726,7 @@ function DispatchPageInner() {
         invoke: getDispatchCallableInvoker(),
         projectWriter,
         projectData,
+        autoDispatchInitial: false,
         wells,
         drivers,
         assignedBy: user?.email || '',
@@ -1719,7 +1747,7 @@ function DispatchPageInner() {
               });
               const threadTitle = newProjectName.trim() || `Project - ${newProjectWells[0] || 'Unnamed'}`;
               const crewNames = allDriverHashes.map(h => { const d = drivers.find(dr => dr.key === h); return d ? (d.legalName || d.displayName).split(' ')[0] : h; }).join(', ');
-              const sysText = `Project "${threadTitle}" created\nCrew: ${crewNames}\nWells: ${newProjectWells.join(', ')}${newProjectNotes ? `\nNotes: ${newProjectNotes}` : ''}`;
+              const sysText = `Project "${threadTitle}" created\nCrew: ${crewNames}\nSites: ${newProjectWells.length ? newProjectWells.join(', ') : 'Chosen per load'}${newProjectNotes ? `\nNotes: ${newProjectNotes}` : ''}`;
               const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
                 type: 'project',
                 projectId: pId,
@@ -1816,37 +1844,10 @@ function DispatchPageInner() {
         [`driverSchedule.${today}`]: [...todayDrivers, driverHash],
       });
 
-      // Create dispatches for this driver for project wells
+      // Joining a project changes its roster. A load is issued separately with
+      // its own pickup and drop-off from the project's Activity tab.
       const driver = drivers.find(d => d.key === driverHash);
       if (driver) {
-        const batchActionId = `proj_add_${projectId}_${driverHash}`;
-        beginAction('add-driver-to-project', batchActionId);
-        const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
-        for (const wellName of project.wellNames) {
-          const wellData = wells.find(w => w.wellName === wellName);
-          const driverDisposal = project.driverDisposals?.[driverHash];
-          await staffCreateDispatch({
-            // Canonical driver identity contract (driverId + canonical driverHash + real name).
-            ...assignmentIdentityForDriver(driver),
-            driverFirstName,
-            wellName,
-            ndicWellName: wellData?.ndicName || '',
-            operator: project.operatorName || '',
-            route: wellData?.route || '',
-            jobType: project.jobType || 'service',
-            serviceType: project.serviceType || undefined,
-            status: 'pending',
-            priority: 500,
-            assignedAt: Timestamp.now(),
-            assignedBy: user?.email || '',
-            projectId: projectId,
-            ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
-          }, {
-            actionId: batchActionId,
-            actionScope: 'add-driver-to-project',
-            unitId: `${projectId}::${driverHash}::${wellName}`,
-          });
-        }
         // Auto-add driver to existing project chat thread
         try {
           const firestore2 = getFirestoreDb();
@@ -1879,7 +1880,6 @@ function DispatchPageInner() {
         } catch (chatErr) {
           console.warn('[Dispatch] Auto-add driver to project chat failed (non-blocking):', chatErr);
         }
-        finalizeAction(batchActionId);
       }
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -1887,133 +1887,55 @@ function DispatchPageInner() {
     }
   }
 
-  // ─── Batch Dispatch for Project Shift ─────────────────────────────────────
-
-  async function batchDispatchShift(projectId: string, shift: 'day' | 'night') {
-    if (!guardCreateDispatch()) return;
-    const project = projects.find(p => p.id === projectId);
-    if (!project) return;
-    const driverHashes = shift === 'day' ? (project.dayDriverHashes || []) : (project.nightDriverHashes || []);
-    if (driverHashes.length === 0) return;
-
-    try {
-      const firestore = getFirestoreDb();
-      const today = new Date().toISOString().slice(0, 10);
-
-      // Build set of existing active dispatch combos to prevent duplicates
-      const activeStatuses = ['pending', 'accepted', 'in_progress', 'paused'];
-      const existingCombos = new Set(
-        projectDispatches
-          .filter(d => activeStatuses.includes(d.status))
-          .map(d => `${d.driverHash}::${d.wellName}`)
-      );
-
-      const batchActionId = `proj_sched_${projectId}`;
-      beginAction('assign-scheduled', batchActionId);
-
-      let created = 0;
-      for (const wellName of project.wellNames) {
-        const wellData = wells.find(w => w.wellName === wellName);
-        for (const driverHash of driverHashes) {
-          const combo = `${driverHash}::${wellName}`;
-          if (existingCombos.has(combo)) continue;
-          const driver = drivers.find(d => d.key === driverHash);
-          if (!driver) continue;
-          const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
-          const driverDisposal = project.driverDisposals?.[driverHash];
-          await staffCreateDispatch({
-            // Canonical driver identity contract (driverId + canonical driverHash + real name).
-            ...assignmentIdentityForDriver(driver),
-            driverFirstName,
-            wellName,
-            ndicWellName: wellData?.ndicName || '',
-            operator: project.operatorName || '',
-            route: wellData?.route || '',
-            jobType: project.jobType || 'service',
-            serviceType: project.serviceType || undefined,
-            status: 'pending',
-            priority: 500,
-            assignedAt: Timestamp.now(),
-            assignedBy: user?.email || '',
-            projectId,
-            notes: project.notes || undefined,
-            ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
-          }, {
-            actionId: batchActionId,
-            actionScope: 'assign-scheduled',
-            unitId: `${projectId}::${driverHash}::${wellName}`,
-          });
-          created++;
-        }
-      }
-
-      // Merge drivers into today's schedule
-      const currentSchedule = project.driverSchedule || {};
-      const todayDrivers = new Set(currentSchedule[today] || []);
-      driverHashes.forEach(h => todayDrivers.add(h));
-      await updateDoc(doc(firestore, 'projects', projectId), {
-        [`driverSchedule.${today}`]: Array.from(todayDrivers),
+  async function dispatchProjectLoad(project: Project, draft: ProjectLoadDraft, workflow: ServiceWorkWorkflowState) {
+    if (!guardCreateDispatch() || !project.id || project.status !== 'active') throw new Error('Project is not active');
+    const driver = drivers.find(d => d.key === draft.driverHash);
+    if (!driver) throw new Error('Choose a project driver');
+    const pickup = draft.pickup.trim();
+    const dropoff = draft.dropoff.trim();
+    if (!pickup) throw new Error('Choose a pickup for this load');
+    if (!Number.isInteger(draft.loadCount) || draft.loadCount < 1 || draft.loadCount > 20) throw new Error('Enter 1–20 loads');
+    if (draft.splitTicket && !dropoff) throw new Error('Split tickets need a drop-off');
+    const well = wells.find(w => w.wellName.toLowerCase() === pickup.toLowerCase() || w.ndicName?.toLowerCase() === pickup.toLowerCase());
+    if (draft.splitTicket) {
+      await executeServiceWorkWorkflow({
+        workflow, coordinator, invoke: getDispatchCallableInvoker(),
+        selectedDrivers: [driver], wellName: well?.wellName || pickup,
+        ndicWellName: well?.ndicName || pickup,
+        operator: project.operatorName, serviceType: project.serviceType || 'Service Work',
+        packageId: jobTypeToPackageId[project.serviceType || ''] || 'water-hauling',
+        projectId: project.id, dropoff, splitABbls: draft.pickupBbls,
+        splitBBbls: draft.deliveryBbls, splitLoadCount: draft.loadCount,
+        isSplitTicket: true, assignedBy: user?.email || 'dashboard',
+        tenantId: sessionTenantId, userId: sessionUserId,
       });
-
-      // Auto-add new shift drivers to existing project chat thread
-      if (created > 0) {
-        try {
-          const threadSnap = await getDocs(query(
-            collection(firestore, 'chat_threads'),
-            where('projectId', '==', projectId),
-            where('type', '==', 'project'),
-          ));
-          if (!threadSnap.empty) {
-            const threadDoc = threadSnap.docs[0];
-            const threadData = threadDoc.data();
-            const existingPids = new Set(threadData.participants || []);
-            const newPids: string[] = [];
-            const newNames: Record<string, string> = {};
-            const joinedNames: string[] = [];
-            for (const driverHash of driverHashes) {
-              const driverPid = `driver:${driverHash}`;
-              if (!existingPids.has(driverPid)) {
-                const driver = drivers.find(d => d.key === driverHash);
-                if (driver) {
-                  newPids.push(driverPid);
-                  newNames[`participantNames.${driverPid}`] = driver.legalName || driver.displayName;
-                  joinedNames.push((driver.legalName || driver.displayName).split(' ')[0]);
-                }
-              }
-            }
-            if (newPids.length > 0) {
-              await updateDoc(doc(firestore, 'chat_threads', threadDoc.id), {
-                participants: [...Array.from(existingPids), ...newPids],
-                ...newNames,
-                updatedAt: Timestamp.now(),
-              });
-              const joinText = `${joinedNames.join(', ')} joined the ${shift} shift`;
-              await addDoc(collection(firestore, 'chat_threads', threadDoc.id, 'messages'), {
-                text: joinText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
-                systemType: 'driver_joined',
-              });
-              await updateDoc(doc(firestore, 'chat_threads', threadDoc.id), {
-                lastMessage: { text: joinText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
-              });
-            }
-          }
-        } catch (chatErr) {
-          console.warn('[Dispatch] Auto-add shift drivers to project chat failed (non-blocking):', chatErr);
-        }
-      }
-
-      finalizeAction(batchActionId);
-
-      if (created > 0) {
-        setMessage(`Created ${created} ${shift} shift dispatch${created !== 1 ? 'es' : ''}`);
-      } else {
-        setMessage(`All ${shift} shift drivers already dispatched`);
-      }
-      setTimeout(() => setMessage(''), 3000);
-    } catch (err: any) {
-      setMessage(`Error: ${err.message}`);
-      setTimeout(() => setMessage(''), 5000);
+    } else {
+      const isPw = project.jobType === 'pw';
+      const actionId = workflow.actionId;
+      await staffCreateDispatch({
+        ...assignmentIdentityForDriver(driver),
+        driverFirstName: driver.legalName?.split(' ')[0] || driver.displayName,
+        wellName: well?.wellName || pickup,
+        ndicWellName: well?.ndicName || pickup,
+        operator: project.operatorName,
+        route: well?.route || '',
+        jobType: isPw ? 'pw' : 'service',
+        jobTypeId: isPw ? 'pw' : canonicalJobTypeIdForServiceType(project.serviceType),
+        ...(isPw ? {} : { serviceType: project.serviceType || 'Service Work' }),
+        packageId: 'water-hauling', packetRevision: 4,
+        status: 'pending', priority: 500,
+        assignedAt: Timestamp.now(), assignedBy: user?.email || 'dashboard',
+        projectId: project.id,
+        notes: project.notes || '',
+        ...(dropoff ? { disposal: dropoff } : {}),
+        ...(draft.loadCount > 1 ? { loadCount: draft.loadCount } : {}),
+      }, {
+        actionId, actionScope: 'project-load', unitId: `${project.id}::${driver.key}::load`,
+      });
+      finalizeAction(actionId);
     }
+    setMessage(`Dispatched ${draft.loadCount} project load${draft.loadCount === 1 ? '' : 's'} to ${driver.legalName || driver.displayName}`);
+    setTimeout(() => setMessage(''), 4000);
   }
 
   // ─── Reassign Declined Job ────────────────────────────────────────────────
@@ -2089,6 +2011,7 @@ function DispatchPageInner() {
         priority: reassignJob.priority,
         assignedAt: Timestamp.now(),
         assignedBy: user?.email || 'dashboard',
+        ...(reassignJob.projectId ? { projectId: reassignJob.projectId } : {}),
         estimatedPullTime: reassignJob.estimatedPullTime || '',
         currentLevel: reassignJob.currentLevel || '',
         flowRate: reassignJob.flowRate || '',
@@ -2433,6 +2356,7 @@ function DispatchPageInner() {
             priority: 5,
             assignedAt: Timestamp.now(),
             assignedBy: user?.email || 'dashboard',
+            ...(editSwJob.projectId ? { projectId: editSwJob.projectId } : {}),
             serviceGroupId,
             assignedDrivers: allDrivers,
           };
@@ -2509,6 +2433,7 @@ function DispatchPageInner() {
         priority: editSwJob.priority,
         assignedAt: Timestamp.now(),
         assignedBy: user?.email || 'dashboard',
+        ...(editSwJob.projectId ? { projectId: editSwJob.projectId } : {}),
         estimatedPullTime: editSwJob.estimatedPullTime || '',
         currentLevel: editSwJob.currentLevel || '',
         flowRate: editSwJob.flowRate || '',
@@ -2562,6 +2487,20 @@ function DispatchPageInner() {
       return { plan: null, error: error instanceof Error ? error.message : 'split_bbls_invalid' };
     }
   }, [swSplitTicket, swSplitABbls, swSplitBBbls, swExtraSplitLegs]);
+
+  const swSplitRepeatError = useMemo(() => {
+    if (!swSplitTicket) return '';
+    if (!Number.isInteger(swSplitLoadCount) || swSplitLoadCount < 1 || swSplitLoadCount > 20) return 'Enter 1–20 loads for the first pickup.';
+    for (const plan of swSplitLoadPlans) {
+      if (!plan.wellName.trim() || !plan.dropoff.trim() || plan.extraSplitLegs?.some(leg => !leg.disposal.trim())) return 'Choose a pickup and every drop-off for each copied plan.';
+      if (!Number.isInteger(plan.loadCount) || plan.loadCount < 1 || plan.loadCount > 20) return 'Enter 1–20 loads for every copied plan.';
+      try {
+        evaluateSplitBblPlan(plan.pickupBbls, [plan.splitBBbls, ...(plan.extraSplitLegs || []).map(leg => leg.bbls)]);
+      } catch { return 'Enter valid non-negative BBLs for every copied plan.'; }
+    }
+    if (swSplitLoadCount + swSplitLoadPlans.reduce((sum, plan) => sum + plan.loadCount, 0) > 20) return 'Dispatch at most 20 split loads at a time.';
+    return '';
+  }, [swSplitTicket, swSplitLoadCount, swSplitLoadPlans]);
 
   // ─── Render Guards ─────────────────────────────────────────────────────────
 
@@ -2851,6 +2790,8 @@ function DispatchPageInner() {
                           setSwSplitTicket(checked);
                           if (!checked) {
                             setSwExtraSplitLegs([]);
+                            setSwSplitLoadCount(1);
+                            setSwSplitLoadPlans([]);
                           }
                         }}
                           className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500" />
@@ -2877,7 +2818,7 @@ function DispatchPageInner() {
                       {/* Left: Well + Drop-off stacked */}
                       {!swSplitTicket && <div className="flex-1 space-y-2">
                         <div className="relative">
-                          <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
+                        <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
                           <BuilderAutocomplete
                             value={swWellName}
                             onValueChange={setSwWellName}
@@ -2992,11 +2933,19 @@ function DispatchPageInner() {
                             Operator: <span className="text-gray-200">{operatorForBuilderWell(swWellName, allOperatorWells) || builderOperator || 'Not linked in well directory'}</span>
                           </div>
                         )}
-                        <div className="mt-3 w-full sm:w-[140px]">
-                          <label htmlFor="sw-split-a-bbls" className="block text-sm text-gray-300 mb-1">Pickup BBLs (optional)</label>
-                          <input id="sw-split-a-bbls" type="text" inputMode="decimal" value={swSplitABbls}
-                            onChange={(e) => setSwSplitABbls(e.target.value)} placeholder="BBLs"
-                            className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                        <div className="mt-3 flex flex-wrap gap-3">
+                          <div className="w-[140px]">
+                            <label htmlFor="sw-split-a-bbls" className="block text-sm text-gray-300 mb-1">Pickup BBLs per load</label>
+                            <input id="sw-split-a-bbls" type="text" inputMode="decimal" value={swSplitABbls}
+                              onChange={(e) => setSwSplitABbls(e.target.value)} placeholder="BBLs"
+                              className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                          </div>
+                          <div className="w-[110px]">
+                            <label htmlFor="sw-split-load-count" className="block text-sm text-gray-300 mb-1">Loads</label>
+                            <input id="sw-split-load-count" type="number" min={1} max={20} step={1} value={swSplitLoadCount}
+                              onChange={(e) => setSwSplitLoadCount(Number(e.target.value))}
+                              className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-purple-500" />
+                          </div>
                         </div>
                       </div>
                     )}
@@ -3111,6 +3060,102 @@ function DispatchPageInner() {
                         </div>
                       );
                     })}
+                    {swSplitTicket && (
+                      <div className="space-y-3 rounded-lg border border-purple-700/50 bg-gray-900 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <h3 className="text-sm font-semibold text-purple-200">More pickups to these drop-offs</h3>
+                            <p className="text-xs text-gray-400">Each physical load gets its own Split A/B{swExtraSplitLegs.length ? '/C…' : ''} tickets and split ID.</p>
+                          </div>
+                          <button type="button" onClick={() => setSwSplitLoadPlans(prev => [...prev, {
+                            id: `repeat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                            wellName: swWellName, ndicWellName: swWellName, pickupBbls: swSplitABbls,
+                            loadCount: 1, dropoff: swDropoff, splitBBbls: swSplitBBbls,
+                            splitBNotes: swSplitBNotes, extraSplitLegs: swExtraSplitLegs.map(leg => ({ ...leg })),
+                          }])}
+                            disabled={!swWellName.trim() || !swDropoff.trim() || !!swBblPlan.error}
+                            className="px-3 py-2 rounded border border-purple-600 bg-purple-900/40 text-purple-100 text-xs disabled:opacity-50">
+                            Duplicate split plan
+                          </button>
+                        </div>
+                        {swSplitLoadPlans.map((plan, idx) => (
+                          <div key={plan.id} className="rounded border border-gray-700 p-3 space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-sm font-medium text-purple-200">Pickup plan {idx + 2}</span>
+                              <button type="button" onClick={() => setSwSplitLoadPlans(prev => prev.filter(p => p.id !== plan.id))}
+                                className="text-xs text-purple-300 underline">Remove</button>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-xs text-gray-400 mb-1">Pickup well / location</label>
+                                <BuilderAutocomplete
+                                  value={plan.wellName}
+                                  onValueChange={(value) => setSwSplitLoadPlans(prev => prev.map(p => p.id === plan.id ? { ...p, wellName: value, ndicWellName: value } : p))}
+                                  items={swWellOptions}
+                                  onSelect={(item) => setSwSplitLoadPlans(prev => prev.map(p => p.id === plan.id ? { ...p, wellName: item.value, ndicWellName: item.value } : p))}
+                                  getItemKey={(item, i) => `${item.value}-${i}`}
+                                  renderItem={(item) => <LocationSearchResult item={item} />}
+                                  placeholder="Search pickup..." ariaLabel={`Pickup plan ${idx + 2} well`}
+                                  minChars={swHeavyWater ? 0 : 2}
+                                  inputClassName="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm"
+                                  listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-56 overflow-y-auto shadow-lg"
+                                  optionClassName="wb-option-row px-3 py-2 border-b border-gray-700/50 text-white text-sm" />
+                              </div>
+                              <div>
+                                <label className="block text-xs text-gray-400 mb-1">Split B drop-off</label>
+                                <BuilderAutocomplete
+                                  value={plan.dropoff}
+                                  onValueChange={(value) => setSwSplitLoadPlans(prev => prev.map(p => p.id === plan.id ? { ...p, dropoff: value } : p))}
+                                  items={swDestinationOptions(plan.dropoff)}
+                                  onSelect={(item) => setSwSplitLoadPlans(prev => prev.map(p => p.id === plan.id ? { ...p, dropoff: item.value } : p))}
+                                  getItemKey={(item, i) => `${item.value}-${i}`}
+                                  renderItem={(item) => <LocationSearchResult item={item} />}
+                                  placeholder="Search drop-off..." ariaLabel={`Pickup plan ${idx + 2} drop-off`}
+                                  minChars={2}
+                                  inputClassName="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm"
+                                  listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-56 overflow-y-auto shadow-lg"
+                                  optionClassName="wb-option-row px-3 py-2 border-b border-gray-700/50 text-white text-sm" />
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-3">
+                              <label className="text-xs text-gray-400">Loads
+                                <input type="number" min={1} max={20} step={1} value={plan.loadCount}
+                                  onChange={(e) => setSwSplitLoadPlans(prev => prev.map(p => p.id === plan.id ? { ...p, loadCount: Number(e.target.value) } : p))}
+                                  className="block mt-1 w-24 px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                              </label>
+                              <label className="text-xs text-gray-400">Pickup BBLs per load
+                                <input type="text" inputMode="decimal" value={plan.pickupBbls ?? ''}
+                                  onChange={(e) => setSwSplitLoadPlans(prev => prev.map(p => p.id === plan.id ? { ...p, pickupBbls: e.target.value } : p))}
+                                  className="block mt-1 w-36 px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                              </label>
+                              <label className="text-xs text-gray-400">Split B BBLs per load
+                                <input type="text" inputMode="decimal" value={plan.splitBBbls ?? ''}
+                                  onChange={(e) => setSwSplitLoadPlans(prev => prev.map(p => p.id === plan.id ? { ...p, splitBBbls: e.target.value } : p))}
+                                  className="block mt-1 w-36 px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                              </label>
+                            </div>
+                            {plan.extraSplitLegs?.map((leg, legIndex) => (
+                              <div key={`${plan.id}-leg-${legIndex}`} className="grid grid-cols-1 sm:grid-cols-[1fr_9rem] gap-3">
+                                <label className="text-xs text-gray-400">Split {String.fromCharCode(67 + legIndex)} drop-off
+                                  <input value={leg.disposal}
+                                    onChange={(e) => setSwSplitLoadPlans(prev => prev.map(p => p.id !== plan.id ? p : {
+                                      ...p, extraSplitLegs: p.extraSplitLegs?.map((item, i) => i === legIndex ? { ...item, disposal: e.target.value } : item),
+                                    }))}
+                                    className="block mt-1 w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                                </label>
+                                <label className="text-xs text-gray-400">Planned BBLs
+                                  <input type="text" inputMode="decimal" value={leg.bbls ?? ''}
+                                    onChange={(e) => setSwSplitLoadPlans(prev => prev.map(p => p.id !== plan.id ? p : {
+                                      ...p, extraSplitLegs: p.extraSplitLegs?.map((item, i) => i === legIndex ? { ...item, bbls: e.target.value } : item),
+                                    }))}
+                                    className="block mt-1 w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                                </label>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {swSplitTicket && (swBblPlan.error || swBblPlan.plan?.warning || (swBblPlan.plan?.pickupBbls != null && swBblPlan.plan.plannedTotal > 0)) && (
                       <div role="status" className={`rounded border px-3 py-2 text-sm ${swBblPlan.error ? 'border-red-600/60 bg-red-950/30 text-red-200' : swBblPlan.plan?.warning ? 'border-amber-600/60 bg-amber-950/30 text-amber-200' : 'border-purple-700/50 bg-gray-900 text-gray-300'}`}>
                         {swBblPlan.error
@@ -3189,7 +3234,7 @@ function DispatchPageInner() {
                       Clear
                     </button>
                     <button onClick={submitServiceWork}
-                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || (swSplitTicket && (!swDropoff.trim() || swExtraSplitLegs.some(leg => !leg.disposal.trim()) || !!swBblPlan.error))}
+                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || (swSplitTicket && (!swDropoff.trim() || swExtraSplitLegs.some(leg => !leg.disposal.trim()) || !!swBblPlan.error || !!swSplitRepeatError))}
                       className="flex-1 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
                       {swSubmitting ? 'Sending...' : swSplitTicket && !swDropoff.trim() ? 'Set Split B location' : swSplitTicket && swExtraSplitLegs.some(leg => !leg.disposal.trim()) ? 'Set every split location' : 'Dispatch'}
                     </button>
@@ -3227,7 +3272,7 @@ function DispatchPageInner() {
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
+                      <label className="block text-xs text-gray-400 mb-1">Starting well / location (optional)</label>
                       <BuilderAutocomplete
                         value={projectWellSearch}
                         onValueChange={setProjectWellSearch}
@@ -3397,7 +3442,7 @@ function DispatchPageInner() {
                   </button>
                   <button
                     onClick={createProject}
-                    disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
+                    disabled={!newProjectName.trim() || creatingProject}
                     className="flex-1 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
                   >
                     {creatingProject ? 'Creating...' : 'Create Project'}
@@ -3902,7 +3947,7 @@ function DispatchPageInner() {
                         setTimeout(() => setMessage(''), 5000);
                       }
                     }}
-                    onBatchDispatch={(shift) => batchDispatchShift(selectedProject.id!, shift)}
+                    onDispatchLoad={(draft, workflow) => dispatchProjectLoad(selectedProject, draft, workflow)}
                   />
                 )}
               </div>
@@ -6348,7 +6393,7 @@ function ProjectsListPanel({ projects, dispatches, drivers, onSelect }: {
             <div className="flex items-center gap-3 text-xs text-gray-400 mb-2">
               <span>{project.operatorName}</span>
               <span>·</span>
-              <span>{project.wellNames.length} well{project.wellNames.length !== 1 ? 's' : ''}</span>
+              <span>{project.wellNames.length ? `${project.wellNames.length} starting site${project.wellNames.length !== 1 ? 's' : ''}` : 'Sites vary by load'}</span>
               {project.projectedEndDate && (
                 <>
                   <span>·</span>
@@ -6396,7 +6441,7 @@ function ProjectsListPanel({ projects, dispatches, drivers, onSelect }: {
 
 // ─── Project Detail Panel ─────────────────────────────────────────────────
 
-function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, allDisposals, cancelDispatch, onStatusChange, onAddDriver, onUpdateProject, onBatchDispatch }: {
+function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, allDisposals, cancelDispatch, onStatusChange, onAddDriver, onUpdateProject, onDispatchLoad }: {
   project: Project;
   projectDispatches: DispatchJob[];
   projectInvoices: ProjectInvoice[];
@@ -6406,7 +6451,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
   onStatusChange: (id: string, status: 'active' | 'paused' | 'completed') => void;
   onAddDriver: (hash: string) => void;
   onUpdateProject?: (id: string, data: Partial<Project>) => void;
-  onBatchDispatch?: (shift: 'day' | 'night') => void;
+  onDispatchLoad: (draft: ProjectLoadDraft, workflow: ServiceWorkWorkflowState) => Promise<void>;
 }) {
   const [detailTab, setDetailTab] = useState<'activity' | 'history' | 'drivers'>('activity');
   const [addDriverHash, setAddDriverHash] = useState('');
@@ -6416,6 +6461,11 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
   const [newUpdate, setNewUpdate] = useState('');
   const [updateShift, setUpdateShift] = useState<'day' | 'night'>('day');
   const [copied, setCopied] = useState(false);
+  const [loadDraft, setLoadDraft] = useState<ProjectLoadDraft>({ driverHash: '', pickup: '', dropoff: '', loadCount: 1, splitTicket: false, pickupBbls: '', deliveryBbls: '' });
+  const [loadWorkflow, setLoadWorkflow] = useState<ServiceWorkWorkflowState>(() => createServiceWorkWorkflow());
+  const [showLoadForm, setShowLoadForm] = useState(false);
+  const [loadSending, setLoadSending] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
   const today = new Date().toISOString().slice(0, 10);
   const todayDriverHashes = project.driverSchedule?.[today] || [];
@@ -6445,7 +6495,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
     const nightNames = (project.nightDriverHashes || []).map(h => getDriverName(h));
     const lines = [
       `${project.name} — ${project.operatorName}`,
-      `Wells: ${project.wellNames.join(', ')}`,
+      `Sites: ${project.wellNames.length ? project.wellNames.join(', ') : 'Chosen per load'}`,
       `Date: ${new Date().toLocaleDateString()}`,
     ];
     if (shift === 'day') {
@@ -6493,7 +6543,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
           <div className="flex items-center gap-3 text-xs text-gray-400">
             <span>{project.operatorName}</span>
             <span>·</span>
-            <span>{project.wellNames.join(', ')}</span>
+            <span>{project.wellNames.length ? project.wellNames.join(', ') : 'Sites chosen per load'}</span>
           </div>
           <div className="flex items-center gap-1">
             {(project.dayDriverHashes || []).length > 0 && (
@@ -6593,15 +6643,101 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
       {/* Activity tab */}
       {detailTab === 'activity' && (
         <div className="space-y-2">
+          {project.status === 'active' && (
+            <div className="rounded-lg border border-emerald-700/40 bg-gray-900 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm text-white font-medium">Assign a project load</div>
+                  <div className="text-xs text-gray-400">Choose this load’s driver, pickup and drop-off. The load stays in this project’s activity and totals.</div>
+                </div>
+                <button type="button" onClick={() => setShowLoadForm(value => !value)}
+                  className="px-3 py-1.5 bg-emerald-700 text-white text-xs rounded">
+                  {showLoadForm ? 'Hide' : '+ Load'}
+                </button>
+              </div>
+              {showLoadForm && (
+                <div className="mt-3 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className="text-xs text-gray-400">Driver
+                      <select value={loadDraft.driverHash} onChange={e => {
+                        const hash = e.target.value;
+                        setLoadDraft(prev => ({ ...prev, driverHash: hash, dropoff: project.driverDisposals?.[hash]?.name || prev.dropoff }));
+                      }} className="block mt-1 w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm">
+                        <option value="">Choose driver...</option>
+                        {Array.from(new Set([...(project.dayDriverHashes || []), ...(project.nightDriverHashes || [])])).map(hash =>
+                          <option key={hash} value={hash}>{getDriverName(hash)}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs text-gray-400">Pickup well / location
+                      <input value={loadDraft.pickup} onChange={e => setLoadDraft(prev => ({ ...prev, pickup: e.target.value }))}
+                        list="project-load-pickups" placeholder="Search or type pickup..."
+                        className="block mt-1 w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                      <datalist id="project-load-pickups">
+                        {allDisposals.filter(w => !loadDraft.pickup || w.well_name.toLowerCase().includes(loadDraft.pickup.toLowerCase())).slice(0, 40)
+                          .map((w, i) => <option key={`${w.well_name}-${i}`} value={w.well_name} />)}
+                      </datalist>
+                    </label>
+                    <label className="text-xs text-gray-400">Drop-off (optional for a regular job)
+                      <input value={loadDraft.dropoff} onChange={e => setLoadDraft(prev => ({ ...prev, dropoff: e.target.value }))}
+                        list="project-load-dropoffs" placeholder="Search or type drop-off..."
+                        className="block mt-1 w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                      <datalist id="project-load-dropoffs">
+                        {allDisposals.filter(w => !loadDraft.dropoff || w.well_name.toLowerCase().includes(loadDraft.dropoff.toLowerCase())).slice(0, 40)
+                          .map((w, i) => <option key={`${w.well_name}-${i}`} value={w.well_name} />)}
+                      </datalist>
+                    </label>
+                    <label className="text-xs text-gray-400">Loads
+                      <input type="number" min={1} max={20} step={1} value={loadDraft.loadCount}
+                        onChange={e => setLoadDraft(prev => ({ ...prev, loadCount: Number(e.target.value) }))}
+                        className="block mt-1 w-28 px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                    </label>
+                  </div>
+                  {project.jobType !== 'pw' && (
+                    <label className="flex items-center gap-2 text-xs text-purple-200">
+                      <input type="checkbox" checked={loadDraft.splitTicket}
+                        onChange={e => setLoadDraft(prev => ({ ...prev, splitTicket: e.target.checked }))} />
+                      Split tickets — one A/B family and split ID per load
+                    </label>
+                  )}
+                  {loadDraft.splitTicket && (
+                    <div className="flex flex-wrap gap-3">
+                      <label className="text-xs text-gray-400">Pickup BBLs per load
+                        <input type="text" inputMode="decimal" value={loadDraft.pickupBbls}
+                          onChange={e => setLoadDraft(prev => ({ ...prev, pickupBbls: e.target.value }))}
+                          className="block mt-1 w-32 px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                      </label>
+                      <label className="text-xs text-gray-400">Planned delivery BBLs per load
+                        <input type="text" inputMode="decimal" value={loadDraft.deliveryBbls}
+                          onChange={e => setLoadDraft(prev => ({ ...prev, deliveryBbls: e.target.value }))}
+                          className="block mt-1 w-32 px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm" />
+                      </label>
+                    </div>
+                  )}
+                  {loadError && <div role="alert" className="text-red-300 text-xs">{loadError}</div>}
+                  <button type="button" disabled={loadSending || !loadDraft.driverHash || !loadDraft.pickup.trim() || (loadDraft.splitTicket && !loadDraft.dropoff.trim())}
+                    onClick={async () => {
+                      setLoadSending(true); setLoadError('');
+                      try {
+                        await onDispatchLoad(loadDraft, loadWorkflow);
+                        setLoadDraft({ driverHash: loadDraft.driverHash, pickup: '', dropoff: loadDraft.dropoff, loadCount: 1, splitTicket: false, pickupBbls: '', deliveryBbls: '' });
+                        setLoadWorkflow(createServiceWorkWorkflow());
+                        setShowLoadForm(false);
+                      } catch (error) {
+                        setLoadError(error instanceof Error ? error.message : 'Could not dispatch this load');
+                      } finally { setLoadSending(false); }
+                    }} className="px-4 py-2 bg-emerald-700 text-white text-xs font-medium rounded disabled:opacity-40">
+                    {loadSending ? 'Sending...' : `Dispatch ${loadDraft.loadCount} load${loadDraft.loadCount === 1 ? '' : 's'}`}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           {/* Render a shift section */}
           {(['day', 'night'] as const).map(shift => {
             const shiftHashes = shift === 'day' ? (project.dayDriverHashes || []) : (project.nightDriverHashes || []);
             const isDay = shift === 'day';
             const shiftJobs = activeJobs.filter(j => shiftHashes.includes(j.driverHash));
             const shiftCompleted = completedJobs.filter(j => shiftHashes.includes(j.driverHash));
-            const activeStatuses = ['pending', 'accepted', 'in_progress', 'paused'];
-            const activeCombos = new Set(projectDispatches.filter(d => activeStatuses.includes(d.status)).map(d => `${d.driverHash}::${d.wellName}`));
-            const newCount = shiftHashes.filter(h => project.wellNames.some(w => !activeCombos.has(`${h}::${w}`))).length;
             return (
               <div key={shift}>
                 <div className={`flex items-center justify-between mb-1.5 ${shift === 'night' ? 'mt-3 pt-3 border-t border-gray-700' : ''}`}>
@@ -6609,15 +6745,6 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
                     <span className={`text-[10px] font-bold uppercase tracking-wider ${isDay ? 'text-amber-400' : 'text-blue-400'}`}>{shift} Shift</span>
                     <span className="text-gray-600 text-[10px]">({shiftHashes.length} driver{shiftHashes.length !== 1 ? 's' : ''})</span>
                   </div>
-                  {project.status === 'active' && shiftHashes.length > 0 && (
-                    <button
-                      onClick={() => onBatchDispatch?.(shift)}
-                      disabled={newCount === 0}
-                      className={`px-2 py-0.5 text-[10px] font-bold rounded disabled:opacity-30 disabled:cursor-not-allowed transition-colors ${isDay ? 'bg-amber-600/20 text-amber-400 hover:bg-amber-600/30' : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'}`}
-                    >
-                      {newCount > 0 ? `Dispatch (${newCount} new)` : 'All dispatched'}
-                    </button>
-                  )}
                 </div>
                 {shiftHashes.length === 0 && (
                   <div className="text-gray-600 text-[10px] py-2">No {shift} drivers assigned</div>
