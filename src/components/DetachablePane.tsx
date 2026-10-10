@@ -23,46 +23,16 @@
  *  - The window opens centered and clamped to the available screen at the requested
  *    size (Active Jobs uses ~1100×800), but nothing about scrolling/reattach depends
  *    on that size — it keeps working after the user makes the window narrow or short.
- *  - Parent stylesheets are copied into the child so the portaled UI is styled;
- *    a MutationObserver keeps late-injected styles (dev/HMR) in sync.
+ *  - Loaded parent CSS rules are copied into the child. This survives a Hosting
+ *    deploy removing the CSS URL while the dashboard tab remains open; cloning
+ *    that old link would leave a newly opened popup completely unstyled.
  *  - Closing the child window (X) or unmounting the parent reattaches cleanly and
  *    returns focus to the opener.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-
-function copyStyles(src: Document, dest: Document): () => void {
-  const clone = (node: Element) => {
-    const tag = node.tagName.toLowerCase();
-    if (tag === 'style') {
-      const s = dest.createElement('style');
-      s.textContent = node.textContent;
-      s.setAttribute('data-detached-style', '1');
-      dest.head.appendChild(s);
-    } else if (tag === 'link' && (node as HTMLLinkElement).rel === 'stylesheet') {
-      const l = dest.createElement('link');
-      l.rel = 'stylesheet';
-      l.href = (node as HTMLLinkElement).href;
-      l.setAttribute('data-detached-style', '1');
-      dest.head.appendChild(l);
-    }
-  };
-  src.querySelectorAll('style, link[rel="stylesheet"]').forEach(clone);
-  // Inherit the app theme (Tailwind dark tokens hang off <html>/<body>).
-  dest.documentElement.className = src.documentElement.className;
-  dest.body.className = src.body.className;
-  // Keep late-injected styles (HMR / dynamic) mirrored.
-  const obs = new MutationObserver((muts) => {
-    for (const m of muts) {
-      m.addedNodes.forEach((n) => {
-        if (n.nodeType === 1) clone(n as Element);
-      });
-    }
-  });
-  obs.observe(src.head, { childList: true });
-  return () => obs.disconnect();
-}
+import { copyStyles } from './detachedStyles';
 
 /** Center a w×h window on the available screen, clamped so it never exceeds it. */
 function centeredFeatures(reqW: number, reqH: number): string {
