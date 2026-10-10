@@ -11,6 +11,7 @@ import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
 import { orderSplitTicketChains } from '@/lib/splitTicketDisplayOrder';
+import { dispatchTimestampToDate } from '@/lib/dispatchTimestampToDate';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { CatalogSearchResult, LocationSearchResult } from '@/components/LocationSearchResult';
@@ -5449,11 +5450,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
   }
 
   function toDate(ts: any): Date | null {
-    if (!ts) return null;
-    if (ts.toDate) return ts.toDate();
-    if (ts.seconds) return new Date(ts.seconds * 1000);
-    if (typeof ts === 'string') return new Date(ts);
-    return null;
+    return dispatchTimestampToDate(ts);
   }
 
   function getDriverFullName(job: DispatchJob) {
