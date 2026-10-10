@@ -3831,20 +3831,6 @@ function DispatchPageInner() {
                     // can always be docked back. (Fixes the missing-Reattach pop-out bug.)
                     className={`${jobsDetached ? 'inline-flex' : 'dispatch-popout-control'} items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0`}
                   >{jobsDetached ? '⧉ Reattach' : '⧉ Pop Out'}</button>
-                  {rightPanelTab === 'jobs' && (
-                    <>
-                      {(() => { const pw = dispatches.filter(d => d.jobType === 'pw' && d.status !== 'completed'); const pwLoads = pw.reduce((s, d) => s + ((d as any).loadCount || 1), 0); return pwLoads > 0 ? (
-                        <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
-                          {pwLoads} {jobTypeCode('pw')}
-                        </span>
-                      ) : null; })()}
-                      {(() => { const sw = dispatches.filter(d => d.jobType === 'service' && d.status !== 'completed'); const swLoads = sw.reduce((s, d) => s + ((d as any).loadCount || 1), 0); return swLoads > 0 ? (
-                        <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
-                          {swLoads} {jobTypeCode('service')}
-                        </span>
-                      ) : null; })()}
-                    </>
-                  )}
                   {rightPanelTab === 'projects' && selectedProject && (
                     <button
                       onClick={() => setSelectedProject(null)}
