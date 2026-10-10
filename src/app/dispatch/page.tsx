@@ -482,6 +482,7 @@ function DispatchPageInner() {
   const [swServiceType, setSwServiceType] = useState('');
   const [swOnsiteBy, setSwOnsiteBy] = useState('');
   const [swOnsiteByText, setSwOnsiteByText] = useState('');
+  const [swOnsiteByInputKey, setSwOnsiteByInputKey] = useState(0);
   const [swTypeOnsiteBy, setSwTypeOnsiteBy] = useState(false);
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
@@ -1500,6 +1501,7 @@ function DispatchPageInner() {
           setSwServiceType('');
           setSwOnsiteBy('');
           setSwOnsiteByText('');
+          setSwOnsiteByInputKey(key => key + 1);
           setSwNotes('');
           setSwDriverHashes(new Set());
           setSwSplitTicket(false);
@@ -1540,6 +1542,7 @@ function DispatchPageInner() {
     setSwServiceType('');
     setSwOnsiteBy('');
     setSwOnsiteByText('');
+    setSwOnsiteByInputKey(key => key + 1);
     setSwNotes('');
     setSwDriverHashes(new Set());
     setSwSplitTicket(false);
@@ -2914,6 +2917,7 @@ function DispatchPageInner() {
                             </button>
                           </div>
                           <input
+                            key={swOnsiteByInputKey}
                             id="sw-onsite-by"
                             type="datetime-local"
                             value={swOnsiteBy}
