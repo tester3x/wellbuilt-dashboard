@@ -109,6 +109,7 @@ describe('createDriverDispatch planned split-ticket fields and security invarian
     expect(DRIVER_DISPATCH_CREATE_ALLOWLIST).toContain('splitSequence');
     expect(DRIVER_DISPATCH_CREATE_ALLOWLIST).toContain('splitTotal');
     expect(DRIVER_DISPATCH_CREATE_ALLOWLIST).toContain('bbls');
+    expect(DRIVER_DISPATCH_CREATE_ALLOWLIST).toContain('isHeavyWater');
   });
 
   it('1. normal driver-created dispatch still works', () => {
@@ -190,6 +191,18 @@ describe('createDriverDispatch planned split-ticket fields and security invarian
     expect(res.ok).toBe(true);
     if (!res.ok || res.result !== 'create') return;
     expect(res.fields?.splitGroupId).toBe('spgroup_abc123');
+  });
+
+  it('preserves the heavy-water flag on driver-created split jobs', () => {
+    const res = evaluateDriverDispatchBirth({
+      dispatchId: 'disp_heavy_split_01',
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      existing: null,
+      record: { wellName: 'Thor 1', jobType: 'service-work', splitGroupId: 'split_heavy_1', splitSequence: 1, splitTotal: 2, isHeavyWater: true },
+      envelope,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.result === 'create') expect(res.fields?.isHeavyWater).toBe(true);
   });
 
   it('3. splitSequence accepted', () => {

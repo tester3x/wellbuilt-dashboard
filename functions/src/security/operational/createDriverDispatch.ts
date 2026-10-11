@@ -33,6 +33,7 @@ export const DRIVER_DISPATCH_CREATE_ALLOWLIST = Object.freeze([
   'splitSequence',
   'splitTotal',
   'bbls',
+  'isHeavyWater',
 ] as const);
 
 export function driverMayJoinProject(project: Record<string, unknown> | null, caller: { companyId: string; driverId: string }, record: Record<string, unknown>): boolean {

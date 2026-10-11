@@ -3098,8 +3098,8 @@ function DispatchPageInner() {
                       <div className="space-y-3 rounded-lg border border-purple-700/50 bg-gray-900 p-4">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div>
-                            <h3 className="text-sm font-semibold text-purple-200">More pickups to these drop-offs</h3>
-                            <p className="text-xs text-gray-400">Each physical load gets its own Split A/B{swExtraSplitLegs.length ? '/C…' : ''} tickets and split ID.</p>
+                            <h3 className="text-sm font-semibold text-purple-200">Another pickup for these drop-offs</h3>
+                            <p className="text-xs text-gray-400">Set Loads above for repeated pickups at the same well. Add a pickup here when the source changes. Each load gets its own split family ID.</p>
                           </div>
                           <button type="button" onClick={() => setSwSplitLoadPlans(prev => [...prev, {
                             id: `repeat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -3109,7 +3109,7 @@ function DispatchPageInner() {
                           }])}
                             disabled={!swWellName.trim() || !swDropoff.trim() || !!swBblPlan.error}
                             className="px-3 py-2 rounded border border-purple-600 bg-purple-900/40 text-purple-100 text-xs disabled:opacity-50">
-                            Duplicate split plan
+                            + Add pickup
                           </button>
                         </div>
                         {swSplitLoadPlans.map((plan, idx) => (
