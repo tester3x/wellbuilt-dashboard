@@ -135,6 +135,34 @@ describe('createDriverDispatch planned split-ticket fields and security invarian
     expect(res.fields?.packetRevision).toBe(4);
   });
 
+  it('allows only Production Water as a Service Work subtype for driver creation', () => {
+    const base = {
+      dispatchId: 'disp_hourly_pw_01',
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      existing: null,
+      envelope,
+    };
+    const hourly = evaluateDriverDispatchBirth({
+      ...base,
+      record: { wellName: 'Thor 1', jobType: 'service', jobTypeId: 'service-work', serviceType: 'Production Water' },
+    });
+    expect(hourly.ok).toBe(true);
+    if (hourly.ok && hourly.result === 'create') {
+      expect(hourly.fields?.jobType).toBe('service');
+      expect(hourly.fields?.serviceType).toBe('Production Water');
+    }
+    const disguisedPw = evaluateDriverDispatchBirth({
+      ...base,
+      record: { wellName: 'Thor 1', jobType: 'pw', jobTypeId: 'pw', serviceType: 'Production Water' },
+    });
+    expect(disguisedPw.ok).toBe(false);
+    const arbitrary = evaluateDriverDispatchBirth({
+      ...base,
+      record: { wellName: 'Thor 1', jobType: 'service', jobTypeId: 'service-work', serviceType: 'Other' },
+    });
+    expect(arbitrary.ok).toBe(false);
+  });
+
   it('2. splitGroupId accepted', () => {
     const res = evaluateDriverDispatchBirth({
       dispatchId: 'disp_split_group_01',

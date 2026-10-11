@@ -19,6 +19,7 @@ export const DRIVER_DISPATCH_CREATE_ALLOWLIST = Object.freeze([
   'operator',
   'jobType',
   'jobTypeId',
+  'serviceType',
   'disposal',
   'hauledTo',
   'driverFirstName',
@@ -103,6 +104,12 @@ export function evaluateDriverDispatchBirth(input: {
     : picked.fields.jobType;
   const jobType = resolveCanonicalJobType(requestedJobType, input.envelope.jobTypes, input.companyCustomJobTypes);
   if (!jobType.ok) return jobType;
+  // The driver may label hourly production-water service work, but may not
+  // relabel PW or another governed job type through an untrusted subtype.
+  if (picked.fields.serviceType !== undefined &&
+      (picked.fields.serviceType !== 'Production Water' || jobType.jobTypeId !== 'service-work')) {
+    return fail('invalid_service_type');
+  }
   const binding = stampDispatchBinding(input.envelope);
   const well = canonicalWellFromRecord(picked.fields);
   const identity: BirthIdentity = {
