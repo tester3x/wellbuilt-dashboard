@@ -928,6 +928,8 @@ function DispatchPageInner() {
             collectedCustomTypes.push(ct);
             // Support both old string format and new { label, packages } format
             const label = typeof ct === 'string' ? ct : ct?.label;
+            // This builder is hourly SW. Other governed types belong in their own builder.
+            if (typeof ct !== 'string' && (ct?.baseJobTypeId !== 'service-work' || ct?.payBasis !== 'hourly')) continue;
             if (label && !allJobTypes.includes(label)) {
               allJobTypes.push(label);
               pkgMap[label] = 'custom';
@@ -953,7 +955,10 @@ function DispatchPageInner() {
         if (allJobTypes.length > 0) {
           // Always include "Other" as escape hatch
           if (!allJobTypes.includes('Other')) allJobTypes.push('Other');
-          setDynamicServiceTypes(allJobTypes);
+          setDynamicServiceTypes(allJobTypes.filter(label => {
+            const custom = collectedCustomTypes.find(ct => typeof ct !== 'string' && ct?.label?.toLowerCase() === label.toLowerCase());
+            return !custom || (custom.baseJobTypeId === 'service-work' && custom.payBasis === 'hourly');
+          }));
           setJobTypeToPackageId(pkgMap);
         }
       } catch (err) {
@@ -2898,7 +2903,7 @@ function DispatchPageInner() {
                             className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
                             <option value="">Select type...</option>
                             {dynamicServiceTypes.map(st => (
-                              <option key={st} value={st}>{st}</option>
+                              <option key={st} value={st}>{st === 'Production Water' ? 'Production Water (hr)' : st}</option>
                             ))}
                           </select>
                         </div>

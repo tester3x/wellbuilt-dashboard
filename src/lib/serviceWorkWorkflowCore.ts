@@ -299,7 +299,11 @@ export async function executeServiceWorkWorkflow(
           ...(onsiteBy ? { onsiteBy } : {}),
           jobType: 'service',
           serviceType: serviceType.trim(),
-          jobTypeId: canonicalJobTypeIdForServiceType(serviceType, customJobTypes),
+          // The SW builder is a service workflow. A water-hauling label here is
+          // still hourly service work and must never bind to the PW packet type.
+          jobTypeId: serviceType.trim().toLowerCase() === 'production water'
+            ? 'service-work'
+            : canonicalJobTypeIdForServiceType(serviceType, customJobTypes),
           packageId: resolvedPackageId,
           packetRevision: 4,
           status: 'pending',

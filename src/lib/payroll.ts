@@ -2,6 +2,7 @@ import { getFirestoreDb } from './firebase';
 import { docBelongsToTenant } from './tenantScope';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type PayConfig, type FrostSeason, type FrostZone, JOB_TYPE_ALIASES } from './companySettings';
+import { rateIdentityForInvoice } from './jobTypeRateCore';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -137,6 +138,7 @@ export interface DriverTimesheetRow {
   wellName: string;
   jobType: string;       // commodityType / product
   subjob?: string;       // separate variable for subtype (e.g. Standby)
+  payBasis?: 'per_bbl' | 'hourly';
   bbls: number;
   hours: number;
   rate: number;
@@ -310,8 +312,25 @@ export function lookupRate(
     }
   }
 
-  // 3. Subjob absent, empty, or unconfigured: return baseEntry with full primary rate
+  // 3. Subjob absent or unconfigured: use the primary rate.
   return baseEntry;
+}
+
+export function lookupInvoiceRate(
+  rateSheets: CompanyRateSheets,
+  operator: string,
+  identity: { primary: string; subtype: string; payBasis?: 'per_bbl' | 'hourly' },
+): RateEntry | null {
+  const matched = lookupRate(rateSheets, operator, identity.primary, identity.subtype);
+  if (!identity.payBasis || matched?.method === identity.payBasis) return matched;
+  const subtype = identity.subtype.toLowerCase();
+  const primary = (JOB_TYPE_ALIASES[identity.primary] || identity.primary).toLowerCase();
+  return rateSheets[operator]?.find(entry => {
+    if (!entry.primaryJobType) return false;
+    const associated = JOB_TYPE_ALIASES[entry.primaryJobType] || entry.primaryJobType;
+    return entry.jobType.toLowerCase() === subtype && entry.method === identity.payBasis &&
+      associated.toLowerCase() === primary;
+  }) || null;
 }
 
 // ─── Fetch Payroll Data ──────────────────────────────────────────────────────
@@ -360,8 +379,7 @@ export async function fetchPayrollInvoices(
     const driverName = legalNameMap?.[rawDriverName] || rawDriverName;
     const invoiceCompanyId = d.companyId || '';
     const operator = d.operator || '';
-    const jobType = d.commodityType || d.jobType || '';
-    const subjob = (d.subjob as string) || (d.serviceType as string) || '';
+    const rawJobType = d.commodityType || d.jobType || '';
     const wellName = d.wellName || '';
 
     // Look up county from well name (for frost rate calculation)
@@ -372,10 +390,13 @@ export async function fetchPayrollInvoices(
     let amountBilled = 0;
     let employeeTake = 0;
     const company = invoiceCompanyId ? companyConfigs.get(invoiceCompanyId) : null;
+    const identity = rateIdentityForInvoice(d, company?.customJobTypes as CompanyConfig['customJobTypes']);
+    const jobType = identity.primary || rawJobType;
+    const subjob = identity.subtype;
     const rateSheets = company?.rateSheets || {};
     const split = company?.payConfig?.defaultSplit || 0;
 
-    const rateEntry = lookupRate(rateSheets, operator, jobType, subjob);
+    const rateEntry = lookupInvoiceRate(rateSheets, operator, identity);
     const swdWaitMinutes = d.swdWaitMinutes || 0;
     let detentionPay = 0;
     // BBLs: try totalBBL first, then fall back to ticket-level fields (s_t mode may not write totalBBL)
@@ -413,6 +434,7 @@ export async function fetchPayrollInvoices(
       wellName: d.wellName || '',
       jobType,
       subjob: subjob || undefined,
+      payBasis: identity.payBasis,
       bbls,
       hours: d.totalHours || 0,
       rate,
@@ -483,7 +505,9 @@ export function applyRatesToTimesheet(
   wellCountyMap?: Map<string, string>
 ): DriverTimesheetSummary {
   const updatedRows = summary.rows.map(row => {
-    const rateEntry = lookupRate(rateSheets, row.operator, row.jobType, row.subjob);
+    const rateEntry = lookupInvoiceRate(rateSheets, row.operator, {
+      primary: row.jobType, subtype: row.subjob || '', payBasis: row.payBasis,
+    });
     if (!rateEntry) return row;
 
     const county = wellCountyMap?.get(row.wellName.toLowerCase()) || '';

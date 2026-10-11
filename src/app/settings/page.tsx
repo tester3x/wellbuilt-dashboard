@@ -41,6 +41,7 @@ export default function SettingsPage() {
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [newJobTypeRequest, setNewJobTypeRequest] = useState<{ label: string; key: number } | null>(null);
 
   // Determine if WB admin (no companyId = sees all companies)
   const isWbAdmin = user ? !user.companyId : false;
@@ -173,7 +174,8 @@ export default function SettingsPage() {
                 so the server resolves their OWN company). */}
             <CompanyJoinCodeCard companyId={company.id} />
             <PackagesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
-            <CustomJobTypesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <CustomJobTypesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)}
+              prefillLabel={newJobTypeRequest?.label} prefillKey={newJobTypeRequest?.key} />
             <InvoiceConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <OperationsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <LevelReportsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
@@ -190,7 +192,8 @@ export default function SettingsPage() {
             <WorkPeriodCard company={company} onSave={handleRefresh} />
             <OilCompaniesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <SWDDirectoryCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
-            <RateSheetsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <RateSheetsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)}
+              onCreateJobType={label => setNewJobTypeRequest({ label, key: Date.now() })} />
             <BillingConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'editBilling', userCompany)} />
             <TicketTemplateCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <PayrollTemplateCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />

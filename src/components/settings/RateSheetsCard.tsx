@@ -8,20 +8,23 @@ import {
   JOB_TYPES,
   BILLING_METHODS,
 } from '@/lib/companySettings';
+import { normalizeCustomJobType } from '@/lib/customJobTypesCore';
 
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
   /** Whether the current user may edit rate sheets (manageCompany). */
   canEdit: boolean;
+  onCreateJobType?: (label: string) => void;
 }
 
-export function RateSheetsCard({ company, onSave, canEdit }: Props) {
+export function RateSheetsCard({ company, onSave, canEdit, onCreateJobType }: Props) {
   // Modal state
   const [editOperator, setEditOperator] = useState<string | null>(null);
   const [entries, setEntries] = useState<RateEntry[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedSubtypes, setSelectedSubtypes] = useState<Record<number, string>>({});
 
   const operators = company.assignedOperators || [];
   // Include custom job types in available options
@@ -29,6 +32,7 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
     ...JOB_TYPES,
     ...(company.customJobTypes || []).map(t => (typeof t === 'string' ? t : t.label)).filter(Boolean),
   ]));
+  const customTypes = (company.customJobTypes || []).map(normalizeCustomJobType).filter((type): type is NonNullable<typeof type> => type !== null);
   // Counties that have frost zones configured — "All Counties" first
   const frostCounties = Object.keys(company.payConfig?.frostZones || {})
     .sort((a, b) => a === 'All Counties' ? -1 : b === 'All Counties' ? 1 : a.localeCompare(b));
@@ -259,7 +263,7 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
                   )}
 
                   {/* Subtype rates — for hourly entries (e.g. Service Work Standby) */}
-                  {entry.method === 'hourly' && (
+                  {entry.method === 'hourly' && (entry.jobType === 'Service Work' || Object.keys(entry.subtypeRates || {}).length > 0) && (
                     <div className="mt-2 pl-1 border-t border-gray-600/40 pt-2">
                       <div className="text-amber-300 text-xs font-medium mb-1">
                         Subjob Exceptions (e.g. Standby):
@@ -282,13 +286,14 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
                           ))}
                         </div>
                       )}
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          placeholder="Subjob name (e.g. Standby)"
-                          id={`new-sub-name-${idx}`}
-                          className="px-2 py-1 bg-gray-700 text-white rounded text-xs flex-1"
-                        />
+                      {entry.jobType === 'Service Work' ? <div className="flex items-center gap-2">
+                        <select value={selectedSubtypes[idx] || ''}
+                          onChange={e => setSelectedSubtypes(prev => ({ ...prev, [idx]: e.target.value }))}
+                          className="px-2 py-1 bg-gray-700 text-white rounded text-xs flex-1">
+                          <option value="">Select an existing job type...</option>
+                          {customTypes.filter(type => type.baseJobTypeId === 'service-work' && type.payBasis === entry.method)
+                            .map(type => <option key={type.id || type.label} value={type.label}>{type.label}</option>)}
+                        </select>
                         <div className="relative w-24">
                           <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">$</span>
                           <input
@@ -303,13 +308,12 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
                         <button
                           type="button"
                           onClick={() => {
-                            const nameEl = document.getElementById(`new-sub-name-${idx}`) as HTMLInputElement | null;
                             const rateEl = document.getElementById(`new-sub-rate-${idx}`) as HTMLInputElement | null;
-                            const name = nameEl?.value.trim();
+                            const name = selectedSubtypes[idx]?.trim();
                             const val = parseFloat(rateEl?.value || '0');
                             if (name && val > 0) {
                               updateSubtypeRate(idx, name, val);
-                              if (nameEl) nameEl.value = '';
+                              setSelectedSubtypes(prev => ({ ...prev, [idx]: '' }));
                               if (rateEl) rateEl.value = '';
                             }
                           }}
@@ -317,7 +321,15 @@ export function RateSheetsCard({ company, onSave, canEdit }: Props) {
                         >
                           + Add Subtype
                         </button>
-                      </div>
+                      </div> : <p className="text-xs text-gray-400">New subtype exceptions belong under the Service Work primary rate.</p>}
+                      {entry.jobType === 'Service Work' && onCreateJobType && (
+                        <button type="button" className="text-blue-300 text-xs mt-2 hover:underline"
+                          onClick={() => {
+                            if (!window.confirm('Open Custom Job Types to create the new type? Unsaved Rate Sheet edits will be lost.')) return;
+                            setEditOperator(null);
+                            onCreateJobType('');
+                          }}>Create a new job type and set its operator rates</button>
+                      )}
                     </div>
                   )}
                 </div>

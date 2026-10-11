@@ -45,7 +45,8 @@ if (!isTsx) {
 }
 
 // ─── TS imports (active under tsx) ──────────────────────────────────────────
-const { lookupRate, applyRatesToTimesheet } = await import('../src/lib/payroll.ts');
+const { lookupRate, lookupInvoiceRate, applyRatesToTimesheet } = await import('../src/lib/payroll.ts');
+const { rateIdentityForInvoice } = await import('../src/lib/jobTypeRateCore.ts');
 
 let pass = 0;
 let fail = 0;
@@ -113,24 +114,21 @@ check(
 );
 
 check(
-  'payroll.ts: fetchPayrollInvoices extracts subjob from d.subjob || d.serviceType',
-  /const subjob\s*=\s*\(d\.subjob\s*as\s*string\)\s*\|\|\s*\(d\.serviceType\s*as\s*string\)\s*\|\|\s*'';/.test(payrollSrc)
+  'payroll.ts: invoices resolve a governed primary and subtype',
+  payrollSrc.includes('rateIdentityForInvoice(d, company?.customJobTypes') &&
+  payrollSrc.includes('lookupInvoiceRate(rateSheets, operator, identity)')
 );
 
 check(
-  'payroll.ts: fetchPayrollInvoices passes subjob to lookupRate',
-  /const rateEntry\s*=\s*lookupRate\(rateSheets,\s*operator,\s*jobType,\s*subjob\);/.test(payrollSrc)
+  'payroll.ts: re-rate path keeps primary, subtype, and pay basis',
+  payrollSrc.includes('lookupInvoiceRate(rateSheets, row.operator, {') &&
+  payrollSrc.includes("primary: row.jobType, subtype: row.subjob || '', payBasis: row.payBasis")
 );
 
 check(
-  'payroll.ts: applyRatesToTimesheet passes row.subjob to lookupRate',
-  /const rateEntry\s*=\s*lookupRate\(rateSheets,\s*row\.operator,\s*row\.jobType,\s*row\.subjob\);/.test(payrollSrc)
-);
-
-check(
-  'billing.ts: extracts subjob and passes to lookupRate',
-  /const subjob\s*=\s*\(d\.subjob\s*as\s*string\)\s*\|\|\s*\(d\.serviceType\s*as\s*string\)\s*\|\|\s*'';/.test(billingSrc) &&
-  /const rateEntry\s*=\s*lookupRate\(rateSheets,\s*operator,\s*jobType,\s*subjob\);/.test(billingSrc)
+  'billing.ts: resolves the same governed identity and rate',
+  billingSrc.includes('rateIdentityForInvoice(d, company?.customJobTypes)') &&
+  billingSrc.includes('lookupInvoiceRate(rateSheets, operator, identity)')
 );
 
 check(
@@ -145,6 +143,23 @@ check(
 );
 
 console.log('\n--- Governed Acceptance Regressions: lookupRate ---');
+
+const slawsonRates = {
+  Slawson: [
+    { jobType: 'Production Water', method: 'per_bbl', rate: 2.4 },
+    { jobType: 'Service Work', method: 'hourly', rate: 160, subtypeRates: { Standby: 80 } },
+  ],
+};
+const swWater = rateIdentityForInvoice({ commodityType: 'Production Water', serviceType: 'Production Water' }, []);
+const swWaterRate = lookupInvoiceRate(slawsonRates, 'Slawson', swWater);
+check('SW Production Water uses the $160/hr service rule', swWaterRate?.rate === 160 && swWaterRate?.method === 'hourly');
+const pwWater = rateIdentityForInvoice({ commodityType: 'Production Water' }, []);
+const pwWaterRate = lookupInvoiceRate(slawsonRates, 'Slawson', pwWater);
+check('PW Production Water keeps the $2.40/bbl rule', pwWaterRate?.rate === 2.4 && pwWaterRate?.method === 'per_bbl');
+const standbyIdentity = rateIdentityForInvoice({ commodityType: 'Service Work', serviceType: 'Standby' }, []);
+check('Standby exception overrides SW base rate', lookupInvoiceRate(slawsonRates, 'Slawson', standbyIdentity)?.rate === 80);
+const customPerBbl = { primary: 'Service Work', subtype: 'Custom Haul', payBasis: 'per_bbl' };
+check('mismatched custom pay basis does not silently take hourly base', lookupInvoiceRate(slawsonRates, 'Slawson', customPerBbl) === null);
 
 // Mock company rate sheets with governed multi-family configuration
 const mockRateSheets = {

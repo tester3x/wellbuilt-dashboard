@@ -28,6 +28,7 @@ import {
   defaultCapabilitiesForLifecycle,
   slugifyCustomJobType,
 } from '@/lib/customJobTypesCore';
+import { addCustomTypeRateOverrides, ratePrimaryForFamily } from '@/lib/jobTypeRateCore';
 
 interface AvailablePackage {
   id: string;
@@ -48,15 +49,19 @@ interface Props {
   onSave: () => void;
   /** Whether the current user may edit custom job types (manageCompany). */
   canEdit: boolean;
+  prefillLabel?: string;
+  prefillKey?: number;
 }
 
-export function CustomJobTypesCard({ company, onSave, canEdit }: Props) {
+export function CustomJobTypesCard({ company, onSave, canEdit, prefillLabel, prefillKey }: Props) {
   // Form fields
   const [newLabel, setNewLabel] = useState('');
   const [newFamily, setNewFamily] = useState<CustomJobTypeFamily | ''>('service-work');
-  const [newPayBasis, setNewPayBasis] = useState<CustomJobTypePayBasis | ''>('per_bbl');
+  const [newPayBasis, setNewPayBasis] = useState<CustomJobTypePayBasis | ''>('hourly');
   const [newLifecycle, setNewLifecycle] = useState<CustomJobTypeLifecycle | ''>('pickup_dropoff');
   const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
+  const [showSpecialRates, setShowSpecialRates] = useState(false);
+  const [newRateInputs, setNewRateInputs] = useState<Record<string, string>>({});
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +73,16 @@ export function CustomJobTypesCard({ company, onSave, canEdit }: Props) {
   const customTypes: CustomJobType[] = (company.customJobTypes || [])
     .map(t => normalizeCustomJobType(t))
     .filter((t): t is CustomJobType => t !== null);
+
+  useEffect(() => {
+    if (prefillKey != null) {
+      setNewLabel(prefillLabel || '');
+      setNewFamily('service-work');
+      setNewPayBasis('hourly');
+      setShowSpecialRates(true);
+      document.getElementById('custom-job-types')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [prefillKey, prefillLabel]);
 
   // Load available packages from Firestore
   useEffect(() => {
@@ -139,14 +154,29 @@ export function CustomJobTypesCard({ company, onSave, canEdit }: Props) {
     setError(null);
     try {
       const updatedList = [...customTypes, validation.value];
+      const overrides: Record<string, number> = {};
+      if (showSpecialRates) {
+        for (const [operator, raw] of Object.entries(newRateInputs)) {
+          if (!raw.trim()) continue;
+          const rate = Number(raw);
+          if (!Number.isFinite(rate) || rate <= 0) throw new Error(`Enter a positive rate for ${operator}.`);
+          overrides[operator] = rate;
+        }
+      }
+      const updatedSheets = Object.keys(overrides).length
+        ? addCustomTypeRateOverrides(company.rateSheets || {}, validation.value, overrides)
+        : null;
       await updateCompanyFields(company.id, {
         customJobTypes: updatedList,
+        ...(updatedSheets ? { rateSheets: updatedSheets } : {}),
       });
       setNewLabel('');
+      setNewRateInputs({});
+      setShowSpecialRates(false);
       onSave();
     } catch (err) {
       console.error('Failed to add custom job type:', err);
-      setError('Could not add that job type — write rejected. Please try again.');
+      setError(err instanceof Error ? err.message : 'Could not add that job type — write rejected. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -221,7 +251,7 @@ export function CustomJobTypesCard({ company, onSave, canEdit }: Props) {
       : selectedPackages.map(id => getPackageName(id)).join(', ');
 
   return (
-    <div className={`bg-gray-800 rounded-lg border border-gray-700 overflow-visible relative ${showPackageDropdown ? 'z-20' : ''}`}>
+    <div id="custom-job-types" className={`bg-gray-800 rounded-lg border border-gray-700 overflow-visible relative ${showPackageDropdown ? 'z-20' : ''}`}>
       {/* Header */}
       <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
         <div>
@@ -325,6 +355,7 @@ export function CustomJobTypesCard({ company, onSave, canEdit }: Props) {
                     type="button"
                     onClick={() => {
                       setNewFamily(fam.value);
+                      setNewPayBasis(fam.value === 'service-work' ? 'hourly' : 'per_bbl');
                       setError(null);
                     }}
                     className={`px-2 py-2 text-xs font-medium rounded border transition-colors text-center ${
@@ -399,6 +430,32 @@ export function CustomJobTypesCard({ company, onSave, canEdit }: Props) {
                 {newLifecycle === 'pickup_dropoff' ? 'Capabilities: lifecycle, pickup' : 'Capabilities: lifecycle only'}
               </p>
             </div>
+          </div>
+
+          <div className="rounded border border-gray-700 p-3 space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-200">
+              <input type="checkbox" checked={showSpecialRates} onChange={e => setShowSpecialRates(e.target.checked)} disabled={saving} />
+              Add operator-specific rate exceptions now (optional)
+            </label>
+            <p className="text-xs text-gray-400">
+              Without an exception, this type uses each operator&apos;s {ratePrimaryForFamily(newFamily === 'pw' ? 'pw' : 'service-work')} rate.
+              A special rate is saved to that operator&apos;s Rate Sheet.
+            </p>
+            {showSpecialRates && (
+              <div className="max-h-44 overflow-y-auto space-y-2">
+                {(company.assignedOperators || []).map(operator => (
+                  <label key={operator} className="flex items-center justify-between gap-3 text-xs text-gray-200">
+                    <span className="truncate">{operator}</span>
+                    <span className="flex items-center gap-1 shrink-0">$
+                      <input type="number" min="0" step="0.01" value={newRateInputs[operator] || ''}
+                        onChange={e => setNewRateInputs(prev => ({ ...prev, [operator]: e.target.value }))}
+                        placeholder={newPayBasis === 'hourly' ? 'per hour' : 'per BBL'}
+                        className="w-28 px-2 py-1 bg-gray-700 rounded border border-gray-600 text-white" />
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Form Actions */}

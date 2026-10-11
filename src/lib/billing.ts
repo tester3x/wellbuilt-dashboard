@@ -1,7 +1,8 @@
 import { getFirestoreDb } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type OperatorBillingConfig } from './companySettings';
-import { lookupRate, getEffectiveRate, formatCurrency, type PayPeriod, type CompanyRateSheets } from './payroll';
+import { lookupInvoiceRate, getEffectiveRate, formatCurrency, type PayPeriod, type CompanyRateSheets } from './payroll';
+import { rateIdentityForInvoice } from './jobTypeRateCore';
 
 // Re-export for convenience
 export { formatCurrency, type PayPeriod };
@@ -314,15 +315,16 @@ export async function fetchBillingData(
     // Company scoping
     if (companyId && invoiceCompanyId && invoiceCompanyId !== companyId) return;
 
-    const jobType = d.commodityType || d.jobType || '';
-    const subjob = (d.subjob as string) || (d.serviceType as string) || '';
+    const company = invoiceCompanyId ? companyConfigs.get(invoiceCompanyId) : null;
+    const identity = rateIdentityForInvoice(d, company?.customJobTypes);
+    const jobType = identity.primary || d.commodityType || d.jobType || '';
+    const subjob = identity.subtype;
     const bbls = d.totalBBL || 0;
     const hours = d.totalHours || 0;
     const fuelMinutes = d.fuelMinutes || 0;
     const driveDistanceMiles = d.driveDistanceMiles || 0;
 
     // Rate lookup
-    const company = invoiceCompanyId ? companyConfigs.get(invoiceCompanyId) : null;
     const rateSheets = company?.rateSheets || {};
     const billingConfig = company?.billingConfig?.[operator];
     // Per-invoice diesel price: uses the price in effect on the invoice date,
@@ -331,8 +333,8 @@ export async function fetchBillingData(
     const timeline = invoiceCompanyId ? dieselTimelines.get(invoiceCompanyId) : undefined;
     const currentDiesel = (timeline && invoiceDate ? getDieselPriceForDate(timeline, invoiceDate) : undefined) ?? company?.currentDieselPrice;
 
-    const rateEntry = lookupRate(rateSheets, operator, jobType, subjob);
-    const rateMethod = rateEntry?.method || 'per_bbl';
+    const rateEntry = lookupInvoiceRate(rateSheets, operator, identity);
+    const rateMethod = rateEntry?.method || identity.payBasis || 'per_bbl';
     const wellName = d.wellName || '';
     const county = d.county || wellCountyMap?.get(wellName.toLowerCase()) || '';
     const rate = rateEntry
