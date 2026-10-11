@@ -14,8 +14,12 @@ export function matchExistingAppPull(row:any,history:JsonRecord,driverId:string|
  const p=candidates[0];const bottom=Number.isFinite(p.tankAfterInches)?p.tankAfterInches/12:
    Number.isFinite(p.bottomLevelFeet)?p.bottomLevelFeet:Number(p.tankLevelFeet)-Number(p.bblsTaken)/bank;
  const intervening=all.some(q=>q!==p&&q.wellName===row.wellName&&Date.parse(q.dateTimeUTC)>Date.parse(p.dateTimeUTC)&&Date.parse(q.dateTimeUTC)<=time);
+ // WB T supplies the measured top; its processing bottom is model-derived.
+ // Do not treat that calculated value as an independent driver measurement.
+ const modeledWbtBottom=p.bottomLevelFeet==null && (p.originAppContext==='wbt' || (Number.isFinite(p.canonicalProcessingBottomInches) && p.canonicalProcessingBottomInches===p.tankAfterInches));
+ const bottomMatches=modeledWbtBottom || (typeof row.bottomLevelFeet==='number' && Number.isFinite(bottom) && Math.abs(bottom-row.bottomLevelFeet)<=2/12+1e-8);
  const strong=p.watchdogProcessed===true && p.canonicalProcessingComplete===true && driverId && p.driverId===driverId && (!barrelsExplicit||Number(p.bblsTaken)===row.bblsTaken) &&
-   typeof row.bottomLevelFeet==='number' && Number.isFinite(bottom) && Math.abs(bottom-row.bottomLevelFeet)<=2/12+1e-8 && !intervening;
+   bottomMatches && !intervening;
  return strong?{status:'matched' as const,packetIds:ids,dateTimeUTC:p.dateTimeUTC}:
    {status:'review' as const,packetIds:ids};
 }
