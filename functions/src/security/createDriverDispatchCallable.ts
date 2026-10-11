@@ -2,7 +2,7 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver } from './requireDriverAuth';
-import { evaluateDriverDispatchBirth } from './operational/createDriverDispatch';
+import { driverMayJoinProject, evaluateDriverDispatchBirth } from './operational/createDriverDispatch';
 import { parsePacketRef } from './operational/dispatchPacketPin';
 import { checkWell, loadAuthorizedWellNames, loadVerifiedRevision } from './operational/dispatchPinRuntime';
 
@@ -45,6 +45,17 @@ export const createDriverDispatchIfAbsent = httpsV2.onCall(
       const existing = snap.exists ? (snap.data() as Record<string, unknown>) : null;
       const compSnap = await tx.get(fs.collection('companies').doc(driver.companyId as string));
       const compData = compSnap.exists ? (compSnap.data() as Record<string, unknown>) : null;
+      const projectId = typeof record.projectId === 'string' ? record.projectId.trim() : '';
+      if (record.projectId !== undefined && (!projectId || !/^[A-Za-z0-9_-]{1,120}$/.test(projectId))) {
+        throw new httpsV2.HttpsError('invalid-argument', 'invalid_project_id');
+      }
+      if (projectId && !snap.exists) {
+        const projectSnap = await tx.get(fs.collection('projects').doc(projectId));
+        if (!driverMayJoinProject(projectSnap.exists ? projectSnap.data() as Record<string, unknown> : null,
+          { companyId: driver.companyId as string, driverId: driver.driverId }, record)) {
+          throw new httpsV2.HttpsError('permission-denied', 'project_driver_not_authorized');
+        }
+      }
       const customJobTypes = Array.isArray(compData?.customJobTypes) ? compData!.customJobTypes : undefined;
       const decided = evaluateDriverDispatchBirth({
         dispatchId,

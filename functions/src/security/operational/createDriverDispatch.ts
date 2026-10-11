@@ -27,11 +27,24 @@ export const DRIVER_DISPATCH_CREATE_ALLOWLIST = Object.freeze([
   'driverPlanCount',
   'priority',
   'notes',
+  'projectId',
   'splitGroupId',
   'splitSequence',
   'splitTotal',
   'bbls',
 ] as const);
+
+export function driverMayJoinProject(project: Record<string, unknown> | null, caller: { companyId: string; driverId: string }, record: Record<string, unknown>): boolean {
+  if (!project || project.status !== 'active' || project.companyId !== caller.companyId) return false;
+  const roster = [
+    ...(Array.isArray(project.dayDriverHashes) ? project.dayDriverHashes : []),
+    ...(Array.isArray(project.nightDriverHashes) ? project.nightDriverHashes : []),
+  ];
+  if (!roster.includes(caller.driverId)) return false;
+  if (typeof project.operatorName === 'string' && project.operatorName.trim() &&
+      typeof record.operator === 'string' && project.operatorName.trim().toLowerCase() !== record.operator.trim().toLowerCase()) return false;
+  return true;
+}
 
 export function pickDriverCreateFields(record: Record<string, unknown>): StoreResult<{ fields: Record<string, unknown> }> {
   const rejected = rejectCallerAuthorityFields(record);

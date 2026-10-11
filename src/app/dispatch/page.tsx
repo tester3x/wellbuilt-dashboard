@@ -1692,7 +1692,7 @@ function DispatchPageInner() {
         name: newProjectName.trim(),
         wellNames: newProjectWells,
         operatorName: newProjectOperator.trim(),
-        companyId: user?.companyId || '',
+        companyId: sessionTenantId || '',
         createdBy: user?.email || '',
         createdAt: Timestamp.now(),
         startDate: today,
@@ -1751,7 +1751,7 @@ function DispatchPageInner() {
               const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
                 type: 'project',
                 projectId: pId,
-                companyId: user?.companyId || '',
+                companyId: sessionTenantId || '',
                 title: threadTitle,
                 participants,
                 participantNames,
