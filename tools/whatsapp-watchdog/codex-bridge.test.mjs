@@ -1,7 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {CodexBridge} from './codex-bridge.mjs';
+import {CodexBridge,workerContext} from './codex-bridge.mjs';
+test('lookup context retains requested wells outside the latest ten and live receiver state',()=>{
+ const rows=Array.from({length:12},(_,i)=>({id:String(i),wellName:'Gabriel 1',dateTimeUTC:new Date(Date.UTC(2026,9,10,12,i)).toISOString()}));
+ rows.push({id:'g3',wellName:'Gunslinger 3',dateTimeUTC:'2026-10-09T19:37:25Z'});
+ const q={data:{messages:{one:{rows}},deliveries:{g3:{status:'complete'}}}};
+ const c=workerContext(q,'Check G3 flow',{state:'Connected'});
+ assert.equal(c.receiver.state,'Connected');assert.ok(c.latestPulls.some(p=>p.row.id==='g3'));assert.equal(c.latestByWell.find(p=>p.row.id==='g3').delivery.status,'complete');
+});
+test('sandbox-blocked replies are failed even when Codex exits successfully',async()=>{
+ const q={directory:'missing-test-folder',data:{codexRequests:{one:{status:'queued',request:'lookup',channel:'overlord'}}},save(){}};
+ const bridge=new CodexBridge(q,async()=>"I couldn’t verify the rate: sandbox initialization blocked local access.");bridge.config={enabled:true};await bridge.tick(async()=>{});assert.equal(q.data.codexRequests.one.status,'failed');
+});
 test('worker serializes jobs and reports once without rerunning completed work',async()=>{
  const q={directory:'missing-test-folder',data:{codexRequests:{one:{status:'queued',request:'test',channel:'overlord'}}},save(){}};let runs=0;const replies=[];
  const bridge=new CodexBridge(q,async()=>{runs++;return 'Finished';});bridge.config={enabled:true};
