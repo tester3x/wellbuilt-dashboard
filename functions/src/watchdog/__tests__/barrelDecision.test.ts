@@ -19,3 +19,5 @@ test('only scoped provisional watchdog pulls can use reported bottom for trackin
 });
 
 test('small rounding over a configured load ceiling stays provisional without mandatory review',()=>{expect(decideBarrels({...base,top:11.25,bottom:8.75,bank:67.2,rateMinutesPerFoot:0,driverCapacity:165})).toMatchObject({bbls:165,provisional:true,needsReview:false});expect(decideBarrels({...base,top:12,bottom:8,rateMinutesPerFoot:0,driverCapacity:165})).toMatchObject({needsReview:true});});
+
+test('assumed inflow above a known full-load drop does not demand review',()=>{expect(decideBarrels({...base,top:11,bottom:8.5,bank:67.2,rateMinutesPerFoot:114,driverCapacity:165})).toMatchObject({bbls:165,provisional:true,needsReview:false});expect(decideBarrels({...base,top:11,bottom:8,bank:67.2,rateMinutesPerFoot:114,driverCapacity:165})).toMatchObject({needsReview:true});});

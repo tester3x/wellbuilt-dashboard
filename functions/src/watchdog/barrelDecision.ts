@@ -8,7 +8,9 @@ export function decideBarrels(input:{written:number|null;fallback:number|null;to
  const guess=estimate?.estimatedBbls??(estimate?Math.round(estimate.observedDropBbls):input.fallback);
  if(!validBottom||!guess||!Number.isFinite(guess)||guess<=0)return null;
  const bbls=Math.max(1,Math.min(1000,limit??1000,guess));
- const routineCap=limit!==null&&guess>=limit&&guess-limit<=Math.max(5,limit*0.05);
+ const tolerance=limit===null?0:Math.max(5,limit*0.05);
+ const knownCapacityDrop=limit===input.driverCapacity && estimate!=null && Math.abs(estimate.observedDropBbls-limit)<=tolerance;
+ const routineCap=limit!==null&&guess>=limit&&(guess-limit<=tolerance||knownCapacityDrop);
  return {bbls,source:estimate?'estimated' as const:'default' as const,provisional:true,needsReview:!routineCap,estimate:estimate?{...estimate,mode:'provisional',caveat:'Estimated loading duration and reported bottom are unverified; tracking uses the reported bottom and estimated barrels do not train AFR.'}:null,limit,issues:[estimate?'Estimated barrels; verify loading duration and actual load':'Driver fallback barrels; verify actual load',...(limit!==null&&guess>limit?['Estimate exceeds configured load limit; capped provisionally']:[])]};
 }
 export function isProvisionalPull(packet:any):boolean {
