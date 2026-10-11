@@ -104,11 +104,22 @@ export function evaluateDriverDispatchBirth(input: {
     : picked.fields.jobType;
   const jobType = resolveCanonicalJobType(requestedJobType, input.envelope.jobTypes, input.companyCustomJobTypes);
   if (!jobType.ok) return jobType;
-  // The driver may label hourly production-water service work, but may not
-  // relabel PW or another governed job type through an untrusted subtype.
-  if (picked.fields.serviceType !== undefined &&
-      (picked.fields.serviceType !== 'Production Water' || jobType.jobTypeId !== 'service-work')) {
-    return fail('invalid_service_type');
+  // Preserve the governed job label (and the one hourly PW service variant)
+  // without letting a caller invent an unrelated billing subtype.
+  if (picked.fields.serviceType !== undefined) {
+    const subtype = picked.fields.serviceType;
+    const publishedLabel = input.envelope.jobTypes.find(jt => jt.jobTypeId === jobType.jobTypeId)?.label;
+    const customLabel = input.companyCustomJobTypes?.map(raw => {
+      if (typeof raw === 'string') return { id: raw.toLowerCase().replace(/[\s_]+/g, '-'), label: raw };
+      if (!raw || typeof raw !== 'object') return null;
+      const entry = raw as { id?: unknown; label?: unknown };
+      if (typeof entry.label !== 'string') return null;
+      return { id: typeof entry.id === 'string' ? entry.id : entry.label.toLowerCase().replace(/[\s_]+/g, '-'), label: entry.label };
+    }).find(entry => entry?.id === jobType.jobTypeId)?.label;
+    const allowed = jobType.jobTypeId !== 'pw' &&
+      ((jobType.jobTypeId === 'service-work' && subtype === 'Production Water') ||
+        subtype === publishedLabel || subtype === customLabel);
+    if (!allowed) return fail('invalid_service_type');
   }
   const binding = stampDispatchBinding(input.envelope);
   const well = canonicalWellFromRecord(picked.fields);
