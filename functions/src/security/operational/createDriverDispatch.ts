@@ -37,6 +37,8 @@ export const DRIVER_DISPATCH_CREATE_ALLOWLIST = Object.freeze([
 export function driverMayJoinProject(project: Record<string, unknown> | null, caller: { companyId: string; driverId: string }, record: Record<string, unknown>): boolean {
   if (!project || project.status !== 'active' || project.companyId !== caller.companyId) return false;
   const roster = [
+    ...(Array.isArray(project.dayDriverIds) ? project.dayDriverIds : []),
+    ...(Array.isArray(project.nightDriverIds) ? project.nightDriverIds : []),
     ...(Array.isArray(project.dayDriverHashes) ? project.dayDriverHashes : []),
     ...(Array.isArray(project.nightDriverHashes) ? project.nightDriverHashes : []),
   ];

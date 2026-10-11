@@ -16,6 +16,7 @@ describe('driver-created project dispatch', () => {
     expect(driverMayJoinProject({ ...project, companyId: 'other' }, caller, picked.fields)).toBe(false);
     expect(driverMayJoinProject({ ...project, status: 'completed' }, caller, picked.fields)).toBe(false);
     expect(driverMayJoinProject({ ...project, dayDriverHashes: [] }, caller, picked.fields)).toBe(false);
+    expect(driverMayJoinProject({ ...project, dayDriverHashes: ['old-approved-key'], dayDriverIds: ['driver-one'] }, caller, picked.fields)).toBe(true);
     expect(driverMayJoinProject(project, caller, { ...picked.fields, operator: 'Operator B' })).toBe(false);
   });
 });

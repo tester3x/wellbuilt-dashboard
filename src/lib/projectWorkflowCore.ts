@@ -58,6 +58,8 @@ export interface ProjectDataInput {
   driverSchedule: Record<string, string[]>;
   dayDriverHashes?: string[];
   nightDriverHashes?: string[];
+  dayDriverIds?: string[];
+  nightDriverIds?: string[];
   driverDisposals?: Record<string, { name: string; lat?: number; lng?: number }>;
   createdAt?: unknown;
 }

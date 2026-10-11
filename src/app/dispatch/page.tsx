@@ -214,6 +214,8 @@ interface Project {
   updates?: ProjectUpdate[];   // Shift handoff log
   dayDriverHashes?: string[];  // Day shift drivers
   nightDriverHashes?: string[];// Night shift drivers
+  dayDriverIds?: string[];     // Canonical IDs for secure driver project access
+  nightDriverIds?: string[];
   driverSchedule: { [isoDate: string]: string[] }; // date -> driverHashes (legacy)
   driverDisposals?: { [driverHash: string]: { name: string; lat?: number; lng?: number } }; // Per-driver SWD assignment
 }
@@ -1682,6 +1684,10 @@ function DispatchPageInner() {
         if (shift === 'day') dayHashes.push(hash);
         else nightHashes.push(hash);
       }
+      const canonicalIds = (hashes: string[]) => hashes.map(hash => {
+        const driver = drivers.find(d => d.key === hash);
+        return driver?.driverId || hash;
+      });
 
       // Firestore rejects `undefined` field values — every optional field
       // either uses `|| null` (string-typed optionals) or the spread-omit
@@ -1704,6 +1710,8 @@ function DispatchPageInner() {
         driverSchedule: schedule,
         ...(dayHashes.length > 0 ? { dayDriverHashes: dayHashes } : {}),
         ...(nightHashes.length > 0 ? { nightDriverHashes: nightHashes } : {}),
+        ...(dayHashes.length > 0 ? { dayDriverIds: canonicalIds(dayHashes) } : {}),
+        ...(nightHashes.length > 0 ? { nightDriverIds: canonicalIds(nightHashes) } : {}),
         ...(Object.keys(newProjectDriverDisposals).length > 0 ? { driverDisposals: newProjectDriverDisposals } : {}),
       };
 
@@ -3947,7 +3955,16 @@ function DispatchPageInner() {
                       if (!guardCreateDispatch()) return;
                       try {
                         const firestore = getFirestoreDb();
-                        await updateDoc(doc(firestore, 'projects', id), data as any);
+                        const next = { ...data };
+                        if (data.dayDriverHashes || data.nightDriverHashes) {
+                          const canonicalIds = (hashes: string[]) => hashes.map(hash => {
+                            const driver = drivers.find(d => d.key === hash);
+                            return driver?.driverId || hash;
+                          });
+                          next.dayDriverIds = canonicalIds(data.dayDriverHashes || selectedProject.dayDriverHashes || []);
+                          next.nightDriverIds = canonicalIds(data.nightDriverHashes || selectedProject.nightDriverHashes || []);
+                        }
+                        await updateDoc(doc(firestore, 'projects', id), next as any);
                       } catch (err) {
                         console.error('Failed to update project:', err);
                         setMessage('Error: ' + (err instanceof Error ? err.message : 'could not update project'));
