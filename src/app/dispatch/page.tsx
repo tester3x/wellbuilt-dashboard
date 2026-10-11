@@ -3653,6 +3653,9 @@ function DispatchPageInner() {
                               ) : (
                                 <div className="text-white font-medium text-xs" title="Open in WB-M unavailable — no canonical company/well identity">{well.wellName}</div>
                               )}
+                              <div className="text-blue-200 text-[10px] font-medium">
+                                Operator: {operatorForBuilderWell(well.wellName, allOperatorWells, well.ndicName) || 'Not linked in well directory'}
+                              </div>
                               <div className="text-gray-500 text-[10px]">{well.route || 'Unrouted'}</div>
                             </td>
                             <td className="px-2 py-1.5 font-mono text-[10px]">

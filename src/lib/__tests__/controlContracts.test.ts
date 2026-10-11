@@ -670,6 +670,7 @@ test('Assign + Reassign modals project the LIVE pool well and show "--" when gov
 
 test('Queue selections carry their operator into PW and survive builder operator changes', () => {
   const page = read('../../app/dispatch/page.tsx');
+  assert.match(page, /Operator: \{operatorForBuilderWell\(well\.wellName, allOperatorWells, well\.ndicName\) \|\| 'Not linked in well directory'\}/, 'each queue row identifies its own operator');
   assert.match(page, /setSelectedWells\(next\);\s*syncQueueSelectionOperator\(next\)/, 'queue selection updates builder operator');
   assert.match(page, /operators\.every\(name => name\.toLowerCase\(\) === first\.toLowerCase\(\)\)/, 'only a common operator is preselected');
   assert.match(page, /if \(builderTab !== 'pw'\) setSelectedWells\(new Map\(\)\)/, 'PW operator changes keep checked wells');
