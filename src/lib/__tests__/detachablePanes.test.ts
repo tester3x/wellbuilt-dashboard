@@ -22,6 +22,13 @@ test('both panes expose a Pop-Out/Reattach toggle button wired to dock*(!detache
   assert.match(page, /\{jobsDetached \? '⧉ Reattach' : '⧉ Pop Out'\}/);
 });
 
+test('workspace tabs label both detached panes and clear the badge on reattach', () => {
+  assert.match(page, /const poppedOut = \(tab === 'queue' && queueDetached\) \|\| \(tab === 'jobs' && jobsDetached\)/);
+  assert.match(page, /disabled=\{poppedOut\}/);
+  assert.match(page, /\{poppedOut && <span[^>]*>⧉ Popped out<\/span>\}/);
+  assert.match(page, /title=\{poppedOut \? `\$\{label\} is open in another window` : undefined\}/);
+});
+
 test('REGRESSION: Reattach is always visible when detached (both panes) and never hidden in the pop-out', () => {
   assert.match(page, /\$\{queueDetached \? 'inline-flex' : 'dispatch-popout-control'\}/);
   assert.match(page, /\$\{jobsDetached \? 'inline-flex' : 'dispatch-popout-control'\}/);

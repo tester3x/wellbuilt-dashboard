@@ -2561,14 +2561,17 @@ function DispatchPageInner() {
             ['build', 'Build Job'],
             ['queue', 'Well Queue'],
             ['jobs', 'Jobs'],
-          ] as const).map(([tab, label]) => (
-            <button key={tab} type="button" aria-pressed={workspaceTab === tab}
-              disabled={(tab === 'queue' && queueDetached) || (tab === 'jobs' && jobsDetached)}
+          ] as const).map(([tab, label]) => {
+            const poppedOut = (tab === 'queue' && queueDetached) || (tab === 'jobs' && jobsDetached);
+            return <button key={tab} type="button" aria-pressed={workspaceTab === tab}
+              disabled={poppedOut}
+              title={poppedOut ? `${label} is open in another window` : undefined}
               onClick={() => setWorkspaceTab(tab)}
-              className={`px-4 py-2 rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${workspaceTab === tab ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'}`}>
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium transition-colors disabled:cursor-not-allowed ${poppedOut ? 'text-white bg-gray-800 border border-amber-500/70' : workspaceTab === tab ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'}`}>
               {label}{tab === 'queue' && selectedWells.size > 0 ? ` · ${selectedWells.size} selected` : ''}
-            </button>
-          ))}
+              {poppedOut && <span className="rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gray-950">⧉ Popped out</span>}
+            </button>;
+          })}
         </nav>
 
         <div className={`dispatch-workspace${queueDetached ? ' is-queue-detached' : ''}${jobsDetached ? ' is-jobs-detached' : ''}`}>
