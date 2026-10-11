@@ -2104,15 +2104,23 @@ function DispatchPageInner() {
     // Entering multi-well mode clears single-well assignment
     setAssignTarget(null);
     handleBuilderTabChange('pw');
-    setSelectedWells(prev => {
-      const next = new Map(prev);
-      if (next.has(wellName)) {
-        next.delete(wellName);
-      } else {
-        next.set(wellName, 1);
-      }
-      return next;
+    const next = new Map(selectedWells);
+    if (next.has(wellName)) next.delete(wellName);
+    else next.set(wellName, 1);
+    setSelectedWells(next);
+    syncQueueSelectionOperator(next);
+  }
+
+  function syncQueueSelectionOperator(chosen: Map<string, number>) {
+    if (chosen.size === 0) return;
+    const operators = Array.from(chosen.keys(), name => {
+      const well = wells.find(w => w.wellName === name);
+      return operatorForBuilderWell(name, allOperatorWells, well?.ndicName);
     });
+    const first = operators[0];
+    // A mixed or unresolved selection remains "All operators"; each job still
+    // receives its own well's operator when bulk dispatch is submitted.
+    setBuilderOperator(first && operators.every(name => name.toLowerCase() === first.toLowerCase()) ? first : '');
   }
 
   function setWellLoadCount(wellName: string, count: number) {
@@ -2138,6 +2146,7 @@ function DispatchPageInner() {
         if (!next.has(w)) next.set(w, 1);
       });
       setSelectedWells(next);
+      syncQueueSelectionOperator(next);
     }
   }
 
@@ -2608,7 +2617,9 @@ function DispatchPageInner() {
                     onChange={e => {
                       setBuilderOperator(e.target.value);
                       setAssignTarget(null);
-                      setSelectedWells(new Map());
+                      // Multi-well Queue picks survive a PW search-filter change.
+                      // The selected well cards display each well's own operator.
+                      if (builderTab !== 'pw') setSelectedWells(new Map());
                       setAssignWellSearch('');
                       setSwWellName('');
                     }}

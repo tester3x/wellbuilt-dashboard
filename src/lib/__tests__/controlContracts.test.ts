@@ -668,6 +668,13 @@ test('Assign + Reassign modals project the LIVE pool well and show "--" when gov
   assert.ok(!/assignTarget\.currentLevel \|\| '--'/.test(page), 'assign no longer shows stored currentLevel as level');
 });
 
+test('Queue selections carry their operator into PW and survive builder operator changes', () => {
+  const page = read('../../app/dispatch/page.tsx');
+  assert.match(page, /setSelectedWells\(next\);\s*syncQueueSelectionOperator\(next\)/, 'queue selection updates builder operator');
+  assert.match(page, /operators\.every\(name => name\.toLowerCase\(\) === first\.toLowerCase\(\)\)/, 'only a common operator is preselected');
+  assert.match(page, /if \(builderTab !== 'pw'\) setSelectedWells\(new Map\(\)\)/, 'PW operator changes keep checked wells');
+});
+
 test('governed well-pool hook: authorized source only, honest unavailable, bounded refresh', () => {
   const hook = read('../useGovernedWellPool.ts');
   assert.match(hook, /adminGetWellPool\(\)/, 'governed callable');
