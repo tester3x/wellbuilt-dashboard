@@ -95,15 +95,17 @@ test('long informational chips are NOT forced into the fixed slot (kept truncate
   assert.doesNotMatch(reasonChunk, /<CategoryBadge/, 'reason is NOT put into the fixed categorical slot');
 });
 
-test('DispatchJobRow moves status/action badges to their own row below well name and destination', () => {
+test('DispatchJobRow keeps status and actions below details inside one bordered job card', () => {
   // Well name is on Row 1 with break-words and minWidth: 100 removed to prevent compression
   assert.match(rowSource, /<span className="text-white font-medium text-sm break-words flex-1 min-w-0"/);
   assert.doesNotMatch(rowSource, /minWidth:\s*100/);
 
-  // Destination sits on Row 2, status/action badges on Row 3
+  // The full job has one outer boundary; there is no divider separating its badges.
+  assert.match(rowSource, /\$\{splitBg\} border rounded-lg/);
+  assert.doesNotMatch(rowSource, /border-t border-gray-800\/60/);
   const wellIdx = rowSource.indexOf('job.ndicWellName || job.wellName');
   const destIdx = rowSource.indexOf('→ {dropoff}');
-  const badgeRowIdx = rowSource.indexOf('border-t border-gray-800/60');
+  const badgeRowIdx = rowSource.indexOf('Operational flags: recommendations');
   const controlsIdx = rowSource.indexOf('Controls always remain');
 
   assert.ok(wellIdx >= 0, 'well name present');

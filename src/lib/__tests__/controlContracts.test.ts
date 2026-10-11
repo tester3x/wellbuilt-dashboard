@@ -658,8 +658,11 @@ test('Assign + Reassign modals project the LIVE pool well and show "--" when gov
   // Reassign: resolve live well by name; null → '--' (not the copied reassignJob.currentLevel).
   assert.match(page, /wells\.find\(w => w\.wellName === reassignJob\.wellName\)/, 'reassign resolves live well');
   assert.match(page, /const proj = liveWell \? projectWellLevel\(liveWell, asOfMs\) : null/, 'reassign projects live or null');
-  // Assign: resolve live well by name; null → '--'.
-  assert.match(page, /wells\.find\(w => w\.wellName === assignTarget\.wellName\) \?\? null/, 'assign resolves live well or null');
+  // Assign: each selected well (or the single target) resolves against the live pool.
+  assert.match(page, /assignTarget\.wellName, loads: 0/, 'single assign target enters the shared details view');
+  assert.match(page, /Array\.from\(selectedWells, \(\[name, loads\]\) => \(\{ name, loads \}\)\)/, 'every checked well gets its own details');
+  assert.match(page, /max-h-\[min\(42vh,420px\)\] overflow-y-auto/, 'details scroll when many wells are selected');
+  assert.match(page, /wells\.find\(w => w\.wellName === name\) \?\? null/, 'each chosen well resolves live or null');
   // Neither modal renders the raw copied currentLevel as the "current" value anymore.
   assert.ok(!/reassignJob\.currentLevel \|\| '--'/.test(page), 'reassign no longer shows copied currentLevel as level');
   assert.ok(!/assignTarget\.currentLevel \|\| '--'/.test(page), 'assign no longer shows stored currentLevel as level');

@@ -2658,31 +2658,38 @@ function DispatchPageInner() {
                         />
                       )}
                     </div>
-                    {/* Well info box — static height, content shows when well selected */}
-                    <div className="bg-gray-900 rounded px-2 py-1.5 min-h-[44px]">
-                      {assignTarget && selectedWells.size === 0 ? (() => {
-                        // Source the LIVE pool well by name (never a frozen copy) and
-                        // project at the shared clock — the modal's Current Level (Est.)
-                        // matches the queue exactly. When the governed pool no longer
-                        // carries this well, show '--' (unavailable) rather than a stale
-                        // copy. The raw last-pull bottom is shown separately, labeled.
-                        const liveWell = wells.find(w => w.wellName === assignTarget.wellName) ?? null;
-                        const proj = liveWell ? projectWellLevel(liveWell, asOfMs) : null;
-                        return (
-                        <div className="grid grid-cols-3 gap-x-3 gap-y-1 text-xs">
-                          <span className="text-gray-400">Current Level (Est.): <span className="text-white font-mono">{proj?.available ? proj.estDisplay : '--'}</span></span>
-                          <span className="text-gray-400">Last Pull: <span className="text-white font-mono">{liveWell?.lastPullBottomLevel || '--'}</span></span>
-                          <span className="text-gray-400">Flow: <span className="text-white font-mono">{assignTarget.flowRate || '--'}</span></span>
-                          <span className="text-gray-400">TTP: <span className="text-white font-mono">{assignTarget.timeTillPull || '--'}</span></span>
-                          <span className="text-gray-400">Route: <span className="text-white">{assignTarget.route || '--'}</span></span>
-                          <span className="text-gray-400 col-span-2">Operator: <span className="text-white">{operatorForBuilderWell(assignTarget.wellName, allOperatorWells, assignTarget.ndicName) || builderOperator || 'Not linked in well directory'}</span></span>
-                          <span className="text-gray-400">BBL/day: <span className="text-white font-mono">{assignTarget.windowBblsDay || assignTarget.bbls24hrs || '--'}</span></span>
-                          <span className="text-gray-400">ETA Max: <span className="text-white font-mono">{assignTarget.etaToMax || '--'}</span></span>
-                        </div>
-                        );
-                      })() : (
-                        <div className="text-gray-600 text-xs italic">Select a well to see info</div>
-                      )}
+                    {/* Every checked well keeps its own live queue details and load count. */}
+                    <div className="bg-gray-900 rounded px-2 py-1.5 min-h-[44px] max-h-[min(42vh,420px)] overflow-y-auto overscroll-contain">
+                      {(() => {
+                        const chosen = selectedWells.size > 0
+                          ? Array.from(selectedWells, ([name, loads]) => ({ name, loads }))
+                          : assignTarget ? [{ name: assignTarget.wellName, loads: 0 }] : [];
+                        if (chosen.length === 0) return <div className="text-gray-600 text-xs italic">Select a well to see info</div>;
+                        return <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+                          {chosen.map(({ name, loads }) => {
+                            // Always project the live pool well at the shared queue clock.
+                            const liveWell = wells.find(w => w.wellName === name) ?? null;
+                            const proj = liveWell ? projectWellLevel(liveWell, asOfMs) : null;
+                            const info = liveWell ?? (assignTarget?.wellName === name ? assignTarget : null);
+                            return <div key={name} className="rounded border border-gray-700/70 bg-gray-800/50 p-2 min-w-0">
+                              <div className="flex flex-wrap items-center justify-between gap-1 mb-1 text-xs font-semibold text-white">
+                                <span className="break-words">{info?.ndicName || name}</span>
+                                {selectedWells.size > 0 && <span className="text-blue-300 whitespace-nowrap">{loads} {loads === 1 ? 'load' : 'loads'}</span>}
+                              </div>
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-3 gap-y-1 text-xs">
+                                <span className="text-gray-400">Current Level (Est.): <span className="text-white font-mono">{proj?.available ? proj.estDisplay : '--'}</span></span>
+                                <span className="text-gray-400">Last Pull: <span className="text-white font-mono">{liveWell?.lastPullBottomLevel || '--'}</span></span>
+                                <span className="text-gray-400">Flow: <span className="text-white font-mono">{info?.flowRate || '--'}</span></span>
+                                <span className="text-gray-400">TTP: <span className="text-white font-mono">{info?.timeTillPull || '--'}</span></span>
+                                <span className="text-gray-400">Route: <span className="text-white">{info?.route || '--'}</span></span>
+                                <span className="text-gray-400">BBL/day: <span className="text-white font-mono">{info?.windowBblsDay || info?.bbls24hrs || '--'}</span></span>
+                                <span className="text-gray-400 md:col-span-2">Operator: <span className="text-white">{operatorForBuilderWell(name, allOperatorWells, info?.ndicName) || builderOperator || 'Not linked in well directory'}</span></span>
+                                <span className="text-gray-400">ETA Max: <span className="text-white font-mono">{info?.etaToMax || '--'}</span></span>
+                              </div>
+                            </div>;
+                          })}
+                        </div>;
+                      })()}
                     </div>
                   </div>
                   {/* Spacer pushes driver+ to bottom */}
@@ -4686,16 +4693,14 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
     : job.notes;
   const isClickable = !!onClickServiceWork;
 
-  // Split ticket visual — light tint so linked jobs stand out
+  // Each complete job, including its flags and controls, gets one visible boundary.
   const splitBg = job.splitGroupId
-    ? job.splitSequence === 1
-      ? 'bg-purple-900/40 border-l-3 border-l-purple-400'
-      : 'bg-purple-900/30 border-l-3 border-l-purple-400/60'
-    : 'bg-gray-900/50';
+    ? 'bg-purple-900/25 border-purple-500/50 border-l-[3px]'
+    : 'bg-gray-900/75 border-gray-700/70';
 
   return (
     <div
-      className={`${compact ? 'py-2 px-3' : 'py-3 px-4'} ${splitBg} rounded-lg hover:bg-gray-900/80 transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
+      className={`${compact ? 'py-2 px-3' : 'py-3 px-4'} ${splitBg} border rounded-lg hover:bg-gray-800/70 transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
       onClick={isClickable ? () => onClickServiceWork!(job) : undefined}
     >
       {/* Row 1: Identity: type, well, quantity, and linked-ticket facts always stay together. */}
@@ -4721,7 +4726,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
       {/* Detail row — invoice #, drop-off, notes */}
       {(job.invoiceNumber || job.ticketNumber || dropoff || operatorName || displayNotes) && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 ml-[48px] text-xs">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs">
           {(job.invoiceNumber || job.ticketNumber) && (
             <span className="text-gray-400 flex-shrink-0">
               <span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}
@@ -4741,8 +4746,19 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
         </div>
       )}
 
-      {/* Row 3: Status & action badges on their own row below well name and destination */}
-      <div className={`flex flex-wrap items-center justify-between gap-1.5 ${compact ? 'mt-1.5 pt-1' : 'mt-2 pt-1.5'} border-t border-gray-800/60`}>
+      {/* Use the available width for dispatch facts; retain labels for snapshot values. */}
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-gray-400">
+        {job.route && <span>Route: <span className="text-gray-200">{job.route}</span></span>}
+        {(job.loadCount || 1) > 1 && <span>Loads: <span className="text-gray-200">{job.loadsCompleted || 0}/{job.loadCount} completed</span></span>}
+        {job.jobType === 'pw' && job.currentLevel && <span>Level at dispatch: <span className="text-gray-200">{job.currentLevel}</span></span>}
+        {job.jobType === 'pw' && job.flowRate && <span>Flow at dispatch: <span className="text-gray-200">{job.flowRate}</span></span>}
+        {job.jobType === 'service' && job.serviceType && <span>Service: <span className="text-gray-200">{job.serviceType}</span></span>}
+        {job.jobType === 'service' && job.onsiteBy && <span>Be on site by: <span className="text-gray-200">{job.onsiteBy.replace('T', ' ')}</span></span>}
+        {job.driverDest && <span>Heading to: <span className="text-gray-200">{job.driverDest}</span></span>}
+      </div>
+
+      {/* Status and actions stay inside the same job boundary as the details. */}
+      <div className={`flex flex-wrap items-center justify-between gap-1.5 ${compact ? 'mt-2' : 'mt-3'}`}>
         {/* Operational flags: recommendations, warnings, and special handling. */}
         <div className="flex flex-wrap items-center gap-1.5">
           {isRecommendedNext && (
