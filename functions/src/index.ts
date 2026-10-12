@@ -4081,3 +4081,7 @@ export { ingestWatchdogPullV2, getWatchdogPullReceiptV2, stopWatchdogWellV2, get
 export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';
 
 export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './watchdog/remoteReview';
+
+// Dedicated synthetic company. The public callable returns a sanitized view;
+// only the scheduled server worker can advance backend records.
+export { advanceLiveDemo, liveDemoSnapshot } from './liveDemo/runtime';

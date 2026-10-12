@@ -1,8 +1,7 @@
 'use client';
 
-// Phase 23 — public /demo route. Zero auth, zero Firebase writes,
-// zero admin callables. All state is in-memory React state and
-// disappears on navigation.
+// Public location-setup preview. It keeps visitors' entered data in memory;
+// the separate /live-demo route displays the synthetic backend operation.
 //
 // Phase 24 — adds a call to the public `demoClassifyLocations`
 // callable (read-only, no auth) so classifications come from the
@@ -289,6 +288,12 @@ function LandingView({
       >
         Start Demo
       </button>
+      <Link
+        href="/live-demo"
+        className="ml-0 mt-3 inline-block rounded-lg border border-cyan-500 px-6 py-3 font-medium text-cyan-200 hover:bg-cyan-900/40 sm:ml-3 sm:mt-0"
+      >
+        Watch the live operations demo
+      </Link>
 
       <div className="mt-8 border-t border-gray-700 pt-6 text-xs text-gray-400 space-y-1">
         <p>You'll be asked for:</p>
