@@ -4090,3 +4090,5 @@ export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';
 export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './watchdog/remoteReview';
 
 export {reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from './watchdog/intake';
+
+export { equipmentShop } from './equipment/shopCallable';
