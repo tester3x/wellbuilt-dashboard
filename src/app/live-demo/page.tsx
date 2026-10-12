@@ -93,6 +93,8 @@ export default function LiveDemoPage() {
 
   const featured = snapshot?.featured;
   const featuredStage = snapshot?.featuredStage;
+  const stepSeconds = snapshot?.active ? Math.max(0, Math.ceil((snapshot.active.dueAt - clock) / 1_000)) : null;
+  const nextRunSeconds = snapshot?.nextRunAt ? Math.max(0, Math.ceil((snapshot.nextRunAt - clock) / 1_000)) : null;
   return (
     <main className="min-h-screen bg-[#08101e] px-4 py-6 text-slate-100 sm:px-8 sm:py-10">
       <div className="mx-auto max-w-6xl">
@@ -112,8 +114,8 @@ export default function LiveDemoPage() {
           <span className="rounded-full bg-blue-500/15 px-3 py-1 text-blue-200">Demo company</span>
           <span className="rounded-full bg-amber-500/15 px-3 py-1 text-amber-200">Synthetic data</span>
           {snapshot && <span className="text-slate-400">Set {snapshot.batchNumber} · run {snapshot.runInBatch}/{snapshot.batchSize} · {snapshot.startedToday} today</span>}
-          {clock > 0 && snapshot?.active && <span className="text-cyan-200">Next step in {Math.max(0, Math.ceil((snapshot.active.dueAt - clock) / 1_000))}s</span>}
-          {clock > 0 && !snapshot?.active && snapshot?.enabled && snapshot?.nextRunAt && <span className="text-cyan-200">Next load in {Math.max(0, Math.ceil((snapshot.nextRunAt - clock) / 1_000))}s</span>}
+          {clock > 0 && snapshot?.active && <span className="text-cyan-200">{stepSeconds ? `Next step in ${stepSeconds}s` : 'Processing next step…'}</span>}
+          {clock > 0 && !snapshot?.active && snapshot?.enabled && snapshot?.nextRunAt && <span className="text-cyan-200">{nextRunSeconds ? `Next load in ${nextRunSeconds}s` : 'Starting next load…'}</span>}
         </div>
 
         {error && <div role="alert" className="mb-6 rounded-xl border border-rose-500/50 bg-rose-950/40 p-4 text-rose-200">{error}</div>}
@@ -192,11 +194,11 @@ export default function LiveDemoPage() {
               {followLive ? '● Following live stage' : 'Follow live stage'}
             </button>
           </div>
-          <div role="tablist" aria-label="WellBuilt workflow views" className="mt-5 flex gap-2 overflow-x-auto pb-2">
+          <div role="tablist" aria-label="WellBuilt workflow views" className="mt-5 flex flex-wrap gap-2 pb-2">
             {views.map(item => (
               <button key={item.id} type="button" role="tab" aria-selected={view === item.id}
                 onClick={() => { setFollowLive(false); setView(item.id); }}
-                className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold ${view === item.id ? 'bg-cyan-500 text-slate-950' : 'bg-[#0b1525] text-slate-300 hover:bg-slate-700'}`}>
+                className={`rounded-lg px-4 py-2 text-sm font-semibold ${view === item.id ? 'bg-cyan-500 text-slate-950' : 'bg-[#0b1525] text-slate-300 hover:bg-slate-700'}`}>
                 {item.label}
               </button>
             ))}
