@@ -2,7 +2,7 @@
   "capturedAt": "2026-09-12",
   "project": "wellbuilt-sync",
   "source": "firebase functions:list",
-  "count": 178,
+  "count": 179,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -113,6 +113,7 @@
     "listStuckHandoffs",
     "listTruthRagExports",
     "listTruthSwdReference",
+    "liveDemoSnapshot",
     "logUnmatched",
     "materializeTransferredTicket",
     "materializerDriftHeartbeat",
@@ -184,6 +185,10 @@
     "writeDiagnosticLog"
   ],
   "verifiedAdditions": {
+    "liveDemoSnapshot": {
+      "verifiedAt": "2026-10-12",
+      "source": "Successful scoped Firebase deployment from 6d85f6a3"
+    },
     "getDispatchLocationCatalog": {
       "verifiedAt": "2026-10-05",
       "source": "Successful scoped Firebase deployment from 2477e56e"
