@@ -15,6 +15,9 @@ type Snapshot = {
   company: string; synthetic: true; enabled: boolean;
   active: { scenario: Scenario; stage: string; dueAt: number; startedAt: number } | null;
   history: Array<{ id: string; kind: Scenario['kind']; driverName: string; startedAt: number; closedAt: number }>;
+  latestProof: { id: string; dispatchesCompleted: number; dispatchCount: number;
+    closedInvoices: number; invoiceCount: number; ticketCount: number;
+    processedPulls: number; pullCount: number; totalBBL: number } | null;
   dispatches: Array<{ id: string; exists: boolean; status: string | null }>;
   sequence: number; startedToday: number; dailyCap: number; error: string | null; observedAt: number;
 };
@@ -149,6 +152,14 @@ export default function LiveDemoPage() {
                 <p className="font-semibold">{kindNames[run.kind]}</p>
                 <p className="mt-1 text-sm text-slate-300">{run.driverName}</p>
                 <p className="mt-2 font-mono text-xs text-slate-500">{run.id} · {new Date(run.closedAt).toLocaleTimeString()}</p>
+                {snapshot.latestProof?.id === run.id && (
+                  <div className="mt-4 border-t border-slate-700 pt-3 text-xs leading-6 text-emerald-200">
+                    <p>{snapshot.latestProof.totalBBL} BBL · {snapshot.latestProof.ticketCount} tickets</p>
+                    <p>{snapshot.latestProof.closedInvoices}/{snapshot.latestProof.invoiceCount} invoices closed</p>
+                    <p>{snapshot.latestProof.dispatchesCompleted}/{snapshot.latestProof.dispatchCount} dispatches completed</p>
+                    <p>{snapshot.latestProof.processedPulls}/{snapshot.latestProof.pullCount} well pulls processed</p>
+                  </div>
+                )}
               </div>
             )) : <p className="text-sm text-slate-500">Runs will appear here as they close.</p>}
           </div>

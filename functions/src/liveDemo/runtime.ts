@@ -155,6 +155,50 @@ function allDispatches(scenario: DemoScenario): string[] {
   return scenario.loads.flatMap(dispatchIds);
 }
 
+async function completedRunProof(id: string): Promise<{
+  id: string; dispatchesCompleted: number; dispatchCount: number;
+  closedInvoices: number; invoiceCount: number; ticketCount: number;
+  processedPulls: number; pullCount: number; totalBBL: number;
+}> {
+  const sequence = Number(id.replace(/^demo-/, ''));
+  if (!Number.isSafeInteger(sequence) || buildDemoScenario(sequence).id !== id) {
+    throw new Error('invalid_demo_history_id');
+  }
+  const scenario = buildDemoScenario(sequence);
+  const loads = await Promise.all(scenario.loads.map(async load => {
+    const [invoice, pull, ...tickets] = await Promise.all([
+      fs().collection('invoices').doc(`${load.id}-invoice`).get(),
+      rt().ref(`packets/processed/${load.id}-pull`).once('value'),
+      ...load.stops.map((_, i) => fs().collection('tickets').doc(`${load.id}-ticket-${i + 1}`).get()),
+    ]);
+    if (invoice.exists) assertDemoRecord(invoice.data(), `invoices/${load.id}-invoice`);
+    for (const [i, ticket] of tickets.entries()) {
+      if (ticket.exists) assertDemoRecord(ticket.data(), `tickets/${load.id}-ticket-${i + 1}`);
+    }
+    if (pull.exists() && pull.val()?.companyId !== DEMO_COMPANY_ID) throw new Error('demo_pull_company_conflict');
+    return {
+      invoiceClosed: invoice.data()?.status === 'closed',
+      bbls: Number(invoice.data()?.totalBBL || 0),
+      processedPull: pull.exists(),
+      ticketCount: tickets.filter(ticket => ticket.exists).length,
+    };
+  }));
+  const dispatches = await Promise.all(allDispatches(scenario).map(id => fs().collection('dispatches').doc(id).get()));
+  for (const [i, dispatch] of dispatches.entries()) {
+    if (dispatch.exists) assertDemoRecord(dispatch.data(), `dispatches/${allDispatches(scenario)[i]}`);
+  }
+  return {
+    id, dispatchesCompleted: dispatches.filter(dispatch => dispatch.data()?.status === 'completed').length,
+    dispatchCount: dispatches.length,
+    closedInvoices: loads.filter(load => load.invoiceClosed).length,
+    invoiceCount: loads.length,
+    ticketCount: loads.reduce((sum, load) => sum + load.ticketCount, 0),
+    processedPulls: loads.filter(load => load.processedPull).length,
+    pullCount: loads.length,
+    totalBBL: loads.reduce((sum, load) => sum + load.bbls, 0),
+  };
+}
+
 async function writePending(scenario: DemoScenario, packet: ImmutableRevisionEnvelope, now: number): Promise<void> {
   const binding = stampDispatchBinding(packet);
   for (const load of scenario.loads) {
@@ -372,10 +416,11 @@ export const liveDemoSnapshot = httpsV2.onCall(
       if (value) assertDemoRecord(value, `dispatches/${id}`);
       return { id, exists: snap.exists, status: value?.status || null };
     }));
+    const latestProof = state.history?.[0] ? await completedRunProof(state.history[0].id) : null;
     return {
       company: DEMO_COMPANY_NAME, companyId: DEMO_COMPANY_ID,
       synthetic: true, enabled: control.enabled !== false && control.killSwitch !== true,
-      active, history: state.history || [], dispatches,
+      active, history: state.history || [], dispatches, latestProof,
       sequence: state.sequence, startedToday: state.startedToday,
       dailyCap: DEMO_MAX_SCENARIOS_PER_DAY, error: state.error || null,
       observedAt: now,
