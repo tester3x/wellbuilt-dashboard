@@ -13,7 +13,7 @@ import { loadVerifiedRevision } from '../security/operational/dispatchPinRuntime
 import { stampDispatchBinding } from '../security/operational/dispatchPacketPin';
 import { DEMO_PACKET_DRAFT } from './packetDraft';
 import {
-  DEMO_COMPANY_ID, DEMO_COMPANY_NAME, DEMO_MAX_SCENARIOS_PER_DAY,
+  DEMO_BATCH_SIZE, DEMO_COMPANY_ID, DEMO_COMPANY_NAME, DEMO_DRIVERS, DEMO_WELLS,
   buildDemoScenario, type DemoLoad, type DemoScenario, type DemoStage,
 } from './plan';
 
@@ -36,6 +36,7 @@ type DemoState = {
   startedToday: number;
   active: Active | null;
   history: RunSummary[];
+  lastCompleted?: DemoScenario;
   error?: string;
 };
 
@@ -123,19 +124,19 @@ async function ensureDemoTenant(): Promise<ImmutableRevisionEnvelope> {
     requirePhotos: false, minPhotoCount: 0, ticketStartNumber: FIRST_DEMO_TICKET,
     ticketBookEra: 'post_cutover', createdAt: new Date().toISOString(),
   });
-  for (const name of ['Demo Well 1', 'Demo Well 2']) {
+  for (const name of DEMO_WELLS) {
     await createDemoRtdb(`well_config/${name}`, {
       companyId: DEMO_COMPANY_ID, isDemo: true, name, route: 'Demo Route',
       tanks: 1, bottomLevel: 24, pullBbls: 140, bblPerFoot: 20,
       tankHeight: 240, recoveryCeilingFeet: 20,
-      lat: 0.1, lng: name === 'Demo Well 1' ? 0.1 : 0.11,
+      lat: 0.1, lng: 0.1 + DEMO_WELLS.indexOf(name) * 0.01,
     });
   }
-  for (const [id, name] of [['demo-driver-claude', 'Claude Demo Driver'], ['demo-driver-grok', 'Grok Demo Driver']]) {
+  for (const { id, name, truck } of DEMO_DRIVERS) {
     await createDemoRtdb(`drivers/profiles/${id}`, {
       companyId: DEMO_COMPANY_ID, isDemo: true, driverId: id,
       legalName: name, displayName: name, active: true,
-      truckNumber: id === 'demo-driver-claude' ? 'DEMO-1' : 'DEMO-2',
+      truckNumber: truck,
     });
   }
   return publishDemoPacket();
@@ -279,7 +280,7 @@ async function writeClosed(scenario: DemoScenario, now: number): Promise<void> {
         type: scenario.kind === 'split_ticket' ? 'Service Work' : 'Production Water',
         driver: scenario.driverName, driverId: scenario.driverId,
         invoiceDocId: `${load.id}-invoice`, dispatchId: ids[Math.min(stopIndex + 1, ids.length - 1)],
-        packetId: `${load.id}-pull`, truckNumber: scenario.driverId === 'demo-driver-claude' ? 'DEMO-1' : 'DEMO-2',
+        packetId: `${load.id}-pull`, truckNumber: DEMO_DRIVERS.find(driver => driver.id === scenario.driverId)?.truck,
         splitChainId: load.familyId, splitChainSeq: stopIndex + 1,
         ...(load.haulGroupId ? { haulGroupId: load.haulGroupId } : {}),
         createdAt: new Date(now).toISOString(),
@@ -351,7 +352,7 @@ async function advance(now: number): Promise<void> {
   if (state.day !== day) { state.day = day; state.startedToday = 0; }
   if (!state.active) {
     const viewerAt = Number((await rt().ref(`${root}/viewerAt`).once('value')).val() || 0);
-    if (now - viewerAt > VIEWER_WINDOW_MS || state.startedToday >= DEMO_MAX_SCENARIOS_PER_DAY) {
+    if (now - viewerAt > VIEWER_WINDOW_MS) {
       await stateRef.set(state);
       return;
     }
@@ -368,6 +369,7 @@ async function advance(now: number): Promise<void> {
     const index = stageOrder.indexOf(active.stage);
     if (index < 0) throw new Error('unknown_demo_stage');
     if (active.stage === 'closed') {
+      state.lastCompleted = active.scenario;
       state.history = [{
         id: active.scenario.id, kind: active.scenario.kind,
         driverName: active.scenario.driverName, startedAt: active.startedAt, closedAt: now,
@@ -409,20 +411,52 @@ export const liveDemoSnapshot = httpsV2.onCall(
     const state: DemoState = stateSnap.val() || blankState(now);
     const control = controlSnap.val() || {};
     const active = state.active;
-    const ids = active ? allDispatches(active.scenario) : [];
+    const featured = active?.scenario || state.lastCompleted || null;
+    const ids = featured ? allDispatches(featured) : [];
     const dispatches = await Promise.all(ids.map(async id => {
       const snap = await fs().collection('dispatches').doc(id).get();
       const value = snap.data();
       if (value) assertDemoRecord(value, `dispatches/${id}`);
-      return { id, exists: snap.exists, status: value?.status || null };
+      return { id, exists: snap.exists, status: value?.status || null,
+        driverStage: value?.driverStage || null, wellName: value?.wellName || null,
+        disposal: value?.disposal || null, bbls: value?.bbls || null };
     }));
+    const loads = featured ? await Promise.all(featured.loads.map(async load => {
+      const [incoming, processed, invoice, ...tickets] = await Promise.all([
+        rt().ref(`packets/incoming/${load.id}-pull`).once('value'),
+        rt().ref(`packets/processed/${load.id}-pull`).once('value'),
+        fs().collection('invoices').doc(`${load.id}-invoice`).get(),
+        ...load.stops.map((_, i) => fs().collection('tickets').doc(`${load.id}-ticket-${i + 1}`).get()),
+      ]);
+      if (incoming.exists()) assertDemoRecord(incoming.val(), `packets/incoming/${load.id}-pull`);
+      if (processed.exists()) assertDemoRecord(processed.val(), `packets/processed/${load.id}-pull`);
+      if (invoice.exists) assertDemoRecord(invoice.data(), `invoices/${load.id}-invoice`);
+      return {
+        id: load.id, pickup: load.pickup, bbls: load.bbls,
+        pullStatus: processed.exists() ? 'processed' : incoming.exists() ? 'queued' : 'awaiting pickup',
+        tickets: tickets.map((ticket, i) => {
+          const value = ticket.data();
+          if (value) assertDemoRecord(value, `tickets/${load.id}-ticket-${i + 1}`);
+          return { id: `${load.id}-ticket-${i + 1}`, exists: ticket.exists,
+            number: value?.ticketNumber || null, qty: value?.qty || null,
+            destination: value?.hauledTo || load.stops[i].name,
+            familyId: value?.splitChainId || load.familyId };
+        }),
+        invoice: { exists: invoice.exists, status: invoice.data()?.status || null,
+          totalBBL: invoice.data()?.totalBBL || null,
+          ticketNumbers: invoice.data()?.tickets || [] },
+      };
+    })) : [];
     const latestProof = state.history?.[0] ? await completedRunProof(state.history[0].id) : null;
     return {
       company: DEMO_COMPANY_NAME, companyId: DEMO_COMPANY_ID,
       synthetic: true, enabled: control.enabled !== false && control.killSwitch !== true,
-      active, history: state.history || [], dispatches, latestProof,
+      active, featured, featuredStage: active?.stage || (featured ? 'complete' : null),
+      history: state.history || [], dispatches, loads, latestProof,
       sequence: state.sequence, startedToday: state.startedToday,
-      dailyCap: DEMO_MAX_SCENARIOS_PER_DAY, error: state.error || null,
+      batchSize: DEMO_BATCH_SIZE, batchNumber: Math.floor((Math.max(1, state.sequence) - 1) / DEMO_BATCH_SIZE) + 1,
+      runInBatch: state.sequence ? (state.sequence - 1) % DEMO_BATCH_SIZE + 1 : 0,
+      error: state.error || null,
       observedAt: now,
     };
   },

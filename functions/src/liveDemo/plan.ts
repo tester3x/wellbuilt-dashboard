@@ -1,7 +1,14 @@
 /** Deterministic, synthetic loads for the public live demo. */
 export const DEMO_COMPANY_ID = 'wellbuilt-demo';
 export const DEMO_COMPANY_NAME = 'WellBuilt Demo Hauling';
-export const DEMO_MAX_SCENARIOS_PER_DAY = 24;
+export const DEMO_BATCH_SIZE = 24;
+export const DEMO_WELLS = ['Demo Well 1', 'Demo Well 2', 'Demo Well 3', 'Demo Well 4', 'Demo Well 5', 'Demo Well 6'] as const;
+export const DEMO_DESTINATIONS = ['Demo SWD 1', 'Demo SWD 2', 'Demo Pad 1', 'Demo Pad 2'] as const;
+export const DEMO_DRIVERS = [
+  { id: 'demo-driver-claude', name: 'Claude Demo Driver', truck: 'DEMO-1' },
+  { id: 'demo-driver-grok', name: 'Grok Demo Driver', truck: 'DEMO-2' },
+  { id: 'demo-driver-antig', name: 'Antig Demo Driver', truck: 'DEMO-3' },
+] as const;
 
 export type DemoScenarioKind = 'single' | 'multi_haul' | 'split_ticket';
 export type DemoStage = 'pending' | 'accepted' | 'at_pickup' | 'departed' | 'at_dropoff' | 'closed';
@@ -30,11 +37,6 @@ export interface DemoScenario {
   loads: DemoLoad[];
 }
 
-const drivers = [
-  { id: 'demo-driver-claude', name: 'Claude Demo Driver' },
-  { id: 'demo-driver-grok', name: 'Grok Demo Driver' },
-] as const;
-
 export function demoScenarioKind(sequence: number): DemoScenarioKind {
   if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error('invalid_demo_sequence');
   if (sequence % 7 === 0) return 'split_ticket';
@@ -44,8 +46,12 @@ export function demoScenarioKind(sequence: number): DemoScenarioKind {
 
 export function buildDemoScenario(sequence: number): DemoScenario {
   const kind = demoScenarioKind(sequence);
-  const driver = drivers[(sequence - 1) % drivers.length];
+  const driver = DEMO_DRIVERS[(sequence - 1) % DEMO_DRIVERS.length];
   const id = `demo-${String(sequence).padStart(6, '0')}`;
+  const slot = (sequence - 1) % DEMO_BATCH_SIZE;
+  const batch = Math.floor((sequence - 1) / DEMO_BATCH_SIZE);
+  const pickup = DEMO_WELLS[slot % DEMO_WELLS.length];
+  const destination = DEMO_DESTINATIONS[Math.floor(slot / DEMO_WELLS.length)];
   const load = (suffix: string, pickup: string, bbls: number, stops: DemoStop[]): DemoLoad => ({
     id: `${id}-${suffix}`,
     pickup,
@@ -56,17 +62,23 @@ export function buildDemoScenario(sequence: number): DemoScenario {
   let loads: DemoLoad[];
   if (kind === 'multi_haul') {
     const haulGroupId = `${id}-haul`;
+    const secondPickup = DEMO_WELLS[(slot + 1 + batch % (DEMO_WELLS.length - 1)) % DEMO_WELLS.length];
+    const firstBbls = 90 + (slot * 3 + batch * 5) % 35;
+    const secondBbls = 55 + (slot * 2 + batch * 7) % 25;
     loads = [
-      { ...load('a', 'Demo Well 1', 90, [{ name: 'Demo SWD 1', bbls: 90 }]), haulGroupId },
-      { ...load('b', 'Demo Well 2', 55, [{ name: 'Demo SWD 1', bbls: 55 }]), haulGroupId },
+      { ...load('a', pickup, firstBbls, [{ name: destination, bbls: firstBbls }]), haulGroupId },
+      { ...load('b', secondPickup, secondBbls, [{ name: destination, bbls: secondBbls }]), haulGroupId },
     ];
   } else if (kind === 'split_ticket') {
-    loads = [load('a', 'Demo Well 1', 140, [
-      { name: 'Demo Pad 1', bbls: 60 },
-      { name: 'Demo SWD 1', bbls: 80 },
+    const bbls = 140 + (slot * 3 + batch * 11) % 45;
+    const firstStopBbls = 60 + (slot * 2 + batch * 7) % 30;
+    loads = [load('a', pickup, bbls, [
+      { name: DEMO_DESTINATIONS[2 + slot % 2], bbls: firstStopBbls },
+      { name: DEMO_DESTINATIONS[(slot + batch) % 2], bbls: bbls - firstStopBbls },
     ])];
   } else {
-    loads = [load('a', 'Demo Well 1', 140, [{ name: 'Demo SWD 1', bbls: 140 }])];
+    const bbls = 140 + (slot * 2 + batch * 11) % 60;
+    loads = [load('a', pickup, bbls, [{ name: destination, bbls }])];
   }
   const scenario = { id, sequence, kind, driverId: driver.id, driverName: driver.name, loads };
   assertDemoScenario(scenario);
@@ -75,7 +87,7 @@ export function buildDemoScenario(sequence: number): DemoScenario {
 
 export function assertDemoScenario(scenario: DemoScenario): void {
   if (!/^demo-\d{6}$/.test(scenario.id)) throw new Error('invalid_demo_id');
-  if (!drivers.some(driver => driver.id === scenario.driverId && driver.name === scenario.driverName)) {
+  if (!DEMO_DRIVERS.some(driver => driver.id === scenario.driverId && driver.name === scenario.driverName)) {
     throw new Error('invalid_demo_driver');
   }
   if (!scenario.loads.length || scenario.loads.length > 2) throw new Error('invalid_demo_load_count');
@@ -84,10 +96,10 @@ export function assertDemoScenario(scenario: DemoScenario): void {
     if (!load.id.startsWith(`${scenario.id}-`)) throw new Error('cross_scenario_load');
     if (families.has(load.familyId)) throw new Error('reused_family_for_new_pickup');
     families.add(load.familyId);
-    if (!['Demo Well 1', 'Demo Well 2'].includes(load.pickup)) throw new Error('unknown_demo_pickup');
+    if (!(DEMO_WELLS as readonly string[]).includes(load.pickup)) throw new Error('unknown_demo_pickup');
     if (!Number.isInteger(load.bbls) || load.bbls < 1 || load.bbls > 250) throw new Error('invalid_demo_bbls');
     if (!load.stops.length || load.stops.length > 2) throw new Error('invalid_demo_stop_count');
-    if (load.stops.some(stop => !['Demo SWD 1', 'Demo Pad 1'].includes(stop.name) || !Number.isInteger(stop.bbls) || stop.bbls < 1)) {
+    if (load.stops.some(stop => !(DEMO_DESTINATIONS as readonly string[]).includes(stop.name) || !Number.isInteger(stop.bbls) || stop.bbls < 1)) {
       throw new Error('invalid_demo_stop');
     }
     if (load.stops.reduce((sum, stop) => sum + stop.bbls, 0) !== load.bbls) {
