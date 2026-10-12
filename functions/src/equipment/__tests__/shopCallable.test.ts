@@ -1,5 +1,5 @@
 const mockDriver=jest.fn();const mockStaff=jest.fn();const mockWhere=jest.fn();const mockGet=jest.fn();const mockMembership=jest.fn();const mockTransaction=jest.fn();
-const mockQuery:any={where:(...a:unknown[])=>{mockWhere(...a);return mockQuery;},orderBy:()=>mockQuery,limit:()=>mockQuery,startAfter:()=>mockQuery,get:async()=>({docs:[],size:0})};
+const mockQuery:any={where:(...a:unknown[])=>{mockWhere(...a);return mockQuery;},orderBy:()=>mockQuery,limit:()=>mockQuery,startAfter:()=>mockQuery,get:async()=>({docs:[],size:0}),doc:(id:string)=>({id})};
 jest.mock('firebase-admin',()=>({
  firestore:Object.assign(()=>({collection:(name:string)=>name==='equipment_shop_access'?{doc:()=>({collection:()=>({doc:()=>({get:mockMembership})})})}:{...mockQuery,doc:()=>({get:mockGet,collection:()=>mockQuery})},runTransaction:mockTransaction}),{FieldPath:{documentId:()=> '__name__'}}),
  database:()=>({ref:()=>({once:async()=>({val:()=>({companyId:'company-a',active:true,legalName:'Test Driver'})})})}),
@@ -21,3 +21,13 @@ test('cross-company detail is not returned',async()=>{await expect(invoke(req({o
 test('only a server-enabled membership expands driver view to shop queue',async()=>{mockMembership.mockResolvedValue({data:()=>({enabled:true})});expect(await invoke(req({op:'list'}))).toMatchObject({staff:true});expect(mockWhere).not.toHaveBeenCalledWith('driverId','==','driver-a');});
 test('unscoped drivers fail before accessing reports',async()=>{mockDriver.mockResolvedValue({uid:'uid-a',driverId:'driver-a'});await expect(invoke(req({op:'list'}))).rejects.toMatchObject({code:'permission-denied'});expect(mockWhere).not.toHaveBeenCalled();});
 test('unauthenticated caller cannot use staff authority',async()=>{mockStaff.mockRejectedValue({code:'unauthenticated'});await expect(invoke({data:{op:'list'}})).rejects.toMatchObject({code:'unauthenticated'});expect(mockWhere).not.toHaveBeenCalled();});
+test('network retry returns the same report without another write',async()=>{
+ const tx={get:jest.fn().mockResolvedValue({exists:false}),create:jest.fn()};
+ mockTransaction.mockImplementation(fn=>fn(tx));
+ const report={op:'create',id:'report_123',equipmentType:'truck',equipmentNumber:'102',title:'Oil leak',description:'Leak near sump',outOfService:true,photos:[]};
+ await invoke(req(report));const saved=tx.create.mock.calls[0][1];
+ expect(saved.driverId).toBe('driver-a');expect(saved.companyId).toBe('company-a');
+ tx.get.mockResolvedValue({exists:true,data:()=>saved});tx.create.mockClear();
+ expect(await invoke(req(report))).toEqual({id:'report_123'});expect(tx.create).not.toHaveBeenCalled();
+ await expect(invoke(req({...report,description:'Changed payload'}))).rejects.toMatchObject({code:'already-exists'});
+});
