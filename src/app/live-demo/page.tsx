@@ -26,7 +26,7 @@ type Snapshot = {
       destination: string; familyId: string }>;
     invoice: { exists: boolean; status: string | null; totalBBL: number | null; ticketNumbers: string[] } }>;
   sequence: number; startedToday: number; batchSize: number; batchNumber: number;
-  runInBatch: number; error: string | null; observedAt: number;
+  runInBatch: number; nextRunAt: number | null; error: string | null; observedAt: number;
 };
 
 const stageNames: Record<string, string> = {
@@ -55,6 +55,13 @@ export default function LiveDemoPage() {
   const [error, setError] = useState('');
   const [view, setView] = useState<View>('dispatch');
   const [followLive, setFollowLive] = useState(true);
+  const [clock, setClock] = useState(0);
+
+  useEffect(() => {
+    setClock(Date.now());
+    const timer = window.setInterval(() => setClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let stopped = false;
@@ -105,6 +112,8 @@ export default function LiveDemoPage() {
           <span className="rounded-full bg-blue-500/15 px-3 py-1 text-blue-200">Demo company</span>
           <span className="rounded-full bg-amber-500/15 px-3 py-1 text-amber-200">Synthetic data</span>
           {snapshot && <span className="text-slate-400">Set {snapshot.batchNumber} · run {snapshot.runInBatch}/{snapshot.batchSize} · {snapshot.startedToday} today</span>}
+          {clock > 0 && snapshot?.active && <span className="text-cyan-200">Next step in {Math.max(0, Math.ceil((snapshot.active.dueAt - clock) / 1_000))}s</span>}
+          {clock > 0 && !snapshot?.active && snapshot?.enabled && snapshot?.nextRunAt && <span className="text-cyan-200">Next load in {Math.max(0, Math.ceil((snapshot.nextRunAt - clock) / 1_000))}s</span>}
         </div>
 
         {error && <div role="alert" className="mb-6 rounded-xl border border-rose-500/50 bg-rose-950/40 p-4 text-rose-200">{error}</div>}

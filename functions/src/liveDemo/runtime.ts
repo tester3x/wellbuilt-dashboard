@@ -21,7 +21,7 @@ const fs = () => admin.firestore();
 const rt = () => admin.database();
 const root = 'live_demo';
 const stageOrder: DemoStage[] = ['pending', 'accepted', 'at_pickup', 'departed', 'at_dropoff', 'closed'];
-const STAGE_MS = 45_000;
+const STAGE_MS = 15_000;
 const VIEWER_WINDOW_MS = 120_000;
 const LOCK_MS = 90_000;
 const FIRST_DEMO_TICKET = 900_000_000;
@@ -37,6 +37,7 @@ type DemoState = {
   active: Active | null;
   history: RunSummary[];
   lastCompleted?: DemoScenario;
+  lastClosedAt?: number;
   error?: string;
 };
 
@@ -352,7 +353,7 @@ async function advance(now: number): Promise<void> {
   if (state.day !== day) { state.day = day; state.startedToday = 0; }
   if (!state.active) {
     const viewerAt = Number((await rt().ref(`${root}/viewerAt`).once('value')).val() || 0);
-    if (now - viewerAt > VIEWER_WINDOW_MS) {
+    if (now - viewerAt > VIEWER_WINDOW_MS || (state.lastClosedAt && now - state.lastClosedAt < 25_000)) {
       await stateRef.set(state);
       return;
     }
@@ -370,6 +371,7 @@ async function advance(now: number): Promise<void> {
     if (index < 0) throw new Error('unknown_demo_stage');
     if (active.stage === 'closed') {
       state.lastCompleted = active.scenario;
+      state.lastClosedAt = now;
       state.history = [{
         id: active.scenario.id, kind: active.scenario.kind,
         driverName: active.scenario.driverName, startedAt: active.startedAt, closedAt: now,
@@ -401,10 +403,19 @@ export async function advanceLiveDemoForEmulator(now: number): Promise<void> {
 }
 
 export const liveDemoSnapshot = httpsV2.onCall(
-  { memory: '256MiB', timeoutSeconds: 20, enforceAppCheck: false },
+  { memory: '256MiB', timeoutSeconds: 60, enforceAppCheck: false },
   async () => {
     const now = Date.now();
     await rt().ref(`${root}/viewerAt`).set(now);
+    const [beforeState, beforeControl] = await Promise.all([
+      rt().ref(`${root}/state`).once('value'), rt().ref(`${root}/control`).once('value'),
+    ]);
+    const pending: DemoState | null = beforeState.val();
+    const settings = beforeControl.val() || {};
+    if (settings.enabled !== false && settings.killSwitch !== true
+      && (!pending?.active || pending.active.dueAt <= now)) {
+      await withLock(() => advance(now));
+    }
     const [stateSnap, controlSnap] = await Promise.all([
       rt().ref(`${root}/state`).once('value'), rt().ref(`${root}/control`).once('value'),
     ]);
@@ -456,6 +467,7 @@ export const liveDemoSnapshot = httpsV2.onCall(
       sequence: state.sequence, startedToday: state.startedToday,
       batchSize: DEMO_BATCH_SIZE, batchNumber: Math.floor((Math.max(1, state.sequence) - 1) / DEMO_BATCH_SIZE) + 1,
       runInBatch: state.sequence ? (state.sequence - 1) % DEMO_BATCH_SIZE + 1 : 0,
+      nextRunAt: state.lastClosedAt ? state.lastClosedAt + 25_000 : null,
       error: state.error || null,
       observedAt: now,
     };
