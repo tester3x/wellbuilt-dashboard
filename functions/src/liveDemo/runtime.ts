@@ -25,6 +25,7 @@ const STAGE_MS = 15_000;
 const VIEWER_WINDOW_MS = 120_000;
 const LOCK_MS = 90_000;
 const FIRST_DEMO_TICKET = 900_000_000;
+const DEMO_LOGO_URL = 'https://wellbuilt-sync.web.app/live-demo/logo.svg';
 
 type Active = { scenario: DemoScenario; stage: DemoStage; dueAt: number; startedAt: number };
 type RunSummary = { id: string; kind: DemoScenario['kind']; driverName: string; startedAt: number; closedAt: number };
@@ -122,8 +123,22 @@ async function ensureDemoTenant(): Promise<ImmutableRevisionEnvelope> {
   await createDemoFirestore('companies', DEMO_COMPANY_ID, {
     companyId: DEMO_COMPANY_ID, name: DEMO_COMPANY_NAME, status: 'active',
     isDemo: true, invoicingMode: 'ticket_only', wellMonitoring: true,
+    logoUrl: DEMO_LOGO_URL, primaryColor: '#0891b2',
+    splitTickets: true, liveDispatchSync: false,
     requirePhotos: false, minPhotoCount: 0, ticketStartNumber: FIRST_DEMO_TICKET,
     ticketBookEra: 'post_cutover', createdAt: new Date().toISOString(),
+  });
+  const companyRef = fs().collection('companies').doc(DEMO_COMPANY_ID);
+  await fs().runTransaction(async tx => {
+    const current = await tx.get(companyRef);
+    assertDemoRecord(current.data(), `companies/${DEMO_COMPANY_ID}`);
+    if (current.get('logoUrl') !== DEMO_LOGO_URL || current.get('primaryColor') !== '#0891b2'
+      || current.get('splitTickets') !== true || current.get('liveDispatchSync') !== false) {
+      tx.update(companyRef, {
+        logoUrl: DEMO_LOGO_URL, primaryColor: '#0891b2',
+        splitTickets: true, liveDispatchSync: false,
+      });
+    }
   });
   await Promise.all(DEMO_WELLS.map(name =>
     createDemoRtdb(`well_config/${name}`, {
@@ -423,11 +438,14 @@ export const liveDemoSnapshot = httpsV2.onCall(
       && (!pending?.active || pending.active.dueAt <= now)) {
       await withLock(() => advance(now));
     }
-    const [stateSnap, controlSnap] = await Promise.all([
+    const [stateSnap, controlSnap, companySnap] = await Promise.all([
       rt().ref(`${root}/state`).once('value'), rt().ref(`${root}/control`).once('value'),
+      fs().collection('companies').doc(DEMO_COMPANY_ID).get(),
     ]);
     const state: DemoState = stateSnap.val() || blankState(now);
     const control = controlSnap.val() || {};
+    const companyConfig = companySnap.data();
+    if (companyConfig) assertDemoRecord(companyConfig, `companies/${DEMO_COMPANY_ID}`);
     const active = state.active;
     const featured = active?.scenario || state.lastCompleted || null;
     const ids = featured ? allDispatches(featured) : [];
@@ -474,6 +492,15 @@ export const liveDemoSnapshot = httpsV2.onCall(
     const latestProof = state.history?.[0] ? await completedRunProof(state.history[0].id) : null;
     return {
       company: DEMO_COMPANY_NAME, companyId: DEMO_COMPANY_ID,
+      companyProfile: {
+        name: companyConfig?.name || DEMO_COMPANY_NAME,
+        logoUrl: companyConfig?.logoUrl || DEMO_LOGO_URL,
+        primaryColor: companyConfig?.primaryColor || '#0891b2',
+        invoicingMode: companyConfig?.invoicingMode || 'ticket_only',
+        wellMonitoring: companyConfig?.wellMonitoring === true,
+        splitTickets: companyConfig?.splitTickets === true,
+        liveDispatchSync: companyConfig?.liveDispatchSync === true,
+      },
       synthetic: true, enabled: control.enabled !== false && control.killSwitch !== true,
       active, featured, featuredStage: active?.stage || (featured ? 'complete' : null),
       history: state.history || [], dispatches, loads, latestProof,

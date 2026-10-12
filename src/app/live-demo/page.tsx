@@ -18,6 +18,8 @@ type DemoDispatch = {
 };
 type Snapshot = {
   company: string; synthetic: true; enabled: boolean;
+  companyProfile: { name: string; logoUrl: string; primaryColor: string; invoicingMode: string;
+    wellMonitoring: boolean; splitTickets: boolean; liveDispatchSync: boolean };
   active: { scenario: Scenario; stage: string; dueAt: number; startedAt: number } | null;
   featured: Scenario | null; featuredStage: string | null;
   dispatches: DemoDispatch[];
@@ -28,11 +30,11 @@ type Snapshot = {
   sequence: number; batchSize: number; batchNumber: number; runInBatch: number;
   nextRunAt: number | null; error: string | null;
 };
-type View = 'dispatch' | 'mobile' | 'well' | 'tickets' | 'billing';
+type View = 'dispatch' | 'mobile' | 'well' | 'tickets' | 'billing' | 'settings';
 const nav: Array<{ id: View; label: string }> = [
   { id: 'dispatch', label: 'Dispatch' }, { id: 'mobile', label: 'WB Mobile' },
   { id: 'well', label: 'Well Queue' }, { id: 'tickets', label: 'WB Tickets' },
-  { id: 'billing', label: 'WB Billing' },
+  { id: 'billing', label: 'WB Billing' }, { id: 'settings', label: 'Settings' },
 ];
 function stageForJob(job: Pick<DemoDispatch, 'driverStage' | 'status'>): string {
   const stages: Record<string, string> = {
@@ -184,6 +186,7 @@ function DemoJobs({ snapshot, clock }: { snapshot: Snapshot; clock: number }) {
 }
 
 export default function LiveDemoPage() {
+  const [entered, setEntered] = useState(false);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState('');
   const [view, setView] = useState<View>('dispatch');
@@ -196,6 +199,7 @@ export default function LiveDemoPage() {
   const [clock, setClock] = useState(0);
   useEffect(() => {
     if (window.localStorage.getItem('wb-live-demo-walkthrough-seen') !== '1') setWalkthrough(true);
+    if (window.sessionStorage.getItem('wb-live-demo-entered') === '1') setEntered(true);
   }, []);
   useEffect(() => {
     setClock(Date.now());
@@ -203,6 +207,7 @@ export default function LiveDemoPage() {
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
+    if (!entered) return;
     let stopped = false;
     let busy = false;
     const fetchSnapshot = async () => {
@@ -219,7 +224,7 @@ export default function LiveDemoPage() {
     const timer = window.setInterval(() => { void fetchSnapshot(); }, 4_000);
     document.addEventListener('visibilitychange', fetchSnapshot);
     return () => { stopped = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', fetchSnapshot); };
-  }, []);
+  }, [entered]);
   const featured = snapshot?.featured;
   const phase = demoPhase(snapshot);
   const guided = walkthrough && !!guideRunId && featured?.id === guideRunId;
@@ -273,13 +278,22 @@ export default function LiveDemoPage() {
   const liveStage = snapshot?.dispatches.find(job => job.exists)?.driverStage ||
     (snapshot?.dispatches.some(job => job.status === 'completed') ? 'completed' : 'pending');
   const remaining = snapshot?.active ? Math.max(0, Math.ceil((snapshot.active.dueAt - clock) / 1_000)) : snapshot?.nextRunAt ? Math.max(0, Math.ceil((snapshot.nextRunAt - clock) / 1_000)) : null;
+  if (!entered) return <main className="flex min-h-screen items-center justify-center bg-[#0b1424] p-4 text-white">
+    <section className="w-full max-w-md rounded-xl border border-cyan-800/70 bg-gray-800 p-8 shadow-2xl">
+      <div className="mb-7 text-center"><img src="/live-demo/logo.svg" alt="WellBuilt Demo Hauling logo" className="mx-auto mb-4 h-20 w-20" />
+        <h1 className="text-2xl font-bold">WellBuilt Demo Hauling</h1><p className="mt-2 text-sm text-gray-400">Demo company login</p></div>
+      <p className="mb-6 text-sm leading-6 text-gray-300">Step into the demo company&apos;s live Dashboard. Watch a job move from Dispatch to the driver app, tickets, and billing, then explore the synced screens yourself.</p>
+      <button type="button" onClick={() => { window.sessionStorage.setItem('wb-live-demo-entered', '1'); setEntered(true); }} className="w-full rounded-lg bg-cyan-600 px-4 py-3 font-semibold text-white hover:bg-cyan-500">Enter demo company</button>
+      <p className="mt-4 text-center text-xs text-gray-400">Guest access · synthetic jobs · read-only</p>
+    </section>
+  </main>;
   return <main className="min-h-screen bg-[#0b1424] text-white">
     <div className="border-b border-amber-600/40 bg-amber-950/20 px-4 py-2 text-xs sm:text-sm flex flex-wrap justify-between gap-2">
       <span><strong className="text-amber-300">LIVE DEMO</strong> · {snapshot?.company || 'Demo company'} · synthetic data · read-only</span>
       <span>{snapshot ? `Set ${snapshot.batchNumber} · run ${snapshot.runInBatch}/${snapshot.batchSize}` : 'Connecting…'}{remaining != null ? ` · next step ${remaining}s` : ''}</span>
     </div>
     <header className="bg-gray-800 border-b border-gray-700">
-      <div className="px-3 pt-4 text-center"><h1 className="text-xl sm:text-3xl font-bold">WellBuilt Suite</h1><p className="text-gray-400 text-sm">{snapshot?.company || 'Demo company'} · Operations</p></div>
+      <div className="flex items-center justify-center gap-3 px-3 pt-4 text-center"><img src={snapshot?.companyProfile?.logoUrl || '/live-demo/logo.svg'} alt="Demo company logo" className="h-12 w-12 rounded-xl" /><div><h1 className="text-xl sm:text-3xl font-bold">WellBuilt Suite</h1><p className="text-gray-400 text-sm">{snapshot?.companyProfile?.name || 'WellBuilt Demo Hauling'} · Operations</p></div></div>
       <nav aria-label="Demo dashboard navigation" className="flex flex-wrap justify-center gap-x-1 px-2 pt-2">
         {nav.filter(item => item.id !== 'well').map(item => <button key={item.id} type="button" onClick={() => navigate(item.id)}
           className={`whitespace-nowrap px-3 py-2 text-sm font-medium border-b-2 ${displayView === item.id ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'}`}>{item.label}</button>)}
@@ -310,7 +324,8 @@ export default function LiveDemoPage() {
         {guided && phase === 'driving' && <div className="mt-3 rounded-lg border border-cyan-800 bg-cyan-950/20 p-3 text-sm text-cyan-200">WB Mobile receives the pull packet as the truck leaves pickup. The Dispatch status now reads To Drop-off.</div>}
       </> : displayView === 'mobile' || displayView === 'well' ? <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">{displayView === 'well' ? 'Well Queue' : 'WB Mobile'} · Pull activity</h2><div className="mt-4 grid gap-2 sm:grid-cols-2">{snapshot?.loads.filter(load => displayView === 'well' || load.pullStatus !== 'awaiting pickup').map(load => <div key={load.id} className="rounded border border-gray-700 bg-gray-900 p-4"><strong>{load.pickup}</strong><p className="mt-2 text-sm text-gray-400">{load.bbls} BBL · {load.pullStatus}</p></div>)}{snapshot?.loads.every(load => load.pullStatus === 'awaiting pickup') && displayView === 'mobile' && <p className="text-sm text-gray-400">No pull packet has arrived yet.</p>}</div></div>
       : displayView === 'tickets' ? <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">WB Tickets</h2><div className="mt-4 space-y-2">{snapshot?.loads.flatMap(load => load.tickets).filter(ticket => ticket.exists).map(ticket => <div key={ticket.id} className="rounded border border-gray-700 bg-gray-900 p-4 flex flex-wrap justify-between gap-2"><strong>#{ticket.number}</strong><span>{ticket.destination} · {ticket.qty} BBL</span></div>)}{!snapshot?.loads.some(load => load.tickets.some(ticket => ticket.exists)) && <p className="text-sm text-gray-400">No ticket yet. It appears after the driver closes the job.</p>}</div></div>
-      : <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">WB Billing</h2><div className="mt-4 space-y-2">{snapshot?.loads.filter(load => load.invoice.exists).map(load => <div key={load.id} className="rounded border border-gray-700 bg-gray-900 p-4 flex flex-wrap justify-between gap-2"><strong>{load.pickup}</strong><span>{load.invoice.totalBBL} BBL · {load.invoice.status}</span></div>)}{!snapshot?.loads.some(load => load.invoice.exists) && <p className="text-sm text-gray-400">No invoice yet. It appears when tickets close.</p>}</div></div>}
+      : displayView === 'billing' ? <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">WB Billing</h2><div className="mt-4 space-y-2">{snapshot?.loads.filter(load => load.invoice.exists).map(load => <div key={load.id} className="rounded border border-gray-700 bg-gray-900 p-4 flex flex-wrap justify-between gap-2"><strong>{load.pickup}</strong><span>{load.invoice.totalBBL} BBL · {load.invoice.status}</span></div>)}{!snapshot?.loads.some(load => load.invoice.exists) && <p className="text-sm text-gray-400">No invoice yet. It appears when tickets close.</p>}</div></div>
+      : <section className="rounded-lg border border-gray-700 bg-gray-800 p-5"><h2 className="text-xl font-bold">Company Settings</h2><div className="mt-5 flex items-center gap-4 rounded-lg border border-gray-700 bg-gray-900 p-4"><img src={snapshot?.companyProfile?.logoUrl || '/live-demo/logo.svg'} alt="Demo company logo" className="h-16 w-16 rounded-xl" /><div><strong>{snapshot?.companyProfile?.name || 'WellBuilt Demo Hauling'}</strong><p className="mt-1 text-sm text-gray-400">Demo company profile · read-only</p></div></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{[['Invoicing Mode', snapshot?.companyProfile?.invoicingMode === 'ticket_only' ? 'Ticket Only' : snapshot?.companyProfile?.invoicingMode || '—'], ['Well Monitoring', snapshot?.companyProfile?.wellMonitoring ? 'On' : 'Off'], ['Split Tickets', snapshot?.companyProfile?.splitTickets ? 'On' : 'Off'], ['Live Dispatch Sync', snapshot?.companyProfile?.liveDispatchSync ? 'Sync' : 'Dispatch Only']].map(([label, value]) => <div key={label} className="rounded border border-gray-700 bg-gray-900 p-4"><p className="text-xs text-gray-400">{label}</p><p className="mt-1 font-medium">{value}</p></div>)}</div></section>}
       {displayView === 'well' && <button type="button" className="mt-4 text-sm text-blue-300" onClick={() => navigate('dispatch')}>Back to Dispatch Jobs</button>}
       <p className="mt-5 text-xs text-gray-500">This view shows read-only records from the dedicated demo company. Dashboard actions are disabled.</p>
       {activeCount === 0 && snapshot?.history.length ? <p className="mt-2 text-xs text-gray-500">Latest completed run: {snapshot.history[0].id}</p> : null}

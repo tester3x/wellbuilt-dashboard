@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title">
+  <title id="title">WellBuilt Demo Hauling</title>
+  <defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs>
+  <rect width="160" height="160" rx="34" fill="#0f172a"/>
+  <path d="M80 18c-13 22-38 53-38 78a38 38 0 0 0 76 0c0-25-25-56-38-78Z" fill="url(#g)"/>
+  <path d="M58 98h44M58 98l9-20h26l9 20M67 78l5-13h16l5 13" fill="none" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="7"/>
+  <circle cx="65" cy="112" r="6" fill="#0f172a" stroke="white" stroke-width="4"/><circle cx="95" cy="112" r="6" fill="#0f172a" stroke="white" stroke-width="4"/>
+</svg>
