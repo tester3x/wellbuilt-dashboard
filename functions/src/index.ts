@@ -4084,4 +4084,4 @@ export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './w
 
 // Dedicated synthetic company. The public callable returns a sanitized view;
 // only the scheduled server worker can advance backend records.
-export { advanceLiveDemo, liveDemoSnapshot } from './liveDemo/runtime';
+export { advanceLiveDemo, liveDemoSnapshot, demoViewerSession } from './liveDemo/runtime';

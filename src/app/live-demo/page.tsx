@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
-import { getFirebaseFunctions } from '@/lib/firebase';
+import { getDemoViewerAuth, getFirebaseFunctions } from '@/lib/firebase';
 
 type Stop = { name: string; bbls: number };
 type Load = { id: string; pickup: string; bbls: number; stops: Stop[]; familyId: string; haulGroupId?: string };
@@ -187,6 +188,8 @@ function DemoJobs({ snapshot, clock }: { snapshot: Snapshot; clock: number }) {
 
 export default function LiveDemoPage() {
   const [entered, setEntered] = useState(false);
+  const [viewerError, setViewerError] = useState('');
+  const [authAttempt, setAuthAttempt] = useState(0);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState('');
   const [view, setView] = useState<View>('dispatch');
@@ -199,8 +202,26 @@ export default function LiveDemoPage() {
   const [clock, setClock] = useState(0);
   useEffect(() => {
     if (window.localStorage.getItem('wb-live-demo-walkthrough-seen') !== '1') setWalkthrough(true);
-    if (window.sessionStorage.getItem('wb-live-demo-entered') === '1') setEntered(true);
   }, []);
+  useEffect(() => {
+    let stopped = false;
+    const openViewer = async () => {
+      try {
+        const response = await httpsCallable<undefined, { customToken: string; companyId: string; role: string }>(
+          getFirebaseFunctions(), 'demoViewerSession')();
+        if (response.data.companyId !== 'wellbuilt-demo' || response.data.role !== 'viewer') throw new Error('Demo viewer scope mismatch');
+        const credential = await signInWithCustomToken(getDemoViewerAuth(), response.data.customToken);
+        const token = await credential.user.getIdTokenResult();
+        if (credential.user.uid !== 'wellbuilt-demo-shared-viewer' || token.claims.staffCompanyId !== 'wellbuilt-demo'
+          || token.claims.staffRole !== 'viewer' || token.claims.isDemo !== true) throw new Error('Demo viewer identity mismatch');
+        if (!stopped) { setEntered(true); setViewerError(''); }
+      } catch (cause) {
+        if (!stopped) setViewerError(cause instanceof Error ? cause.message : 'Demo viewer sign-in failed.');
+      }
+    };
+    void openViewer();
+    return () => { stopped = true; };
+  }, [authAttempt]);
   useEffect(() => {
     setClock(Date.now());
     const timer = window.setInterval(() => setClock(Date.now()), 1_000);
@@ -281,10 +302,10 @@ export default function LiveDemoPage() {
   if (!entered) return <main className="flex min-h-screen items-center justify-center bg-[#0b1424] p-4 text-white">
     <section className="w-full max-w-md rounded-xl border border-cyan-800/70 bg-gray-800 p-8 shadow-2xl">
       <div className="mb-7 text-center"><img src="/live-demo/logo.svg" alt="WellBuilt Demo Hauling logo" className="mx-auto mb-4 h-20 w-20" />
-        <h1 className="text-2xl font-bold">WellBuilt Demo Hauling</h1><p className="mt-2 text-sm text-gray-400">Demo company login</p></div>
-      <p className="mb-6 text-sm leading-6 text-gray-300">Step into the demo company&apos;s live Dashboard. Watch a job move from Dispatch to the driver app, tickets, and billing, then explore the synced screens yourself.</p>
-      <button type="button" onClick={() => { window.sessionStorage.setItem('wb-live-demo-entered', '1'); setEntered(true); }} className="w-full rounded-lg bg-cyan-600 px-4 py-3 font-semibold text-white hover:bg-cyan-500">Enter demo company</button>
-      <p className="mt-4 text-center text-xs text-gray-400">Guest access · synthetic jobs · read-only</p>
+        <h1 className="text-2xl font-bold">WellBuilt Demo Hauling</h1><p className="mt-2 text-sm text-gray-400">Signing in to the demo company</p></div>
+      {viewerError ? <><p role="alert" className="mb-4 text-sm text-amber-300">{viewerError}</p><button type="button" onClick={() => { setViewerError(''); setAuthAttempt(value => value + 1); }} className="w-full rounded-lg bg-cyan-600 px-4 py-3 font-semibold text-white hover:bg-cyan-500">Try again</button></>
+        : <p className="text-center text-sm text-gray-300">Opening the shared viewer account…</p>}
+      <p className="mt-4 text-center text-xs text-gray-400">Synthetic jobs · read-only viewer</p>
     </section>
   </main>;
   return <main className="min-h-screen bg-[#0b1424] text-white">

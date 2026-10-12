@@ -21,6 +21,7 @@ let database: Database | null = null;
 let firestore: Firestore | null = null;
 let storage: FirebaseStorage | null = null;
 let functions: Functions | null = null;
+let demoViewerAuth: Auth | null = null;
 
 export function getFirebaseApp(): FirebaseApp {
   if (!app) {
@@ -35,6 +36,16 @@ export function getFirebaseAuth(): Auth {
     auth = getAuth(getFirebaseApp());
   }
   return auth;
+}
+
+/** An isolated session so opening the public demo never replaces a staff login. */
+export function getDemoViewerAuth(): Auth {
+  if (!demoViewerAuth) {
+    const name = 'wellbuilt-live-demo-viewer';
+    const demoApp = getApps().find(item => item.name === name) || initializeApp(firebaseConfig, name);
+    demoViewerAuth = getAuth(demoApp);
+  }
+  return demoViewerAuth;
 }
 
 export function getFirebaseDatabase(): Database {

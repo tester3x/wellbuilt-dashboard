@@ -26,6 +26,7 @@ const VIEWER_WINDOW_MS = 120_000;
 const LOCK_MS = 90_000;
 const FIRST_DEMO_TICKET = 900_000_000;
 const DEMO_LOGO_URL = 'https://wellbuilt-sync.web.app/live-demo/logo.svg';
+const DEMO_VIEWER_UID = 'wellbuilt-demo-shared-viewer';
 
 type Active = { scenario: DemoScenario; stage: DemoStage; dueAt: number; startedAt: number };
 type RunSummary = { id: string; kind: DemoScenario['kind']; driverName: string; startedAt: number; closedAt: number };
@@ -414,6 +415,43 @@ async function advance(now: number): Promise<void> {
 export const advanceLiveDemo = onSchedule(
   { schedule: 'every 1 minutes', timeZone: 'UTC', memory: '256MiB', timeoutSeconds: 120 },
   async () => { await withLock(() => advance(Date.now())); },
+);
+
+/** One shared, company-scoped viewer identity for public demo visitors. */
+export const demoViewerSession = httpsV2.onCall(
+  { memory: '256MiB', timeoutSeconds: 30, enforceAppCheck: false },
+  async () => {
+    try {
+      await admin.auth().getUser(DEMO_VIEWER_UID);
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'auth/user-not-found') throw error;
+      try {
+        await admin.auth().createUser({ uid: DEMO_VIEWER_UID, displayName: 'WellBuilt Demo Viewer' });
+      } catch (createError) {
+        if ((createError as { code?: string }).code !== 'auth/uid-already-exists') throw createError;
+      }
+    }
+    const profileRef = rt().ref(`users/${DEMO_VIEWER_UID}`);
+    const profile = await profileRef.transaction(current => {
+      if (current !== null) {
+        if (current.companyId !== DEMO_COMPANY_ID || current.role !== 'viewer' || current.isDemo !== true) return;
+        return;
+      }
+      return {
+        companyId: DEMO_COMPANY_ID, companyName: DEMO_COMPANY_NAME,
+        role: 'viewer', roles: ['viewer'], displayName: 'WellBuilt Demo Viewer',
+        status: 'active', isDemo: true,
+      };
+    }, undefined, false);
+    const saved = profile.snapshot.val();
+    if (!saved || saved.companyId !== DEMO_COMPANY_ID || saved.role !== 'viewer' || saved.isDemo !== true) {
+      throw new Error('demo_viewer_identity_conflict');
+    }
+    const customToken = await admin.auth().createCustomToken(DEMO_VIEWER_UID, {
+      staffCompanyId: DEMO_COMPANY_ID, staffRole: 'viewer', isDemo: true,
+    });
+    return { customToken, companyId: DEMO_COMPANY_ID, role: 'viewer' as const };
+  },
 );
 
 /** Emulator-only entry for the end-to-end test; never a deployed callable. */
