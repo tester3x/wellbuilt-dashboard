@@ -55,7 +55,7 @@ const TZ = 'America/Chicago';
 const NDIC_SOURCE = {
   state: 'ND',
   label: 'NDIC DMR ArcGIS REST API',
-  url: 'https://gis.dmr.nd.gov/dmrpublicservices/rest/services/OilGasPublicMapDataVectorTiles/Wells/FeatureServer/0/query',
+  url: 'https://gis.dmr.nd.gov/dmrpublicservices/rest/services/Wells/FeatureServer/0/query',
   metaDoc: 'lastSyncND',
   page: 1000,
 };
