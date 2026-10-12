@@ -1,3 +1,4 @@
+import { driverRequestedJobType } from './driverJobTypeCompatibility';
 import { fail, type StoreResult } from './jobPacketRevisionStore';
 import {
   canonicalWellFromRecord,
@@ -100,9 +101,7 @@ export function evaluateDriverDispatchBirth(input: {
   if (!input.caller?.driverId || !input.caller.companyId) return fail('unauthenticated_driver');
   const picked = pickDriverCreateFields(input.record);
   if (!picked.ok) return picked;
-  const requestedJobType = (typeof picked.fields.jobTypeId === 'string' && picked.fields.jobTypeId.trim())
-    ? picked.fields.jobTypeId.trim()
-    : picked.fields.jobType;
+  const requestedJobType = driverRequestedJobType(picked.fields);
   const jobType = resolveCanonicalJobType(requestedJobType, input.envelope.jobTypes, input.companyCustomJobTypes);
   if (!jobType.ok) return jobType;
   // Preserve the governed job label (and the one hourly PW service variant)
