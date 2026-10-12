@@ -2,7 +2,7 @@
   "capturedAt": "2026-09-12",
   "project": "wellbuilt-sync",
   "source": "firebase functions:list",
-  "count": 179,
+  "count": 180,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -61,6 +61,7 @@
     "createOrFindDispatchThread",
     "deactivateTruthSwdReference",
     "demoClassifyLocations",
+    "demoViewerSession",
     "dismissDispatch",
     "driverChangeOwnPasscode",
     "eQuipmentAssignments",
@@ -185,6 +186,10 @@
     "writeDiagnosticLog"
   ],
   "verifiedAdditions": {
+    "demoViewerSession": {
+      "verifiedAt": "2026-10-12",
+      "source": "Successful scoped Firebase deployment from 65122ff3; live token and viewer role verified"
+    },
     "liveDemoSnapshot": {
       "verifiedAt": "2026-10-12",
       "source": "Successful scoped Firebase deployment from 6d85f6a3"

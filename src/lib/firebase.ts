@@ -22,6 +22,7 @@ let firestore: Firestore | null = null;
 let storage: FirebaseStorage | null = null;
 let functions: Functions | null = null;
 let demoViewerAuth: Auth | null = null;
+let demoViewerFunctions: Functions | null = null;
 
 export function getFirebaseApp(): FirebaseApp {
   if (!app) {
@@ -39,13 +40,19 @@ export function getFirebaseAuth(): Auth {
 }
 
 /** An isolated session so opening the public demo never replaces a staff login. */
+function getDemoViewerApp(): FirebaseApp {
+  const name = 'wellbuilt-live-demo-viewer';
+  return getApps().find(item => item.name === name) || initializeApp(firebaseConfig, name);
+}
+
 export function getDemoViewerAuth(): Auth {
-  if (!demoViewerAuth) {
-    const name = 'wellbuilt-live-demo-viewer';
-    const demoApp = getApps().find(item => item.name === name) || initializeApp(firebaseConfig, name);
-    demoViewerAuth = getAuth(demoApp);
-  }
+  if (!demoViewerAuth) demoViewerAuth = getAuth(getDemoViewerApp());
   return demoViewerAuth;
+}
+
+export function getDemoViewerFunctions(): Functions {
+  if (!demoViewerFunctions) demoViewerFunctions = getFunctions(getDemoViewerApp());
+  return demoViewerFunctions;
 }
 
 export function getFirebaseDatabase(): Database {

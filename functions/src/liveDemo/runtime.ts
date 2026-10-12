@@ -120,12 +120,13 @@ async function publishDemoPacket(): Promise<ImmutableRevisionEnvelope> {
   return loaded.envelope;
 }
 
-async function ensureDemoTenant(): Promise<ImmutableRevisionEnvelope> {
+async function ensureDemoCompany(): Promise<void> {
   await createDemoFirestore('companies', DEMO_COMPANY_ID, {
     companyId: DEMO_COMPANY_ID, name: DEMO_COMPANY_NAME, status: 'active',
     isDemo: true, invoicingMode: 'ticket_only', wellMonitoring: true,
     logoUrl: DEMO_LOGO_URL, primaryColor: '#0891b2',
     splitTickets: true, liveDispatchSync: false,
+    activePackages: ['water-hauling'], assignedOperators: ['Demo Operator'],
     requirePhotos: false, minPhotoCount: 0, ticketStartNumber: FIRST_DEMO_TICKET,
     ticketBookEra: 'post_cutover', createdAt: new Date().toISOString(),
   });
@@ -134,13 +135,19 @@ async function ensureDemoTenant(): Promise<ImmutableRevisionEnvelope> {
     const current = await tx.get(companyRef);
     assertDemoRecord(current.data(), `companies/${DEMO_COMPANY_ID}`);
     if (current.get('logoUrl') !== DEMO_LOGO_URL || current.get('primaryColor') !== '#0891b2'
-      || current.get('splitTickets') !== true || current.get('liveDispatchSync') !== false) {
+      || current.get('splitTickets') !== true || current.get('liveDispatchSync') !== false
+      || !Array.isArray(current.get('activePackages')) || !Array.isArray(current.get('assignedOperators'))) {
       tx.update(companyRef, {
         logoUrl: DEMO_LOGO_URL, primaryColor: '#0891b2',
         splitTickets: true, liveDispatchSync: false,
+        activePackages: ['water-hauling'], assignedOperators: ['Demo Operator'],
       });
     }
   });
+}
+
+async function ensureDemoTenant(): Promise<ImmutableRevisionEnvelope> {
+  await ensureDemoCompany();
   await Promise.all(DEMO_WELLS.map(name =>
     createDemoRtdb(`well_config/${name}`, {
       companyId: DEMO_COMPANY_ID, isDemo: true, name, route: 'Demo Route',
@@ -421,6 +428,7 @@ export const advanceLiveDemo = onSchedule(
 export const demoViewerSession = httpsV2.onCall(
   { memory: '256MiB', timeoutSeconds: 30, enforceAppCheck: false },
   async () => {
+    await ensureDemoCompany();
     try {
       await admin.auth().getUser(DEMO_VIEWER_UID);
     } catch (error) {
@@ -464,7 +472,13 @@ export async function advanceLiveDemoForEmulator(now: number): Promise<void> {
 
 export const liveDemoSnapshot = httpsV2.onCall(
   { memory: '256MiB', timeoutSeconds: 60, enforceAppCheck: false },
-  async () => {
+  async request => {
+    if (request.auth?.uid !== DEMO_VIEWER_UID
+      || request.auth.token.staffCompanyId !== DEMO_COMPANY_ID
+      || request.auth.token.staffRole !== 'viewer'
+      || request.auth.token.isDemo !== true) {
+      throw new httpsV2.HttpsError('permission-denied', 'demo_viewer_required');
+    }
     const now = Date.now();
     await rt().ref(`${root}/viewerAt`).set(now);
     const [beforeState, beforeControl] = await Promise.all([
