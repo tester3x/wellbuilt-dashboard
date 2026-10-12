@@ -146,7 +146,27 @@ async function ensureDemoCompany(): Promise<void> {
   });
 }
 
+async function existingDemoTenant(): Promise<ImmutableRevisionEnvelope | null> {
+  const [packet, company, ...records] = await Promise.all([
+    loadVerifiedRevision(DEMO_COMPANY_ID, { packageId: 'water-hauling', revision: 1 }),
+    fs().collection('companies').doc(DEMO_COMPANY_ID).get(),
+    ...DEMO_WELLS.map(name => rt().ref(`well_config/${name}`).once('value')),
+    ...DEMO_DRIVERS.map(driver => rt().ref(`drivers/profiles/${driver.id}`).once('value')),
+  ]);
+  if (!packet.ok || !company.exists || records.some(record => !record.exists())) return null;
+  assertDemoRecord(company.data(), `companies/${DEMO_COMPANY_ID}`);
+  for (const [index, record] of records.entries()) {
+    const path = index < DEMO_WELLS.length
+      ? `well_config/${DEMO_WELLS[index]}`
+      : `drivers/profiles/${DEMO_DRIVERS[index - DEMO_WELLS.length].id}`;
+    assertDemoRecord(record.val(), path);
+  }
+  return packet.envelope;
+}
+
 async function ensureDemoTenant(): Promise<ImmutableRevisionEnvelope> {
+  const existing = await existingDemoTenant();
+  if (existing) return existing;
   await ensureDemoCompany();
   await Promise.all(DEMO_WELLS.map(name =>
     createDemoRtdb(`well_config/${name}`, {

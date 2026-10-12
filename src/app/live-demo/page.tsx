@@ -311,7 +311,7 @@ export default function LiveDemoPage() {
   return <main className="min-h-screen bg-[#0b1424] text-white">
     <div className="border-b border-amber-600/40 bg-amber-950/20 px-4 py-2 text-xs sm:text-sm flex flex-wrap justify-between gap-2">
       <span><strong className="text-amber-300">LIVE DEMO</strong> · {snapshot?.company || 'Demo company'} · synthetic data · read-only</span>
-      <span>{snapshot ? `Set ${snapshot.batchNumber} · run ${snapshot.runInBatch}/${snapshot.batchSize}` : 'Connecting…'}{remaining != null ? ` · next step ${remaining}s` : ''}</span>
+      <span>{snapshot ? `Set ${snapshot.batchNumber} · run ${snapshot.runInBatch}/${snapshot.batchSize}` : 'Connecting…'}{remaining != null ? remaining > 0 ? ` · next step ${remaining}s` : ' · processing next step…' : ''}</span>
     </div>
     <header className="bg-gray-800 border-b border-gray-700">
       <div className="flex items-center justify-center gap-3 px-3 pt-4 text-center"><img src={snapshot?.companyProfile?.logoUrl || '/live-demo/logo.svg'} alt="Demo company logo" className="h-12 w-12 rounded-xl" /><div><h1 className="text-xl sm:text-3xl font-bold">WellBuilt Suite</h1><p className="text-gray-400 text-sm">{snapshot?.companyProfile?.name || 'WellBuilt Demo Hauling'} · Operations</p></div></div>
