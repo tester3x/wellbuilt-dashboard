@@ -35,7 +35,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const channel=policy.channels?.[body.chatId];if(!channel)throw Error('channel_not_allowed');
  const fallback=Object.prototype.hasOwnProperty.call(body,'defaultBbls')?body.defaultBbls:channel.defaultBbls;
  if(fallback!=null&&fallback!==0&&(!Number.isFinite(fallback)||fallback<=0||fallback>1000))throw Error('invalid_barrel_fallback');
- const rows=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined,driverDefaultBbls:channel.driverDefaultBbls||{}});
+ const rows=parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined,driverDefaultBbls:channel.driverDefaultBbls||{}});
  let row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
  const senderKey=body.senderId===undefined?null:watchdogSenderKey(body.senderId);
  const originalTime=row.dateTimeUTC;
@@ -60,7 +60,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
    row={...row,issues:row.issues.filter(issue=>issue!=='Inferred level separator needs historical validation'&&issue!=='Missing barrels')};
  }
  const config=configs[mapped.wellName],status=(await db.ref('wells/'+mapped.wellName+'/status').once('value')).val();
- const noDefault=parsePullChat(body.chat,{defaultWell:channel.defaultWell||'',wellNames:channel.wells||[]})[body.rowIndex];
+ const noDefault=parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[]})[body.rowIndex];
  const writtenBarrels=review?.bblsTaken!=null&&review.bblsTaken!==originalMeasurements.bblsTaken?review.bblsTaken:noDefault?.bblsTaken??null;
  const earlyAppMatch=matchExistingAppPull({...row,wellName:mapped.wellName,bblsTaken:writtenBarrels},history[mapped.wellName],owner?.driverId??null,mapped.bank,writtenBarrels!==null);
  if(earlyAppMatch.status==='matched'){res.json({ok:true,status:'duplicate',alreadyRecorded:true,matchedPacketId:earlyAppMatch.packetIds[0],matchedDateTimeUTC:earlyAppMatch.dateTimeUTC,issues:['Already recorded through the app; original gauge time preserved']});return;}

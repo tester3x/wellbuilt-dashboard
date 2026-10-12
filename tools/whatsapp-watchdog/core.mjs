@@ -17,7 +17,7 @@ export class Queue{
  if(!id||!channel||typeof chat!=='string'||chat.length>2000000)throw Error('Invalid message');
  const key=hash(channel+'\0'+id),digest=hash(chat+'\0'+deleted+'\0'+JSON.stringify(options)+'\0'+(senderId||''));const previous=this.data.messages[key];
  if(previous?.digest===digest)return {duplicate:true};
- const rows=deleted?[]:parsePullChat(chat,options).map(row=>({...row,id:key+':'+row.id}));
+ const rows=deleted?[]:parsePullChat(chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:key+':'+row.id}));
  const notices=deleted?[]:findPullChatNotices(chat);
  const post=splitChat(chat)[0];let postedAt=rows[0]?.postedAt||'';if(!postedAt&&post)try{postedAt=chatTimestamp(post.date,post.time);}catch{}
  this.data.messages[key]={key,id,channel,chat,digest,senderId:senderId||previous?.senderId||null,rows,notices,deleted,edited:!!previous&&(previous.edited||previous.body!==(post?.body||chat)||previous.postedAt!==postedAt),postedAt,author:post?.author||'',body:post?.body||chat,updatedAt:new Date().toISOString()};this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
@@ -27,7 +27,7 @@ export class Queue{
  for(const message of Object.values(this.data.messages)){
   const options=channelOptions[message.channel];
   if(!options||message.deleted||message.edited||message.id.startsWith('export:'))continue;
-  const rows=parsePullChat(message.chat,options).map(row=>({...row,id:message.key+':'+row.id}));
+  const rows=parsePullChat(message.chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:message.key+':'+row.id})).map(row=>{const d=this.data.deliveries?.[row.id];return d&&(['duplicate','excluded','archived','before_activation'].includes(d.status)||(d.status==='complete'&&!d.needsReview))?message.rows.find(old=>old.id===row.id)||row:row;});
   if(JSON.stringify(rows)!==JSON.stringify(message.rows)){message.rows=rows;changed=true;}
   for(const row of rows){const delivery=this.data.deliveries?.[row.id];
    if(!row.issues.length&&!message.notices.length&&delivery?.status==='review'&&!delivery.identity&&!delivery.review&&delivery.issues?.length===1&&['Missing barrels','Unreadable levels'].includes(delivery.issues[0])){delete this.data.deliveries[row.id];changed=true;}

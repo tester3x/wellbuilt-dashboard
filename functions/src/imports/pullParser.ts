@@ -1,6 +1,7 @@
 /** Shared, side-effect-free WhatsApp parser. Input is data, never instructions. */
 export interface PullImportOptions {
   defaultWell?: string;
+  levelNotation?: 'decimal_feet' | 'feet_inches';
   wellNames?: string[];
   defaultBbls?: number;
   driverDefaultBbls?: Record<string, number>;
@@ -93,6 +94,14 @@ const wellPattern = /\b(Gunslinger(?:\s+Federal)?\s*[35](?:-\d+(?:-\d+)*[Hh])?|C
 export function normalizeWell(text: string): string { return text.toLowerCase().replace(/[^a-z0-9]/g, ''); }
 export function parsePullChat(text: string, options: PullImportOptions = {}): PullImportRow[] {
   const rows: PullImportRow[] = [];
+  const level=(text:string):number|null=>{
+    const value=text.trim().replace(/[–—]/g,'-');
+    if(options.levelNotation==='feet_inches'){
+      const pair=/^(\d{1,2})\s*[.,:]\s*(\d{1,2})$/.exec(value);
+      if(pair)return Number(pair[2])<12?Number(pair[1])+Number(pair[2])/12:null;
+    }
+    return parseFeet(value);
+  };
   const pesekCanonical = (options.wellNames || []).find(name => normalizeWell(name) === 'pesek10');
   const catalogueNames = (options.wellNames || []).filter(Boolean).sort((a, b) => b.length - a.length).map(name => [...name].map(character => String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
   const boundary = String.fromCharCode(92) + 'b';
@@ -105,36 +114,43 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
     for (let part = 0; part < segments.length; part++) {
       const segment = segments[part];
       let inlineTime = '';
-      const lines = segment.body.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+      const gaugeBody=segment.body.replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
+      const rawLines=gaugeBody.split('\n').map(line=>line.trim()).filter(Boolean);
+      const lines = gaugeBody.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
         const suffix = /\s+(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
-        const prefix = suffix ? line.slice(0,suffix.index).trim().replace(/^(?:T|B)\s+/i,'').replace(/\.(?!\d)$/,'') : '';
+        const prefix = suffix ? line.slice(0,suffix.index).trim().replace(/^(?:top|bottom|t|b)\s*[:=.\-]?\s*/i,'').replace(/\.(?!\d)$/,'') : '';
         if (suffix && clock(suffix[1]) && (/[ap]/i.test(suffix[1]) || parseFeet(prefix)!==null)) { inlineTime = suffix[1]; line = line.slice(0, suffix.index).trim(); }
-        return line.replace(/^(?:T|B)\s+(?=\d)/i, '').replace(/\.(?!\d)$/, '').trim();
+        return line.replace(/^(?:top|bottom|t|b)\s*[:=.\-]?\s*(?=\d)/i, '').replace(/\.(?!\d)$/, '').trim();
       });
-      const labelled = /\btop\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
-      const bottom = /\bbottom\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
+      const labelled = /(?:^|\n)\s*(?:top|t)\s*[:=.\-]?\s*(\d[^\n]*)/i.exec(gaugeBody);
+      const bottom = /(?:^|\n)\s*(?:bottom|b)\s*[:=.\-]?\s*(\d[^\n]*)/i.exec(gaugeBody);
       const typoPair = /^\s*[-:]?\s*(\d{1,2}\.\d{1,2})\.(\d{1,2}\.\d{1,2})\s*(?:\n|$)/.exec(segment.body);
-      const pair = /^\s*[-:]?\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*\/{1,2}\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*(?:\n|$)/.exec(segment.body) || typoPair;
-      const levelLines = lines.map(line => parseFeet(line));
+      const slash=(lines[0]||'').replace(/^[-:]\s*/,'').split(/\s*\/{1,2}\s*/);
+      const pair=slash.length===2&&level(slash[0])!==null&&level(slash[1])!==null?[lines[0],slash[0],slash[1]]:typoPair;
+      const levelLines = lines.map(line => level(line));
       const unlabelled = !labelled && !pair && levelLines.length >= 2 && levelLines[0] !== null && levelLines[1] !== null;
-      const top = labelled ? parseFeet(labelled[1]) : pair ? parseFeet(pair[1]) : unlabelled ? levelLines[0] : null;
-      const low = bottom ? parseFeet(bottom[1]) : pair ? parseFeet(pair[2]) : unlabelled ? levelLines[1] : null;
+      const topIndex=rawLines.findIndex(line=>/^(?:top|t)\s*[:=.\-]?\s*\d/i.test(line));
+      const bottomIndex=rawLines.findIndex(line=>/^(?:bottom|b)\s*[:=.\-]?\s*\d/i.test(line));
+      let top=labelled?level(lines[topIndex]):pair?level(pair[1]):unlabelled?levelLines[0]:null;
+      let low=bottom?level(lines[bottomIndex]):pair?level(pair[2]):unlabelled?levelLines[1]:null;
+      if(!labelled&&!bottom&&top!==null&&low!==null&&low>top)[top,low]=[low,top];
       const amount = /\b(\d+(?:\.\d+)?)\s*bbls?\b/i.exec(segment.body);
       const amountLine = lines[pair ? 1 : 2] || '';
       const isClockLine = /^\d{1,2}:\d{2}(?:\s*[ap](?:m)?)?$|^\d{1,4}\s*[ap](?:m)?$/i.test(amountLine);
-      const bareAmount = (pair || unlabelled) && !isClockLine ? /^\s*(\d{2,3})(?:\.(?!\d))?\s*(.*)$/.exec(lines[pair ? 1 : 2] || '') : null;
+      const bareAmount = (pair || unlabelled || (labelled && bottom)) && !isClockLine ? /^\s*(\d{2,3})(?:\.(?!\d))?\s*(.*)$/.exec(lines[pair ? 1 : 2] || '') : null;
       const driverDefault = Object.entries(options.driverDefaultBbls || {}).find(([name]) => name.trim().toLowerCase() === message.author.trim().toLowerCase())?.[1];
       const bbls = amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : driverDefault || options.defaultBbls || null;
       // A routing instruction containing a well and barrels is not a pull.
       if (!labelled && !pair && !unlabelled) {
-        if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s+)?\d/i.test(segment.body)) { let timestamp='';try{timestamp=chatTimestamp(message.date,message.time,options.timeZone,options.dateOrder);}catch{} rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp, tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false }); }
+        if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s*[:=.\-]?\s*)?\d/i.test(segment.body)) { let timestamp='';try{timestamp=chatTimestamp(message.date,message.time,options.timeZone,options.dateOrder);}catch{} rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp, tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false }); }
         continue;
       }
       const issues: string[] = typoPair ? ['Inferred level separator needs historical validation'] : [];
+      if(top!==null&&low!==null&&low>top)issues.push('Labelled bottom exceeds top');
       let postedAt = '';
       try { postedAt = chatTimestamp(message.date, message.time, options.timeZone, options.dateOrder); } catch (error) { issues.push(String(error)); }
       let eventTime = postedAt;
-      const explicit = inlineTime || lines.find((line, index) => index >= (pair ? (bareAmount ? 2 : 1) : unlabelled ? (bareAmount ? 3 : 2) : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
+      const explicit = inlineTime || lines.find((line, index) => index >= (pair ? (bareAmount ? 2 : 1) : (unlabelled || (labelled && bottom)) ? (bareAmount ? 3 : 2) : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
       if (explicit && clock(explicit)) {
         let resolved = explicit;
         // Bare 1:30 can mean AM or PM. Choose nearest post only within two hours.
