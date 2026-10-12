@@ -211,7 +211,7 @@ async function writePending(scenario: DemoScenario, packet: ImmutableRevisionEnv
       const record: Record<string, unknown> = {
         companyId: DEMO_COMPANY_ID, isDemo: true, demoScenarioId: scenario.id,
         driverId: scenario.driverId, driverHash: scenario.driverId, driverName: scenario.driverName,
-        wellName: name, ndicWellName: '', operator: 'Demo Operator',
+        wellName: name, ndicWellName: '', operator: 'Demo Operator', route: 'Demo Route',
         disposal: load.stops[load.stops.length - 1].name,
         jobType: isSplit ? 'service' : 'pw', jobTypeId: isSplit ? 'service-work' : 'pw',
         ...binding, status: 'pending', assignedAt: new Date(now).toISOString(),
@@ -231,11 +231,15 @@ async function writeDispatchStage(scenario: DemoScenario, stage: 'accepted' | 'a
   const driverStage = stage === 'accepted' ? 'en_route_pickup'
     : stage === 'at_pickup' ? 'on_site_pickup'
       : stage === 'departed' ? 'en_route_dropoff' : 'on_site_dropoff';
-  for (const id of allDispatches(scenario)) {
-    await mergeDemoFirestore('dispatches', id, {
-      status, driverStage, loadsCompleted: 1,
-      [`demoStageTimes.${stage}`]: new Date(now).toISOString(),
-    });
+  for (const load of scenario.loads) {
+    for (const id of dispatchIds(load)) {
+      await mergeDemoFirestore('dispatches', id, {
+        status, driverStage, loadsCompleted: 0,
+        driverDest: stage === 'accepted' || stage === 'at_pickup'
+          ? load.pickup : load.stops[load.stops.length - 1].name,
+        [`demoStageTimes.${stage}`]: new Date(now).toISOString(),
+      });
+    }
   }
 }
 
@@ -308,7 +312,8 @@ async function writeClosed(scenario: DemoScenario, now: number): Promise<void> {
   }
   for (const id of allDispatches(scenario)) {
     await mergeDemoFirestore('dispatches', id, {
-      status: 'completed', driverStage: 'completed', completedAt: new Date(now).toISOString(),
+      status: 'completed', driverStage: 'completed', loadsCompleted: 1,
+      completedAt: new Date(now).toISOString(),
     });
   }
 }
@@ -429,8 +434,14 @@ export const liveDemoSnapshot = httpsV2.onCall(
       const value = snap.data();
       if (value) assertDemoRecord(value, `dispatches/${id}`);
       return { id, exists: snap.exists, status: value?.status || null,
-        driverStage: value?.driverStage || null, wellName: value?.wellName || null,
-        disposal: value?.disposal || null, bbls: value?.bbls || null };
+        driverStage: value?.driverStage || null, driverDest: value?.driverDest || null,
+        wellName: value?.wellName || null,
+        disposal: value?.disposal || null, bbls: value?.bbls || null,
+        jobType: value?.jobType || null, operator: value?.operator || null,
+        route: value?.route || null, currentLevel: value?.currentLevel || null,
+        flowRate: value?.flowRate || null, assignedAt: value?.assignedAt || null,
+        splitGroupId: value?.splitGroupId || null, splitSequence: value?.splitSequence || null,
+        ticketNumber: value?.ticketNumber || null, notes: value?.notes || null };
     }));
     const loads = featured ? await Promise.all(featured.loads.map(async load => {
       const [incoming, processed, invoice, ...tickets] = await Promise.all([
