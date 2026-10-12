@@ -462,23 +462,26 @@ export const demoViewerSession = httpsV2.onCall(
     const profileRef = rt().ref(`users/${DEMO_VIEWER_UID}`);
     const profile = await profileRef.transaction(current => {
       if (current !== null) {
-        if (current.companyId !== DEMO_COMPANY_ID || current.role !== 'viewer' || current.isDemo !== true) return;
-        return;
+        if (current.companyId !== DEMO_COMPANY_ID
+          || !['viewer', 'demo_viewer'].includes(current.role)
+          || current.isDemo !== true) return;
+        if (current.role === 'demo_viewer') return;
+        return { ...current, role: 'demo_viewer', roles: ['demo_viewer'] };
       }
       return {
         companyId: DEMO_COMPANY_ID, companyName: DEMO_COMPANY_NAME,
-        role: 'viewer', roles: ['viewer'], displayName: 'WellBuilt Demo Viewer',
+        role: 'demo_viewer', roles: ['demo_viewer'], displayName: 'WellBuilt Demo Viewer',
         status: 'active', isDemo: true,
       };
     }, undefined, false);
     const saved = profile.snapshot.val();
-    if (!saved || saved.companyId !== DEMO_COMPANY_ID || saved.role !== 'viewer' || saved.isDemo !== true) {
+    if (!saved || saved.companyId !== DEMO_COMPANY_ID || saved.role !== 'demo_viewer' || saved.isDemo !== true) {
       throw new Error('demo_viewer_identity_conflict');
     }
     const customToken = await admin.auth().createCustomToken(DEMO_VIEWER_UID, {
-      staffCompanyId: DEMO_COMPANY_ID, staffRole: 'viewer', isDemo: true,
+      staffCompanyId: DEMO_COMPANY_ID, staffRole: 'demo_viewer', isDemo: true,
     });
-    return { customToken, companyId: DEMO_COMPANY_ID, role: 'viewer' as const };
+    return { customToken, companyId: DEMO_COMPANY_ID, role: 'demo_viewer' as const };
   },
 );
 
@@ -495,7 +498,7 @@ export const liveDemoSnapshot = httpsV2.onCall(
   async request => {
     if (request.auth?.uid !== DEMO_VIEWER_UID
       || request.auth.token.staffCompanyId !== DEMO_COMPANY_ID
-      || request.auth.token.staffRole !== 'viewer'
+      || !['viewer', 'demo_viewer'].includes(request.auth.token.staffRole as string)
       || request.auth.token.isDemo !== true) {
       throw new httpsV2.HttpsError('permission-denied', 'demo_viewer_required');
     }

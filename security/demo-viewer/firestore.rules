@@ -1,0 +1,389 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isDriver() { return signedIn() && request.auth.token.kind == 'driver'; }
+    function driverId() { return request.auth.token.driverId; }
+    function companyId() { return request.auth.token.companyId; }
+    // Public demo sessions are one fixed Auth identity, issued only by the
+    // demoViewerSession callable. They never inherit staff or driver writes.
+    function isDemoViewer() {
+      return signedIn()
+        && request.auth.uid == 'wellbuilt-demo-shared-viewer'
+        && request.auth.token.staffRole == 'demo_viewer'
+        && request.auth.token.staffCompanyId == 'wellbuilt-demo'
+        && request.auth.token.isDemo == true;
+    }
+    function demoRecord(data) {
+      return isDemoViewer()
+        && data.companyId == 'wellbuilt-demo'
+        && data.isDemo == true;
+    }
+    // Platform admin: wellbuiltAdmin claim AND enabled platform_admins/{uid}.
+    // Company staff: enabled Firestore staff/{uid} (role + optional companyId).
+    // token.role is not used. RTDB users/{uid}/role is not readable here.
+    function isPlatformAdmin() {
+      return signedIn()
+        && request.auth.token.wellbuiltAdmin == true
+        && exists(/databases/$(database)/documents/platform_admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/platform_admins/$(request.auth.uid)).data.enabled == true;
+    }
+    function staffDoc() {
+      return get(/databases/$(database)/documents/staff/$(request.auth.uid)).data;
+    }
+    function isCompanyStaff() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/staff/$(request.auth.uid))
+        && staffDoc().enabled == true
+        && staffDoc().role in ['admin', 'it', 'manager', 'dispatch'];
+    }
+    function staffSameCompany(data) {
+      return isCompanyStaff()
+        && staffDoc().companyId is string
+        && staffDoc().companyId.size() > 0
+        && 'companyId' in data
+        && staffDoc().companyId == data.companyId;
+    }
+    function isDashboard() { return isPlatformAdmin() || isCompanyStaff(); }
+    function isDashboardScoped(data) {
+      return isPlatformAdmin() || staffSameCompany(data);
+    }
+    function isDashboardCompanyDoc(docId) {
+      return isPlatformAdmin()
+        || (isCompanyStaff() && staffDoc().companyId is string && staffDoc().companyId == docId);
+    }
+    function immutableDriverCompany() {
+      return request.resource.data.driverId == resource.data.driverId
+        && request.resource.data.companyId == resource.data.companyId;
+    }
+    function sameCompany(data) {
+      return companyId() != null
+        && 'companyId' in data
+        && data.companyId == companyId();
+    }
+    function ownsDriver(data) {
+      return isDriver()
+        && 'driverId' in data
+        && data.driverId == driverId()
+        && sameCompany(data);
+    }
+    function tenantRead(data) {
+      return isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(data))
+        || ownsDriver(data);
+    }
+    function threadMember(threadId) {
+      return isDriver()
+        && exists(/databases/$(database)/documents/chat_threads/$(threadId))
+        && get(/databases/$(database)/documents/chat_threads/$(threadId)).data.companyId == companyId()
+        && driverId() in get(/databases/$(database)/documents/chat_threads/$(threadId)).data.participantIds;
+    }
+
+    match /platform_admins/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+    match /staff/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+    match /storage_grants/{id} { allow read, write: if false; }
+
+    match /driver_credentials/{id} { allow read, write: if false; }
+    match /pending_credentials/{id} { allow read, write: if false; }
+    match /driver_name_index/{id} { allow read, write: if false; }
+    match /security_audit/{id} { allow read, write: if false; }
+
+    // Reference catalogs — authenticated read only
+    match /operators/{docId} { allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data)) || (isDriver() && sameCompany(resource.data)) || demoRecord(resource.data); allow write: if false; }
+    match /wells/{docId} { allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data)) || (isDriver() && sameCompany(resource.data)) || demoRecord(resource.data); allow write: if false; }
+    match /wells_inactive/{docId} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /disposals/{docId} { allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data)) || (isDriver() && sameCompany(resource.data)) || demoRecord(resource.data); allow write: if false; }
+    match /customers/{docId} { allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data)) || (isDriver() && sameCompany(resource.data)) || demoRecord(resource.data); allow write: if false; }
+    match /operatorAliases/{docId} { allow read: if isDashboardScoped(resource.data) || isPlatformAdmin(); allow write: if false; }
+    match /job_packages/{id} { allow read: if isDashboard() || isDriver(); allow write: if false; }
+    match /app_registry/{id} { allow read: if isDashboard() || isDriver(); allow write: if false; }
+    match /overweight_fines/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /invoiceBlocks/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /ticketBlocks/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+
+    match /companies/{docId} {
+      allow read: if isDashboardCompanyDoc(docId) || (isDriver() && docId == companyId())
+        || (docId == 'wellbuilt-demo' && demoRecord(resource.data));
+      allow write: if false;
+      match /{sub=**} {
+        allow read: if isDashboardCompanyDoc(docId) || (isDriver() && docId == companyId())
+          || (docId == 'wellbuilt-demo' && demoRecord(resource.data));
+        allow write: if false;
+      }
+    }
+
+    // Driver-owned shifts — client write denied (callable only)
+    match /driver_shift_authority/{driverId} {
+      allow read, write: if false;
+    }
+    match /driver_shifts/{shiftId} {
+      allow read: if isDriver() && (
+        shiftId.matches('^' + driverId() + '_.*')
+        || resource.data.driverId == driverId()
+      ) || isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+
+    match /jsas/{jsaId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || (isDriver() && resource != null
+          && resource.data.driverId == driverId()
+          && resource.data.companyId == companyId());
+      allow create: if isDriver()
+        && request.resource.data.driverId == driverId()
+        && request.resource.data.companyId == companyId();
+      allow update: if isDriver()
+        && resource.data.driverId == driverId()
+        && resource.data.companyId == companyId()
+        && request.resource.data.driverId == driverId()
+        && request.resource.data.companyId == companyId();
+      allow delete: if isDriver()
+        && resource.data.driverId == driverId()
+        && resource.data.companyId == companyId();
+    }
+    match /jsa_day_status/{docId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || (isDriver() && resource != null && resource.data.companyId == companyId()
+          && resource.data.driverId == driverId());
+      allow create: if isDriver()
+        && request.resource.data.driverId == driverId()
+        && request.resource.data.companyId == companyId();
+      allow update: if isDriver()
+        && resource.data.driverId == driverId()
+        && resource.data.companyId == companyId()
+        && request.resource.data.driverId == driverId()
+        && request.resource.data.companyId == companyId();
+      allow delete: if false;
+    }
+    match /jsa_completions/{docId} {
+      allow read: if isDashboardScoped(resource.data) || ownsDriver(resource.data);
+      allow write: if false;
+    }
+    match /jsa_templates/{cid} {
+      allow read: if isDashboardCompanyDoc(cid) || (isDriver() && cid == companyId());
+      allow write: if false;
+      match /templates/{templateId} {
+        allow read: if isDashboardCompanyDoc(cid) || (isDriver() && cid == companyId());
+        allow write: if false;
+      }
+    }
+
+    // Operational docs — CF-only writes under secure model
+    // CF-only writes. Driver reads are owner-scoped. Staff reads are company-scoped.
+    match /invoices/{docId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || ownsDriver(resource.data) || demoRecord(resource.data);
+      allow create, update, delete: if false;
+    }
+    match /tickets/{docId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || ownsDriver(resource.data) || demoRecord(resource.data);
+      allow create, update, delete: if false;
+    }
+    match /dispatches/{jobId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || ownsDriver(resource.data) || demoRecord(resource.data);
+      allow create, update, delete: if false;
+    }
+    match /transfer_requests/{id} {
+      allow read: if tenantRead(resource.data);
+      allow write: if false;
+    }
+    match /transfers/{id} {
+      allow read: if tenantRead(resource.data);
+      allow write: if false;
+    }
+    match /projects/{id} {
+      allow read: if isDashboardScoped(resource.data) || demoRecord(resource.data);
+      allow write: if false;
+    }
+    match /chat_threads/{threadId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || threadMember(threadId);
+      allow write: if false;
+      match /messages/{messageId} {
+        allow read: if isPlatformAdmin()
+          || (isCompanyStaff() && staffSameCompany(get(/databases/$(database)/documents/chat_threads/$(threadId)).data))
+          || (isCompanyStaff() && staffSameCompany(resource.data))
+          || threadMember(threadId);
+        allow write: if false;
+      }
+    }
+    match /chat_monitors/{id} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+
+    match /route_recordings/{slug} {
+      allow read: if isDashboardScoped(resource.data) || (isDriver() && sameCompany(resource.data));
+      allow write: if false;
+      match /trips/{tripId} {
+        allow read: if isDashboardScoped(get(/databases/$(database)/documents/route_recordings/$(slug)).data)
+          || isDashboardScoped(resource.data)
+          || (isDriver() && sameCompany(resource.data));
+        allow write: if false;
+      }
+    }
+    match /route_overrides/{slug} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+    match /locationCorrections/{id} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+    match /customLocations/{id} {
+      allow read: if isDashboardScoped(resource.data) || (isDriver() && resource.data.companyId == companyId());
+      allow create, update, delete: if false;
+    }
+    match /unmatchedLocations/{id} {
+      allow read, write: if false;
+    }
+    match /unmatchedCompanies/{id} {
+      allow read, write: if false;
+    }
+
+    match /photo_requirements/{customerId} {
+      // customerId is an operator slug, not companyId.
+      allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data));
+      allow write: if isPlatformAdmin();
+    }
+    match /vehicle_documents/{id} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+    match /driver_documents/{id} {
+      allow read, write: if false;
+    }
+
+    match /deductions/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /additions/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /billing_invoices/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /billing_counters/{id} { allow read: if isPlatformAdmin(); allow write: if false; }
+    match /billing_invoice_counters/{id} { allow read: if isPlatformAdmin(); allow write: if false; }
+    match /billing_exports/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /diesel_prices/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /job_type_usage/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+
+    match /wb_diagnostics/{id} {
+      allow read: if isPlatformAdmin();
+      allow write: if false;
+    }
+    match /canonical_jobs/{id} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+    match /daps_waitlist/{id} {
+      allow read, write: if false;
+    }
+
+    function validJsaReceiptV1(requestId) {
+      return request.resource.data.keys().hasOnly([
+          'receiptVersion', 'requestId', 'jobDocId', 'haulGroupId',
+          'companyId', 'driverHash', 'shiftId', 'operator',
+          'jsaRecordId', 'completedAt', 'completionType'
+        ])
+        && request.resource.data.receiptVersion == 1
+        && request.resource.data.requestId == requestId
+        && request.resource.data.jobDocId is string
+        && request.resource.data.jobDocId.size() > 0
+        && request.resource.data.jobDocId.size() <= 120
+        && (!('haulGroupId' in request.resource.data)
+          || (request.resource.data.haulGroupId is string
+            && request.resource.data.haulGroupId.size() <= 120))
+        && request.resource.data.companyId is string
+        && request.resource.data.driverHash is string
+        && request.resource.data.driverHash.size() >= 8
+        && request.resource.data.shiftId is string
+        && request.resource.data.shiftId.size() > 0
+        && request.resource.data.operator is string
+        && request.resource.data.jsaRecordId is string
+        && request.resource.data.jsaRecordId.size() > 0
+        && request.resource.data.completedAt is string
+        && request.resource.data.completedAt.size() >= 20
+        && request.resource.data.completedAt.size() <= 40
+        && request.resource.data.completionType == 'signed_submission'
+        && request.resource.data.companyId.size() <= 80
+        && request.resource.data.operator.size() <= 120
+        && request.resource.data.shiftId.size() <= 80
+        && request.resource.data.jsaRecordId.size() <= 120
+        && request.resource.data.driverHash.size() <= 128;
+    }
+    function validJsaReceiptV2(requestId) {
+      return request.resource.data.keys().hasOnly([
+          'receiptVersion', 'requestId', 'jobDocId', 'haulGroupId',
+          'companyId', 'driverHash', 'operator',
+          'requestPeriodId', 'submissionPeriodId', 'workPeriodMode',
+          'jsaRecordId', 'completedAt', 'completionType'
+        ])
+        && request.resource.data.receiptVersion == 2
+        && request.resource.data.requestId == requestId
+        && request.resource.data.jobDocId is string
+        && request.resource.data.jobDocId.size() > 0
+        && request.resource.data.jobDocId.size() <= 120
+        && (!('haulGroupId' in request.resource.data)
+          || (request.resource.data.haulGroupId is string
+            && request.resource.data.haulGroupId.size() <= 120))
+        && request.resource.data.companyId is string
+        && request.resource.data.driverHash is string
+        && request.resource.data.driverHash.size() >= 8
+        && request.resource.data.operator is string
+        && request.resource.data.requestPeriodId is string
+        && request.resource.data.requestPeriodId.size() > 0
+        && request.resource.data.requestPeriodId.size() <= 120
+        && request.resource.data.submissionPeriodId == request.resource.data.requestPeriodId
+        && request.resource.data.workPeriodMode in ['explicit_shift', 'company_defined_period']
+        && request.resource.data.jsaRecordId is string
+        && request.resource.data.jsaRecordId.size() > 0
+        && request.resource.data.completedAt is string
+        && request.resource.data.completedAt.size() >= 20
+        && request.resource.data.completionType == 'signed_submission'
+        && request.resource.data.completedAt.size() <= 40
+        && request.resource.data.companyId.size() <= 80
+        && request.resource.data.operator.size() <= 120
+        && request.resource.data.jsaRecordId.size() <= 120
+        && request.resource.data.driverHash.size() <= 128;
+    }
+
+    // TEMPORARY compatibility exception — unauthenticated create + exact GET.
+    // Not the final secure architecture. Documented in AUTH-CLAIM-SHAPES.md.
+    match /jsa_read_receipts/{requestId} {
+      allow create: if requestId.matches('^[A-Za-z0-9_-]{43}$')
+        && (validJsaReceiptV1(requestId) || validJsaReceiptV2(requestId));
+      allow get: if true;
+      allow list: if false;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /daps_waitlist/{docId} {
+      allow read: if false;
+      allow create: if request.resource.data.keys().hasOnly(['email', 'createdAt', 'source'])
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 3
+        && request.resource.data.email.size() < 120
+        && request.resource.data.createdAt is string
+        && request.resource.data.createdAt.size() >= 20
+        && request.resource.data.createdAt.size() <= 40
+        && request.resource.data.source is string
+        && request.resource.data.source in ['daps', 'website', 'app'];
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

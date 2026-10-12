@@ -209,11 +209,11 @@ export default function LiveDemoPage() {
       try {
         const response = await httpsCallable<undefined, { customToken: string; companyId: string; role: string }>(
           getFirebaseFunctions(), 'demoViewerSession')();
-        if (response.data.companyId !== 'wellbuilt-demo' || response.data.role !== 'viewer') throw new Error('Demo viewer scope mismatch');
+        if (response.data.companyId !== 'wellbuilt-demo' || response.data.role !== 'demo_viewer') throw new Error('Demo viewer scope mismatch');
         const credential = await signInWithCustomToken(getDemoViewerAuth(), response.data.customToken);
         const token = await credential.user.getIdTokenResult();
         if (credential.user.uid !== 'wellbuilt-demo-shared-viewer' || token.claims.staffCompanyId !== 'wellbuilt-demo'
-          || token.claims.staffRole !== 'viewer' || token.claims.isDemo !== true) throw new Error('Demo viewer identity mismatch');
+          || token.claims.staffRole !== 'demo_viewer' || token.claims.isDemo !== true) throw new Error('Demo viewer identity mismatch');
         if (!stopped) { setEntered(true); setViewerError(''); }
       } catch (cause) {
         if (!stopped) setViewerError(cause instanceof Error ? cause.message : 'Demo viewer sign-in failed.');
