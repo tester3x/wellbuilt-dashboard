@@ -125,21 +125,21 @@ async function ensureDemoTenant(): Promise<ImmutableRevisionEnvelope> {
     requirePhotos: false, minPhotoCount: 0, ticketStartNumber: FIRST_DEMO_TICKET,
     ticketBookEra: 'post_cutover', createdAt: new Date().toISOString(),
   });
-  for (const name of DEMO_WELLS) {
-    await createDemoRtdb(`well_config/${name}`, {
+  await Promise.all(DEMO_WELLS.map(name =>
+    createDemoRtdb(`well_config/${name}`, {
       companyId: DEMO_COMPANY_ID, isDemo: true, name, route: 'Demo Route',
       tanks: 1, bottomLevel: 24, pullBbls: 140, bblPerFoot: 20,
       tankHeight: 240, recoveryCeilingFeet: 20,
       lat: 0.1, lng: 0.1 + DEMO_WELLS.indexOf(name) * 0.01,
-    });
-  }
-  for (const { id, name, truck } of DEMO_DRIVERS) {
-    await createDemoRtdb(`drivers/profiles/${id}`, {
+    })
+  ));
+  await Promise.all(DEMO_DRIVERS.map(({ id, name, truck }) =>
+    createDemoRtdb(`drivers/profiles/${id}`, {
       companyId: DEMO_COMPANY_ID, isDemo: true, driverId: id,
       legalName: name, displayName: name, active: true,
       truckNumber: truck,
-    });
-  }
+    })
+  ));
   return publishDemoPacket();
 }
 
@@ -203,9 +203,9 @@ async function completedRunProof(id: string): Promise<{
 
 async function writePending(scenario: DemoScenario, packet: ImmutableRevisionEnvelope, now: number): Promise<void> {
   const binding = stampDispatchBinding(packet);
-  for (const load of scenario.loads) {
+  await Promise.all(scenario.loads.map(async load => {
     const ids = dispatchIds(load);
-    for (let index = 0; index < ids.length; index += 1) {
+    await Promise.all(ids.map(async (id, index) => {
       const isSplit = load.stops.length > 1;
       const name = index === 0 ? load.pickup : load.stops[index - 1].name;
       const record: Record<string, unknown> = {
@@ -221,9 +221,9 @@ async function writePending(scenario: DemoScenario, packet: ImmutableRevisionEnv
         ...(load.haulGroupId ? { haulGroupId: load.haulGroupId } : {}),
         ...(isSplit ? { splitGroupId: load.familyId, splitSequence: index + 1, splitTotal: ids.length } : {}),
       };
-      await createDemoFirestore('dispatches', ids[index], record);
-    }
-  }
+      await createDemoFirestore('dispatches', id, record);
+    }));
+  }));
 }
 
 async function writeDispatchStage(scenario: DemoScenario, stage: 'accepted' | 'at_pickup' | 'departed' | 'at_dropoff', now: number): Promise<void> {
@@ -231,16 +231,14 @@ async function writeDispatchStage(scenario: DemoScenario, stage: 'accepted' | 'a
   const driverStage = stage === 'accepted' ? 'en_route_pickup'
     : stage === 'at_pickup' ? 'on_site_pickup'
       : stage === 'departed' ? 'en_route_dropoff' : 'on_site_dropoff';
-  for (const load of scenario.loads) {
-    for (const id of dispatchIds(load)) {
-      await mergeDemoFirestore('dispatches', id, {
+  await Promise.all(scenario.loads.flatMap(load => dispatchIds(load).map(id =>
+    mergeDemoFirestore('dispatches', id, {
         status, driverStage, loadsCompleted: 0,
         driverDest: stage === 'accepted' || stage === 'at_pickup'
           ? load.pickup : load.stops[load.stops.length - 1].name,
         [`demoStageTimes.${stage}`]: new Date(now).toISOString(),
-      });
-    }
-  }
+    })
+  )));
 }
 
 function localDateTime(date: Date): string {
@@ -251,7 +249,7 @@ function localDateTime(date: Date): string {
 }
 
 async function writePullPackets(scenario: DemoScenario, now: number): Promise<void> {
-  for (const load of scenario.loads) {
+  await Promise.all(scenario.loads.map(async load => {
     const packetId = `${load.id}-pull`;
     const packet = {
       packetId, idempotencyKey: packetId, requestType: 'pull',
@@ -265,7 +263,7 @@ async function writePullPackets(scenario: DemoScenario, now: number): Promise<vo
       dispatchId: dispatchIds(load)[0], isDemo: true,
     };
     await createDemoRtdb(`packets/incoming/${packetId}`, packet);
-  }
+  }));
 }
 
 async function writeClosed(scenario: DemoScenario, now: number): Promise<void> {
@@ -310,12 +308,12 @@ async function writeClosed(scenario: DemoScenario, now: number): Promise<void> {
       ...(scenario.kind === 'split_ticket' ? { splitGroupId: load.familyId } : {}),
     });
   }
-  for (const id of allDispatches(scenario)) {
-    await mergeDemoFirestore('dispatches', id, {
+  await Promise.all(allDispatches(scenario).map(id =>
+    mergeDemoFirestore('dispatches', id, {
       status: 'completed', driverStage: 'completed', loadsCompleted: 1,
       completedAt: new Date(now).toISOString(),
-    });
-  }
+    })
+  ));
 }
 
 async function applyStage(active: Active, now: number): Promise<void> {
