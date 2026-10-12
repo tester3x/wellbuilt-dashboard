@@ -20,7 +20,7 @@ import {
 const fs = () => admin.firestore();
 const rt = () => admin.database();
 const root = 'live_demo';
-const stageOrder: DemoStage[] = ['pending', 'accepted', 'at_pickup', 'departed', 'at_dropoff', 'closed'];
+const stageOrder: DemoStage[] = ['planning', 'pending', 'accepted', 'at_pickup', 'departed', 'at_dropoff', 'closed'];
 const STAGE_MS = 15_000;
 const VIEWER_WINDOW_MS = 120_000;
 const LOCK_MS = 90_000;
@@ -320,7 +320,11 @@ async function writeClosed(scenario: DemoScenario, now: number): Promise<void> {
 
 async function applyStage(active: Active, now: number): Promise<void> {
   const scenario = active.scenario;
-  if (active.stage === 'pending') {
+  if (active.stage === 'planning') {
+    // The public walkthrough may show the draft here. No job exists in the
+    // driver's drawer or Dispatch until the next, pending, step commits it.
+    return;
+  } else if (active.stage === 'pending') {
     const packet = await ensureDemoTenant();
     await writePending(scenario, packet, now);
   } else if (active.stage === 'departed') {
@@ -363,7 +367,7 @@ async function advance(now: number): Promise<void> {
       return;
     }
     const next = state.sequence + 1;
-    state.active = { scenario: buildDemoScenario(next), stage: 'pending', dueAt: now, startedAt: now };
+    state.active = { scenario: buildDemoScenario(next), stage: 'planning', dueAt: now, startedAt: now };
     state.sequence = next;
     state.startedToday += 1;
     await stateRef.set(state);

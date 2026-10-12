@@ -11,7 +11,7 @@ export const DEMO_DRIVERS = [
 ] as const;
 
 export type DemoScenarioKind = 'single' | 'multi_haul' | 'split_ticket';
-export type DemoStage = 'pending' | 'accepted' | 'at_pickup' | 'departed' | 'at_dropoff' | 'closed';
+export type DemoStage = 'planning' | 'pending' | 'accepted' | 'at_pickup' | 'departed' | 'at_dropoff' | 'closed';
 
 export interface DemoStop {
   name: string;

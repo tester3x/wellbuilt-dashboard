@@ -18,7 +18,7 @@ type DemoDispatch = {
 };
 type Snapshot = {
   company: string; synthetic: true; enabled: boolean;
-  active: { scenario: Scenario; stage: string; dueAt: number } | null;
+  active: { scenario: Scenario; stage: string; dueAt: number; startedAt: number } | null;
   featured: Scenario | null; featuredStage: string | null;
   dispatches: DemoDispatch[];
   loads: Array<{ id: string; pickup: string; bbls: number; pullStatus: string;
@@ -40,6 +40,66 @@ function stageForJob(job: Pick<DemoDispatch, 'driverStage' | 'status'>): string 
     en_route_dropoff: 'To Drop-off', on_site_dropoff: 'At Drop-off',
   };
   return stages[job.driverStage || ''] || (job.status === 'completed' ? 'Done' : 'Pending');
+}
+type DemoPhase = 'building' | 'drawer' | 'review' | 'pickup' | 'driving' | 'dropoff' | 'complete';
+function demoPhase(snapshot: Snapshot | null): DemoPhase {
+  const job = snapshot?.dispatches.find(row => row.exists);
+  if (!job) return 'building';
+  if (job.status === 'completed') return 'complete';
+  if (job.driverStage === 'on_site_dropoff') return 'dropoff';
+  if (job.driverStage === 'en_route_dropoff') return 'driving';
+  if (job.driverStage === 'on_site_pickup') return 'pickup';
+  if (job.driverStage === 'en_route_pickup') return 'review';
+  return 'drawer';
+}
+const stepCopy: Record<DemoPhase, string> = {
+  building: 'Dispatch fills out the job', drawer: 'The assignment appears in Jobs and the driver drawer',
+  review: 'The driver opens and starts the job', pickup: 'The driver arrives at pickup',
+  driving: 'The load leaves pickup and the well pull is recorded',
+  dropoff: 'The driver arrives at the destination',
+  complete: 'The ticket closes and billing receives the load',
+};
+
+function DemoBuilder({ scenario, progress, dispatched }: { scenario: Scenario | null; progress: number; dispatched: boolean }) {
+  const load = scenario?.loads[0];
+  const shown = (threshold: number, value: string | undefined) => progress >= threshold ? value || '' : '';
+  const split = scenario?.kind === 'split_ticket';
+  return <div className="rounded-lg border border-purple-700/70 bg-gray-800 p-4">
+    <div className="flex items-center justify-between border-b border-gray-700 pb-3 text-xs">
+      <div className="flex gap-2"><span className={`rounded px-3 py-1.5 ${!split ? 'bg-blue-700 text-white' : 'text-gray-400'}`}>PW</span><span className={`rounded px-3 py-1.5 ${split ? 'bg-purple-700 text-white' : 'text-gray-400'}`}>SW</span><span className="px-3 py-1.5 text-gray-400">Projects</span></div>
+      <span className="text-gray-400">Build Job</span>
+    </div>
+    <div className="mt-4 grid gap-3 md:grid-cols-2">
+      <label className="text-xs text-gray-400">Customer / Operator<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.12, 'Demo Operator')}</div></label>
+      <label className="text-xs text-gray-400">Service Type<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.24, split ? 'Service Work · Split Ticket' : 'Production Water')}</div></label>
+      <label className="text-xs text-gray-400">Well / Location<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.36, load?.pickup)}</div></label>
+      <label className="text-xs text-gray-400">Drop-off<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.5, load?.stops.map(stop => stop.name).join(' → '))}</div></label>
+      <label className="text-xs text-gray-400">Driver<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.64, scenario?.driverName)}</div></label>
+      <label className="text-xs text-gray-400">Loads / BBL<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.76, scenario ? `${scenario.loads.length} load${scenario.loads.length > 1 ? 's' : ''} · ${scenario.loads.reduce((sum, row) => sum + row.bbls, 0)} BBL` : '')}</div></label>
+    </div>
+    {scenario && scenario.loads.length > 1 && progress >= 0.76 && <div className="mt-3 space-y-1 text-xs text-purple-300">{scenario.loads.map((item, index) => <p key={item.id}>Load {index + 1}: {item.pickup} → {item.stops.map(stop => stop.name).join(' → ')} · {item.bbls} BBL · separate ticket family</p>)}</div>}
+    {split && progress >= 0.76 && <p className="mt-3 text-xs text-purple-300">Split A pickup · {load?.bbls} BBL → {load?.stops.map((stop, i) => `Split ${String.fromCharCode(66 + i)}: ${stop.name} ${stop.bbls} BBL`).join(' · ')}</p>}
+    <div className="mt-5 flex gap-2"><span className="rounded border border-gray-600 px-4 py-2 text-xs">Clear</span><div className={`flex-1 rounded py-2 text-center text-sm font-semibold transition-transform ${dispatched ? 'bg-green-600 text-white' : progress >= 0.92 ? 'bg-blue-700 text-white scale-[.98]' : progress >= 0.86 ? 'bg-blue-600 text-white animate-pulse' : 'bg-gray-600 text-gray-300'}`}>{dispatched ? '✓ Dispatched' : progress >= 0.92 ? '☝ Clicking Dispatch…' : 'Dispatch'}</div></div>
+  </div>;
+}
+
+function DemoPhone({ scenario, phase, dispatches, onClose, detailOpen, onOpen }: {
+  scenario: Scenario | null; phase: DemoPhase; dispatches: DemoDispatch[];
+  onClose: () => void; detailOpen: boolean; onOpen: () => void;
+}) {
+  const job = dispatches.find(row => row.exists);
+  const load = scenario?.loads[0];
+  const review = phase !== 'drawer' || detailOpen;
+  return <aside aria-label="Driver phone demo" className="fixed bottom-3 right-3 z-50 w-[min(340px,calc(100vw-24px))] max-h-[min(620px,calc(100vh-24px))] overflow-auto rounded-[24px] border-4 border-slate-600 bg-[#080d19] text-white shadow-[0_16px_55px_rgba(0,0,0,.7)]">
+    <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3 text-xs"><span>10:24 ◉ ▰▰</span><strong>WB T · {scenario?.driverName || 'Driver'}</strong><button type="button" onClick={onClose} aria-label="Close driver phone" className="text-lg text-gray-400">×</button></div>
+    {!review ? <div className="p-4"><p className="mb-3 text-sm font-bold text-amber-400">Job Drawer</p><p className="mb-3 text-xs text-gray-400">Today&apos;s jobs · {scenario?.driverName}</p>
+      {dispatches.filter(row => row.exists).map((row, index) => <button key={row.id} type="button" onClick={onOpen} className="mb-2 w-full rounded-xl border border-amber-700/70 bg-[#151d2e] p-4 text-left"><span className="text-[10px] font-bold uppercase text-amber-400">Pending dispatch · Job {index + 1}</span><p className="mt-2 font-semibold">{row.wellName}</p><p className="mt-1 text-xs text-cyan-300">→ {row.disposal}</p><p className="mt-2 text-xs text-gray-400">{row.bbls} BBL · Tap to open</p></button>)}
+    </div> : <div className="p-4"><p className="text-[10px] font-bold uppercase tracking-widest text-amber-400">{phase === 'review' || phase === 'drawer' ? 'Job Review' : stageForJob(job || { driverStage: null, status: null })}</p><h2 className="mt-2 text-lg font-bold">{load?.pickup}</h2><p className="mt-1 text-sm text-blue-300">{load?.stops.map(stop => stop.name).join(' → ')}</p><p className="mt-1 text-xs text-gray-400">Demo Operator · {load?.bbls} BBL</p>
+      <div className="mt-5 rounded-lg border border-slate-700 p-3 text-xs"><p className="font-bold text-amber-400">PICKUP</p><p className="mt-1">{load?.pickup}</p><p className="mt-3 font-bold text-purple-300">DROP-OFF</p><p className="mt-1">{load?.stops.map(stop => `${stop.name} · ${stop.bbls} BBL`).join(' / ')}</p></div>
+      <div className="mt-5 rounded-lg bg-amber-400 px-4 py-3 text-center text-sm font-bold text-black">{phase === 'review' || phase === 'drawer' ? 'Start Job' : phase === 'pickup' ? 'Pickup recorded' : phase === 'driving' ? 'En route to drop-off' : phase === 'dropoff' ? 'At drop-off' : 'Ticket completed'}</div>
+    </div>}
+    <div className="border-t border-slate-800 p-3 text-center text-[10px] text-gray-500">Live demo company · read-only phone view</div>
+  </aside>;
 }
 function DemoJobs({ snapshot, clock }: { snapshot: Snapshot; clock: number }) {
   const [tab, setTab] = useState<'active' | 'completed'>('active');
@@ -127,7 +187,16 @@ export default function LiveDemoPage() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState('');
   const [view, setView] = useState<View>('dispatch');
+  const [dispatchTab, setDispatchTab] = useState<'build' | 'jobs'>('jobs');
+  const [walkthrough, setWalkthrough] = useState(false);
+  const [guideRunId, setGuideRunId] = useState<string | null>(null);
+  const [guideEndedAt, setGuideEndedAt] = useState<number | null>(null);
+  const [phoneVisible, setPhoneVisible] = useState(false);
+  const [phoneDetailOpen, setPhoneDetailOpen] = useState(false);
   const [clock, setClock] = useState(0);
+  useEffect(() => {
+    if (window.localStorage.getItem('wb-live-demo-walkthrough-seen') !== '1') setWalkthrough(true);
+  }, []);
   useEffect(() => {
     setClock(Date.now());
     const timer = window.setInterval(() => setClock(Date.now()), 1_000);
@@ -147,11 +216,59 @@ export default function LiveDemoPage() {
       } finally { busy = false; }
     };
     void fetchSnapshot();
-    const timer = window.setInterval(() => { void fetchSnapshot(); }, 10_000);
+    const timer = window.setInterval(() => { void fetchSnapshot(); }, 4_000);
     document.addEventListener('visibilitychange', fetchSnapshot);
     return () => { stopped = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', fetchSnapshot); };
   }, []);
   const featured = snapshot?.featured;
+  const phase = demoPhase(snapshot);
+  const guided = walkthrough && !!guideRunId && featured?.id === guideRunId;
+  const jobVisible = !!snapshot?.dispatches.some(job => job.exists);
+  const guideElapsed = guideEndedAt == null ? 0 : clock - guideEndedAt;
+  const displayView: View = guided
+    ? phase === 'complete' ? guideElapsed < 5_000 ? 'tickets' : 'billing' : 'dispatch'
+    : view;
+  const displayDispatchTab = guided ? phase === 'building' ? 'build' : 'jobs' : dispatchTab;
+  const buildProgress = snapshot?.active && phase === 'building'
+    ? Math.min(1, Math.max(0, (clock - snapshot.active.startedAt) / Math.max(1, snapshot.active.dueAt - snapshot.active.startedAt)))
+    : jobVisible ? 1 : 0;
+  useEffect(() => {
+    if (!walkthrough || !snapshot) return;
+    if (!guideRunId && snapshot.active?.stage === 'pending' && !snapshot.dispatches.some(job => job.exists)) {
+      setGuideRunId(snapshot.active.scenario.id);
+      setGuideEndedAt(null);
+      setPhoneVisible(true);
+      setPhoneDetailOpen(false);
+    } else if (guideRunId && snapshot.featured?.id === guideRunId && demoPhase(snapshot) === 'complete' && guideEndedAt == null) {
+      setGuideEndedAt(Date.now());
+    }
+  }, [walkthrough, guideRunId, guideEndedAt, snapshot]);
+  useEffect(() => {
+    if (walkthrough && guideEndedAt != null && clock - guideEndedAt >= 13_000) {
+      window.localStorage.setItem('wb-live-demo-walkthrough-seen', '1');
+      setWalkthrough(false);
+      setGuideRunId(null);
+      setPhoneVisible(false);
+      setView('dispatch');
+    }
+  }, [walkthrough, guideEndedAt, clock]);
+  const exitWalkthrough = () => {
+    window.localStorage.setItem('wb-live-demo-walkthrough-seen', '1');
+    setWalkthrough(false);
+    setGuideRunId(null);
+    setPhoneVisible(false);
+  };
+  const replayWalkthrough = () => {
+    setWalkthrough(true);
+    setGuideRunId(null);
+    setGuideEndedAt(null);
+    setPhoneVisible(true);
+    setView('dispatch');
+  };
+  const navigate = (target: View) => {
+    if (walkthrough) exitWalkthrough();
+    setView(target);
+  };
   const activeCount = snapshot?.dispatches.filter(job => job.exists && job.status !== 'completed').length || 0;
   const liveStage = snapshot?.dispatches.find(job => job.exists)?.driverStage ||
     (snapshot?.dispatches.some(job => job.status === 'completed') ? 'completed' : 'pending');
@@ -164,32 +281,40 @@ export default function LiveDemoPage() {
     <header className="bg-gray-800 border-b border-gray-700">
       <div className="px-3 pt-4 text-center"><h1 className="text-xl sm:text-3xl font-bold">WellBuilt Suite</h1><p className="text-gray-400 text-sm">{snapshot?.company || 'Demo company'} · Operations</p></div>
       <nav aria-label="Demo dashboard navigation" className="flex flex-wrap justify-center gap-x-1 px-2 pt-2">
-        {nav.filter(item => item.id !== 'well').map(item => <button key={item.id} type="button" onClick={() => setView(item.id)}
-          className={`whitespace-nowrap px-3 py-2 text-sm font-medium border-b-2 ${view === item.id ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'}`}>{item.label}</button>)}
+        {nav.filter(item => item.id !== 'well').map(item => <button key={item.id} type="button" onClick={() => navigate(item.id)}
+          className={`whitespace-nowrap px-3 py-2 text-sm font-medium border-b-2 ${displayView === item.id ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'}`}>{item.label}</button>)}
       </nav>
     </header>
     <div className="px-4 py-4 max-w-[1600px] mx-auto">
+      {walkthrough && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-700 bg-cyan-950/40 p-3 text-sm">
+        <span><strong className="text-cyan-300">Walkthrough</strong> · {guided ? stepCopy[phase] : 'Waiting for the next new job to start at the builder'}{guided && phase === 'complete' ? ` · ${guideElapsed < 5_000 ? 'Tickets' : 'Billing'}` : ''}</span>
+        <button type="button" onClick={exitWalkthrough} className="rounded border border-cyan-700 px-3 py-1 text-cyan-200">Explore live demo</button>
+      </div>}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm">
-        <span className="text-gray-300">{featured ? `${featured.driverName} · ${featured.id} · ${stageForJob({ driverStage: liveStage, status: liveStage === 'completed' ? 'completed' : 'pending' })}` : 'Waiting for the next run'}</span>
-        <button type="button" onClick={() => setView('dispatch')} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">Watch Dispatch Jobs</button>
+        <span className="text-gray-300">{featured ? `${featured.driverName} · ${featured.id} · ${phase === 'building' ? 'Building job' : stageForJob({ driverStage: liveStage, status: liveStage === 'completed' ? 'completed' : 'pending' })}` : 'Waiting for the next run'}</span>
+        <div className="flex flex-wrap gap-2">
+          {!walkthrough && <button type="button" onClick={replayWalkthrough} className="rounded border border-cyan-700 px-3 py-1.5 text-cyan-200">Replay walkthrough</button>}
+          {jobVisible && <button type="button" onClick={() => setPhoneVisible(value => !value)} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">{phoneVisible ? 'Hide' : 'Show'} driver phone</button>}
+          <button type="button" onClick={() => navigate('dispatch')} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">Watch Dispatch Jobs</button>
+        </div>
       </div>
       {(error || snapshot?.error) && <div role="alert" className="mb-4 rounded border border-amber-600 bg-amber-950/30 p-3 text-sm text-amber-200">{error || `Demo step retrying: ${snapshot?.error}`}</div>}
-      {view === 'dispatch' ? <>
+      {displayView === 'dispatch' ? <>
         <div className="flex gap-2 border-b border-gray-700 pb-2 mb-3 text-sm">
-          <span className="px-3 py-1.5 text-gray-400">Build Job</span><button type="button" onClick={() => setView('well')} className="px-3 py-1.5 text-gray-400">Well Queue</button><span className="px-3 py-1.5 rounded bg-blue-600">Jobs</span>
+          <button type="button" onClick={() => { if (walkthrough) exitWalkthrough(); setDispatchTab('build'); }} className={`px-3 py-1.5 rounded ${displayDispatchTab === 'build' ? 'bg-blue-600 text-white' : 'text-gray-400'}`}>Build Job</button>
+          <button type="button" onClick={() => navigate('well')} className="px-3 py-1.5 text-gray-400">Well Queue</button>
+          <button type="button" onClick={() => { if (walkthrough) exitWalkthrough(); setDispatchTab('jobs'); }} className={`px-3 py-1.5 rounded ${displayDispatchTab === 'jobs' ? 'bg-blue-600 text-white' : 'text-gray-400'}`}>Jobs</button>
         </div>
-        {snapshot ? <DemoJobs snapshot={snapshot} clock={clock} /> : <div className="p-6 bg-gray-800 rounded-lg text-gray-400">Loading Dispatch Jobs…</div>}
-      </> : view === 'mobile' ? <div className="mx-auto max-w-md rounded-2xl border border-gray-700 bg-[#070b15] overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-800 text-center font-bold">WellBuilt Tickets · My Jobs</div>
-        <div className="p-5"><p className="text-xs uppercase tracking-widest text-amber-400">{snapshot?.dispatches[0] ? stageForJob(snapshot.dispatches[0]) : 'Pending'}</p><h2 className="mt-2 text-xl font-bold">{featured?.loads[0]?.pickup || 'Waiting for dispatch'}</h2><p className="mt-1 text-gray-400">{featured?.driverName}</p>
-          {featured?.loads.map((load, i) => <div key={load.id} className="mt-4 rounded-xl border border-gray-700 bg-[#111a2a] p-4"><strong>Load {i + 1} · {load.bbls} BBL</strong><p className="mt-2 text-sm text-gray-300">Pickup · {load.pickup}</p><p className="mt-1 text-sm text-gray-300">Drop-off · {load.stops.map(stop => stop.name).join(' → ')}</p></div>)}
-        </div>
-      </div> : view === 'well' ? <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">Well Queue · Pull activity</h2><div className="mt-4 grid gap-2 sm:grid-cols-2">{snapshot?.loads.map(load => <div key={load.id} className="rounded border border-gray-700 bg-gray-900 p-4"><strong>{load.pickup}</strong><p className="mt-2 text-sm text-gray-400">{load.bbls} BBL · {load.pullStatus}</p></div>)}</div></div>
-      : view === 'tickets' ? <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">WB Tickets</h2><div className="mt-4 space-y-2">{snapshot?.loads.flatMap(load => load.tickets).map(ticket => <div key={ticket.id} className="rounded border border-gray-700 bg-gray-900 p-4 flex flex-wrap justify-between gap-2"><strong>{ticket.exists ? `#${ticket.number}` : 'Awaiting ticket'}</strong><span>{ticket.destination} · {ticket.qty || 'Planned'} BBL</span></div>)}</div></div>
-      : <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">WB Billing</h2><div className="mt-4 space-y-2">{snapshot?.loads.map(load => <div key={load.id} className="rounded border border-gray-700 bg-gray-900 p-4 flex flex-wrap justify-between gap-2"><strong>{load.pickup}</strong><span>{load.invoice.exists ? `${load.invoice.totalBBL} BBL · ${load.invoice.status}` : 'Awaiting tickets'}</span></div>)}</div></div>}
-      {view === 'well' && <button type="button" className="mt-4 text-sm text-blue-300" onClick={() => setView('dispatch')}>Back to Dispatch Jobs</button>}
+        {displayDispatchTab === 'build' ? <DemoBuilder scenario={featured || null} progress={buildProgress} dispatched={jobVisible} />
+          : snapshot ? <DemoJobs snapshot={snapshot} clock={clock} /> : <div className="p-6 bg-gray-800 rounded-lg text-gray-400">Loading Dispatch Jobs…</div>}
+        {guided && phase === 'driving' && <div className="mt-3 rounded-lg border border-cyan-800 bg-cyan-950/20 p-3 text-sm text-cyan-200">WB Mobile receives the pull packet as the truck leaves pickup. The Dispatch status now reads To Drop-off.</div>}
+      </> : displayView === 'mobile' || displayView === 'well' ? <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">{displayView === 'well' ? 'Well Queue' : 'WB Mobile'} · Pull activity</h2><div className="mt-4 grid gap-2 sm:grid-cols-2">{snapshot?.loads.filter(load => displayView === 'well' || load.pullStatus !== 'awaiting pickup').map(load => <div key={load.id} className="rounded border border-gray-700 bg-gray-900 p-4"><strong>{load.pickup}</strong><p className="mt-2 text-sm text-gray-400">{load.bbls} BBL · {load.pullStatus}</p></div>)}{snapshot?.loads.every(load => load.pullStatus === 'awaiting pickup') && displayView === 'mobile' && <p className="text-sm text-gray-400">No pull packet has arrived yet.</p>}</div></div>
+      : displayView === 'tickets' ? <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">WB Tickets</h2><div className="mt-4 space-y-2">{snapshot?.loads.flatMap(load => load.tickets).filter(ticket => ticket.exists).map(ticket => <div key={ticket.id} className="rounded border border-gray-700 bg-gray-900 p-4 flex flex-wrap justify-between gap-2"><strong>#{ticket.number}</strong><span>{ticket.destination} · {ticket.qty} BBL</span></div>)}{!snapshot?.loads.some(load => load.tickets.some(ticket => ticket.exists)) && <p className="text-sm text-gray-400">No ticket yet. It appears after the driver closes the job.</p>}</div></div>
+      : <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">WB Billing</h2><div className="mt-4 space-y-2">{snapshot?.loads.filter(load => load.invoice.exists).map(load => <div key={load.id} className="rounded border border-gray-700 bg-gray-900 p-4 flex flex-wrap justify-between gap-2"><strong>{load.pickup}</strong><span>{load.invoice.totalBBL} BBL · {load.invoice.status}</span></div>)}{!snapshot?.loads.some(load => load.invoice.exists) && <p className="text-sm text-gray-400">No invoice yet. It appears when tickets close.</p>}</div></div>}
+      {displayView === 'well' && <button type="button" className="mt-4 text-sm text-blue-300" onClick={() => navigate('dispatch')}>Back to Dispatch Jobs</button>}
       <p className="mt-5 text-xs text-gray-500">This view shows read-only records from the dedicated demo company. Dashboard actions are disabled.</p>
       {activeCount === 0 && snapshot?.history.length ? <p className="mt-2 text-xs text-gray-500">Latest completed run: {snapshot.history[0].id}</p> : null}
     </div>
+    {phoneVisible && jobVisible && <DemoPhone scenario={featured || null} phase={phase} dispatches={snapshot?.dispatches || []} onClose={() => setPhoneVisible(false)} detailOpen={phoneDetailOpen} onOpen={() => setPhoneDetailOpen(true)} />}
   </main>;
 }
