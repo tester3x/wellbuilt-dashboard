@@ -380,6 +380,12 @@ export default function LiveDemoPage() {
   const remaining = snapshot?.active ? Math.max(0, Math.ceil((snapshot.active.dueAt - clock) / 1_000)) : snapshot?.nextRunAt ? Math.max(0, Math.ceil((snapshot.nextRunAt - clock) / 1_000)) : null;
   const nextPwAt = snapshot ? nextPwBuildAt(snapshot) : null;
   const timeToStart = snapshot?.active?.stage === 'accepted' ? Math.max(0, snapshot.active.dueAt - clock) : STEP_MS;
+  const scheduleLabel = guided
+    ? phase === 'complete' ? 'Run complete'
+      : (snapshot?.active?.dueAt || 0) <= clock ? phase === 'building' ? 'Dispatching…' : 'Updating live status…'
+        : `${phase === 'building' ? 'Dispatch in' : 'Next scene'} ${formatCountdown((snapshot?.active?.dueAt || clock) - clock)}`
+    : nextPwAt == null ? 'Scheduling next run…'
+      : nextPwAt <= clock ? 'Starting next PW build…' : `Next PW build ~${formatCountdown(nextPwAt - clock)}`;
   if (!entered) return <main className="flex min-h-screen items-center justify-center bg-[#0b1424] p-4 text-white">
     <section className="w-full max-w-md rounded-xl border border-cyan-800/70 bg-gray-800 p-8 shadow-2xl">
       <div className="mb-7 text-center"><img src="/live-demo/logo.svg" alt="WellBuilt Demo Hauling logo" className="mx-auto mb-4 h-20 w-20" />
@@ -404,7 +410,7 @@ export default function LiveDemoPage() {
     <div className="px-4 py-4 max-w-[1600px] mx-auto">
       <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-700 bg-cyan-950/40 p-3 text-sm">
         <span><strong className="text-cyan-300">{walkthrough ? 'Walkthrough' : 'Live schedule'}</strong> · {guided ? stepCopy[phase] : walkthrough ? 'The next PW job will build in Dispatch' : 'Watch the next PW job build from the beginning'}{guided && phase === 'complete' ? ` · ${guideElapsed < 5_000 ? 'Tickets' : 'Billing'}` : ''}</span>
-        <div className="flex items-center gap-3"><span className="font-mono text-lg font-semibold tabular-nums text-cyan-200">{guided ? phase === 'building' ? `Dispatch in ${formatCountdown((snapshot?.active?.dueAt || clock) - clock)}` : phase === 'complete' ? 'Run complete' : `Next scene ${formatCountdown((snapshot?.active?.dueAt || clock) - clock)}` : nextPwAt != null ? `Next PW build ~${formatCountdown(nextPwAt - clock)}` : 'Scheduling next run…'}</span>
+        <div className="flex items-center gap-3"><span className="font-mono text-lg font-semibold tabular-nums text-cyan-200">{scheduleLabel}</span>
           {walkthrough ? <button type="button" onClick={exitWalkthrough} className="rounded border border-cyan-700 px-3 py-1 text-cyan-200">Explore live demo</button>
             : <button type="button" onClick={replayWalkthrough} className="rounded border border-cyan-700 px-3 py-1 text-cyan-200">Watch next PW job</button>}
         </div>
