@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { isPlatformAdmin } from '@/lib/auth';
 import { docBelongsToTenant, viewedCompanyId } from '@/lib/tenantScope';
+import { loadCompanyById } from '@/lib/companySettings';
 import { Ticket, fetchTickets, searchTicketsArchive } from '@/lib/tickets';
 import { TicketDetailModal } from '@/components/TicketDetailModal';
 
@@ -30,7 +31,22 @@ function TicketsPageInner() {
   const [scannedTickets, setScannedTickets] = useState(0);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [loadedCompanyId, setLoadedCompanyId] = useState<string | undefined | null>(null);
+  const [operatorCatalog, setOperatorCatalog] = useState<{ companyId: string; names: string[] } | null>(null);
+  const [operatorFilter, setOperatorFilter] = useState<{ companyId: string | undefined; names: string[] } | null>(null);
   const companyId = viewedCompanyId(user?.companyId, operatingCompanyId, isPlatformAdmin(user));
+
+  useEffect(() => {
+    if (!companyId || companyId === '__no_company_access__') return;
+    let cancelled = false;
+    loadCompanyById(companyId)
+      .then(company => {
+        if (!cancelled) setOperatorCatalog({ companyId, names: company?.assignedOperators || [] });
+      })
+      .catch(() => {
+        if (!cancelled) setOperatorCatalog({ companyId, names: [] });
+      });
+    return () => { cancelled = true; };
+  }, [companyId]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -90,9 +106,25 @@ function TicketsPageInner() {
   // Hide rows from the previous selection immediately, before its replacement
   // request starts. Show all remains available only to platform admins.
   const companyViewLoading = loadedCompanyId !== companyId;
-  const filtered = companyViewLoading
+  const scopedTickets = companyViewLoading
     ? []
     : tickets.filter(ticket => docBelongsToTenant(ticket.companyId, companyId));
+  const selectedOperators = operatorFilter?.companyId === companyId ? (operatorFilter?.names || []) : [];
+  const operatorNames = Array.from(new Set([
+    ...(operatorCatalog?.companyId === companyId ? (operatorCatalog?.names || []) : []),
+    ...scopedTickets.map(ticket => ticket.company || ticket.operator),
+    ...selectedOperators,
+  ].map(name => name.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const filtered = selectedOperators.length
+    ? scopedTickets.filter(ticket => selectedOperators.some(name => name.toLowerCase() === (ticket.company || ticket.operator).trim().toLowerCase()))
+    : scopedTickets;
+
+  const toggleOperator = (name: string) => {
+    const next = selectedOperators.includes(name)
+      ? selectedOperators.filter(selected => selected !== name)
+      : [...selectedOperators, name];
+    setOperatorFilter({ companyId, names: next });
+  };
 
   if (loading) {
     return (
@@ -118,6 +150,24 @@ function TicketsPageInner() {
             </span>
           </h2>
 
+          <div className="flex flex-wrap items-center gap-3">
+            <details className="relative text-sm">
+              <summary className="cursor-pointer select-none px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white">
+                Operators: {selectedOperators.length ? `${selectedOperators.length} selected` : 'All'}
+              </summary>
+              <div className="absolute right-0 z-30 mt-1 w-72 max-h-80 overflow-y-auto rounded-lg border border-gray-600 bg-gray-800 p-2 shadow-xl">
+                <button type="button" onClick={() => setOperatorFilter({ companyId, names: [] })} className="w-full text-left px-2 py-2 text-blue-300 hover:bg-gray-700 rounded">
+                  All operators
+                </button>
+                {operatorNames.map(name => (
+                  <label key={name} className="flex items-center gap-2 px-2 py-2 text-gray-200 hover:bg-gray-700 rounded cursor-pointer">
+                    <input type="checkbox" checked={selectedOperators.includes(name)} onChange={() => toggleOperator(name)} />
+                    <span>{name}</span>
+                  </label>
+                ))}
+                {!operatorNames.length && <p className="px-2 py-2 text-gray-400">No operators in the loaded tickets.</p>}
+              </div>
+            </details>
           <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-3">
             <input
               type="text"
@@ -155,6 +205,7 @@ function TicketsPageInner() {
               Refresh
             </button>
           </form>
+          </div>
         </div>
 
         {error && (
