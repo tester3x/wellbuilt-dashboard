@@ -23,6 +23,7 @@ const rt = () => admin.database();
 const root = 'live_demo';
 const stageOrder: DemoStage[] = ['planning', 'pending', 'accepted', 'at_pickup', 'departed', 'at_dropoff', 'closed'];
 const STAGE_MS = 15_000;
+const BUILD_MS = 36_000;
 const VIEWER_WINDOW_MS = 120_000;
 const LOCK_MS = 130_000; // longer than either function's maximum execution time
 const FIRST_DEMO_TICKET = 900_000_000;
@@ -544,7 +545,7 @@ async function advance(now: number): Promise<void> {
       state.lastPrunedAt = now;
       state.active = null;
     } else {
-      state.active = { ...active, stage: stageOrder[index + 1], dueAt: now + STAGE_MS };
+      state.active = { ...active, stage: stageOrder[index + 1], dueAt: now + (active.stage === 'planning' ? BUILD_MS : STAGE_MS) };
     }
     delete state.error;
     await stateRef.set(state);

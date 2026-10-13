@@ -57,6 +57,7 @@ function currentPhysicalJob(snapshot: Pick<Snapshot, 'featured' | 'dispatches'>)
 }
 type DemoPhase = 'building' | 'drawer' | 'review' | 'to_pickup' | 'pickup' | 'driving' | 'dropoff' | 'complete';
 const STEP_MS = 15_000;
+const BUILD_MS = 36_000;
 function demoPhase(snapshot: Snapshot | null, clock: number): DemoPhase {
   const job = snapshot ? currentPhysicalJob(snapshot)?.lead : undefined;
   if (!job) return 'building';
@@ -83,6 +84,12 @@ function formatCountdown(milliseconds: number): string {
   const seconds = Math.max(0, Math.ceil(milliseconds / 1_000));
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 }
+function typedPreview(value: string, progress: number, start: number, end: number): string {
+  if (progress < start) return '';
+  if (progress >= end) return value;
+  const length = Math.max(1, Math.ceil(value.length * (progress - start) / (end - start)));
+  return value.slice(0, length);
+}
 function nextPwBuildAt(snapshot: Snapshot): number | null {
   const stages = ['planning', 'pending', 'accepted', 'at_pickup', 'departed', 'at_dropoff', 'closed'];
   const active = snapshot.active;
@@ -91,12 +98,13 @@ function nextPwBuildAt(snapshot: Snapshot): number | null {
   if (active) {
     const remainingStages = Math.max(0, stages.length - 1 - stages.indexOf(active.stage));
     const remainingLoads = active.scenario.loads.length - 1 - (active.loadIndex || 0);
-    startAt = active.dueAt + (remainingStages + remainingLoads * 6) * STEP_MS + 25_000;
+    startAt = active.dueAt + (remainingStages + remainingLoads * 6) * STEP_MS
+      + (active.stage === 'planning' ? BUILD_MS - STEP_MS : 0) + 25_000;
   }
   if (startAt == null) return null;
   while (sequence % 7 === 0) {
     // Split-ticket runs still play, but the guided Dispatch builder waits for PW.
-    startAt += 6 * STEP_MS + 25_000;
+    startAt += BUILD_MS + 5 * STEP_MS + 25_000;
     sequence += 1;
   }
   return startAt;
@@ -104,12 +112,18 @@ function nextPwBuildAt(snapshot: Snapshot): number | null {
 
 function DemoBuilder({ scenario, progress, dispatched, showCursor }: { scenario: Scenario | null; progress: number; dispatched: boolean; showCursor: boolean }) {
   const load = scenario?.loads[0];
-  const shown = (threshold: number, value: string | undefined) => progress >= threshold ? value || '' : '';
   const split = scenario?.kind === 'split_ticket';
   const root = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState({ x: 42, y: 115 });
-  const cursorStep = progress < .12 ? 0 : progress < .24 ? 1 : progress < .36 ? 2
-    : progress < .5 ? 3 : progress < .64 ? 4 : progress < .76 ? 5 : 6;
+  const cursorStep = progress < .03 ? 0 : progress < .12 ? 1 : progress < .15 ? 2
+    : progress < .24 ? 3 : progress < .29 ? 4 : progress < .42 ? 5
+      : progress < .45 ? 6 : progress < .58 ? 7 : progress < .61 ? 8
+        : progress < .7 ? 9 : progress < .76 ? 10 : progress < .89 ? 11 : 12;
+  const pickup = load?.pickup || '';
+  const dropoff = load?.stops[0]?.name || '';
+  const driver = scenario?.driverName || '';
+  const fieldStyle = 'mt-1 min-h-9 rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white';
+  const suggestionStyle = 'absolute left-0 right-0 top-full z-10 mt-1 rounded border border-cyan-600 bg-[#101a2b] p-1 text-sm text-white shadow-xl';
   useEffect(() => {
     if (!showCursor) return;
     const placeCursor = () => {
@@ -131,18 +145,53 @@ function DemoBuilder({ scenario, progress, dispatched, showCursor }: { scenario:
       <span className="text-gray-400">Build Job</span>
     </div>
     <div className="mt-4 grid gap-3 md:grid-cols-2">
-      <label data-demo-cursor="0" className="text-xs text-gray-400">Customer / Operator<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.12, 'Demo Operator')}</div></label>
-      <label data-demo-cursor="1" className="text-xs text-gray-400">Service Type<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.24, split ? 'Service Work · Split Ticket' : 'Production Water')}</div></label>
-      <label data-demo-cursor="2" className="text-xs text-gray-400">Well / Location<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.36, load?.pickup)}</div></label>
-      <label data-demo-cursor="3" className="text-xs text-gray-400">Drop-off<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.5, load?.stops.map(stop => stop.name).join(' → '))}</div></label>
-      <label data-demo-cursor="4" className="text-xs text-gray-400">Driver<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.64, scenario?.driverName)}</div></label>
-      <label data-demo-cursor="5" className="text-xs text-gray-400">Loads / BBL<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.76, scenario ? `${scenario.loads.length} load${scenario.loads.length > 1 ? 's' : ''} · ${scenario.loads.reduce((sum, row) => sum + row.bbls, 0)} BBL` : '')}</div></label>
+      <div className="relative text-xs text-gray-400">Customer / Operator
+        <div data-demo-cursor="0" className={fieldStyle}>{progress >= .12 ? 'Demo Operator' : <span className="text-gray-500">Select customer…</span>}</div>
+        {progress >= .03 && progress < .12 && <div className={suggestionStyle}>
+          <div data-demo-cursor="1" className="rounded bg-cyan-800/60 px-3 py-2 text-white">Demo Operator</div>
+          <div className="px-3 py-2 text-gray-400">Other operator</div>
+        </div>}
+      </div>
+      <div className="relative text-xs text-gray-400">Service Type
+        <div data-demo-cursor="2" className={fieldStyle}>{progress >= .24 ? split ? 'Service Work · Split Ticket' : 'Production Water' : <span className="text-gray-500">Select type…</span>}</div>
+        {progress >= .15 && progress < .24 && <div className={suggestionStyle}>
+          <div data-demo-cursor="3" className="rounded bg-cyan-800/60 px-3 py-2 text-white">{split ? 'Service Work' : 'Production Water'}</div>
+          <div className="px-3 py-2 text-gray-400">{split ? 'Production Water' : 'Service Work'}</div>
+        </div>}
+      </div>
+      <div className="relative text-xs text-gray-400">Well / Location
+        <div data-demo-cursor="4" className={fieldStyle}>{progress >= .42 ? pickup : typedPreview(pickup, progress, .29, .39) || <span className="text-gray-500">Search wells…</span>}{progress >= .29 && progress < .42 && <span className="ml-0.5 animate-pulse text-cyan-300">│</span>}</div>
+        {progress >= .29 && progress < .42 && <div className={suggestionStyle}>
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-cyan-300">Matching wells</div>
+          <div data-demo-cursor="5" className="rounded bg-cyan-800/60 px-3 py-2 text-white">{pickup}</div>
+          <div className="px-3 py-2 text-gray-400">Demo Well 2</div>
+        </div>}
+      </div>
+      <div className="relative text-xs text-gray-400">Drop-off
+        <div data-demo-cursor="6" className={fieldStyle}>{progress >= .58 ? dropoff : typedPreview(dropoff, progress, .45, .55) || <span className="text-gray-500">Search SWD or location…</span>}{progress >= .45 && progress < .58 && <span className="ml-0.5 animate-pulse text-cyan-300">│</span>}</div>
+        {progress >= .45 && progress < .58 && <div className={suggestionStyle}>
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-cyan-300">Matching locations</div>
+          <div data-demo-cursor="7" className="rounded bg-cyan-800/60 px-3 py-2 text-white">{dropoff}</div>
+          <div className="px-3 py-2 text-gray-400">Demo SWD 1</div>
+        </div>}
+      </div>
+      <div className="relative text-xs text-gray-400">Driver
+        <div data-demo-cursor="8" className={fieldStyle}>{progress >= .7 ? driver : <span className="text-gray-500">Select driver…</span>}</div>
+        {progress >= .61 && progress < .7 && <div className={suggestionStyle}>
+          <div data-demo-cursor="9" className="rounded bg-cyan-800/60 px-3 py-2 text-white">{driver}</div>
+          <div className="px-3 py-2 text-gray-400">Another demo driver</div>
+        </div>}
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-xs text-gray-400">
+        <div>Loads<div data-demo-cursor="10" className={fieldStyle}>{progress >= .76 ? scenario?.loads.length : <span className="text-gray-500">#</span>}</div></div>
+        <div>BBLs per load<div data-demo-cursor="11" className={fieldStyle}>{typedPreview(String(load?.bbls || ''), progress, .78, .87) || <span className="text-gray-500">BBLs</span>}{progress >= .78 && progress < .87 && <span className="ml-0.5 animate-pulse text-cyan-300">│</span>}</div></div>
+      </div>
     </div>
-    {scenario && scenario.loads.length > 1 && progress >= 0.76 && <div className="mt-3 space-y-1 text-xs text-purple-300">{scenario.loads.map((item, index) => <p key={item.id}>Load {index + 1}: {item.pickup} → {item.stops.map(stop => stop.name).join(' → ')} · {item.bbls} BBL · separate ticket family</p>)}</div>}
-    {split && progress >= 0.76 && <p className="mt-3 text-xs text-purple-300">Split A pickup · {load?.bbls} BBL → {load?.stops.map((stop, i) => `Split ${String.fromCharCode(66 + i)}: ${stop.name} ${stop.bbls} BBL`).join(' · ')}</p>}
-    <div className="mt-5 flex gap-2"><span className="rounded border border-gray-600 px-4 py-2 text-xs">Clear</span><div data-demo-cursor="6" className={`flex-1 rounded py-2 text-center text-sm font-semibold transition-transform ${dispatched ? 'bg-green-600 text-white' : progress >= 0.92 ? 'bg-blue-700 text-white scale-[.98]' : progress >= 0.86 ? 'bg-blue-600 text-white animate-pulse' : 'bg-gray-600 text-gray-300'}`}>{dispatched ? '✓ Dispatched' : progress >= 0.92 ? 'Clicking Dispatch…' : 'Dispatch'}</div></div>
-    {showCursor && <div aria-hidden="true" className="pointer-events-none absolute z-20 transition-[left,top,transform] duration-700 ease-in-out" style={{ left: cursor.x, top: cursor.y, transform: progress >= .9 && !dispatched ? 'scale(.78)' : 'scale(1)' }}>
-      {progress >= .9 && !dispatched && <span className="absolute -left-3 -top-3 h-8 w-8 animate-ping rounded-full bg-cyan-300/70" />}
+    {scenario && scenario.loads.length > 1 && progress >= .88 && <div className="mt-3 space-y-1 text-xs text-purple-300">{scenario.loads.map((item, index) => <p key={item.id}>Load {index + 1}: {item.pickup} → {item.stops.map(stop => stop.name).join(' → ')} · {item.bbls} BBL · separate ticket family</p>)}</div>}
+    {split && progress >= .88 && <p className="mt-3 text-xs text-purple-300">Split A pickup · {load?.bbls} BBL → {load?.stops.map((stop, i) => `Split ${String.fromCharCode(66 + i)}: ${stop.name} ${stop.bbls} BBL`).join(' · ')}</p>}
+    <div className="mt-5 flex gap-2"><span className="rounded border border-gray-600 px-4 py-2 text-xs">Clear</span><div data-demo-cursor="12" className={`flex-1 rounded py-2 text-center text-sm font-semibold transition-transform ${dispatched ? 'bg-green-600 text-white' : progress >= .95 ? 'bg-blue-700 text-white scale-[.98]' : progress >= .89 ? 'bg-blue-600 text-white animate-pulse' : 'bg-gray-600 text-gray-300'}`}>{dispatched ? '✓ Dispatched' : progress >= .95 ? 'Clicking Dispatch…' : 'Dispatch'}</div></div>
+    {showCursor && <div aria-hidden="true" className="pointer-events-none absolute z-20 transition-[left,top,transform] duration-700 ease-in-out" style={{ left: cursor.x, top: cursor.y, transform: progress >= .95 && !dispatched ? 'scale(.78)' : 'scale(1)' }}>
+      {progress >= .95 && !dispatched && <span className="absolute -left-3 -top-3 h-8 w-8 animate-ping rounded-full bg-cyan-300/70" />}
       <svg width="30" height="36" viewBox="0 0 30 36" fill="none" className="relative drop-shadow-[0_2px_3px_rgba(0,0,0,.8)]"><path d="M3 2v27l7.3-6.5 5.1 10.4 4.7-2.3-5-10.1H25L3 2Z" fill="white" stroke="#111827" strokeWidth="2" strokeLinejoin="round" /></svg>
     </div>}
   </div>;
@@ -264,6 +313,7 @@ export default function LiveDemoPage() {
   const [dispatchTab, setDispatchTab] = useState<'build' | 'jobs'>('jobs');
   const [walkthrough, setWalkthrough] = useState(false);
   const [guideRunId, setGuideRunId] = useState<string | null>(null);
+  const [guideBuildStartedAt, setGuideBuildStartedAt] = useState<number | null>(null);
   const [guideEndedAt, setGuideEndedAt] = useState<number | null>(null);
   const [phoneVisible, setPhoneVisible] = useState(false);
   const [phoneDetailOpen, setPhoneDetailOpen] = useState(false);
@@ -333,14 +383,16 @@ export default function LiveDemoPage() {
     ? phase === 'complete' ? guideElapsed < 5_000 ? 'tickets' : 'billing' : 'dispatch'
     : view;
   const displayDispatchTab = guided ? phase === 'building' ? 'build' : 'jobs' : dispatchTab;
+  const buildStartAt = guided && guideBuildStartedAt != null ? guideBuildStartedAt : snapshot?.active?.startedAt || clock;
   const buildProgress = snapshot?.active && phase === 'building'
-    ? Math.min(1, Math.max(0, (clock - snapshot.active.startedAt) / Math.max(1, snapshot.active.dueAt - snapshot.active.startedAt)))
+    ? Math.min(1, Math.max(0, (clock - buildStartAt) / Math.max(1, snapshot.active.dueAt - buildStartAt)))
     : jobVisible ? 1 : 0;
   useEffect(() => {
     if (!walkthrough || !snapshot) return;
     if (!guideRunId && snapshot.active?.stage === 'pending' && !snapshot.dispatches.some(job => job.exists)
-      && snapshot.active.scenario.kind !== 'split_ticket') {
+      && snapshot.active.scenario.kind !== 'split_ticket' && snapshot.active.dueAt - Date.now() >= 24_000) {
       setGuideRunId(snapshot.active.scenario.id);
+      setGuideBuildStartedAt(Date.now());
       setGuideEndedAt(null);
       setPhoneVisible(true);
       setPhoneDetailOpen(false);
@@ -352,6 +404,7 @@ export default function LiveDemoPage() {
     if (walkthrough && guideEndedAt != null && clock - guideEndedAt >= 13_000) {
       setWalkthrough(false);
       setGuideRunId(null);
+      setGuideBuildStartedAt(null);
       setPhoneVisible(false);
       setView('dispatch');
     }
@@ -360,11 +413,13 @@ export default function LiveDemoPage() {
   const exitWalkthrough = () => {
     setWalkthrough(false);
     setGuideRunId(null);
+    setGuideBuildStartedAt(null);
     setPhoneVisible(false);
   };
   const replayWalkthrough = () => {
     setWalkthrough(true);
     setGuideRunId(null);
+    setGuideBuildStartedAt(null);
     setGuideEndedAt(null);
     setPhoneVisible(true);
     setView('dispatch');
