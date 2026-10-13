@@ -314,6 +314,7 @@ export default function LiveDemoPage() {
   const [walkthrough, setWalkthrough] = useState(false);
   const [guideRunId, setGuideRunId] = useState<string | null>(null);
   const [guideBuildStartedAt, setGuideBuildStartedAt] = useState<number | null>(null);
+  const [guideDispatchedAt, setGuideDispatchedAt] = useState<number | null>(null);
   const [guideEndedAt, setGuideEndedAt] = useState<number | null>(null);
   const [phoneVisible, setPhoneVisible] = useState(false);
   const [phoneDetailOpen, setPhoneDetailOpen] = useState(false);
@@ -379,12 +380,17 @@ export default function LiveDemoPage() {
     return () => { stopped = true; if (timer !== undefined) window.clearTimeout(timer); document.removeEventListener('visibilitychange', fetchSnapshot); };
   }, [entered]);
   const featured = snapshot?.featured;
-  const phase = demoPhase(snapshot, clock);
+  const backendPhase = demoPhase(snapshot, clock);
   const guided = walkthrough && !!guideRunId && featured?.id === guideRunId;
   const jobVisible = !!snapshot?.dispatches.some(job => job.exists);
+  const phase = guided && backendPhase === 'review' && guideDispatchedAt != null && clock - guideDispatchedAt < 4_000
+    ? 'drawer' : backendPhase;
   useEffect(() => {
     if (jobVisible) setDispatchTab('jobs');
   }, [jobVisible, featured?.id]);
+  useEffect(() => {
+    if (guided && jobVisible && guideDispatchedAt == null) setGuideDispatchedAt(Date.now());
+  }, [guided, jobVisible, guideDispatchedAt]);
   const guideElapsed = guideEndedAt == null ? 0 : clock - guideEndedAt;
   const displayView: View = guided
     ? phase === 'complete' ? guideElapsed < 5_000 ? 'tickets' : 'billing' : 'dispatch'
@@ -394,12 +400,14 @@ export default function LiveDemoPage() {
   const buildProgress = snapshot?.active && phase === 'building'
     ? Math.min(1, Math.max(0, (clock - buildStartAt) / Math.max(1, snapshot.active.dueAt - buildStartAt)))
     : 0;
+  const phoneReady = !!snapshot?.active && (jobVisible || (phase === 'building' && buildProgress >= .88));
   useEffect(() => {
     if (!walkthrough || !snapshot) return;
     if (!guideRunId && snapshot.active?.stage === 'pending' && !snapshot.dispatches.some(job => job.exists)
       && snapshot.active.scenario.kind !== 'split_ticket' && snapshot.active.dueAt - Date.now() >= 15_000) {
       setGuideRunId(snapshot.active.scenario.id);
       setGuideBuildStartedAt(Date.now());
+      setGuideDispatchedAt(null);
       setGuideEndedAt(null);
       setPhoneVisible(true);
       setPhoneDetailOpen(false);
@@ -412,6 +420,7 @@ export default function LiveDemoPage() {
       setWalkthrough(false);
       setGuideRunId(null);
       setGuideBuildStartedAt(null);
+      setGuideDispatchedAt(null);
       setPhoneVisible(false);
       setView('dispatch');
     }
@@ -421,12 +430,14 @@ export default function LiveDemoPage() {
     setWalkthrough(false);
     setGuideRunId(null);
     setGuideBuildStartedAt(null);
+    setGuideDispatchedAt(null);
     setPhoneVisible(false);
   };
   const replayWalkthrough = () => {
     setWalkthrough(true);
     setGuideRunId(null);
     setGuideBuildStartedAt(null);
+    setGuideDispatchedAt(null);
     setGuideEndedAt(null);
     setPhoneVisible(true);
     setView('dispatch');
@@ -480,7 +491,7 @@ export default function LiveDemoPage() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm">
         <span className="text-gray-300">{featured ? `${featured.driverName} · ${featured.id} · ${phase === 'building' ? 'Building job' : stageForJob({ driverStage: liveStage, status: liveStage === 'completed' ? 'completed' : 'pending' })}` : 'Waiting for the next run'}</span>
         <div className="flex flex-wrap gap-2">
-          {snapshot?.active && <button type="button" onClick={() => setPhoneVisible(value => !value)} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">{phoneVisible ? 'Hide' : 'Show'} driver phone</button>}
+          {phoneReady && <button type="button" onClick={() => setPhoneVisible(value => !value)} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">{phoneVisible ? 'Hide' : 'Show'} driver phone</button>}
           <button type="button" onClick={() => navigate('dispatch')} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">Watch Dispatch Jobs</button>
         </div>
       </div>
@@ -501,6 +512,6 @@ export default function LiveDemoPage() {
       <p className="mt-5 text-xs text-gray-500">This view shows read-only records from the dedicated demo company. Dashboard actions are disabled.</p>
       {activeCount === 0 && snapshot?.history.length ? <p className="mt-2 text-xs text-gray-500">Latest completed run: {snapshot.history[0].id}</p> : null}
     </div>
-    {phoneVisible && snapshot?.active && <DemoPhone scenario={featured || null} phase={phase} dispatches={snapshot?.dispatches || []} onClose={() => setPhoneVisible(false)} detailOpen={phoneDetailOpen} onOpen={() => setPhoneDetailOpen(true)} timeToStart={timeToStart} />}
+    {phoneVisible && phoneReady && <DemoPhone scenario={featured || null} phase={phase} dispatches={snapshot?.dispatches || []} onClose={() => setPhoneVisible(false)} detailOpen={phoneDetailOpen} onOpen={() => setPhoneDetailOpen(true)} timeToStart={timeToStart} />}
   </main>;
 }
