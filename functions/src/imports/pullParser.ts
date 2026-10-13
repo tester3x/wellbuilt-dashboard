@@ -103,16 +103,21 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
     return parseFeet(value);
   };
   const pesekCanonical = (options.wellNames || []).find(name => normalizeWell(name) === 'pesek10');
+  const predatorMatches = (options.wellNames || []).filter(name => normalizeWell(name) === 'predator1');
+  const predatorCanonical = predatorMatches.length === 1 && !(options.wellNames || []).some(name => normalizeWell(name) === 'predator') ? predatorMatches[0] : null;
   const catalogueNames = (options.wellNames || []).filter(Boolean).sort((a, b) => b.length - a.length).map(name => [...name].map(character => String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
   const boundary = String.fromCharCode(92) + 'b';
   const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + wellPattern.source + '|' + catalogueNames.join('|') + (pesekCanonical ? '|Pesek(?![ \t]*\\d)' : '') + ')' + boundary, 'ig') : wellPattern;
   for (const message of splitChat(text)) {
     const body = message.body.trim();
     if (/message was deleted|<.*omitted>|message_history_notice|end-to-end encrypted/i.test(body)) continue;
-    const matches = [...body.matchAll(namesPattern)];
+    const predatorPattern = predatorCanonical ? /\bPredator(?![ \t]*[-#]?[ \t]*\d)\b/ig : null;
+    const matches = [...body.matchAll(namesPattern), ...(predatorPattern ? body.matchAll(predatorPattern) : [])]
+      .sort((a, b) => (a.index || 0) - (b.index || 0));
     const segments = matches.length ? matches.map((match, i) => ({ well: pesekCanonical && normalizeWell(match[0]) === 'pesek' ? pesekCanonical : match[0], body: body.slice((match.index || 0) + match[0].length, matches[i + 1]?.index ?? body.length) })) : [{ well: options.defaultWell || '', body }];
     for (let part = 0; part < segments.length; part++) {
       const segment = segments[part];
+      if (predatorCanonical && normalizeWell(segment.well) === 'predator') segment.well = predatorCanonical;
       let inlineTime = '';
       const gaugeBody=segment.body.replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
       const rawLines=gaugeBody.split('\n').map(line=>line.trim()).filter(Boolean);
