@@ -12,6 +12,7 @@ import {
 import { loadVerifiedRevision } from '../security/operational/dispatchPinRuntime';
 import { stampDispatchBinding } from '../security/operational/dispatchPacketPin';
 import { DEMO_PACKET_DRAFT } from './packetDraft';
+import { demoScenariosToPrune, MAX_COMPLETED_DEMO_JOBS } from './retention';
 import {
   DEMO_BATCH_SIZE, DEMO_COMPANY_ID, DEMO_COMPANY_NAME, DEMO_DRIVERS, DEMO_WELLS,
   buildDemoScenario, type DemoLoad, type DemoScenario, type DemoStage,
@@ -40,6 +41,7 @@ type DemoState = {
   history: RunSummary[];
   lastCompleted?: DemoScenario;
   lastClosedAt?: number;
+  lastPrunedAt?: number;
   error?: string;
 };
 
@@ -198,6 +200,99 @@ function ticketNumber(scenario: DemoScenario, loadIndex: number, stopIndex: numb
 
 function allDispatches(scenario: DemoScenario): string[] {
   return scenario.loads.flatMap(dispatchIds);
+}
+
+function scenarioFromId(id: string): DemoScenario | null {
+  if (!/^demo-\d{6}$/.test(id)) return null;
+  const sequence = Number(id.slice(5));
+  if (!Number.isSafeInteger(sequence) || sequence < 1) return null;
+  return buildDemoScenario(sequence);
+}
+
+function performanceRowKey(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) throw new Error('invalid_demo_pull_time');
+  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}_${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}${String(date.getSeconds()).padStart(2, '0')}`;
+}
+
+async function deleteCompletedDemoScenario(scenario: DemoScenario): Promise<void> {
+  const documentRefs = [
+    ...allDispatches(scenario).map(id => fs().collection('dispatches').doc(id)),
+    ...scenario.loads.flatMap(load => [
+      fs().collection('invoices').doc(`${load.id}-invoice`),
+      ...load.stops.map((_, index) => fs().collection('tickets').doc(`${load.id}-ticket-${index + 1}`)),
+    ]),
+  ];
+  const docs = await Promise.all(documentRefs.map(ref => ref.get()));
+  for (const doc of docs) {
+    if (!doc.exists) continue; // Idempotent after a partial cleanup.
+    assertDemoRecord(doc.data(), doc.ref.path);
+    if (doc.get('demoScenarioId') !== scenario.id) throw new Error(`demo_scenario_conflict:${doc.ref.path}`);
+    if (doc.ref.parent.id === 'dispatches' && doc.get('status') !== 'completed') {
+      throw new Error(`demo_dispatch_not_complete:${doc.ref.path}`);
+    }
+  }
+
+  // Remove RTDB records first. If the Firestore delete fails, the completed
+  // dispatches remain discoverable and this cleanup is safely retried.
+  const updates: Record<string, null> = {};
+  for (const load of scenario.loads) {
+    const packetId = `${load.id}-pull`;
+    const paths = [`packets/incoming/${packetId}`, `packets/processed/${packetId}`];
+    const [incoming, processed, config] = await Promise.all([
+      rt().ref(paths[0]).once('value'), rt().ref(paths[1]).once('value'),
+      rt().ref(`well_config/${load.pickup}`).once('value'),
+    ]);
+    assertDemoRecord(config.val(), `well_config/${load.pickup}`);
+    for (const [index, packet] of [incoming, processed].entries()) {
+      if (!packet.exists()) continue;
+      assertDemoRecord(packet.val(), paths[index]);
+      if (packet.val()?.packetId !== packetId) throw new Error(`demo_packet_conflict:${paths[index]}`);
+      updates[paths[index]] = null;
+    }
+    if (processed.exists() && processed.val()?.dateTimeUTC) {
+      const wellKey = load.pickup.replace(/\s+/g, '_');
+      updates[`performance/${wellKey}/rows/${performanceRowKey(processed.val().dateTimeUTC)}`] = null;
+    }
+  }
+  if (Object.keys(updates).length) await rt().ref().update(updates);
+  const batch = fs().batch();
+  for (const doc of docs) if (doc.exists) batch.delete(doc.ref);
+  await batch.commit();
+}
+
+/** Cap the real Dispatch Completed list, tickets, invoices and pull records.
+ * Only exact synthetic records for the dedicated demo company are eligible. */
+async function pruneCompletedDemoJobs(): Promise<Set<string>> {
+  const snap = await fs().collection('dispatches').where('companyId', '==', DEMO_COMPANY_ID).get();
+  const byScenario = new Map<string, Set<string>>();
+  for (const doc of snap.docs) {
+    const value = doc.data();
+    if (value.isDemo !== true || value.status !== 'completed') continue;
+    const scenario = scenarioFromId(value.demoScenarioId);
+    if (!scenario || !allDispatches(scenario).includes(doc.id)) continue;
+    const ids = byScenario.get(scenario.id) || new Set<string>();
+    ids.add(doc.id);
+    byScenario.set(scenario.id, ids);
+  }
+  const completed = [...byScenario].flatMap(([id, ids]) => {
+    const scenario = scenarioFromId(id)!;
+    return ids.size === allDispatches(scenario).length
+      ? [{ id, jobCount: ids.size }] : [];
+  });
+  const removeIds = demoScenariosToPrune(completed);
+  for (let offset = 0; offset < removeIds.length; offset += 5) {
+    await Promise.all(removeIds.slice(offset, offset + 5).map(id =>
+      deleteCompletedDemoScenario(scenarioFromId(id)!)
+    ));
+  }
+  if (removeIds.length) {
+    console.log('[live-demo] completed retention', {
+      maxJobs: MAX_COMPLETED_DEMO_JOBS, completedJobsBefore: completed.reduce((sum, run) => sum + run.jobCount, 0),
+      removedScenarios: removeIds.length,
+    });
+  }
+  return new Set(removeIds);
 }
 
 async function completedRunProof(id: string): Promise<{
@@ -394,11 +489,17 @@ async function withLock<T>(fn: () => Promise<T>): Promise<T | null> {
 
 async function advance(now: number): Promise<void> {
   const control = (await rt().ref(`${root}/control`).once('value')).val() || {};
-  if (control.killSwitch === true || control.enabled === false) return;
   const stateRef = rt().ref(`${root}/state`);
   const raw = (await stateRef.once('value')).val();
   const state: DemoState = raw || blankState(now);
   if (state.companyId !== DEMO_COMPANY_ID || state.schemaVersion !== 1) throw new Error('demo_state_conflict');
+  if (!state.lastPrunedAt || now - state.lastPrunedAt > 6 * 60 * 60_000) {
+    const removed = await pruneCompletedDemoJobs();
+    state.history = (state.history || []).filter(run => !removed.has(run.id));
+    state.lastPrunedAt = now;
+    await stateRef.set(state);
+  }
+  if (control.killSwitch === true || control.enabled === false) return;
   const day = new Date(now).toISOString().slice(0, 10);
   if (state.day !== day) { state.day = day; state.startedToday = 0; }
   if (!state.active) {
@@ -426,6 +527,9 @@ async function advance(now: number): Promise<void> {
         id: active.scenario.id, kind: active.scenario.kind,
         driverName: active.scenario.driverName, startedAt: active.startedAt, closedAt: now,
       }, ...(state.history || [])].slice(0, 20);
+      const removed = await pruneCompletedDemoJobs();
+      state.history = state.history.filter(run => !removed.has(run.id));
+      state.lastPrunedAt = now;
       state.active = null;
     } else {
       state.active = { ...active, stage: stageOrder[index + 1], dueAt: now + STAGE_MS };
