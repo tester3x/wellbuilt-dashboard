@@ -283,11 +283,14 @@ export async function fetchSiblingTickets(
 
 function mapTicketDoc(doc: any): Ticket {
   const d = doc.data();
+  const createdAt = d.createdAt?.toDate?.()
+    || (typeof d.createdAt === 'string' ? new Date(d.createdAt) : null);
+  const validCreatedAt = createdAt instanceof Date && !Number.isNaN(createdAt.getTime()) ? createdAt : null;
   return {
     id: doc.id,
     ticketNumber: d.ticketNumber || '',
-    date: d.date || '',
-    company: d.company || '',
+    date: d.date || (validCreatedAt?.toLocaleDateString('en-US', { timeZone: 'America/Chicago' }) || ''),
+    company: d.company || d.operator || (d.isDemo === true && d.companyId === 'wellbuilt-demo' ? 'Demo Operator' : ''),
     companyId: d.companyId || '',
     location: d.location || d.wellName || '',
     hauledTo: d.hauledTo || d.disposal || '',
@@ -303,7 +306,7 @@ function mapTicketDoc(doc: any): Ticket {
     apiNo: d.apiNo || '',
     invoiceNumber: d.invoiceNumber || '',
     invoiceDocId: d.invoiceDocId || '',
-    createdAt: d.createdAt?.toDate?.() || null,
+    createdAt: validCreatedAt,
     updatedAt: d.updatedAt?.toDate?.() || null,
     submittedBy: d.submittedBy || '',
     updatedBy: d.updatedBy || '',

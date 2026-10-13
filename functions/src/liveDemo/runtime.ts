@@ -387,6 +387,12 @@ function localDateTime(date: Date): string {
   }).format(date).replace(',', '');
 }
 
+function localDate(date: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago', month: '2-digit', day: '2-digit', year: 'numeric',
+  }).format(date);
+}
+
 async function writePullPackets(scenario: DemoScenario, now: number, loadIndex: number): Promise<void> {
   await Promise.all(scenario.loads.slice(loadIndex, loadIndex + 1).map(async load => {
     const packetId = `${load.id}-pull`;
@@ -416,6 +422,7 @@ async function writeClosed(scenario: DemoScenario, now: number, loadIndex: numbe
       tickets.push(String(number));
       await createDemoFirestore('tickets', id, {
         companyId: DEMO_COMPANY_ID, isDemo: true, demoScenarioId: scenario.id,
+        company: 'Demo Operator', operator: 'Demo Operator', date: localDate(new Date(now)),
         ticketNumber: number, wellName: load.pickup, location: load.pickup,
         hauledTo: stop.name, qty: String(stop.bbls), top: '10',
         type: scenario.kind === 'split_ticket' ? 'Service Work' : 'Production Water',
