@@ -22,6 +22,7 @@ import {
 } from './dashboardCatalogProjection';
 import { projectWellPerformance, wellKeyFromName } from './operational/selectWellPerformance';
 import { requestedAdminWellName } from './operational/staffWellPerformanceRequest';
+import { DEMO_COMPANY_ID, DEMO_DRIVERS } from '../liveDemo/plan';
 
 function trustedCatalogCaller(access: { uid: string; companyId: string; isPlatformAdmin: false }): DashboardCaller {
   return {
@@ -74,6 +75,28 @@ export const adminGetDashboardCatalog = httpsV2.onCall(
       ok: true as const,
       ...projected,
     };
+  },
+);
+
+/** Only the fixed synthetic identities used by the public demo. Never a cross-tenant catalog read. */
+export const adminGetDemoDriverRoster = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    await requireTrustedCatalogCaller(request.auth?.uid);
+    const entries = await Promise.all(DEMO_DRIVERS.map(async ({ id }) => {
+      const snap = await admin.database().ref(`drivers/profiles/${id}`).once('value');
+      const profile = snap.val();
+      if (!profile || profile.isDemo !== true || profile.companyId !== DEMO_COMPANY_ID || profile.active === false) return null;
+      return [id, {
+        driverId: id,
+        companyId: DEMO_COMPANY_ID,
+        displayName: String(profile.displayName || profile.legalName || ''),
+        legalName: String(profile.legalName || profile.displayName || ''),
+        active: true,
+        isDemo: true,
+      }] as const;
+    }));
+    return { ok: true as const, profiles: Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)) };
   },
 );
 

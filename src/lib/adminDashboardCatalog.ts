@@ -35,6 +35,12 @@ export async function adminGetDashboardCatalog(): Promise<DashboardCatalog> {
   return res.data as DashboardCatalog;
 }
 
+export async function adminGetDemoDriverRoster(): Promise<{ profiles: Record<string, unknown> }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminGetDemoDriverRoster');
+  const res = await fn({});
+  return res.data as { profiles: Record<string, unknown> };
+}
+
 export async function adminGetWellPool(): Promise<WellPool> {
   const fn = httpsCallable(getFirebaseFunctions(), 'adminGetWellPool');
   const res = await fn({});

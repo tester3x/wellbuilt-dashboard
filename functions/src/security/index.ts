@@ -34,6 +34,7 @@ export {
 } from './companyOnboarding';
 export {
   adminGetDashboardCatalog,
+  adminGetDemoDriverRoster,
   adminGetWellPool,
   adminGetWellHistory,
   adminGetWellPerformance,

@@ -3981,6 +3981,7 @@ export {
   getCompanyJoinCode,
   rotateCompanyJoinCode,
   adminGetDashboardCatalog,
+  adminGetDemoDriverRoster,
   adminGetWellPool,
   adminGetWellHistory,
   adminGetWellPerformance,

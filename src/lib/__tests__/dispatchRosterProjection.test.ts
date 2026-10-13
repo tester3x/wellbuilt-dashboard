@@ -9,6 +9,16 @@ const CANON_UUID_2 = '8c3d9a10-9876-4321-a123-abcdef012345';
 const LEGACY_HASH_1 = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const LEGACY_HASH_2 = 'f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f';
 
+test('synthetic demo profiles join the selected demo roster without leaking into Liquid Gold', () => {
+  const demoCatalog = { profiles: {
+    'demo-driver-claude': { companyId: 'wellbuilt-demo', displayName: 'Claude Demo Driver', legalName: 'Claude Demo Driver', active: true },
+    'demo-driver-grok': { companyId: 'wellbuilt-demo', displayName: 'Grok Demo Driver', legalName: 'Grok Demo Driver', active: true },
+    'demo-driver-antig': { companyId: 'wellbuilt-demo', displayName: 'Antig Demo Driver', legalName: 'Antig Demo Driver', active: true },
+  } };
+  assert.equal(projectDispatchDriverRoster(demoCatalog, 'wellbuilt-demo').length, 3);
+  assert.equal(projectDispatchDriverRoster(demoCatalog, 'liquid-gold').length, 0);
+});
+
 test('1. Modern secure driver (profiles only) is projected and visible with canonical UUID', () => {
   const catalog = {
     approved: {},

@@ -38,7 +38,7 @@ import {
   wellQueueSearchActive,
   wellQueueUsesSearchHits,
 } from '@/lib/dispatchWellQueueLive';
-import { adminGetDashboardCatalog, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
+import { adminGetDashboardCatalog, adminGetDemoDriverRoster, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant, viewedCompanyId as resolveViewedCompanyId } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { DetachablePane } from '@/components/DetachablePane';
@@ -809,7 +809,7 @@ function DispatchPageInner() {
     loadDriversData();
 
     loadOperators().then(setAllOperators).catch(console.error);
-  }, [user, loading]);
+  }, [user, loading, viewedCompanyId]);
 
   const catalogRouteWells = useMemo(() => !operatingCompanyId || operatingCompanyId === 'liquid-gold' ? wells : wells.filter(w => w.companyId === operatingCompanyId), [wells, operatingCompanyId]);
   const swWellOptions = useMemo(() => {
@@ -1108,6 +1108,10 @@ function DispatchPageInner() {
       // Canonical dispatch roster projection: unifies approved rows with modern
       // canonical profiles (profiles-only drivers) under company containment.
       const scoped = projectDispatchDriverRoster(catalog, user?.companyId);
+      if (viewedCompanyId === 'wellbuilt-demo' && user?.companyId !== 'wellbuilt-demo') {
+        const demo = await adminGetDemoDriverRoster();
+        scoped.push(...projectDispatchDriverRoster(demo, 'wellbuilt-demo'));
+      }
       setDrivers(scoped);
       setReadErrors(prev => ({ ...prev, drivers: undefined }));
 
