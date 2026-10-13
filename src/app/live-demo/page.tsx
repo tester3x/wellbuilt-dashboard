@@ -318,6 +318,10 @@ export default function LiveDemoPage() {
   const [phoneVisible, setPhoneVisible] = useState(false);
   const [phoneDetailOpen, setPhoneDetailOpen] = useState(false);
   const [clock, setClock] = useState(0);
+  const activeRunId = snapshot?.active?.scenario.id;
+  useEffect(() => {
+    if (activeRunId) setPhoneVisible(true);
+  }, [activeRunId]);
   useEffect(() => { setWalkthrough(true); }, []);
   useEffect(() => {
     let stopped = false;
@@ -378,6 +382,9 @@ export default function LiveDemoPage() {
   const phase = demoPhase(snapshot, clock);
   const guided = walkthrough && !!guideRunId && featured?.id === guideRunId;
   const jobVisible = !!snapshot?.dispatches.some(job => job.exists);
+  useEffect(() => {
+    if (jobVisible) setDispatchTab('jobs');
+  }, [jobVisible, featured?.id]);
   const guideElapsed = guideEndedAt == null ? 0 : clock - guideEndedAt;
   const displayView: View = guided
     ? phase === 'complete' ? guideElapsed < 5_000 ? 'tickets' : 'billing' : 'dispatch'
@@ -386,7 +393,7 @@ export default function LiveDemoPage() {
   const buildStartAt = guided && guideBuildStartedAt != null ? guideBuildStartedAt : snapshot?.active?.startedAt || clock;
   const buildProgress = snapshot?.active && phase === 'building'
     ? Math.min(1, Math.max(0, (clock - buildStartAt) / Math.max(1, snapshot.active.dueAt - buildStartAt)))
-    : jobVisible ? 1 : 0;
+    : 0;
   useEffect(() => {
     if (!walkthrough || !snapshot) return;
     if (!guideRunId && snapshot.active?.stage === 'pending' && !snapshot.dispatches.some(job => job.exists)
@@ -473,7 +480,7 @@ export default function LiveDemoPage() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm">
         <span className="text-gray-300">{featured ? `${featured.driverName} · ${featured.id} · ${phase === 'building' ? 'Building job' : stageForJob({ driverStage: liveStage, status: liveStage === 'completed' ? 'completed' : 'pending' })}` : 'Waiting for the next run'}</span>
         <div className="flex flex-wrap gap-2">
-          {(jobVisible || (guided && phase === 'building' && buildProgress >= .7)) && <button type="button" onClick={() => setPhoneVisible(value => !value)} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">{phoneVisible ? 'Hide' : 'Show'} driver phone</button>}
+          {snapshot?.active && <button type="button" onClick={() => setPhoneVisible(value => !value)} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">{phoneVisible ? 'Hide' : 'Show'} driver phone</button>}
           <button type="button" onClick={() => navigate('dispatch')} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">Watch Dispatch Jobs</button>
         </div>
       </div>
@@ -484,7 +491,7 @@ export default function LiveDemoPage() {
           <button type="button" onClick={() => navigate('well')} className="px-3 py-1.5 text-gray-400">Well Queue</button>
           <button type="button" onClick={() => { if (walkthrough) exitWalkthrough(); setDispatchTab('jobs'); }} className={`px-3 py-1.5 rounded ${displayDispatchTab === 'jobs' ? 'bg-blue-600 text-white' : 'text-gray-400'}`}>Jobs</button>
         </div>
-        {displayDispatchTab === 'build' ? <DemoBuilder scenario={featured || null} progress={buildProgress} dispatched={jobVisible} showCursor={guided && phase === 'building'} />
+        {displayDispatchTab === 'build' ? <DemoBuilder scenario={featured || null} progress={buildProgress} dispatched={false} showCursor={guided && phase === 'building'} />
           : snapshot ? <DemoJobs snapshot={snapshot} clock={clock} /> : <div className="p-6 bg-gray-800 rounded-lg text-gray-400">Loading Dispatch Jobs…</div>}
         {guided && phase === 'driving' && <div className="mt-3 rounded-lg border border-cyan-800 bg-cyan-950/20 p-3 text-sm text-cyan-200">WB Mobile receives the pull packet as the truck leaves pickup. The Dispatch status now reads To Drop-off.</div>}
       </> : displayView === 'mobile' || displayView === 'well' ? <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">{displayView === 'well' ? 'Well Queue' : 'WB Mobile'} · Pull activity</h2><div className="mt-4 grid gap-2 sm:grid-cols-2">{snapshot?.loads.filter(load => displayView === 'well' || load.pullStatus !== 'awaiting pickup').map(load => <div key={load.id} className="rounded border border-gray-700 bg-gray-900 p-4"><strong>{load.pickup}</strong><p className="mt-2 text-sm text-gray-400">{load.bbls} BBL · {load.pullStatus}</p></div>)}{snapshot?.loads.every(load => load.pullStatus === 'awaiting pickup') && displayView === 'mobile' && <p className="text-sm text-gray-400">No pull packet has arrived yet.</p>}</div></div>
@@ -494,6 +501,6 @@ export default function LiveDemoPage() {
       <p className="mt-5 text-xs text-gray-500">This view shows read-only records from the dedicated demo company. Dashboard actions are disabled.</p>
       {activeCount === 0 && snapshot?.history.length ? <p className="mt-2 text-xs text-gray-500">Latest completed run: {snapshot.history[0].id}</p> : null}
     </div>
-    {phoneVisible && (jobVisible || (guided && phase === 'building' && buildProgress >= .7)) && <DemoPhone scenario={featured || null} phase={phase} dispatches={snapshot?.dispatches || []} onClose={() => setPhoneVisible(false)} detailOpen={phoneDetailOpen} onOpen={() => setPhoneDetailOpen(true)} timeToStart={timeToStart} />}
+    {phoneVisible && snapshot?.active && <DemoPhone scenario={featured || null} phase={phase} dispatches={snapshot?.dispatches || []} onClose={() => setPhoneVisible(false)} detailOpen={phoneDetailOpen} onOpen={() => setPhoneDetailOpen(true)} timeToStart={timeToStart} />}
   </main>;
 }
