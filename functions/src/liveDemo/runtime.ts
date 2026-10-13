@@ -476,6 +476,11 @@ async function applyStage(active: Active, now: number): Promise<void> {
 async function withLock<T>(fn: () => Promise<T>): Promise<T | null> {
   const holder = randomUUID();
   const ref = rt().ref(`${root}/lock`);
+  // Snapshot viewers poll around a stage boundary. Do not queue a write
+  // transaction for every viewer while the current worker owns the lease;
+  // contention here can delay the owner's release and stretch a 15s step.
+  const existing = (await ref.once('value')).val();
+  if (existing && typeof existing.until === 'number' && existing.until > Date.now()) return null;
   const claimed = await ref.transaction(current => {
     if (current && typeof current.until === 'number' && current.until > Date.now()) return;
     return { holder, until: Date.now() + LOCK_MS };
