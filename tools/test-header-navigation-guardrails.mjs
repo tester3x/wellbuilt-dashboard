@@ -218,6 +218,8 @@ export async function runHeaderNavigationGuardrails() {
     '@/contexts/AuthContext': {
       useAuth: () => ({
         user: { uid: 'guardrail-test-uid', email: 'dispatch-admin@wellbuilt.test', role: 'admin' },
+        operatingCompanyId: null,
+        selectOperatingCompany: () => {},
         signOut: async () => {},
       }),
     },
@@ -227,6 +229,7 @@ export async function runHeaderNavigationGuardrails() {
       hasCapability: () => true,
       hasEQuipmentAccess: () => true,
       hasRole: () => true,
+      isPlatformAdmin: () => true,
     },
     './NotificationBell': { NotificationBell: () => React.createElement('button', null, 'Alerts') },
     './chat/ChatIcon': { ChatIcon: () => React.createElement('button', null, 'Chat') },

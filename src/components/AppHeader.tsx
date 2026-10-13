@@ -7,7 +7,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ref, onValue } from 'firebase/database';
 import { useAuth } from '@/contexts/AuthContext';
 import { TABS, getActiveTab } from '@/lib/tabs';
-import { getRoleLabel, hasCapability, hasEQuipmentAccess, hasRole } from '@/lib/auth';
+import { getRoleLabel, hasCapability, hasEQuipmentAccess, hasRole, isPlatformAdmin } from '@/lib/auth';
 import { NotificationBell } from './NotificationBell';
 import { ChatIcon } from './chat/ChatIcon';
 import { ChatSidebar } from './chat/ChatSidebar';
@@ -22,7 +22,7 @@ export function AppHeader() {
   const [chatOpen, setChatOpen] = useState(false);
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
   useEffect(() => {
-    if (!user || user.companyId) return;
+    if (!isPlatformAdmin(user)) return;
     let cancelled = false;
     import('@/lib/companySettings').then(m => m.loadAllCompanies()).then(rows => { if (!cancelled) setCompanies(rows); }).catch(console.error);
     return () => { cancelled = true; };
@@ -65,9 +65,9 @@ export function AppHeader() {
     <header className="bg-gray-800 border-b border-gray-700 sticky top-0 z-40">
       {/* Full-width rows keep the title and navigation centered independently of tools. */}
       <div className="w-full min-w-0 flex flex-col items-center gap-2 px-3 pt-3">
-        {!user.companyId && <label className="order-1 text-sm text-gray-300">Company
+        {isPlatformAdmin(user) && <label className="order-1 text-sm text-gray-300">Company
           <select aria-label="Operating company" value={operatingCompanyId || ''} onChange={e => selectOperatingCompany(e.target.value)} className="ml-2 bg-gray-700 rounded px-3 py-2 text-white">
-            <option value="">Select company...</option>
+            <option value="">Show all companies</option>
             {companies.map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
           </select>
         </label>}

@@ -21,6 +21,17 @@ interface ScopedUser {
 /** The one tenant whose data the legacy global well pool actually is. */
 export const LEGACY_WELL_POOL_COMPANY_ID = 'liquid-gold';
 
+/** Company chosen for a Dashboard view. Only an unscoped WB platform admin
+ * may clear the selection to see every company. */
+export function viewedCompanyId(
+  userCompanyId: string | undefined,
+  operatingCompanyId: string | null,
+  platformAdmin: boolean,
+): string | undefined {
+  if (userCompanyId) return userCompanyId;
+  return platformAdmin ? operatingCompanyId || undefined : '__no_company_access__';
+}
+
 /** True when this user may see the global RTDB well pool (well status,
  *  routes, pull history, performance). */
 export function canViewGlobalWellPool(user: ScopedUser | null | undefined): boolean {

@@ -39,7 +39,7 @@ import {
   wellQueueUsesSearchHits,
 } from '@/lib/dispatchWellQueueLive';
 import { adminGetDashboardCatalog, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
-import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
+import { canViewGlobalWellPool, docBelongsToTenant, viewedCompanyId as resolveViewedCompanyId } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
@@ -294,6 +294,9 @@ type RowAssignment =
 
 function DispatchPageInner() {
   const { user, loading, userCompany, operatingCompanyId } = useAuth();
+  // WB owners have no company on their login. Their header selection still
+  // scopes what Dispatch displays; an empty selection is the explicit all view.
+  const viewedCompanyId = resolveViewedCompanyId(user?.companyId, operatingCompanyId, isPlatformAdmin(user));
   const router = useRouter();
   const dispatchPathname = usePathname();
   // Restore scroll position across refresh (session-scoped; restores after data lays out).
@@ -418,8 +421,10 @@ function DispatchPageInner() {
     setJobsDetached(v);
     try { localStorage.setItem('wb.dispatch.jobsDetached', v ? '1' : '0'); } catch { /* ignore */ }
   }, []);
-  const [drivers, setDrivers] = useState<ApprovedDriver[]>([]);
-  const [dispatches, setDispatches] = useState<DispatchJob[]>([]);
+  const [allDrivers, setDrivers] = useState<ApprovedDriver[]>([]);
+  const [allDispatches, setDispatches] = useState<DispatchJob[]>([]);
+  const drivers = useMemo(() => allDrivers.filter(d => docBelongsToTenant(d.companyId, viewedCompanyId)), [allDrivers, viewedCompanyId]);
+  const dispatches = useMemo(() => allDispatches.filter(d => docBelongsToTenant(d.companyId, viewedCompanyId)), [allDispatches, viewedCompanyId]);
   // True once the Active Jobs dispatch subscription has delivered its first real
   // dataset. Distinguishes "no jobs yet loaded" (initial []) from "loaded, zero
   // jobs" so expanded-group restore never prunes against a still-loading empty set.
@@ -587,8 +592,10 @@ function DispatchPageInner() {
   }, [searchParams]);
 
   // Projects state
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [allProjects, setProjects] = useState<Project[]>([]);
+  const projects = useMemo(() => allProjects.filter(p => docBelongsToTenant(p.companyId, viewedCompanyId)), [allProjects, viewedCompanyId]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  useEffect(() => { setSelectedProject(null); }, [viewedCompanyId]);
   const [projectInvoices, setProjectInvoices] = useState<ProjectInvoice[]>([]);
   const [projectDispatches, setProjectDispatches] = useState<DispatchJob[]>([]);
   const [newProjectName, setNewProjectName] = useState('');
@@ -804,7 +811,7 @@ function DispatchPageInner() {
     loadOperators().then(setAllOperators).catch(console.error);
   }, [user, loading]);
 
-  const catalogRouteWells = useMemo(() => operatingCompanyId === 'liquid-gold' ? wells : wells.filter(w => !!operatingCompanyId && w.companyId === operatingCompanyId), [wells, operatingCompanyId]);
+  const catalogRouteWells = useMemo(() => !operatingCompanyId || operatingCompanyId === 'liquid-gold' ? wells : wells.filter(w => w.companyId === operatingCompanyId), [wells, operatingCompanyId]);
   const swWellOptions = useMemo(() => {
     const scopedWells = wellsForBuilderOperator(catalogRouteWells, allOperatorWells, builderOperator);
     const scopedOperatorWells = builderOperator
@@ -1228,9 +1235,9 @@ function DispatchPageInner() {
   // Route-scoped well collection: all tab counts and queue views derive from this
   // collection when a route filter is active; 'all' yields the full company catalog.
   const routeWells = useMemo(() => {
-    if (!routeFilter || routeFilter === 'all') return wells;
-    return wells.filter(w => w.route === routeFilter);
-  }, [wells, routeFilter]);
+    if (!routeFilter || routeFilter === 'all') return catalogRouteWells;
+    return catalogRouteWells.filter(w => w.route === routeFilter);
+  }, [catalogRouteWells, routeFilter]);
 
   const pwQueue = useMemo(() => {
     // Include DOWN wells here so they remain visible in the ALL view (and search),
