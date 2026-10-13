@@ -57,7 +57,7 @@ function currentPhysicalJob(snapshot: Pick<Snapshot, 'featured' | 'dispatches'>)
 }
 type DemoPhase = 'building' | 'drawer' | 'review' | 'to_pickup' | 'pickup' | 'driving' | 'dropoff' | 'complete';
 const STEP_MS = 15_000;
-const BUILD_MS = 36_000;
+const BUILD_MS = 60_000;
 function demoPhase(snapshot: Snapshot | null, clock: number): DemoPhase {
   const job = snapshot ? currentPhysicalJob(snapshot)?.lead : undefined;
   if (!job) return 'building';
@@ -390,7 +390,7 @@ export default function LiveDemoPage() {
   useEffect(() => {
     if (!walkthrough || !snapshot) return;
     if (!guideRunId && snapshot.active?.stage === 'pending' && !snapshot.dispatches.some(job => job.exists)
-      && snapshot.active.scenario.kind !== 'split_ticket' && snapshot.active.dueAt - Date.now() >= 24_000) {
+      && snapshot.active.scenario.kind !== 'split_ticket' && snapshot.active.dueAt - Date.now() >= 15_000) {
       setGuideRunId(snapshot.active.scenario.id);
       setGuideBuildStartedAt(Date.now());
       setGuideEndedAt(null);
