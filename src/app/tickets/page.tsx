@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { isPlatformAdmin } from '@/lib/auth';
+import { docBelongsToTenant, viewedCompanyId } from '@/lib/tenantScope';
 import { Ticket, fetchTickets, searchTicketsArchive } from '@/lib/tickets';
 import { TicketDetailModal } from '@/components/TicketDetailModal';
 
@@ -17,7 +18,7 @@ export default function TicketsPage() {
 }
 
 function TicketsPageInner() {
-  const { user, loading } = useAuth();
+  const { user, loading, operatingCompanyId } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -28,6 +29,8 @@ function TicketsPageInner() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [scannedTickets, setScannedTickets] = useState(0);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [loadedCompanyId, setLoadedCompanyId] = useState<string | undefined | null>(null);
+  const companyId = viewedCompanyId(user?.companyId, operatingCompanyId, isPlatformAdmin(user));
 
   useEffect(() => {
     if (!loading && !user) {
@@ -39,15 +42,16 @@ function TicketsPageInner() {
     if (loading || !user) return;
     let cancelled = false;
     const loadTickets = async () => {
-      const companyId = user.companyId?.trim();
-      if (!companyId && !isPlatformAdmin(user)) {
+      if (companyId === '__no_company_access__') {
         setTickets([]);
+        setLoadedCompanyId(companyId);
         setDataLoading(false);
         setError('Company access is unavailable. Tickets were not loaded.');
         return;
       }
       setDataLoading(true);
       setTickets([]);
+      setSelectedTicket(null);
       setScannedTickets(0);
       setError(null);
       try {
@@ -58,6 +62,7 @@ function TicketsPageInner() {
           : await fetchTickets(200, companyId || undefined);
         if (!cancelled) {
           setTickets(data);
+          setLoadedCompanyId(companyId);
           if (submittedSearch && submittedSearch === searchParams.get('search')?.trim() && data.length === 1) {
             setSelectedTicket(data[0]);
           }
@@ -65,6 +70,7 @@ function TicketsPageInner() {
       } catch (err: unknown) {
         if (!cancelled) {
           console.error('Failed to fetch tickets:', err);
+          setLoadedCompanyId(companyId);
           setError(err instanceof Error ? err.message : 'Failed to load tickets');
         }
       } finally {
@@ -73,7 +79,7 @@ function TicketsPageInner() {
     };
     void loadTickets();
     return () => { cancelled = true; };
-  }, [user, loading, submittedSearch, refreshToken, searchParams]);
+  }, [user, loading, companyId, submittedSearch, refreshToken, searchParams]);
 
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -81,7 +87,12 @@ function TicketsPageInner() {
     setRefreshToken((previous) => previous + 1);
   };
 
-  const filtered = tickets;
+  // Hide rows from the previous selection immediately, before its replacement
+  // request starts. Show all remains available only to platform admins.
+  const companyViewLoading = loadedCompanyId !== companyId;
+  const filtered = companyViewLoading
+    ? []
+    : tickets.filter(ticket => docBelongsToTenant(ticket.companyId, companyId));
 
   if (loading) {
     return (
@@ -150,7 +161,7 @@ function TicketsPageInner() {
           <div className="mb-4 p-3 bg-red-900/50 text-red-200 rounded-lg">{error}</div>
         )}
 
-        {dataLoading ? (
+        {dataLoading || companyViewLoading ? (
           <div className="text-gray-400">
             {submittedSearch ? `Searching the full ticket archive... ${scannedTickets} tickets checked.` : 'Loading recent tickets...'}
           </div>
@@ -222,7 +233,7 @@ function TicketsPageInner() {
       </main>
 
       {/* Paper-style detail modal */}
-      {selectedTicket && (
+      {selectedTicket && !companyViewLoading && docBelongsToTenant(selectedTicket.companyId, companyId) && (
         <TicketDetailModal
           ticket={selectedTicket}
           onClose={() => setSelectedTicket(null)}
