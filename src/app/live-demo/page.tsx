@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { getDemoViewerAuth, getDemoViewerFunctions, getFirebaseFunctions } from '@/lib/firebase';
@@ -72,39 +72,85 @@ function demoPhase(snapshot: Snapshot | null, clock: number): DemoPhase {
   return pendingElapsed >= 3_000 ? 'review' : 'drawer';
 }
 const stepCopy: Record<DemoPhase, string> = {
-  building: 'The job builder fills out the load', drawer: 'The assignment appears in Dispatch Jobs and the driver drawer',
+  building: 'Dispatch builds the PW job while the driver waits for an assignment', drawer: 'Dispatch sends the job; it appears in Jobs and the driver drawer',
   review: 'The driver taps the job, reviews it, then taps Start Job', to_pickup: 'Dispatch changes from Pending to En Route · Pickup', pickup: 'The driver arrives at pickup',
   driving: 'The load leaves pickup and the well pull is recorded',
   dropoff: 'The driver arrives at the destination',
   complete: 'The ticket closes and billing receives the load',
 };
 
-function DemoBuilder({ scenario, progress, dispatched }: { scenario: Scenario | null; progress: number; dispatched: boolean }) {
+function formatCountdown(milliseconds: number): string {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1_000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+function nextPwBuildAt(snapshot: Snapshot): number | null {
+  const stages = ['planning', 'pending', 'accepted', 'at_pickup', 'departed', 'at_dropoff', 'closed'];
+  const active = snapshot.active;
+  let startAt = snapshot.nextRunAt;
+  let sequence = snapshot.sequence + 1;
+  if (active) {
+    const remainingStages = Math.max(0, stages.length - 1 - stages.indexOf(active.stage));
+    const remainingLoads = active.scenario.loads.length - 1 - (active.loadIndex || 0);
+    startAt = active.dueAt + (remainingStages + remainingLoads * 6) * STEP_MS + 25_000;
+  }
+  if (startAt == null) return null;
+  while (sequence % 7 === 0) {
+    // Split-ticket runs still play, but the guided Dispatch builder waits for PW.
+    startAt += 6 * STEP_MS + 25_000;
+    sequence += 1;
+  }
+  return startAt;
+}
+
+function DemoBuilder({ scenario, progress, dispatched, showCursor }: { scenario: Scenario | null; progress: number; dispatched: boolean; showCursor: boolean }) {
   const load = scenario?.loads[0];
   const shown = (threshold: number, value: string | undefined) => progress >= threshold ? value || '' : '';
   const split = scenario?.kind === 'split_ticket';
-  return <div className="rounded-lg border border-purple-700/70 bg-gray-800 p-4">
+  const root = useRef<HTMLDivElement>(null);
+  const [cursor, setCursor] = useState({ x: 42, y: 115 });
+  const cursorStep = progress < .12 ? 0 : progress < .24 ? 1 : progress < .36 ? 2
+    : progress < .5 ? 3 : progress < .64 ? 4 : progress < .76 ? 5 : 6;
+  useEffect(() => {
+    if (!showCursor) return;
+    const placeCursor = () => {
+      const container = root.current;
+      const target = container?.querySelector<HTMLElement>(`[data-demo-cursor="${cursorStep}"]`);
+      if (!container || !target) return;
+      const parentRect = container.getBoundingClientRect();
+      const rect = target.getBoundingClientRect();
+      setCursor({ x: rect.left - parentRect.left + Math.min(rect.width - 24, cursorStep === 6 ? rect.width / 2 : 105),
+        y: rect.top - parentRect.top + (cursorStep === 6 ? rect.height / 2 : rect.height - 13) });
+    };
+    placeCursor();
+    window.addEventListener('resize', placeCursor);
+    return () => window.removeEventListener('resize', placeCursor);
+  }, [cursorStep, showCursor]);
+  return <div ref={root} className="relative rounded-lg border border-purple-700/70 bg-gray-800 p-4">
     <div className="flex items-center justify-between border-b border-gray-700 pb-3 text-xs">
       <div className="flex gap-2"><span className={`rounded px-3 py-1.5 ${!split ? 'bg-blue-700 text-white' : 'text-gray-400'}`}>PW</span><span className={`rounded px-3 py-1.5 ${split ? 'bg-purple-700 text-white' : 'text-gray-400'}`}>SW</span><span className="px-3 py-1.5 text-gray-400">Projects</span></div>
       <span className="text-gray-400">Build Job</span>
     </div>
     <div className="mt-4 grid gap-3 md:grid-cols-2">
-      <label className="text-xs text-gray-400">Customer / Operator<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.12, 'Demo Operator')}</div></label>
-      <label className="text-xs text-gray-400">Service Type<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.24, split ? 'Service Work · Split Ticket' : 'Production Water')}</div></label>
-      <label className="text-xs text-gray-400">Well / Location<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.36, load?.pickup)}</div></label>
-      <label className="text-xs text-gray-400">Drop-off<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.5, load?.stops.map(stop => stop.name).join(' → '))}</div></label>
-      <label className="text-xs text-gray-400">Driver<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.64, scenario?.driverName)}</div></label>
-      <label className="text-xs text-gray-400">Loads / BBL<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.76, scenario ? `${scenario.loads.length} load${scenario.loads.length > 1 ? 's' : ''} · ${scenario.loads.reduce((sum, row) => sum + row.bbls, 0)} BBL` : '')}</div></label>
+      <label data-demo-cursor="0" className="text-xs text-gray-400">Customer / Operator<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.12, 'Demo Operator')}</div></label>
+      <label data-demo-cursor="1" className="text-xs text-gray-400">Service Type<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.24, split ? 'Service Work · Split Ticket' : 'Production Water')}</div></label>
+      <label data-demo-cursor="2" className="text-xs text-gray-400">Well / Location<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.36, load?.pickup)}</div></label>
+      <label data-demo-cursor="3" className="text-xs text-gray-400">Drop-off<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.5, load?.stops.map(stop => stop.name).join(' → '))}</div></label>
+      <label data-demo-cursor="4" className="text-xs text-gray-400">Driver<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.64, scenario?.driverName)}</div></label>
+      <label data-demo-cursor="5" className="text-xs text-gray-400">Loads / BBL<div className="mt-1 min-h-9 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white">{shown(0.76, scenario ? `${scenario.loads.length} load${scenario.loads.length > 1 ? 's' : ''} · ${scenario.loads.reduce((sum, row) => sum + row.bbls, 0)} BBL` : '')}</div></label>
     </div>
     {scenario && scenario.loads.length > 1 && progress >= 0.76 && <div className="mt-3 space-y-1 text-xs text-purple-300">{scenario.loads.map((item, index) => <p key={item.id}>Load {index + 1}: {item.pickup} → {item.stops.map(stop => stop.name).join(' → ')} · {item.bbls} BBL · separate ticket family</p>)}</div>}
     {split && progress >= 0.76 && <p className="mt-3 text-xs text-purple-300">Split A pickup · {load?.bbls} BBL → {load?.stops.map((stop, i) => `Split ${String.fromCharCode(66 + i)}: ${stop.name} ${stop.bbls} BBL`).join(' · ')}</p>}
-    <div className="mt-5 flex gap-2"><span className="rounded border border-gray-600 px-4 py-2 text-xs">Clear</span><div className={`flex-1 rounded py-2 text-center text-sm font-semibold transition-transform ${dispatched ? 'bg-green-600 text-white' : progress >= 0.92 ? 'bg-blue-700 text-white scale-[.98]' : progress >= 0.86 ? 'bg-blue-600 text-white animate-pulse' : 'bg-gray-600 text-gray-300'}`}>{dispatched ? '✓ Dispatched' : progress >= 0.92 ? '☝ Clicking Dispatch…' : 'Dispatch'}</div></div>
+    <div className="mt-5 flex gap-2"><span className="rounded border border-gray-600 px-4 py-2 text-xs">Clear</span><div data-demo-cursor="6" className={`flex-1 rounded py-2 text-center text-sm font-semibold transition-transform ${dispatched ? 'bg-green-600 text-white' : progress >= 0.92 ? 'bg-blue-700 text-white scale-[.98]' : progress >= 0.86 ? 'bg-blue-600 text-white animate-pulse' : 'bg-gray-600 text-gray-300'}`}>{dispatched ? '✓ Dispatched' : progress >= 0.92 ? 'Clicking Dispatch…' : 'Dispatch'}</div></div>
+    {showCursor && <div aria-hidden="true" className="pointer-events-none absolute z-20 transition-[left,top,transform] duration-700 ease-in-out" style={{ left: cursor.x, top: cursor.y, transform: progress >= .9 && !dispatched ? 'scale(.78)' : 'scale(1)' }}>
+      {progress >= .9 && !dispatched && <span className="absolute -left-3 -top-3 h-8 w-8 animate-ping rounded-full bg-cyan-300/70" />}
+      <svg width="30" height="36" viewBox="0 0 30 36" fill="none" className="relative drop-shadow-[0_2px_3px_rgba(0,0,0,.8)]"><path d="M3 2v27l7.3-6.5 5.1 10.4 4.7-2.3-5-10.1H25L3 2Z" fill="white" stroke="#111827" strokeWidth="2" strokeLinejoin="round" /></svg>
+    </div>}
   </div>;
 }
 
-function DemoPhone({ scenario, phase, dispatches, onClose, detailOpen, onOpen, progress, timeToStart, launchTap }: {
+function DemoPhone({ scenario, phase, dispatches, onClose, detailOpen, onOpen, timeToStart }: {
   scenario: Scenario | null; phase: DemoPhase; dispatches: DemoDispatch[];
-  onClose: () => void; detailOpen: boolean; onOpen: () => void; progress: number; timeToStart: number; launchTap: boolean;
+  onClose: () => void; detailOpen: boolean; onOpen: () => void; timeToStart: number;
 }) {
   const current = physicalJobs({ featured: scenario, dispatches }).find(item => item.lead.status !== 'completed')
     || physicalJobs({ featured: scenario, dispatches }).at(-1);
@@ -113,10 +159,7 @@ function DemoPhone({ scenario, phase, dispatches, onClose, detailOpen, onOpen, p
   const review = phase !== 'drawer' || detailOpen;
   return <aside aria-label="Driver phone demo" className="fixed bottom-3 right-3 z-50 w-[min(340px,calc(100vw-24px))] max-h-[min(620px,calc(100vh-24px))] overflow-auto rounded-[24px] border-4 border-slate-600 bg-[#080d19] text-white shadow-[0_16px_55px_rgba(0,0,0,.7)]">
     <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3 text-xs"><span>10:24 ◉ ▰▰</span><strong>WB T · {scenario?.driverName || 'Driver'}</strong><button type="button" onClick={onClose} aria-label="Close driver phone" className="text-lg text-gray-400">×</button></div>
-    {(phase === 'building' || launchTap) && scenario?.kind === 'single' ? <div className="p-4"><p className="text-sm font-bold text-amber-400">Where are you going?</p><p className="mt-1 text-xs text-gray-400">New job · {scenario.driverName}</p>
-      <div className="mt-4 space-y-3 text-xs">{[['Customer / Operator', 'Demo Operator', .12], ['Well / Location', load?.pickup || '', .34], ['Drop-off', load?.stops[0]?.name || '', .53], ['Job Type', 'Production Water', .72], ['Loads / jobs', String(scenario.loads.length), .82]].map(([label, value, threshold]) => <div key={String(label)}><p className="mb-1 text-gray-400">{label}</p><div className="min-h-9 rounded border border-slate-700 bg-[#151d2e] px-3 py-2 text-sm">{progress >= Number(threshold) ? value : ''}</div></div>)}</div>
-      <div className={`mt-5 rounded-lg px-4 py-3 text-center text-sm font-bold text-black ${launchTap ? 'bg-amber-400 animate-pulse' : 'bg-amber-700/60'}`}>{launchTap ? '👆 Tap Start' : progress > .88 ? 'Ready to start' : 'Start'}</div>
-    </div> : scenario?.kind === 'single' && (phase === 'drawer' || phase === 'review') ? <div className="p-4"><p className="text-sm font-bold text-emerald-300">✓ Job started</p><h2 className="mt-3 text-lg font-bold">{load?.pickup}</h2><p className="mt-1 text-sm text-cyan-300">→ {load?.stops[0]?.name}</p><p className="mt-5 rounded-lg border border-amber-700/60 bg-amber-950/20 p-3 text-xs text-amber-200">Sent to Dispatch · opening your route…</p></div> : !review ? <div className="p-4"><p className="mb-3 text-sm font-bold text-amber-400">Job Drawer</p><p className="mb-3 text-xs text-gray-400">Today&apos;s jobs · {scenario?.driverName}</p>
+    {phase === 'building' ? <div className="p-4"><p className="text-sm font-bold text-amber-400">Job Drawer</p><p className="mt-1 text-xs text-gray-400">{scenario?.driverName}</p><div className="mt-5 rounded-xl border border-dashed border-slate-600 bg-[#151d2e] p-5 text-center"><p className="text-lg">🚚</p><p className="mt-2 text-sm font-semibold">Waiting for Dispatch</p><p className="mt-2 text-xs text-gray-400">The PW job will appear here as soon as Dispatch sends it.</p></div></div> : !review ? <div className="p-4"><p className="mb-3 text-sm font-bold text-amber-400">Job Drawer</p><p className="mb-3 text-xs text-gray-400">Today&apos;s jobs · {scenario?.driverName}</p>
       {physicalJobs({ featured: scenario, dispatches }).filter(item => item.lead.status !== 'completed').map((item, index) => <button key={item.load.id} type="button" onClick={onOpen} className="relative mb-2 w-full rounded-xl border border-amber-700/70 bg-[#151d2e] p-4 text-left"><span className="text-[10px] font-bold uppercase text-amber-400">Pending dispatch · Load {index + 1}{item.dispatches.length > 1 ? ` · ${item.dispatches.length} linked split jobs` : ''}</span><p className="mt-2 font-semibold">{item.load.pickup}</p><p className="mt-1 text-xs text-cyan-300">→ {item.load.stops.map(stop => stop.name).join(' → ')}</p><p className="mt-2 text-xs text-gray-400">{item.load.bbls} BBL · Tap to open</p>{timeToStart < STEP_MS - 1_500 && <span aria-hidden="true" className="absolute bottom-2 right-3 animate-bounce text-xl">👆</span>}</button>)}
     </div> : <div className="p-4"><p className="text-[10px] font-bold uppercase tracking-widest text-amber-400">{phase === 'review' || phase === 'drawer' ? 'Job Review' : stageForJob(job || { driverStage: null, status: null })}</p><h2 className="mt-2 text-lg font-bold">{load?.pickup}</h2><p className="mt-1 text-sm text-blue-300">{load?.stops.map(stop => stop.name).join(' → ')}</p><p className="mt-1 text-xs text-gray-400">Demo Operator · {load?.bbls} BBL</p>
       <div className="mt-5 rounded-lg border border-slate-700 p-3 text-xs"><p className="font-bold text-amber-400">PICKUP</p><p className="mt-1">{load?.pickup}</p><p className="mt-3 font-bold text-purple-300">DROP-OFF</p><p className="mt-1">{load?.stops.map(stop => `${stop.name} · ${stop.bbls} BBL`).join(' / ')}</p></div>
@@ -222,13 +265,10 @@ export default function LiveDemoPage() {
   const [walkthrough, setWalkthrough] = useState(false);
   const [guideRunId, setGuideRunId] = useState<string | null>(null);
   const [guideEndedAt, setGuideEndedAt] = useState<number | null>(null);
-  const [jobAppearedAt, setJobAppearedAt] = useState<number | null>(null);
   const [phoneVisible, setPhoneVisible] = useState(false);
   const [phoneDetailOpen, setPhoneDetailOpen] = useState(false);
   const [clock, setClock] = useState(0);
-  useEffect(() => {
-    if (window.localStorage.getItem('wb-live-demo-walkthrough-seen') !== '1') setWalkthrough(true);
-  }, []);
+  useEffect(() => { setWalkthrough(true); }, []);
   useEffect(() => {
     let stopped = false;
     const openViewer = async () => {
@@ -288,50 +328,44 @@ export default function LiveDemoPage() {
   const phase = demoPhase(snapshot, clock);
   const guided = walkthrough && !!guideRunId && featured?.id === guideRunId;
   const jobVisible = !!snapshot?.dispatches.some(job => job.exists);
-  const launchTap = guided && featured?.kind === 'single' && jobVisible && jobAppearedAt != null && clock - jobAppearedAt < 1_800;
   const guideElapsed = guideEndedAt == null ? 0 : clock - guideEndedAt;
   const displayView: View = guided
     ? phase === 'complete' ? guideElapsed < 5_000 ? 'tickets' : 'billing' : 'dispatch'
     : view;
-  const displayDispatchTab = guided ? phase === 'building' && featured?.kind !== 'single' ? 'build' : 'jobs' : dispatchTab;
+  const displayDispatchTab = guided ? phase === 'building' ? 'build' : 'jobs' : dispatchTab;
   const buildProgress = snapshot?.active && phase === 'building'
     ? Math.min(1, Math.max(0, (clock - snapshot.active.startedAt) / Math.max(1, snapshot.active.dueAt - snapshot.active.startedAt)))
     : jobVisible ? 1 : 0;
   useEffect(() => {
     if (!walkthrough || !snapshot) return;
-    if (!guideRunId && snapshot.active?.stage === 'pending' && !snapshot.dispatches.some(job => job.exists)) {
+    if (!guideRunId && snapshot.active?.stage === 'pending' && !snapshot.dispatches.some(job => job.exists)
+      && snapshot.active.scenario.kind !== 'split_ticket') {
       setGuideRunId(snapshot.active.scenario.id);
       setGuideEndedAt(null);
-      setJobAppearedAt(null);
       setPhoneVisible(true);
       setPhoneDetailOpen(false);
-    } else if (guided && jobVisible && jobAppearedAt == null) {
-      setJobAppearedAt(Date.now());
     } else if (guideRunId && snapshot.featured?.id === guideRunId && demoPhase(snapshot, Date.now()) === 'complete' && guideEndedAt == null) {
       setGuideEndedAt(Date.now());
     }
-  }, [walkthrough, guideRunId, guideEndedAt, snapshot, guided, jobVisible, jobAppearedAt]);
+  }, [walkthrough, guideRunId, guideEndedAt, snapshot]);
   useEffect(() => {
     if (walkthrough && guideEndedAt != null && clock - guideEndedAt >= 13_000) {
-      window.localStorage.setItem('wb-live-demo-walkthrough-seen', '1');
       setWalkthrough(false);
       setGuideRunId(null);
       setPhoneVisible(false);
       setView('dispatch');
     }
   }, [walkthrough, guideEndedAt, clock]);
+  useEffect(() => { setPhoneDetailOpen(false); }, [snapshot?.active?.loadIndex]);
   const exitWalkthrough = () => {
-    window.localStorage.setItem('wb-live-demo-walkthrough-seen', '1');
     setWalkthrough(false);
     setGuideRunId(null);
-    setJobAppearedAt(null);
     setPhoneVisible(false);
   };
   const replayWalkthrough = () => {
     setWalkthrough(true);
     setGuideRunId(null);
     setGuideEndedAt(null);
-    setJobAppearedAt(null);
     setPhoneVisible(true);
     setView('dispatch');
   };
@@ -344,6 +378,7 @@ export default function LiveDemoPage() {
     ? currentPhysicalJob(snapshot)?.lead.driverStage || (snapshot.dispatches.some(job => job.status === 'completed') ? 'completed' : 'pending')
     : 'pending';
   const remaining = snapshot?.active ? Math.max(0, Math.ceil((snapshot.active.dueAt - clock) / 1_000)) : snapshot?.nextRunAt ? Math.max(0, Math.ceil((snapshot.nextRunAt - clock) / 1_000)) : null;
+  const nextPwAt = snapshot ? nextPwBuildAt(snapshot) : null;
   const timeToStart = snapshot?.active?.stage === 'accepted' ? Math.max(0, snapshot.active.dueAt - clock) : STEP_MS;
   if (!entered) return <main className="flex min-h-screen items-center justify-center bg-[#0b1424] p-4 text-white">
     <section className="w-full max-w-md rounded-xl border border-cyan-800/70 bg-gray-800 p-8 shadow-2xl">
@@ -367,15 +402,17 @@ export default function LiveDemoPage() {
       </nav>
     </header>
     <div className="px-4 py-4 max-w-[1600px] mx-auto">
-      {walkthrough && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-700 bg-cyan-950/40 p-3 text-sm">
-        <span><strong className="text-cyan-300">Walkthrough</strong> · {launchTap ? 'WB T taps Start; the job appears in Dispatch Active Jobs' : guided && featured?.kind === 'single' && phase === 'building' ? 'WB T fills in the job form' : guided && featured?.kind === 'single' && (phase === 'drawer' || phase === 'review') ? 'The new WB T job appears in Dispatch Active Jobs' : guided ? stepCopy[phase] : 'Waiting for the next new job to start at the builder'}{guided && phase === 'complete' ? ` · ${guideElapsed < 5_000 ? 'Tickets' : 'Billing'}` : ''}</span>
-        <button type="button" onClick={exitWalkthrough} className="rounded border border-cyan-700 px-3 py-1 text-cyan-200">Explore live demo</button>
-      </div>}
+      <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-700 bg-cyan-950/40 p-3 text-sm">
+        <span><strong className="text-cyan-300">{walkthrough ? 'Walkthrough' : 'Live schedule'}</strong> · {guided ? stepCopy[phase] : walkthrough ? 'The next PW job will build in Dispatch' : 'Watch the next PW job build from the beginning'}{guided && phase === 'complete' ? ` · ${guideElapsed < 5_000 ? 'Tickets' : 'Billing'}` : ''}</span>
+        <div className="flex items-center gap-3"><span className="font-mono text-lg font-semibold tabular-nums text-cyan-200">{guided ? phase === 'building' ? `Dispatch in ${formatCountdown((snapshot?.active?.dueAt || clock) - clock)}` : phase === 'complete' ? 'Run complete' : `Next scene ${formatCountdown((snapshot?.active?.dueAt || clock) - clock)}` : nextPwAt != null ? `Next PW build ~${formatCountdown(nextPwAt - clock)}` : 'Scheduling next run…'}</span>
+          {walkthrough ? <button type="button" onClick={exitWalkthrough} className="rounded border border-cyan-700 px-3 py-1 text-cyan-200">Explore live demo</button>
+            : <button type="button" onClick={replayWalkthrough} className="rounded border border-cyan-700 px-3 py-1 text-cyan-200">Watch next PW job</button>}
+        </div>
+      </div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm">
         <span className="text-gray-300">{featured ? `${featured.driverName} · ${featured.id} · ${phase === 'building' ? 'Building job' : stageForJob({ driverStage: liveStage, status: liveStage === 'completed' ? 'completed' : 'pending' })}` : 'Waiting for the next run'}</span>
         <div className="flex flex-wrap gap-2">
-          {!walkthrough && <button type="button" onClick={replayWalkthrough} className="rounded border border-cyan-700 px-3 py-1.5 text-cyan-200">Replay walkthrough</button>}
-          {(jobVisible || (guided && featured?.kind === 'single')) && <button type="button" onClick={() => setPhoneVisible(value => !value)} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">{phoneVisible ? 'Hide' : 'Show'} driver phone</button>}
+          {(jobVisible || (guided && phase === 'building' && buildProgress >= .7)) && <button type="button" onClick={() => setPhoneVisible(value => !value)} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">{phoneVisible ? 'Hide' : 'Show'} driver phone</button>}
           <button type="button" onClick={() => navigate('dispatch')} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">Watch Dispatch Jobs</button>
         </div>
       </div>
@@ -386,7 +423,7 @@ export default function LiveDemoPage() {
           <button type="button" onClick={() => navigate('well')} className="px-3 py-1.5 text-gray-400">Well Queue</button>
           <button type="button" onClick={() => { if (walkthrough) exitWalkthrough(); setDispatchTab('jobs'); }} className={`px-3 py-1.5 rounded ${displayDispatchTab === 'jobs' ? 'bg-blue-600 text-white' : 'text-gray-400'}`}>Jobs</button>
         </div>
-        {displayDispatchTab === 'build' ? <DemoBuilder scenario={featured || null} progress={buildProgress} dispatched={jobVisible} />
+        {displayDispatchTab === 'build' ? <DemoBuilder scenario={featured || null} progress={buildProgress} dispatched={jobVisible} showCursor={guided && phase === 'building'} />
           : snapshot ? <DemoJobs snapshot={snapshot} clock={clock} /> : <div className="p-6 bg-gray-800 rounded-lg text-gray-400">Loading Dispatch Jobs…</div>}
         {guided && phase === 'driving' && <div className="mt-3 rounded-lg border border-cyan-800 bg-cyan-950/20 p-3 text-sm text-cyan-200">WB Mobile receives the pull packet as the truck leaves pickup. The Dispatch status now reads To Drop-off.</div>}
       </> : displayView === 'mobile' || displayView === 'well' ? <div className="rounded-lg border border-gray-700 bg-gray-800 p-4"><h2 className="text-lg font-bold">{displayView === 'well' ? 'Well Queue' : 'WB Mobile'} · Pull activity</h2><div className="mt-4 grid gap-2 sm:grid-cols-2">{snapshot?.loads.filter(load => displayView === 'well' || load.pullStatus !== 'awaiting pickup').map(load => <div key={load.id} className="rounded border border-gray-700 bg-gray-900 p-4"><strong>{load.pickup}</strong><p className="mt-2 text-sm text-gray-400">{load.bbls} BBL · {load.pullStatus}</p></div>)}{snapshot?.loads.every(load => load.pullStatus === 'awaiting pickup') && displayView === 'mobile' && <p className="text-sm text-gray-400">No pull packet has arrived yet.</p>}</div></div>
@@ -396,6 +433,6 @@ export default function LiveDemoPage() {
       <p className="mt-5 text-xs text-gray-500">This view shows read-only records from the dedicated demo company. Dashboard actions are disabled.</p>
       {activeCount === 0 && snapshot?.history.length ? <p className="mt-2 text-xs text-gray-500">Latest completed run: {snapshot.history[0].id}</p> : null}
     </div>
-    {phoneVisible && (jobVisible || (guided && featured?.kind === 'single' && phase === 'building')) && <DemoPhone scenario={featured || null} phase={phase} dispatches={snapshot?.dispatches || []} onClose={() => setPhoneVisible(false)} detailOpen={phoneDetailOpen} onOpen={() => setPhoneDetailOpen(true)} progress={buildProgress} timeToStart={timeToStart} launchTap={launchTap} />}
+    {phoneVisible && (jobVisible || (guided && phase === 'building' && buildProgress >= .7)) && <DemoPhone scenario={featured || null} phase={phase} dispatches={snapshot?.dispatches || []} onClose={() => setPhoneVisible(false)} detailOpen={phoneDetailOpen} onOpen={() => setPhoneDetailOpen(true)} timeToStart={timeToStart} />}
   </main>;
 }
