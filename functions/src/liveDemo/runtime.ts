@@ -24,7 +24,7 @@ const root = 'live_demo';
 const stageOrder: DemoStage[] = ['planning', 'pending', 'accepted', 'at_pickup', 'departed', 'at_dropoff', 'closed'];
 const STAGE_MS = 15_000;
 const VIEWER_WINDOW_MS = 120_000;
-const LOCK_MS = 90_000;
+const LOCK_MS = 130_000; // longer than either function's maximum execution time
 const FIRST_DEMO_TICKET = 900_000_000;
 const DEMO_LOGO_URL = 'https://wellbuilt-sync.web.app/live-demo/logo.svg';
 const DEMO_VIEWER_UID = 'wellbuilt-demo-shared-viewer';
@@ -488,7 +488,12 @@ async function withLock<T>(fn: () => Promise<T>): Promise<T | null> {
   if (!claimed.committed) return null;
   try { return await fn(); }
   finally {
-    await ref.transaction(current => current?.holder === holder ? null : undefined, undefined, false);
+    // Admin RTDB transactions can invoke the updater with an empty local value
+    // and abort on `undefined`, leaving this lease in place until it expires.
+    // The callable/scheduler timeout is 60s/120s; a worker only removes its
+    // own still-current lease. A later holder is never removed.
+    const current = (await ref.once('value')).val();
+    if (current?.holder === holder) await ref.remove();
   }
 }
 
