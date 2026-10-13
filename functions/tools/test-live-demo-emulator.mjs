@@ -44,4 +44,21 @@ for (let attempt = 0; attempt < 20; attempt += 1) {
   await new Promise(resolve => setTimeout(resolve, 500));
 }
 assert.equal(processed, true, 'processIncomingPull did not archive the demo pull');
-process.stdout.write('Live demo emulator E2E: company, binding, dispatch, ticket, invoice, processed pull OK\n');
+
+// Jump to the next multi-haul sequence and prove that its second pickup is
+// still absent when the first physical load closes.
+await database.ref('live_demo/state/sequence').set(4);
+const multiStart = start + 500_000;
+await database.ref('live_demo/viewerAt').set(multiStart);
+for (let step = 0; step < 7; step += 1) {
+  await advanceLiveDemoForEmulator(multiStart + step * 50_000);
+}
+const multiState = (await database.ref('live_demo/state').once('value')).val();
+assert.equal(multiState.sequence, 5);
+assert.equal(multiState.active.loadIndex, 1);
+assert.equal(multiState.active.stage, 'pending');
+assert.equal((await firestore.collection('dispatches').doc('demo-000005-a-leg-1').get()).data()?.status, 'completed');
+assert.equal((await firestore.collection('dispatches').doc('demo-000005-b-leg-1').get()).exists, false);
+await advanceLiveDemoForEmulator(multiStart + 7 * 50_000);
+assert.equal((await firestore.collection('dispatches').doc('demo-000005-b-leg-1').get()).data()?.status, 'pending');
+process.stdout.write('Live demo emulator E2E: single load and sequential multi-haul OK\n');

@@ -21,7 +21,7 @@ type Snapshot = {
   company: string; synthetic: true; enabled: boolean;
   companyProfile: { name: string; logoUrl: string; primaryColor: string; invoicingMode: string;
     wellMonitoring: boolean; splitTickets: boolean; liveDispatchSync: boolean };
-  active: { scenario: Scenario; stage: string; dueAt: number; startedAt: number } | null;
+  active: { scenario: Scenario; stage: string; dueAt: number; startedAt: number; loadIndex?: number } | null;
   featured: Scenario | null; featuredStage: string | null;
   dispatches: DemoDispatch[];
   loads: Array<{ id: string; pickup: string; bbls: number; pullStatus: string;
@@ -44,11 +44,24 @@ function stageForJob(job: Pick<DemoDispatch, 'driverStage' | 'status'>): string 
   };
   return stages[job.driverStage || ''] || (job.status === 'completed' ? 'Done' : 'Pending');
 }
+type PhysicalJob = { load: Load; dispatches: DemoDispatch[]; lead: DemoDispatch };
+function physicalJobs(snapshot: Pick<Snapshot, 'featured' | 'dispatches'>): PhysicalJob[] {
+  return (snapshot.featured?.loads || []).flatMap(load => {
+    const dispatches = snapshot.dispatches.filter(job => job.exists && job.id.startsWith(`${load.id}-leg-`));
+    return dispatches.length ? [{ load, dispatches, lead: dispatches[0] }] : [];
+  });
+}
+function currentPhysicalJob(snapshot: Pick<Snapshot, 'featured' | 'dispatches'>): PhysicalJob | undefined {
+  const jobs = physicalJobs(snapshot);
+  return jobs.find(job => job.lead.status !== 'completed') || jobs[jobs.length - 1];
+}
 type DemoPhase = 'building' | 'drawer' | 'review' | 'to_pickup' | 'pickup' | 'driving' | 'dropoff' | 'complete';
 const STEP_MS = 15_000;
 function demoPhase(snapshot: Snapshot | null, clock: number): DemoPhase {
-  const job = snapshot?.dispatches.find(row => row.exists);
+  const job = snapshot ? currentPhysicalJob(snapshot)?.lead : undefined;
   if (!job) return 'building';
+  if (job.status === 'completed' && snapshot?.active?.stage === 'pending'
+    && (snapshot.active.loadIndex || 0) > 0) return 'drawer';
   if (job.status === 'completed') return 'complete';
   if (job.driverStage === 'on_site_dropoff') return 'dropoff';
   if (job.driverStage === 'en_route_dropoff') return 'driving';
@@ -93,8 +106,10 @@ function DemoPhone({ scenario, phase, dispatches, onClose, detailOpen, onOpen, p
   scenario: Scenario | null; phase: DemoPhase; dispatches: DemoDispatch[];
   onClose: () => void; detailOpen: boolean; onOpen: () => void; progress: number; timeToStart: number; launchTap: boolean;
 }) {
-  const job = dispatches.find(row => row.exists);
-  const load = scenario?.loads[0];
+  const current = physicalJobs({ featured: scenario, dispatches }).find(item => item.lead.status !== 'completed')
+    || physicalJobs({ featured: scenario, dispatches }).at(-1);
+  const job = current?.lead;
+  const load = current?.load || scenario?.loads[0];
   const review = phase !== 'drawer' || detailOpen;
   return <aside aria-label="Driver phone demo" className="fixed bottom-3 right-3 z-50 w-[min(340px,calc(100vw-24px))] max-h-[min(620px,calc(100vh-24px))] overflow-auto rounded-[24px] border-4 border-slate-600 bg-[#080d19] text-white shadow-[0_16px_55px_rgba(0,0,0,.7)]">
     <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3 text-xs"><span>10:24 ◉ ▰▰</span><strong>WB T · {scenario?.driverName || 'Driver'}</strong><button type="button" onClick={onClose} aria-label="Close driver phone" className="text-lg text-gray-400">×</button></div>
@@ -102,7 +117,7 @@ function DemoPhone({ scenario, phase, dispatches, onClose, detailOpen, onOpen, p
       <div className="mt-4 space-y-3 text-xs">{[['Customer / Operator', 'Demo Operator', .12], ['Well / Location', load?.pickup || '', .34], ['Drop-off', load?.stops[0]?.name || '', .53], ['Job Type', 'Production Water', .72], ['Loads / jobs', String(scenario.loads.length), .82]].map(([label, value, threshold]) => <div key={String(label)}><p className="mb-1 text-gray-400">{label}</p><div className="min-h-9 rounded border border-slate-700 bg-[#151d2e] px-3 py-2 text-sm">{progress >= Number(threshold) ? value : ''}</div></div>)}</div>
       <div className={`mt-5 rounded-lg px-4 py-3 text-center text-sm font-bold text-black ${launchTap ? 'bg-amber-400 animate-pulse' : 'bg-amber-700/60'}`}>{launchTap ? '👆 Tap Start' : progress > .88 ? 'Ready to start' : 'Start'}</div>
     </div> : scenario?.kind === 'single' && (phase === 'drawer' || phase === 'review') ? <div className="p-4"><p className="text-sm font-bold text-emerald-300">✓ Job started</p><h2 className="mt-3 text-lg font-bold">{load?.pickup}</h2><p className="mt-1 text-sm text-cyan-300">→ {load?.stops[0]?.name}</p><p className="mt-5 rounded-lg border border-amber-700/60 bg-amber-950/20 p-3 text-xs text-amber-200">Sent to Dispatch · opening your route…</p></div> : !review ? <div className="p-4"><p className="mb-3 text-sm font-bold text-amber-400">Job Drawer</p><p className="mb-3 text-xs text-gray-400">Today&apos;s jobs · {scenario?.driverName}</p>
-      {dispatches.filter(row => row.exists).map((row, index) => <button key={row.id} type="button" onClick={onOpen} className="relative mb-2 w-full rounded-xl border border-amber-700/70 bg-[#151d2e] p-4 text-left"><span className="text-[10px] font-bold uppercase text-amber-400">Pending dispatch · Job {index + 1}</span><p className="mt-2 font-semibold">{row.wellName}</p><p className="mt-1 text-xs text-cyan-300">→ {row.disposal}</p><p className="mt-2 text-xs text-gray-400">{row.bbls} BBL · Tap to open</p>{timeToStart < STEP_MS - 1_500 && <span aria-hidden="true" className="absolute bottom-2 right-3 animate-bounce text-xl">👆</span>}</button>)}
+      {physicalJobs({ featured: scenario, dispatches }).filter(item => item.lead.status !== 'completed').map((item, index) => <button key={item.load.id} type="button" onClick={onOpen} className="relative mb-2 w-full rounded-xl border border-amber-700/70 bg-[#151d2e] p-4 text-left"><span className="text-[10px] font-bold uppercase text-amber-400">Pending dispatch · Load {index + 1}{item.dispatches.length > 1 ? ` · ${item.dispatches.length} linked split jobs` : ''}</span><p className="mt-2 font-semibold">{item.load.pickup}</p><p className="mt-1 text-xs text-cyan-300">→ {item.load.stops.map(stop => stop.name).join(' → ')}</p><p className="mt-2 text-xs text-gray-400">{item.load.bbls} BBL · Tap to open</p>{timeToStart < STEP_MS - 1_500 && <span aria-hidden="true" className="absolute bottom-2 right-3 animate-bounce text-xl">👆</span>}</button>)}
     </div> : <div className="p-4"><p className="text-[10px] font-bold uppercase tracking-widest text-amber-400">{phase === 'review' || phase === 'drawer' ? 'Job Review' : stageForJob(job || { driverStage: null, status: null })}</p><h2 className="mt-2 text-lg font-bold">{load?.pickup}</h2><p className="mt-1 text-sm text-blue-300">{load?.stops.map(stop => stop.name).join(' → ')}</p><p className="mt-1 text-xs text-gray-400">Demo Operator · {load?.bbls} BBL</p>
       <div className="mt-5 rounded-lg border border-slate-700 p-3 text-xs"><p className="font-bold text-amber-400">PICKUP</p><p className="mt-1">{load?.pickup}</p><p className="mt-3 font-bold text-purple-300">DROP-OFF</p><p className="mt-1">{load?.stops.map(stop => `${stop.name} · ${stop.bbls} BBL`).join(' / ')}</p></div>
       <div className={`relative mt-5 rounded-lg bg-amber-400 px-4 py-3 text-center text-sm font-bold text-black ${phase === 'review' && timeToStart <= 3_000 ? 'animate-pulse' : ''}`}>{phase === 'review' || phase === 'drawer' ? 'Start Job' : phase === 'to_pickup' ? 'En route to pickup' : phase === 'pickup' ? 'Pickup recorded' : phase === 'driving' ? 'En route to drop-off' : phase === 'dropoff' ? 'At drop-off' : 'Ticket completed'}{phase === 'review' && timeToStart <= 3_000 && <span aria-hidden="true" className="absolute -bottom-2 right-6 text-xl">👆</span>}</div>
@@ -113,13 +128,13 @@ function DemoPhone({ scenario, phase, dispatches, onClose, detailOpen, onOpen, p
 function DemoJobs({ snapshot, clock }: { snapshot: Snapshot; clock: number }) {
   const [tab, setTab] = useState<'active' | 'completed'>('active');
   const [expanded, setExpanded] = useState(true);
-  const jobs = snapshot.dispatches.filter(job => job.exists);
-  const active = jobs.filter(job => job.status !== 'completed');
-  const completed = jobs.filter(job => job.status === 'completed');
+  const jobs = physicalJobs(snapshot);
+  const active = jobs.filter(job => job.lead.status !== 'completed');
+  const completed = jobs.filter(job => job.lead.status === 'completed');
   const visible = tab === 'active' ? active : completed;
   const name = snapshot.featured?.driverName || 'Demo driver';
-  const pw = visible.filter(job => job.jobType === 'pw').length;
-  const sw = visible.filter(job => job.jobType === 'service').length;
+  const pw = visible.filter(job => job.lead.jobType === 'pw').length;
+  const sw = visible.filter(job => job.lead.jobType === 'service').length;
   return (
     <div className="dispatch-jobs bg-gray-800 rounded-lg border border-gray-700 flex flex-col min-h-[430px]">
       <div className="flex items-center gap-1 px-4 py-2.5 border-b border-gray-700">
@@ -152,24 +167,26 @@ function DemoJobs({ snapshot, clock }: { snapshot: Snapshot; clock: number }) {
               <span className="text-gray-500 text-xs">{expanded ? '▲' : '▼'}</span>
             </button>
             {expanded && <div className="space-y-1 p-2 bg-gray-900/30">
-              {visible.map((job, index) => {
+              {visible.map(({ load, lead: job, dispatches }, index) => {
                 const pendingMinutes = job.assignedAt ? Math.max(0, Math.floor((clock - Date.parse(job.assignedAt)) / 60_000)) : 0;
                 const freshAssignment = !!job.assignedAt && clock - Date.parse(job.assignedAt) < 5_000;
                 const status = stageForJob(job);
-                const split = !!job.splitGroupId;
-                return <div key={job.id} className={`py-3 px-4 border rounded-lg ${freshAssignment ? 'ring-2 ring-cyan-400/70' : ''} ${split ? 'bg-purple-900/25 border-purple-500/50 border-l-[3px]' : 'bg-gray-900/75 border-gray-700/70'}`}>
+                const split = dispatches.length > 1;
+                return <div key={load.id} className={`py-3 px-4 border rounded-lg ${freshAssignment ? 'ring-2 ring-cyan-400/70' : ''} ${split ? 'bg-purple-900/25 border-purple-500/50 border-l-[3px]' : 'bg-gray-900/75 border-gray-700/70'}`}>
                   <div className="flex items-center gap-2 min-w-0">
                     <span className={`inline-flex items-center justify-center w-10 h-5 text-[10px] font-bold rounded ${job.jobType === 'service' ? 'bg-purple-600/30 text-purple-300' : 'bg-blue-600/30 text-blue-300'}`}>
                       {job.jobType === 'service' ? 'SW' : 'PW'}
                     </span>
-                    <span className="text-white font-medium text-sm break-words flex-1 min-w-0">{job.wellName || 'Assignment pending'}</span>
-                    {split && <span className="inline-flex items-center justify-center h-5 w-[6.5rem] text-[10px] font-bold rounded bg-purple-600/30 text-purple-300">TICKET {String.fromCharCode(64 + (job.splitSequence || 1))}</span>}
+                    <span className="text-white font-medium text-sm break-words flex-1 min-w-0">{load.pickup}</span>
+                    {split && <span className="rounded bg-purple-600/30 px-2 py-0.5 text-[10px] font-bold text-purple-300">1 LOAD · {dispatches.length} SPLIT JOBS</span>}
+                    {snapshot.featured?.kind === 'multi_haul' && <span className="rounded bg-cyan-600/20 px-2 py-0.5 text-[10px] font-bold text-cyan-300">MULTI-HAUL · LOAD {snapshot.featured.loads.findIndex(item => item.id === load.id) + 1} OF {snapshot.featured.loads.length}</span>}
                   </div>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs">
                     {job.ticketNumber && <span className="text-gray-400">#{job.ticketNumber}</span>}
-                    {job.disposal && <span className="text-cyan-400/70">→ {job.disposal}</span>}
+                    <span className="text-cyan-400/70">→ {load.stops.map(stop => stop.name).join(' → ')}</span>
                     {job.operator && <span className="text-gray-300">Operator: {job.operator}</span>}
                   </div>
+                  {split && <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-purple-200"><span>Split A · pickup {load.bbls} BBL</span>{load.stops.map((stop, stopIndex) => <span key={`${load.id}-stop-${stopIndex}`}>Split {String.fromCharCode(66 + stopIndex)} · {stop.name} {stop.bbls} BBL</span>)}</div>}
                   <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-gray-400">
                     {job.route && <span>Route: <span className="text-gray-200">{job.route}</span></span>}
                     {job.currentLevel && <span>Level at dispatch: <span className="text-gray-200">{job.currentLevel}</span></span>}
@@ -322,9 +339,10 @@ export default function LiveDemoPage() {
     if (walkthrough) exitWalkthrough();
     setView(target);
   };
-  const activeCount = snapshot?.dispatches.filter(job => job.exists && job.status !== 'completed').length || 0;
-  const liveStage = snapshot?.dispatches.find(job => job.exists)?.driverStage ||
-    (snapshot?.dispatches.some(job => job.status === 'completed') ? 'completed' : 'pending');
+  const activeCount = snapshot ? physicalJobs(snapshot).filter(job => job.lead.status !== 'completed').length : 0;
+  const liveStage = snapshot
+    ? currentPhysicalJob(snapshot)?.lead.driverStage || (snapshot.dispatches.some(job => job.status === 'completed') ? 'completed' : 'pending')
+    : 'pending';
   const remaining = snapshot?.active ? Math.max(0, Math.ceil((snapshot.active.dueAt - clock) / 1_000)) : snapshot?.nextRunAt ? Math.max(0, Math.ceil((snapshot.nextRunAt - clock) / 1_000)) : null;
   const timeToStart = snapshot?.active?.stage === 'accepted' ? Math.max(0, snapshot.active.dueAt - clock) : STEP_MS;
   if (!entered) return <main className="flex min-h-screen items-center justify-center bg-[#0b1424] p-4 text-white">

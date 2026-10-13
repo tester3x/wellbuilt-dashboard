@@ -29,7 +29,7 @@ const FIRST_DEMO_TICKET = 900_000_000;
 const DEMO_LOGO_URL = 'https://wellbuilt-sync.web.app/live-demo/logo.svg';
 const DEMO_VIEWER_UID = 'wellbuilt-demo-shared-viewer';
 
-type Active = { scenario: DemoScenario; stage: DemoStage; dueAt: number; startedAt: number };
+type Active = { scenario: DemoScenario; stage: DemoStage; dueAt: number; startedAt: number; loadIndex?: number };
 type RunSummary = { id: string; kind: DemoScenario['kind']; driverName: string; startedAt: number; closedAt: number };
 type DemoState = {
   schemaVersion: 1;
@@ -339,9 +339,9 @@ async function completedRunProof(id: string): Promise<{
   };
 }
 
-async function writePending(scenario: DemoScenario, packet: ImmutableRevisionEnvelope, now: number): Promise<void> {
+async function writePending(scenario: DemoScenario, packet: ImmutableRevisionEnvelope, now: number, loadIndex: number): Promise<void> {
   const binding = stampDispatchBinding(packet);
-  await Promise.all(scenario.loads.map(async load => {
+  await Promise.all(scenario.loads.slice(loadIndex, loadIndex + 1).map(async load => {
     const ids = dispatchIds(load);
     await Promise.all(ids.map(async (id, index) => {
       const isSplit = load.stops.length > 1;
@@ -364,12 +364,12 @@ async function writePending(scenario: DemoScenario, packet: ImmutableRevisionEnv
   }));
 }
 
-async function writeDispatchStage(scenario: DemoScenario, stage: 'accepted' | 'at_pickup' | 'departed' | 'at_dropoff', now: number): Promise<void> {
+async function writeDispatchStage(scenario: DemoScenario, stage: 'accepted' | 'at_pickup' | 'departed' | 'at_dropoff', now: number, loadIndex: number): Promise<void> {
   const status = stage === 'accepted' ? 'accepted' : 'in_progress';
   const driverStage = stage === 'accepted' ? 'en_route_pickup'
     : stage === 'at_pickup' ? 'on_site_pickup'
       : stage === 'departed' ? 'en_route_dropoff' : 'on_site_dropoff';
-  await Promise.all(scenario.loads.flatMap(load => dispatchIds(load).map(id =>
+  await Promise.all(scenario.loads.slice(loadIndex, loadIndex + 1).flatMap(load => dispatchIds(load).map(id =>
     mergeDemoFirestore('dispatches', id, {
         status, driverStage, loadsCompleted: 0,
         driverDest: stage === 'accepted' || stage === 'at_pickup'
@@ -386,8 +386,8 @@ function localDateTime(date: Date): string {
   }).format(date).replace(',', '');
 }
 
-async function writePullPackets(scenario: DemoScenario, now: number): Promise<void> {
-  await Promise.all(scenario.loads.map(async load => {
+async function writePullPackets(scenario: DemoScenario, now: number, loadIndex: number): Promise<void> {
+  await Promise.all(scenario.loads.slice(loadIndex, loadIndex + 1).map(async load => {
     const packetId = `${load.id}-pull`;
     const packet = {
       packetId, idempotencyKey: packetId, requestType: 'pull',
@@ -404,8 +404,7 @@ async function writePullPackets(scenario: DemoScenario, now: number): Promise<vo
   }));
 }
 
-async function writeClosed(scenario: DemoScenario, now: number): Promise<void> {
-  for (let loadIndex = 0; loadIndex < scenario.loads.length; loadIndex += 1) {
+async function writeClosed(scenario: DemoScenario, now: number, loadIndex: number): Promise<void> {
     const load = scenario.loads[loadIndex];
     const ids = dispatchIds(load);
     const tickets: string[] = [];
@@ -445,8 +444,7 @@ async function writeClosed(scenario: DemoScenario, now: number): Promise<void> {
       ...(load.haulGroupId ? { haulGroupId: load.haulGroupId } : {}),
       ...(scenario.kind === 'split_ticket' ? { splitGroupId: load.familyId } : {}),
     });
-  }
-  await Promise.all(allDispatches(scenario).map(id =>
+  await Promise.all(dispatchIds(scenario.loads[loadIndex]).map(id =>
     mergeDemoFirestore('dispatches', id, {
       status: 'completed', driverStage: 'completed', loadsCompleted: 1,
       completedAt: new Date(now).toISOString(),
@@ -456,20 +454,21 @@ async function writeClosed(scenario: DemoScenario, now: number): Promise<void> {
 
 async function applyStage(active: Active, now: number): Promise<void> {
   const scenario = active.scenario;
+  const loadIndex = active.loadIndex || 0;
   if (active.stage === 'planning') {
     // The public walkthrough may show the draft here. No job exists in the
     // driver's drawer or Dispatch until the next, pending, step commits it.
     return;
   } else if (active.stage === 'pending') {
     const packet = await ensureDemoTenant();
-    await writePending(scenario, packet, now);
+    await writePending(scenario, packet, now, loadIndex);
   } else if (active.stage === 'departed') {
-    await writePullPackets(scenario, now);
-    await writeDispatchStage(scenario, active.stage, now);
+    await writePullPackets(scenario, now, loadIndex);
+    await writeDispatchStage(scenario, active.stage, now, loadIndex);
   } else if (active.stage === 'closed') {
-    await writeClosed(scenario, now);
+    await writeClosed(scenario, now, loadIndex);
   } else {
-    await writeDispatchStage(scenario, active.stage, now);
+    await writeDispatchStage(scenario, active.stage, now, loadIndex);
   }
 }
 
@@ -530,7 +529,10 @@ async function advance(now: number): Promise<void> {
     await applyStage(active, now);
     const index = stageOrder.indexOf(active.stage);
     if (index < 0) throw new Error('unknown_demo_stage');
-    if (active.stage === 'closed') {
+    if (active.stage === 'closed' && (active.loadIndex || 0) + 1 < active.scenario.loads.length) {
+      // A multi-haul's next physical pickup starts only after the prior load closes.
+      state.active = { ...active, loadIndex: (active.loadIndex || 0) + 1, stage: 'pending', dueAt: now + STAGE_MS };
+    } else if (active.stage === 'closed') {
       state.lastCompleted = active.scenario;
       state.lastClosedAt = now;
       state.history = [{
