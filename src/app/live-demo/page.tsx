@@ -39,25 +39,28 @@ const nav: Array<{ id: View; label: string }> = [
 ];
 function stageForJob(job: Pick<DemoDispatch, 'driverStage' | 'status'>): string {
   const stages: Record<string, string> = {
-    en_route_pickup: 'To Pickup', on_site_pickup: 'At Pickup',
+    en_route_pickup: 'En Route · Pickup', on_site_pickup: 'At Pickup',
     en_route_dropoff: 'To Drop-off', on_site_dropoff: 'At Drop-off',
   };
   return stages[job.driverStage || ''] || (job.status === 'completed' ? 'Done' : 'Pending');
 }
-type DemoPhase = 'building' | 'drawer' | 'review' | 'pickup' | 'driving' | 'dropoff' | 'complete';
-function demoPhase(snapshot: Snapshot | null): DemoPhase {
+type DemoPhase = 'building' | 'drawer' | 'review' | 'to_pickup' | 'pickup' | 'driving' | 'dropoff' | 'complete';
+const STEP_MS = 15_000;
+function demoPhase(snapshot: Snapshot | null, clock: number): DemoPhase {
   const job = snapshot?.dispatches.find(row => row.exists);
   if (!job) return 'building';
   if (job.status === 'completed') return 'complete';
   if (job.driverStage === 'on_site_dropoff') return 'dropoff';
   if (job.driverStage === 'en_route_dropoff') return 'driving';
   if (job.driverStage === 'on_site_pickup') return 'pickup';
-  if (job.driverStage === 'en_route_pickup') return 'review';
-  return 'drawer';
+  if (job.driverStage === 'en_route_pickup') return 'to_pickup';
+  const pendingElapsed = snapshot?.active?.stage === 'accepted'
+    ? clock - (snapshot.active.dueAt - STEP_MS) : 0;
+  return pendingElapsed >= 3_000 ? 'review' : 'drawer';
 }
 const stepCopy: Record<DemoPhase, string> = {
-  building: 'Dispatch fills out the job', drawer: 'The assignment appears in Jobs and the driver drawer',
-  review: 'The driver opens and starts the job', pickup: 'The driver arrives at pickup',
+  building: 'The job builder fills out the load', drawer: 'The assignment appears in Dispatch Jobs and the driver drawer',
+  review: 'The driver taps the job, reviews it, then taps Start Job', to_pickup: 'Dispatch changes from Pending to En Route · Pickup', pickup: 'The driver arrives at pickup',
   driving: 'The load leaves pickup and the well pull is recorded',
   dropoff: 'The driver arrives at the destination',
   complete: 'The ticket closes and billing receives the load',
@@ -86,20 +89,23 @@ function DemoBuilder({ scenario, progress, dispatched }: { scenario: Scenario | 
   </div>;
 }
 
-function DemoPhone({ scenario, phase, dispatches, onClose, detailOpen, onOpen }: {
+function DemoPhone({ scenario, phase, dispatches, onClose, detailOpen, onOpen, progress, timeToStart }: {
   scenario: Scenario | null; phase: DemoPhase; dispatches: DemoDispatch[];
-  onClose: () => void; detailOpen: boolean; onOpen: () => void;
+  onClose: () => void; detailOpen: boolean; onOpen: () => void; progress: number; timeToStart: number;
 }) {
   const job = dispatches.find(row => row.exists);
   const load = scenario?.loads[0];
   const review = phase !== 'drawer' || detailOpen;
   return <aside aria-label="Driver phone demo" className="fixed bottom-3 right-3 z-50 w-[min(340px,calc(100vw-24px))] max-h-[min(620px,calc(100vh-24px))] overflow-auto rounded-[24px] border-4 border-slate-600 bg-[#080d19] text-white shadow-[0_16px_55px_rgba(0,0,0,.7)]">
     <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3 text-xs"><span>10:24 ◉ ▰▰</span><strong>WB T · {scenario?.driverName || 'Driver'}</strong><button type="button" onClick={onClose} aria-label="Close driver phone" className="text-lg text-gray-400">×</button></div>
-    {!review ? <div className="p-4"><p className="mb-3 text-sm font-bold text-amber-400">Job Drawer</p><p className="mb-3 text-xs text-gray-400">Today&apos;s jobs · {scenario?.driverName}</p>
-      {dispatches.filter(row => row.exists).map((row, index) => <button key={row.id} type="button" onClick={onOpen} className="mb-2 w-full rounded-xl border border-amber-700/70 bg-[#151d2e] p-4 text-left"><span className="text-[10px] font-bold uppercase text-amber-400">Pending dispatch · Job {index + 1}</span><p className="mt-2 font-semibold">{row.wellName}</p><p className="mt-1 text-xs text-cyan-300">→ {row.disposal}</p><p className="mt-2 text-xs text-gray-400">{row.bbls} BBL · Tap to open</p></button>)}
+    {phase === 'building' && scenario?.kind === 'single' ? <div className="p-4"><p className="text-sm font-bold text-amber-400">Where are you going?</p><p className="mt-1 text-xs text-gray-400">New job · {scenario.driverName}</p>
+      <div className="mt-4 space-y-3 text-xs">{[['Customer / Operator', 'Demo Operator', .12], ['Well / Location', load?.pickup || '', .34], ['Drop-off', load?.stops[0]?.name || '', .53], ['Job Type', 'Production Water', .72], ['Loads / jobs', String(scenario.loads.length), .82]].map(([label, value, threshold]) => <div key={String(label)}><p className="mb-1 text-gray-400">{label}</p><div className="min-h-9 rounded border border-slate-700 bg-[#151d2e] px-3 py-2 text-sm">{progress >= Number(threshold) ? value : ''}</div></div>)}</div>
+      <div className={`mt-5 rounded-lg px-4 py-3 text-center text-sm font-bold text-black ${progress > .88 ? 'bg-amber-400 animate-pulse' : 'bg-amber-700/60'}`}>{progress > .88 ? '👆 Tap Start' : 'Start'}</div>
+    </div> : scenario?.kind === 'single' && (phase === 'drawer' || phase === 'review') ? <div className="p-4"><p className="text-sm font-bold text-emerald-300">✓ Job started</p><h2 className="mt-3 text-lg font-bold">{load?.pickup}</h2><p className="mt-1 text-sm text-cyan-300">→ {load?.stops[0]?.name}</p><p className="mt-5 rounded-lg border border-amber-700/60 bg-amber-950/20 p-3 text-xs text-amber-200">Sent to Dispatch · opening your route…</p></div> : !review ? <div className="p-4"><p className="mb-3 text-sm font-bold text-amber-400">Job Drawer</p><p className="mb-3 text-xs text-gray-400">Today&apos;s jobs · {scenario?.driverName}</p>
+      {dispatches.filter(row => row.exists).map((row, index) => <button key={row.id} type="button" onClick={onOpen} className="relative mb-2 w-full rounded-xl border border-amber-700/70 bg-[#151d2e] p-4 text-left"><span className="text-[10px] font-bold uppercase text-amber-400">Pending dispatch · Job {index + 1}</span><p className="mt-2 font-semibold">{row.wellName}</p><p className="mt-1 text-xs text-cyan-300">→ {row.disposal}</p><p className="mt-2 text-xs text-gray-400">{row.bbls} BBL · Tap to open</p>{timeToStart < STEP_MS - 1_500 && <span aria-hidden="true" className="absolute bottom-2 right-3 animate-bounce text-xl">👆</span>}</button>)}
     </div> : <div className="p-4"><p className="text-[10px] font-bold uppercase tracking-widest text-amber-400">{phase === 'review' || phase === 'drawer' ? 'Job Review' : stageForJob(job || { driverStage: null, status: null })}</p><h2 className="mt-2 text-lg font-bold">{load?.pickup}</h2><p className="mt-1 text-sm text-blue-300">{load?.stops.map(stop => stop.name).join(' → ')}</p><p className="mt-1 text-xs text-gray-400">Demo Operator · {load?.bbls} BBL</p>
       <div className="mt-5 rounded-lg border border-slate-700 p-3 text-xs"><p className="font-bold text-amber-400">PICKUP</p><p className="mt-1">{load?.pickup}</p><p className="mt-3 font-bold text-purple-300">DROP-OFF</p><p className="mt-1">{load?.stops.map(stop => `${stop.name} · ${stop.bbls} BBL`).join(' / ')}</p></div>
-      <div className="mt-5 rounded-lg bg-amber-400 px-4 py-3 text-center text-sm font-bold text-black">{phase === 'review' || phase === 'drawer' ? 'Start Job' : phase === 'pickup' ? 'Pickup recorded' : phase === 'driving' ? 'En route to drop-off' : phase === 'dropoff' ? 'At drop-off' : 'Ticket completed'}</div>
+      <div className={`relative mt-5 rounded-lg bg-amber-400 px-4 py-3 text-center text-sm font-bold text-black ${phase === 'review' && timeToStart <= 3_000 ? 'animate-pulse' : ''}`}>{phase === 'review' || phase === 'drawer' ? 'Start Job' : phase === 'to_pickup' ? 'En route to pickup' : phase === 'pickup' ? 'Pickup recorded' : phase === 'driving' ? 'En route to drop-off' : phase === 'dropoff' ? 'At drop-off' : 'Ticket completed'}{phase === 'review' && timeToStart <= 3_000 && <span aria-hidden="true" className="absolute -bottom-2 right-6 text-xl">👆</span>}</div>
     </div>}
     <div className="border-t border-slate-800 p-3 text-center text-[10px] text-gray-500">Live demo company · read-only phone view</div>
   </aside>;
@@ -148,9 +154,10 @@ function DemoJobs({ snapshot, clock }: { snapshot: Snapshot; clock: number }) {
             {expanded && <div className="space-y-1 p-2 bg-gray-900/30">
               {visible.map((job, index) => {
                 const pendingMinutes = job.assignedAt ? Math.max(0, Math.floor((clock - Date.parse(job.assignedAt)) / 60_000)) : 0;
+                const freshAssignment = !!job.assignedAt && clock - Date.parse(job.assignedAt) < 5_000;
                 const status = stageForJob(job);
                 const split = !!job.splitGroupId;
-                return <div key={job.id} className={`py-3 px-4 border rounded-lg ${split ? 'bg-purple-900/25 border-purple-500/50 border-l-[3px]' : 'bg-gray-900/75 border-gray-700/70'}`}>
+                return <div key={job.id} className={`py-3 px-4 border rounded-lg ${freshAssignment ? 'ring-2 ring-cyan-400/70' : ''} ${split ? 'bg-purple-900/25 border-purple-500/50 border-l-[3px]' : 'bg-gray-900/75 border-gray-700/70'}`}>
                   <div className="flex items-center gap-2 min-w-0">
                     <span className={`inline-flex items-center justify-center w-10 h-5 text-[10px] font-bold rounded ${job.jobType === 'service' ? 'bg-purple-600/30 text-purple-300' : 'bg-blue-600/30 text-blue-300'}`}>
                       {job.jobType === 'service' ? 'SW' : 'PW'}
@@ -171,9 +178,10 @@ function DemoJobs({ snapshot, clock }: { snapshot: Snapshot; clock: number }) {
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5 mt-3">
                     {tab === 'active' && index === 0 && job.jobType === 'pw' && <span className="inline-flex items-center justify-center h-5 w-[6.5rem] text-[10px] font-bold rounded bg-emerald-600/30 text-emerald-300">★ Next</span>}
-                    <span className={`inline-flex items-center justify-center h-5 w-[6.5rem] text-[10px] font-bold rounded ${status === 'Pending' ? 'bg-yellow-600/30 text-yellow-300' : status === 'Done' ? 'bg-green-600/30 text-green-300' : 'bg-blue-600/30 text-blue-300'}`}>
+                    <span className={`inline-flex items-center justify-center h-5 min-w-[6.5rem] px-1 text-[10px] font-bold rounded ${status === 'Pending' ? 'bg-yellow-600/30 text-yellow-300' : status === 'Done' ? 'bg-green-600/30 text-green-300' : 'bg-blue-600/30 text-blue-300'}`}>
                       {status === 'Pending' && pendingMinutes > 0 ? `Pending · ${pendingMinutes < 60 ? `${pendingMinutes}m` : `${Math.floor(pendingMinutes / 60)}h`}` : status}
                     </span>
+                    {freshAssignment && <span className="text-[10px] font-bold text-cyan-300">Just added</span>}
                     {job.driverDest && status !== 'Pending' && status !== 'Done' && <span className="text-gray-500 text-xs truncate max-w-[140px]" title={job.driverDest}>{job.driverDest}</span>}
                   </div>
                 </div>;
@@ -231,30 +239,42 @@ export default function LiveDemoPage() {
     if (!entered) return;
     let stopped = false;
     let busy = false;
+    let timer: number | undefined;
+    let nextDueAt: number | null = null;
     const fetchSnapshot = async () => {
-      if (stopped || busy || document.visibilityState === 'hidden') return;
+      if (stopped || busy) return;
+      if (timer !== undefined) window.clearTimeout(timer);
+      if (document.visibilityState === 'hidden') {
+        timer = window.setTimeout(fetchSnapshot, 4_000);
+        return;
+      }
       busy = true;
       try {
         const response = await httpsCallable<undefined, Snapshot>(getDemoViewerFunctions(), 'liveDemoSnapshot')();
-        if (!stopped) { setSnapshot(response.data); setError(''); }
+        if (!stopped) { setSnapshot(response.data); setError(''); nextDueAt = response.data.active?.dueAt || null; }
       } catch (cause) {
         if (!stopped) setError(cause instanceof Error ? cause.message : 'Live demo is unavailable.');
-      } finally { busy = false; }
+      } finally {
+        busy = false;
+        if (!stopped) {
+          const toTransition = nextDueAt == null ? Infinity : nextDueAt - Date.now();
+          timer = window.setTimeout(fetchSnapshot, toTransition >= -4_000 && toTransition <= 4_000 ? 750 : 4_000);
+        }
+      }
     };
     void fetchSnapshot();
-    const timer = window.setInterval(() => { void fetchSnapshot(); }, 4_000);
     document.addEventListener('visibilitychange', fetchSnapshot);
-    return () => { stopped = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', fetchSnapshot); };
+    return () => { stopped = true; if (timer !== undefined) window.clearTimeout(timer); document.removeEventListener('visibilitychange', fetchSnapshot); };
   }, [entered]);
   const featured = snapshot?.featured;
-  const phase = demoPhase(snapshot);
+  const phase = demoPhase(snapshot, clock);
   const guided = walkthrough && !!guideRunId && featured?.id === guideRunId;
   const jobVisible = !!snapshot?.dispatches.some(job => job.exists);
   const guideElapsed = guideEndedAt == null ? 0 : clock - guideEndedAt;
   const displayView: View = guided
     ? phase === 'complete' ? guideElapsed < 5_000 ? 'tickets' : 'billing' : 'dispatch'
     : view;
-  const displayDispatchTab = guided ? phase === 'building' ? 'build' : 'jobs' : dispatchTab;
+  const displayDispatchTab = guided ? phase === 'building' && featured?.kind !== 'single' ? 'build' : 'jobs' : dispatchTab;
   const buildProgress = snapshot?.active && phase === 'building'
     ? Math.min(1, Math.max(0, (clock - snapshot.active.startedAt) / Math.max(1, snapshot.active.dueAt - snapshot.active.startedAt)))
     : jobVisible ? 1 : 0;
@@ -265,7 +285,7 @@ export default function LiveDemoPage() {
       setGuideEndedAt(null);
       setPhoneVisible(true);
       setPhoneDetailOpen(false);
-    } else if (guideRunId && snapshot.featured?.id === guideRunId && demoPhase(snapshot) === 'complete' && guideEndedAt == null) {
+    } else if (guideRunId && snapshot.featured?.id === guideRunId && demoPhase(snapshot, Date.now()) === 'complete' && guideEndedAt == null) {
       setGuideEndedAt(Date.now());
     }
   }, [walkthrough, guideRunId, guideEndedAt, snapshot]);
@@ -299,6 +319,7 @@ export default function LiveDemoPage() {
   const liveStage = snapshot?.dispatches.find(job => job.exists)?.driverStage ||
     (snapshot?.dispatches.some(job => job.status === 'completed') ? 'completed' : 'pending');
   const remaining = snapshot?.active ? Math.max(0, Math.ceil((snapshot.active.dueAt - clock) / 1_000)) : snapshot?.nextRunAt ? Math.max(0, Math.ceil((snapshot.nextRunAt - clock) / 1_000)) : null;
+  const timeToStart = snapshot?.active?.stage === 'accepted' ? Math.max(0, snapshot.active.dueAt - clock) : STEP_MS;
   if (!entered) return <main className="flex min-h-screen items-center justify-center bg-[#0b1424] p-4 text-white">
     <section className="w-full max-w-md rounded-xl border border-cyan-800/70 bg-gray-800 p-8 shadow-2xl">
       <div className="mb-7 text-center"><img src="/live-demo/logo.svg" alt="WellBuilt Demo Hauling logo" className="mx-auto mb-4 h-20 w-20" />
@@ -322,14 +343,14 @@ export default function LiveDemoPage() {
     </header>
     <div className="px-4 py-4 max-w-[1600px] mx-auto">
       {walkthrough && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-700 bg-cyan-950/40 p-3 text-sm">
-        <span><strong className="text-cyan-300">Walkthrough</strong> · {guided ? stepCopy[phase] : 'Waiting for the next new job to start at the builder'}{guided && phase === 'complete' ? ` · ${guideElapsed < 5_000 ? 'Tickets' : 'Billing'}` : ''}</span>
+        <span><strong className="text-cyan-300">Walkthrough</strong> · {guided && featured?.kind === 'single' && phase === 'building' ? 'WB T fills in the job and taps Start; Dispatch receives it' : guided && featured?.kind === 'single' && (phase === 'drawer' || phase === 'review') ? 'The new WB T job appears in Dispatch Active Jobs' : guided ? stepCopy[phase] : 'Waiting for the next new job to start at the builder'}{guided && phase === 'complete' ? ` · ${guideElapsed < 5_000 ? 'Tickets' : 'Billing'}` : ''}</span>
         <button type="button" onClick={exitWalkthrough} className="rounded border border-cyan-700 px-3 py-1 text-cyan-200">Explore live demo</button>
       </div>}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm">
         <span className="text-gray-300">{featured ? `${featured.driverName} · ${featured.id} · ${phase === 'building' ? 'Building job' : stageForJob({ driverStage: liveStage, status: liveStage === 'completed' ? 'completed' : 'pending' })}` : 'Waiting for the next run'}</span>
         <div className="flex flex-wrap gap-2">
           {!walkthrough && <button type="button" onClick={replayWalkthrough} className="rounded border border-cyan-700 px-3 py-1.5 text-cyan-200">Replay walkthrough</button>}
-          {jobVisible && <button type="button" onClick={() => setPhoneVisible(value => !value)} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">{phoneVisible ? 'Hide' : 'Show'} driver phone</button>}
+          {(jobVisible || (guided && featured?.kind === 'single')) && <button type="button" onClick={() => setPhoneVisible(value => !value)} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">{phoneVisible ? 'Hide' : 'Show'} driver phone</button>}
           <button type="button" onClick={() => navigate('dispatch')} className="rounded border border-gray-600 px-3 py-1.5 text-gray-300">Watch Dispatch Jobs</button>
         </div>
       </div>
@@ -350,6 +371,6 @@ export default function LiveDemoPage() {
       <p className="mt-5 text-xs text-gray-500">This view shows read-only records from the dedicated demo company. Dashboard actions are disabled.</p>
       {activeCount === 0 && snapshot?.history.length ? <p className="mt-2 text-xs text-gray-500">Latest completed run: {snapshot.history[0].id}</p> : null}
     </div>
-    {phoneVisible && jobVisible && <DemoPhone scenario={featured || null} phase={phase} dispatches={snapshot?.dispatches || []} onClose={() => setPhoneVisible(false)} detailOpen={phoneDetailOpen} onOpen={() => setPhoneDetailOpen(true)} />}
+    {phoneVisible && (jobVisible || (guided && featured?.kind === 'single' && phase === 'building')) && <DemoPhone scenario={featured || null} phase={phase} dispatches={snapshot?.dispatches || []} onClose={() => setPhoneVisible(false)} detailOpen={phoneDetailOpen} onOpen={() => setPhoneDetailOpen(true)} progress={buildProgress} timeToStart={timeToStart} />}
   </main>;
 }
