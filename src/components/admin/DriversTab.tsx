@@ -433,7 +433,13 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 collection(getFirestoreDb(), 'wells'),
                 where('companyId', '==', scopeCompanyId),
               ));
-              return [...new Set(snap.docs.map(d => d.data().route).filter((route): route is string => typeof route === 'string' && !!route.trim()))].sort();
+              const companyRoutes = [...new Set(snap.docs.map(d => d.data().route).filter((route): route is string => typeof route === 'string' && !!route.trim()))].sort();
+              // The synthetic demo wells live in RTDB well_config, outside
+              // tenant reads. Their fixed route is provisioned by the demo
+              // runtime and may not have a mirrored Firestore wells row.
+              return scopeCompanyId === 'wellbuilt-demo' && companyRoutes.length === 0
+                ? ['Demo Route']
+                : companyRoutes;
             })()
           : await fetchRouteNames();
         setAvailableRoutes(routes);
@@ -1957,7 +1963,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   )}
                 </label>
                 {availableRoutes.length === 0 ? (
-                  <p className="text-gray-500 text-sm">No routes found in well_config</p>
+                  <p className="text-gray-500 text-sm">No routes configured for this company</p>
                 ) : (
                   <div className="space-y-1 max-h-40 overflow-y-auto bg-gray-900 rounded p-2">
                     {availableRoutes.map(route => (
