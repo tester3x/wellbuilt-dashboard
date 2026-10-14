@@ -549,6 +549,24 @@ function DispatchPageInner() {
     return tab === 'jobs' || tab === 'completed' || tab === 'projects' ? 'jobs'
       : tab === 'queue' ? 'queue' : 'build';
   });
+  const [demoTourTarget, setDemoTourTarget] = useState<string | null>(null);
+  const [demoTourPointer, setDemoTourPointer] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const demoTourRun = useRef(0);
+  const demoTourRunning = useRef(false);
+  useEffect(() => () => { demoTourRun.current += 1; }, []);
+  useEffect(() => {
+    if (!demoTourTarget) { setDemoTourPointer(null); return; }
+    const update = () => {
+      const element = document.querySelector(`[data-demo-builder-target="${demoTourTarget}"]`);
+      if (!element) return;
+      const rect = element.getBoundingClientRect();
+      setDemoTourPointer({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+    };
+    const frame = window.requestAnimationFrame(update);
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => { window.cancelAnimationFrame(frame); window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true); };
+  }, [demoTourTarget]);
   // Edit dispatch modal state (shared for PW + SW)
   const [editSwJob, setEditSwJob] = useState<DispatchJob | null>(null);
   const [editSwNotes, setEditSwNotes] = useState('');
@@ -1416,6 +1434,98 @@ function DispatchPageInner() {
     setAssignWellSearch('');
     setDisposalSearch('');
     setDisposalResults([]);
+  }
+
+  function stopDemoDispatchTour() {
+    demoTourRun.current += 1;
+    demoTourRunning.current = false;
+    setDemoTourTarget(null);
+    cancelPWDispatch();
+  }
+
+  async function runDemoDispatchTour() {
+    if (!isDemoCompany || user?.role !== 'demo_viewer' || demoTourRunning.current) return;
+    demoTourRunning.current = true;
+    const run = ++demoTourRun.current;
+    const pause = async (ms: number) => {
+      await new Promise(resolve => window.setTimeout(resolve, ms));
+      if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
+    };
+    try {
+      cancelPWDispatch();
+      setBuilderOperator('');
+      handleBuilderTabChange('pw');
+      setWorkspaceTab('build');
+      await pause(650);
+
+      setDemoTourTarget('operator');
+      await pause(850);
+      setBuilderOperator('Demo Operator');
+      setDemoTourTarget('well');
+      await pause(500);
+      for (const letter of 'Demo Well 1') {
+        setAssignWellSearch(previous => previous + letter);
+        await pause(125);
+      }
+      await pause(1100); // The real search dropdown remains visible here.
+      const selectedWell = allOperatorWells.find(row => row.well_name === 'Demo Well 1');
+      if (!selectedWell) throw new Error('Demo Well 1 is unavailable');
+      setAssignTarget(wells.find(row => (row.ndicName || row.wellName) === selectedWell.well_name) || {
+        wellName: selectedWell.well_name, ndicName: selectedWell.well_name,
+        ndicApiNo: selectedWell.api_no, currentLevel: '', etaToMax: '', flowRate: '', timestamp: '',
+      });
+      setAssignWellSearch('');
+
+      setDemoTourTarget('driver');
+      await pause(950);
+      const selectedDriver = drivers.find(row => /AntigDemoDriver/i.test(operationalDriverName(row)));
+      if (!selectedDriver) throw new Error('Antig demo driver is unavailable');
+      setAssignDriverHash(selectedDriver.key);
+      setDemoTourTarget('disposal');
+      await pause(700);
+      let search = '';
+      for (const letter of 'Demo SWD 1') {
+        search += letter;
+        setDisposalSearch(search);
+        setDisposalResults(search.length >= 2 ? locationResults(search).filter(row => row.kind === 'SWD') : []);
+        await pause(125);
+      }
+      await pause(1000);
+      const selectedDisposal = locationResults('Demo SWD 1').find(row => row.kind === 'SWD' && row.well_name === 'Demo SWD 1');
+      if (!selectedDisposal) throw new Error('Demo SWD 1 is unavailable');
+      setAssignDisposalWell(selectedDisposal);
+      setAssignDisposal(selectedDisposal.well_name);
+      setDisposalSearch('');
+      setDisposalResults([]);
+
+      setDemoTourTarget('notes');
+      await pause(650);
+      setAssignNotes('Demo production water load');
+      setDemoTourTarget('dispatch');
+      await pause(1200);
+      // No backend job exists until this exact stage. Leaving the page or
+      // stopping the walkthrough before now abandons only the local preview.
+      await httpsCallable(getFirebaseFunctions(), 'dispatchDemoViewerJob')({
+        wellName: selectedWell.well_name,
+        disposal: selectedDisposal.well_name,
+        driverId: selectedDriver.driverId || selectedDriver.key,
+        loadCount: 1,
+        notes: 'Demo production water load',
+      });
+      setMessage('Dispatched Demo Well 1 to AntigDemoDriver');
+      cancelPWDispatch();
+      setDemoTourTarget(null);
+      setWorkspaceTab('jobs');
+    } catch (error) {
+      if (run === demoTourRun.current && error instanceof Error && error.message !== 'Walkthrough stopped') {
+        setMessage(`Error: ${error.message}`);
+      }
+    } finally {
+      if (run === demoTourRun.current) {
+        demoTourRunning.current = false;
+        setDemoTourTarget(null);
+      }
+    }
   }
 
   async function submitPWDispatch() {
@@ -2626,7 +2736,7 @@ function DispatchPageInner() {
             return <button key={tab} type="button" aria-pressed={workspaceTab === tab}
               disabled={poppedOut}
               title={poppedOut ? `${label} is open in another window` : undefined}
-              onClick={() => setWorkspaceTab(tab)}
+              onClick={() => { if (demoTourRunning.current) stopDemoDispatchTour(); setWorkspaceTab(tab); }}
               className={`inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium transition-colors disabled:cursor-not-allowed ${poppedOut ? 'text-white bg-gray-800 border border-amber-500/70' : workspaceTab === tab ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'}`}>
               {label}{tab === 'queue' && selectedWells.size > 0 ? ` · ${selectedWells.size} selected` : ''}
               {poppedOut && <span className="rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gray-950">⧉ Popped out</span>}
@@ -2647,7 +2757,7 @@ function DispatchPageInner() {
                   { key: 'sw' as const, label: 'SW', active: 'bg-purple-600/30 text-purple-400' },
                   { key: 'projects' as const, label: 'Projects', active: 'bg-emerald-600/30 text-emerald-400' },
                 ] as const).map(tab => (
-                  <button key={tab.key} onClick={() => handleBuilderTabChange(tab.key)}
+                  <button key={tab.key} onClick={() => { if (demoTourRunning.current) stopDemoDispatchTour(); handleBuilderTabChange(tab.key); }}
                     className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
                       builderTab === tab.key
                         ? tab.active
@@ -2700,10 +2810,14 @@ function DispatchPageInner() {
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
                   {isDemoCompany && (
-                    <p className="mb-3 rounded border border-cyan-700/60 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-100">
-                      Try a demo load: search for Demo Well 1, choose a demo driver, then search for Demo SWD 1. The real builder searches as you type.
-                      {user?.role === 'demo_viewer' && ' Dispatch sends a real demo-company job to the selected driver.'}
-                    </p>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded border border-cyan-700/60 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-100">
+                      <span>Try a demo load: search for Demo Well 1, choose a demo driver, then search for Demo SWD 1. The real builder searches as you type.
+                        {user?.role === 'demo_viewer' && ' Dispatch sends a real demo-company job to the selected driver.'}</span>
+                      {user?.role === 'demo_viewer' && <button type="button" onClick={demoTourRunning.current ? stopDemoDispatchTour : runDemoDispatchTour}
+                        className="rounded border border-cyan-500 bg-cyan-700/50 px-3 py-1.5 font-semibold text-white hover:bg-cyan-600/70">
+                        {demoTourTarget ? 'Stop walkthrough' : 'Watch a dispatch walkthrough'}
+                      </button>}
+                    </div>
                   )}
                   {/* Top: Well input + static info box */}
                   <div className="space-y-2 flex-shrink-0">
@@ -4578,6 +4692,17 @@ function DispatchPageInner() {
               </>
             )}
           </div>
+        </div>
+      )}
+      {demoTourTarget && demoTourPointer && (
+        <div aria-live="polite" className="pointer-events-none fixed z-[90]" style={{ left: demoTourPointer.x, top: demoTourPointer.y, width: demoTourPointer.width, height: demoTourPointer.height }}>
+          <div className="absolute inset-0 rounded border-2 border-cyan-300 shadow-[0_0_0_4px_#22d3ee55,0_0_18px_#22d3ee]" />
+          <svg aria-hidden="true" className="absolute left-3 top-3 h-8 w-8 drop-shadow-lg" viewBox="0 0 32 32">
+            <path d="M3 2v25l7-6 5 9 5-3-5-9h10L3 2Z" fill="white" stroke="#111827" strokeWidth="2" strokeLinejoin="round" />
+          </svg>
+          <span className="absolute left-8 top-10 whitespace-nowrap rounded bg-cyan-950 px-2 py-1 text-xs font-semibold text-white shadow-lg">
+            {demoTourTarget === 'dispatch' ? 'Dispatching the real demo job' : `Selecting ${demoTourTarget}`}
+          </span>
         </div>
       )}
     </div>
