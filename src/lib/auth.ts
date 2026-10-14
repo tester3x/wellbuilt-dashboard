@@ -16,7 +16,7 @@ import { getFirebaseAuth, getFirebaseDatabase, getFirebaseFunctions } from './fi
 // companies/{id}) but cannot invent new primitives — security rules / Cloud
 // Functions reference these strings. Relabelling does not change logic.
 // `safety` and `lead` are first-class responsibilities for Safety / spills.
-export type UserRole = 'driver' | 'viewer' | 'dispatch' | 'payroll' | 'manager' | 'admin' | 'it' | 'safety' | 'lead';
+export type UserRole = 'driver' | 'viewer' | 'demo_viewer' | 'dispatch' | 'payroll' | 'manager' | 'admin' | 'it' | 'safety' | 'lead';
 
 // Role hierarchy — kept for backwards-compatibility with hasRole(). New code
 // should prefer hasCapability() instead; hasRole() is only useful for coarse
@@ -24,6 +24,7 @@ export type UserRole = 'driver' | 'viewer' | 'dispatch' | 'payroll' | 'manager' 
 export const ROLE_LEVELS: Record<UserRole, number> = {
   driver: 1,
   viewer: 1,
+  demo_viewer: 1,
   dispatch: 2,
   payroll: 2,
   safety: 2,
@@ -134,6 +135,11 @@ export const DEFAULT_ROLE_CAPABILITIES: Record<UserRole, Capability[]> = {
     'viewPayroll', 'viewDriverLogs',
     'viewEQuipment', 'viewDVIR', 'viewEquipmentDocuments',
   ],
+  demo_viewer: [
+    'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
+    'viewPayroll', 'viewDriverLogs', 'viewSafety', 'viewSettings', 'viewAdmin',
+    'viewChat', 'viewEQuipment', 'viewDVIR', 'viewEquipmentDocuments',
+  ],
   driver: [],
 };
 
@@ -147,6 +153,7 @@ export const DEFAULT_ROLE_LABELS: Record<UserRole, string> = {
   dispatch: 'Dispatcher',
   payroll: 'Payroll',
   viewer: 'Viewer',
+  demo_viewer: 'Demo Viewer',
   driver: 'Driver',
 };
 
@@ -230,6 +237,13 @@ export function hasCapability(
   companyConfig?: RoleConfig | null,
 ): boolean {
   if (!user) return false;
+  // Public demo access is a fixed read-only role. Company overrides must not
+  // turn the shared account into a writer or widen it to another tenant.
+  if (user.role === 'demo_viewer') {
+    return user.uid === 'wellbuilt-demo-shared-viewer'
+      && user.companyId === 'wellbuilt-demo'
+      && DEFAULT_ROLE_CAPABILITIES.demo_viewer.includes(capability);
+  }
   // Multi-role (7/9): UNION of capabilities across the user's roles. Per
   // role, a per-company override wins over the default (same rule as
   // before); the union happens across the resolved per-role lists. With no
@@ -351,7 +365,7 @@ async function getUserWithRole(user: User): Promise<WellBuiltUser> {
       // "mike" instead of a blank label) until an admin sets a proper name.
       writeBack.displayName = user.email.split('@')[0];
     }
-    if (Object.keys(writeBack).length > 0) {
+    if (user.uid !== 'wellbuilt-demo-shared-viewer' && Object.keys(writeBack).length > 0) {
       // Child-path writes only. A parent update(users/{uid}) is denied under
       // default-deny even when email/displayName children are writable.
       const writes = Object.entries(writeBack).map(([field, value]) =>

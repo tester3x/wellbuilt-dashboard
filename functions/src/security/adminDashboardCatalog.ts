@@ -82,7 +82,11 @@ export const adminGetDashboardCatalog = httpsV2.onCall(
 export const adminGetDemoDriverRoster = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    await requireTrustedCatalogCaller(request.auth?.uid);
+    const sharedDemoViewer = request.auth?.uid === 'wellbuilt-demo-shared-viewer'
+      && request.auth.token.staffCompanyId === DEMO_COMPANY_ID
+      && request.auth.token.staffRole === 'demo_viewer'
+      && request.auth.token.isDemo === true;
+    if (!sharedDemoViewer) await requireTrustedCatalogCaller(request.auth?.uid);
     const entries = await Promise.all(DEMO_DRIVERS.map(async ({ id }) => {
       const snap = await admin.database().ref(`drivers/profiles/${id}`).once('value');
       const profile = snap.val();

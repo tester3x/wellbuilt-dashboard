@@ -172,7 +172,7 @@ export default function SettingsPage() {
             {/* Employee Registration — the company's own join code (self-gated to
                 manageDrivers/platform; the card sends no companyId for a tenant user,
                 so the server resolves their OWN company). */}
-            <CompanyJoinCodeCard companyId={company.id} />
+            {user.role !== 'demo_viewer' && <CompanyJoinCodeCard companyId={company.id} />}
             <PackagesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <CustomJobTypesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)}
               prefillLabel={newJobTypeRequest?.label} prefillKey={newJobTypeRequest?.key} />

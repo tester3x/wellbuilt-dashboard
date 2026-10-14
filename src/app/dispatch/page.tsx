@@ -987,17 +987,25 @@ function DispatchPageInner() {
   useEffect(() => {
     if (!user) return;
     const firestore = getFirestoreDb();
-    const q = query(
-      collection(firestore, 'dispatches'),
-      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed', 'dismissed']),
-      orderBy('assignedAt', 'desc')
-    );
+    // The shared demo viewer must query only its own company. The synthetic
+    // tenant has a small bounded history, so filter/sort locally without a
+    // cross-tenant status query or a composite-index dependency.
+    const demoViewer = user.uid === 'wellbuilt-demo-shared-viewer' && user.companyId === 'wellbuilt-demo';
+    const q = demoViewer
+      ? query(collection(firestore, 'dispatches'), where('companyId', '==', 'wellbuilt-demo'), where('isDemo', '==', true))
+      : query(
+          collection(firestore, 'dispatches'),
+          where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed', 'dismissed']),
+          orderBy('assignedAt', 'desc')
+        );
     const unsub = onSnapshot(q, (snap) => {
       const jobs: DispatchJob[] = [];
       snap.forEach((d) => {
         jobs.push({ id: d.id, ...d.data() } as DispatchJob);
       });
-      setDispatches(jobs.filter(j => docBelongsToTenant(j.companyId, user.companyId)));
+      const scopedJobs = jobs.filter(j => docBelongsToTenant(j.companyId, user.companyId));
+      if (demoViewer) scopedJobs.sort((a, b) => Date.parse(String(b.assignedAt || '')) - Date.parse(String(a.assignedAt || '')));
+      setDispatches(scopedJobs);
       setDispatchesLoaded(true);
       setReadErrors(prev => ({ ...prev, dispatches: undefined }));
     }, (err) => {
@@ -1104,6 +1112,12 @@ function DispatchPageInner() {
   async function loadDriversData() {
     setDriversLoading(true);
     try {
+      if (user?.uid === 'wellbuilt-demo-shared-viewer' && user.companyId === 'wellbuilt-demo') {
+        const demo = await adminGetDemoDriverRoster();
+        setDrivers(projectDispatchDriverRoster(demo, 'wellbuilt-demo'));
+        setReadErrors(prev => ({ ...prev, drivers: undefined }));
+        return;
+      }
       const catalog = await adminGetDashboardCatalog();
       // Canonical dispatch roster projection: unifies approved rows with modern
       // canonical profiles (profiles-only drivers) under company containment.
@@ -1143,18 +1157,22 @@ function DispatchPageInner() {
   async function loadDispatchesData() {
     try {
       const firestore = getFirestoreDb();
-      const q = query(
-        collection(firestore, 'dispatches'),
-        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled']),
-        orderBy('assignedAt', 'desc')
-      );
+      const q = user?.uid === 'wellbuilt-demo-shared-viewer' && user.companyId === 'wellbuilt-demo'
+        ? query(collection(firestore, 'dispatches'), where('companyId', '==', 'wellbuilt-demo'), where('isDemo', '==', true))
+        : query(
+            collection(firestore, 'dispatches'),
+            where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled']),
+            orderBy('assignedAt', 'desc')
+          );
       const snap = await getDocs(q);
       const jobs: DispatchJob[] = [];
       snap.forEach((d) => {
         jobs.push({ id: d.id, ...d.data() } as DispatchJob);
       });
       // Tenant containment (7/9) — same filter as the live subscription.
-      setDispatches(jobs.filter(j => docBelongsToTenant(j.companyId, user?.companyId)));
+      const scopedJobs = jobs.filter(j => docBelongsToTenant(j.companyId, user?.companyId));
+      if (user?.uid === 'wellbuilt-demo-shared-viewer') scopedJobs.sort((a, b) => Date.parse(String(b.assignedAt || '')) - Date.parse(String(a.assignedAt || '')));
+      setDispatches(scopedJobs);
     } catch (err) {
       console.error('Failed to load dispatches:', err);
       setReadErrors(prev => ({ ...prev, dispatches: classifiedReadFailure('dispatch jobs', err) }));

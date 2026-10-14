@@ -1,7 +1,7 @@
 // Shared types and helpers for company settings
 // Used by both CompaniesTab (admin) and Settings page (self-service)
 
-import { getFirestoreDb } from '@/lib/firebase';
+import { getFirebaseAuth, getFirestoreDb } from '@/lib/firebase';
 import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -552,6 +552,12 @@ export const BILLING_METHODS: { value: 'per_bbl' | 'hourly'; label: string }[] =
 // ── Firestore Helpers ──────────────────────────────────────────────────────────
 
 export async function loadAllCompanies(): Promise<CompanyConfig[]> {
+  // The public demo identity may read only its own tenant. A collection scan
+  // would both fail the scoped rules and disclose other company metadata.
+  if (getFirebaseAuth().currentUser?.uid === 'wellbuilt-demo-shared-viewer') {
+    const demo = await loadCompanyById('wellbuilt-demo');
+    return demo ? [demo] : [];
+  }
   const firestore = getFirestoreDb();
   const snap = await getDocs(collection(firestore, 'companies'));
   const list: CompanyConfig[] = [];

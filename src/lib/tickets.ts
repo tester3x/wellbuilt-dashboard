@@ -1,4 +1,4 @@
-import { getFirestoreDb } from './firebase';
+import { getFirebaseAuth, getFirestoreDb } from './firebase';
 import { collection, getDocs, getDoc, doc, query, orderBy, limit, where, documentId, startAfter, type QueryDocumentSnapshot } from 'firebase/firestore';
 import { invoiceBelongsToCompany, planInvoiceLookup } from './ticketCompanyLookup';
 
@@ -123,6 +123,8 @@ export interface InvoiceDetail {
 // this containment patch. Unscoped WB admin passes undefined → global.
 export async function fetchTickets(limitCount = 200, companyId?: string): Promise<Ticket[]> {
   const db = getFirestoreDb();
+  const demoViewer = getFirebaseAuth().currentUser?.uid === 'wellbuilt-demo-shared-viewer';
+  if (demoViewer && companyId !== 'wellbuilt-demo') return [];
   const scope = (rows: Ticket[]) =>
     companyId ? rows.filter(t => t.companyId === companyId) : rows;
 
@@ -132,6 +134,7 @@ export async function fetchTickets(limitCount = 200, companyId?: string): Promis
       ? query(
           collection(db, 'tickets'),
           where('companyId', '==', companyId),
+          ...(demoViewer ? [where('isDemo', '==', true)] : []),
           orderBy('createdAt', 'desc'),
           limit(limitCount),
         )
@@ -152,6 +155,7 @@ export async function fetchTickets(limitCount = 200, companyId?: string): Promis
     ? query(
         collection(db, 'tickets'),
         where('companyId', '==', companyId),
+        ...(demoViewer ? [where('isDemo', '==', true)] : []),
         orderBy('ticketNumber', 'desc'),
         limit(limitCount),
       )
@@ -175,11 +179,13 @@ export async function searchTicketsArchive(
   if (!term) return [];
 
   const db = getFirestoreDb();
+  const demoViewer = getFirebaseAuth().currentUser?.uid === 'wellbuilt-demo-shared-viewer';
+  if (demoViewer && companyId !== 'wellbuilt-demo') return [];
   const ticketsRef = collection(db, 'tickets');
   // The company predicate is sent to Firestore, not applied only after a global
   // read. The document-ID cursor also reaches older tickets without createdAt.
   const scopedQuery = companyId
-    ? query(ticketsRef, where('companyId', '==', companyId), orderBy(documentId()))
+    ? query(ticketsRef, where('companyId', '==', companyId), ...(demoViewer ? [where('isDemo', '==', true)] : []), orderBy(documentId()))
     : query(ticketsRef, orderBy(documentId()));
   const pageSize = 250;
   let cursor: QueryDocumentSnapshot | undefined;

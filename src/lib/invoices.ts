@@ -1,5 +1,5 @@
-import { getFirestoreDb } from './firebase';
-import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { getFirebaseAuth, getFirestoreDb } from './firebase';
+import { collection, getDocs, query, orderBy, limit, where } from 'firebase/firestore';
 
 export type InvoiceStatus = 'open' | 'closed' | 'submitted' | 'approved' | 'paid';
 
@@ -34,8 +34,11 @@ export interface DashboardInvoice {
 // admin passes undefined → global. Mirrors fetchTickets.
 export async function fetchInvoices(limitCount = 200, companyId?: string): Promise<DashboardInvoice[]> {
   const db = getFirestoreDb();
+  const demoViewer = getFirebaseAuth().currentUser?.uid === 'wellbuilt-demo-shared-viewer';
+  if (demoViewer && companyId !== 'wellbuilt-demo') return [];
   const q = query(
     collection(db, 'invoices'),
+    ...(demoViewer ? [where('companyId', '==', 'wellbuilt-demo'), where('isDemo', '==', true)] : []),
     orderBy('createdAt', 'desc'),
     limit(limitCount)
   );
