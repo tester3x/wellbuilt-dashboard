@@ -1543,7 +1543,9 @@ function DispatchPageInner() {
         loadCount: 1,
         notes: 'Demo production water load',
       });
-      setMessage('Dispatched Demo Well 1 to AntigDemoDriver');
+      if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
+      window.dispatchEvent(new Event('wellbuilt:demo-phone-tour'));
+      setMessage('Dispatched Demo Well 1 to AntigDemoDriver. Watch the phone: the driver opens DDJD, taps Accept, then sees Job Review.');
       cancelPWDispatch();
       setDemoTourTarget(null);
       setWorkspaceTab('jobs');

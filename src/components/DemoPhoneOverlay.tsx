@@ -7,6 +7,7 @@ import { getFirebaseFunctions } from '@/lib/firebase';
 
 type PhoneFrame = { available: false } | { available: true; url: string; capturedAt: number; live: boolean };
 type ExploreScreen = 'home' | 'emptyDrawer' | 'drawer' | 'review' | 'enroute' | 'pickup' | 'dropoff' | 'summary' | 'more' | 'settings';
+type PhoneTourStep = 'waiting' | 'drawer' | 'review';
 
 const exploreImages: Record<ExploreScreen, string> = {
   home: '/demo-phone/home.png',
@@ -100,6 +101,8 @@ export function DemoPhoneOverlay() {
   const [expanded, setExpanded] = useState(true);
   const [large, setLarge] = useState(false);
   const [explore, setExplore] = useState<ExploreScreen | null>(null);
+  const [phoneTourStep, setPhoneTourStep] = useState<PhoneTourStep | null>(null);
+  const [phoneTourStartedAt, setPhoneTourStartedAt] = useState(0);
   const [recognized, setRecognized] = useState<{ capturedAt: number; screen: ExploreScreen | null } | null>(null);
   const liveScreen = frame.available && recognized?.capturedAt === frame.capturedAt ? recognized.screen : null;
 
@@ -107,9 +110,35 @@ export function DemoPhoneOverlay() {
     // Explore a separate captured WB T session. The live driver keeps running
     // for every viewer and never receives public-browser taps.
     setExplore(screen);
+    setPhoneTourStep(null);
     setLarge(true);
     setExpanded(true);
   };
+
+  useEffect(() => {
+    const startPhoneTour = () => {
+      setExplore(null);
+      setExpanded(true);
+      setLarge(true);
+      setPhoneTourStartedAt(Date.now());
+      setPhoneTourStep('waiting');
+    };
+    window.addEventListener('wellbuilt:demo-phone-tour', startPhoneTour);
+    return () => window.removeEventListener('wellbuilt:demo-phone-tour', startPhoneTour);
+  }, []);
+
+  useEffect(() => {
+    if (!phoneTourStep) return;
+    const timer = window.setTimeout(() => setPhoneTourStep(null), 90_000);
+    return () => window.clearTimeout(timer);
+  }, [phoneTourStep]);
+
+  useEffect(() => {
+    if (!phoneTourStep || !liveScreen || explore || !frame.available || frame.capturedAt <= phoneTourStartedAt) return;
+    if (liveScreen === 'drawer') setPhoneTourStep('drawer');
+    else if (liveScreen === 'review') setPhoneTourStep('review');
+    else if (liveScreen === 'enroute' || liveScreen === 'pickup' || liveScreen === 'dropoff') setPhoneTourStep(null);
+  }, [explore, frame, liveScreen, phoneTourStartedAt, phoneTourStep]);
 
   useEffect(() => {
     if (!frame.available || !frame.live) return;
@@ -160,6 +189,13 @@ export function DemoPhoneOverlay() {
           </button>
         </div>
       </div>
+      {phoneTourStep && !explore && (
+        <div aria-live="polite" className="border-y border-cyan-700 bg-cyan-950 px-3 py-2 text-center text-xs font-semibold text-cyan-100">
+          {phoneTourStep === 'waiting' ? 'Phone in use · driver opens DDJD for the new job'
+            : phoneTourStep === 'drawer' ? 'DDJD open · driver taps Accept'
+              : 'Job accepted · Job Review is on the phone'}
+        </div>
+      )}
       {expanded && (
         <div className="relative aspect-[9/20] bg-black">
           {explore ? (
@@ -180,7 +216,11 @@ export function DemoPhoneOverlay() {
               {liveScreen && exploreHotspots[liveScreen]?.map(hotspot => (
                 <button key={hotspot.label} type="button" aria-label={`${hotspot.label} on the demo phone`}
                   onClick={() => openExplore(hotspot.next)}
-                  className="absolute cursor-pointer bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300"
+                  className={`absolute cursor-pointer bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 ${
+                    (phoneTourStep === 'waiting' && liveScreen === 'home' && hotspot.label === 'Open Job Drawer')
+                    || (phoneTourStep === 'drawer' && liveScreen === 'drawer' && hotspot.label === 'Accept demo job')
+                    || (phoneTourStep === 'review' && liveScreen === 'review' && hotspot.label === 'Start demo job preview')
+                      ? 'rounded-lg ring-2 ring-cyan-300 shadow-[0_0_18px_#22d3ee]' : ''}`}
                   style={{ left: hotspot.left, top: hotspot.top, width: hotspot.width, height: hotspot.height }} />
               ))}
             </>
