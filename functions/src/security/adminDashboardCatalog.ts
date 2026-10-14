@@ -22,7 +22,7 @@ import {
 } from './dashboardCatalogProjection';
 import { projectWellPerformance, wellKeyFromName } from './operational/selectWellPerformance';
 import { requestedAdminWellName } from './operational/staffWellPerformanceRequest';
-import { DEMO_COMPANY_ID, DEMO_DRIVERS } from '../liveDemo/plan';
+import { DEMO_COMPANY_ID } from '../liveDemo/runtime';
 
 function trustedCatalogCaller(access: { uid: string; companyId: string; isPlatformAdmin: false }): DashboardCaller {
   return {
@@ -78,7 +78,7 @@ export const adminGetDashboardCatalog = httpsV2.onCall(
   },
 );
 
-/** Only the fixed synthetic identities used by the public demo. Never a cross-tenant catalog read. */
+/** Approved secure identities for the demo tenant. Legacy simulator stubs are excluded. */
 export const adminGetDemoDriverRoster = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
@@ -86,16 +86,28 @@ export const adminGetDemoDriverRoster = httpsV2.onCall(
       && request.auth.token.staffCompanyId === DEMO_COMPANY_ID
       && request.auth.token.staffRole === 'demo_viewer'
       && request.auth.token.isDemo === true;
-    if (!sharedDemoViewer) await requireTrustedCatalogCaller(request.auth?.uid);
-    const entries = await Promise.all(DEMO_DRIVERS.map(async ({ id }) => {
-      const snap = await admin.database().ref(`drivers/profiles/${id}`).once('value');
-      const profile = snap.val();
-      if (!profile || profile.isDemo !== true || profile.companyId !== DEMO_COMPANY_ID || profile.active === false) return null;
+    if (!sharedDemoViewer) {
+      const caller = await requireTrustedCatalogCaller(request.auth?.uid);
+      if (caller.companyId !== DEMO_COMPANY_ID) {
+        throw new httpsV2.HttpsError('permission-denied', 'demo_company_scope_required');
+      }
+    }
+    const snap = await admin.database().ref('drivers/profiles').once('value');
+    const profiles = (snap.val() || {}) as Record<string, Record<string, unknown>>;
+    const candidates = Object.entries(profiles).filter(([id, profile]) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+      && profile?.companyId === DEMO_COMPANY_ID
+      && profile?.active !== false
+      && Array.isArray(profile?.roles) && profile.roles.includes('driver'));
+    const entries = await Promise.all(candidates.map(async ([id, profile]) => {
+      const credential = await admin.firestore().collection('driver_credentials').doc(id).get();
+      if (!credential.exists || credential.get('active') === false) return null;
       return [id, {
         driverId: id,
         companyId: DEMO_COMPANY_ID,
         displayName: String(profile.displayName || profile.legalName || ''),
         legalName: String(profile.legalName || profile.displayName || ''),
+        assignedRoutes: Array.isArray(profile.assignedRoutes) ? profile.assignedRoutes : [],
         active: true,
         isDemo: true,
       }] as const;

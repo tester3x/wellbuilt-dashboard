@@ -246,6 +246,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         const data = (catalog.profiles || {}) as Record<string, any>;
         Object.entries(data).forEach(([id, val]) => {
           if (!val || typeof val !== 'object') return;
+          // Retired simulator shells were separate identities with no login or
+          // governed WB-M scope. Show only the approved secure driver cards.
+          if (val.companyId === 'wellbuilt-demo' && val.isDemo === true && /^demo-driver-(?:antig|claude|grok)$/.test(id)) return;
           canonical.push({
             driverId: id,
             displayName: val.displayName || val.name || 'Unknown',

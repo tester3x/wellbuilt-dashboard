@@ -9,11 +9,11 @@ const CANON_UUID_2 = '8c3d9a10-9876-4321-a123-abcdef012345';
 const LEGACY_HASH_1 = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const LEGACY_HASH_2 = 'f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f';
 
-test('synthetic demo profiles join the selected demo roster without leaking into Liquid Gold', () => {
+test('approved demo driver profiles join only the selected demo roster', () => {
   const demoCatalog = { profiles: {
-    'demo-driver-claude': { companyId: 'wellbuilt-demo', displayName: 'Claude Demo Driver', legalName: 'Claude Demo Driver', active: true },
-    'demo-driver-grok': { companyId: 'wellbuilt-demo', displayName: 'Grok Demo Driver', legalName: 'Grok Demo Driver', active: true },
-    'demo-driver-antig': { companyId: 'wellbuilt-demo', displayName: 'Antig Demo Driver', legalName: 'Antig Demo Driver', active: true },
+    '2f6e6f75-b468-4239-9831-71faeb623acb': { companyId: 'wellbuilt-demo', displayName: 'AntigDemoDriver', legalName: 'Antig Demo Driver', active: true },
+    '24762b4e-82ee-4197-955f-0c52cab31f73': { companyId: 'wellbuilt-demo', displayName: 'GrokDemoDriver', legalName: 'Grok Demo Driver', active: true },
+    '867d1bf3-c445-49ce-9c85-58dab6fbf0e2': { companyId: 'wellbuilt-demo', displayName: 'ClaudeDemoDriver', legalName: 'Claude Demo Driver', active: true },
   } };
   assert.equal(projectDispatchDriverRoster(demoCatalog, 'wellbuilt-demo').length, 3);
   assert.equal(projectDispatchDriverRoster(demoCatalog, 'liquid-gold').length, 0);

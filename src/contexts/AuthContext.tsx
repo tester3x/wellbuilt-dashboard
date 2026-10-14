@@ -4,8 +4,6 @@ import { createContext, useContext, useEffect, useState, ReactNode } from 'react
 import { WellBuiltUser, subscribeToAuthState, signIn, signOut, hasRole, UserRole } from '@/lib/auth';
 import { loadCompanyById, type CompanyConfig } from '@/lib/companySettings';
 import { computeAuthResolved } from '@/lib/authGateCore';
-import { httpsCallable } from 'firebase/functions';
-import { getFirebaseFunctions } from '@/lib/firebase';
 
 // Firebase Auth is enabled. DEV_MODE exists only as an emergency escape hatch
 // for local work when real auth is unavailable; deployed builds must run with
@@ -100,29 +98,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => { if (!cancelled) setCompanyLoading(false); });
     return () => { cancelled = true; };
   }, [user?.companyId]);
-
-  // The real Dashboard listens to live demo records. This heartbeat keeps the
-  // synthetic dispatcher moving while the shared viewer explores any tab.
-  useEffect(() => {
-    if (user?.uid !== 'wellbuilt-demo-shared-viewer' || user.companyId !== 'wellbuilt-demo') return;
-    let stopped = false;
-    let busy = false;
-    const tick = async () => {
-      if (stopped || busy || document.visibilityState === 'hidden') return;
-      busy = true;
-      try {
-        await httpsCallable(getFirebaseFunctions(), 'liveDemoSnapshot')();
-      } catch (error) {
-        console.warn('[live-demo] heartbeat failed:', error);
-      } finally {
-        busy = false;
-      }
-    };
-    void tick();
-    const timer = window.setInterval(tick, 4_000);
-    document.addEventListener('visibilitychange', tick);
-    return () => { stopped = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
-  }, [user?.uid, user?.companyId]);
 
   const handleSignIn = async (email: string, password: string) => {
     if (DEV_MODE) {

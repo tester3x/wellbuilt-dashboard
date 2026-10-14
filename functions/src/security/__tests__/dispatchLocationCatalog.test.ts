@@ -1,8 +1,13 @@
 const mockGet = jest.fn();
 const mockWhere = jest.fn();
 const mockTrusted = jest.fn();
-jest.mock('firebase-admin', () => ({ firestore: () => ({ collection: (name: string) => ({
-  doc: (id: string) => ({ get: () => mockGet(name, id), collection: () => ({ limit: () => ({ get: async () => ({ docs: [] }) }) }) }),
+jest.mock('firebase-admin', () => ({
+  database: () => ({ ref: () => ({ once: async () => ({ val: () => ({
+    'Demo Well 1': { companyId: 'wellbuilt-demo', name: 'Demo Well 1' },
+    'Other Well': { companyId: 'hauler-a', name: 'Other Well' },
+  }) }) }) }),
+  firestore: () => ({ collection: (name: string) => ({
+  doc: (id: string) => ({ get: () => mockGet(name, id), collection: () => ({ get: async () => ({ docs: [] }), limit: () => ({ get: async () => ({ docs: [] }) }) }) }),
   where: (field: string, op: string, value: string) => { mockWhere(name, field, op, value); return { limit: () => ({ get: async () => ({ docs: [] }) }) }; },
   limit: () => ({ get: async () => ({ docs: [] }) }),
 }) }) }));
@@ -42,7 +47,7 @@ test('untrusted staff is denied, never falls back to driver or public reads', as
   expect(mockWhere).not.toHaveBeenCalled();
 });
 
-test('shared demo viewer sees only the synthetic catalog for its fixed tenant', async () => {
+test('shared demo viewer sees only its tenant locations', async () => {
   const auth = { uid: 'wellbuilt-demo-shared-viewer', token: {
     staffRole: 'demo_viewer', staffCompanyId: 'wellbuilt-demo', isDemo: true,
   } };
@@ -51,6 +56,7 @@ test('shared demo viewer sees only the synthetic catalog for its fixed tenant', 
   };
   expect(result.companyId).toBe('wellbuilt-demo');
   expect(result.wells.map(well => well.well_name)).toContain('Demo Well 1');
+  expect(result.wells.map(well => well.well_name)).not.toContain('Other Well');
   expect(mockWhere).not.toHaveBeenCalled();
   expect(mockTrusted).not.toHaveBeenCalled();
   await expect(invoke({ auth, data: { companyId: 'hauler-a' } }))
