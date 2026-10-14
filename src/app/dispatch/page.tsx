@@ -550,7 +550,7 @@ function DispatchPageInner() {
       : tab === 'queue' ? 'queue' : 'build';
   });
   const [demoTourTarget, setDemoTourTarget] = useState<string | null>(null);
-  const [demoTourPointer, setDemoTourPointer] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [demoTourPointer, setDemoTourPointer] = useState<{ x: number; y: number; width: number; height: number; labelX: number; labelY: number } | null>(null);
   const demoTourRun = useRef(0);
   const demoTourRunning = useRef(false);
   useEffect(() => () => { demoTourRun.current += 1; }, []);
@@ -567,7 +567,11 @@ function DispatchPageInner() {
       const element = document.querySelector(`[data-demo-builder-target="${demoTourTarget}"]`);
       if (!element) return;
       const rect = element.getBoundingClientRect();
-      setDemoTourPointer({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+      setDemoTourPointer({
+        x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+        labelX: Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - 292)),
+        labelY: rect.top > 170 ? rect.top - 62 : Math.min(window.innerHeight - 62, rect.bottom + 12),
+      });
     };
     const frame = window.requestAnimationFrame(update);
     window.addEventListener('resize', update);
@@ -1468,15 +1472,15 @@ function DispatchPageInner() {
       await pause(650);
 
       setDemoTourTarget('operator');
-      await pause(850);
+      await pause(1250);
       setBuilderOperator('Demo Operator');
       setDemoTourTarget('well');
-      await pause(500);
+      await pause(850);
       for (const letter of 'Demo Well 1') {
         setAssignWellSearch(previous => previous + letter);
-        await pause(125);
+        await pause(220);
       }
-      await pause(1100); // The real search dropdown remains visible here.
+      await pause(1700); // Give viewers time to read the real search dropdown.
       // The page catalog may still be loading on a fresh public-demo visit.
       // Fetch the same governed company catalog for this run when needed.
       let tourWells = allOperatorWells;
@@ -1500,7 +1504,7 @@ function DispatchPageInner() {
       setAssignWellSearch('');
 
       setDemoTourTarget('driver');
-      await pause(950);
+      await pause(1300);
       const tourDrivers = projectDispatchDriverRoster(await adminGetDemoDriverRoster(), 'wellbuilt-demo');
       if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
       const selectedDriver = tourDrivers.find(row =>
@@ -1509,15 +1513,15 @@ function DispatchPageInner() {
       setDrivers(tourDrivers);
       setAssignDriverHash(selectedDriver.key);
       setDemoTourTarget('disposal');
-      await pause(700);
+      await pause(1000);
       let search = '';
       for (const letter of 'Demo SWD 1') {
         search += letter;
         setDisposalSearch(search);
         setDisposalResults(search.length >= 2 ? searchDisposals(search, tourDisposals).filter(row => row.kind === 'SWD') : []);
-        await pause(125);
+        await pause(220);
       }
-      await pause(1000);
+      await pause(1600);
       const selectedDisposal = tourDisposals.find(row => row.well_name === 'Demo SWD 1');
       if (!selectedDisposal) throw new Error('Demo SWD 1 is unavailable');
       setAssignDisposalWell(selectedDisposal);
@@ -1526,10 +1530,10 @@ function DispatchPageInner() {
       setDisposalResults([]);
 
       setDemoTourTarget('notes');
-      await pause(650);
+      await pause(1100);
       setAssignNotes('Demo production water load');
       setDemoTourTarget('dispatch');
-      await pause(1200);
+      await pause(1800);
       // No backend job exists until this exact stage. Leaving the page or
       // stopping the walkthrough before now abandons only the local preview.
       await httpsCallable(getFirebaseFunctions(), 'dispatchDemoViewerJob')({
@@ -4722,15 +4726,18 @@ function DispatchPageInner() {
         </div>
       )}
       {demoTourTarget && demoTourPointer && (
-        <div aria-live="polite" className="pointer-events-none fixed z-[90]" style={{ left: demoTourPointer.x, top: demoTourPointer.y, width: demoTourPointer.width, height: demoTourPointer.height }}>
-          <div className="absolute inset-0 rounded border-2 border-cyan-300 shadow-[0_0_0_4px_#22d3ee55,0_0_18px_#22d3ee]" />
-          <svg aria-hidden="true" className="absolute left-3 top-3 h-8 w-8 drop-shadow-lg" viewBox="0 0 32 32">
-            <path d="M3 2v25l7-6 5 9 5-3-5-9h10L3 2Z" fill="white" stroke="#111827" strokeWidth="2" strokeLinejoin="round" />
-          </svg>
-          <span className="absolute left-8 top-10 whitespace-nowrap rounded bg-cyan-950 px-2 py-1 text-xs font-semibold text-white shadow-lg">
-            {demoTourTarget === 'dispatch' ? 'Dispatching the real demo job' : `Selecting ${demoTourTarget}`}
-          </span>
-        </div>
+        <>
+          <div className="pointer-events-none fixed z-[90] rounded border-2 border-cyan-300 shadow-[0_0_0_4px_#22d3ee55,0_0_18px_#22d3ee]"
+            style={{ left: demoTourPointer.x, top: demoTourPointer.y, width: demoTourPointer.width, height: demoTourPointer.height }}>
+            <svg aria-hidden="true" className="absolute -left-7 top-1 h-8 w-8 drop-shadow-lg" viewBox="0 0 32 32">
+              <path d="M3 2v25l7-6 5 9 5-3-5-9h10L3 2Z" fill="white" stroke="#111827" strokeWidth="2" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <div aria-live="polite" data-demo-tour-label={demoTourTarget} className="pointer-events-none fixed z-[91] max-w-[min(280px,calc(100vw-24px))] rounded-lg border border-cyan-400 bg-cyan-950 px-4 py-2 text-sm font-semibold text-white shadow-xl md:text-base"
+            style={{ left: demoTourPointer.labelX, top: demoTourPointer.labelY }}>
+            {demoTourTarget === 'dispatch' ? 'Dispatching the real demo job' : demoTourTarget === 'well' || demoTourTarget === 'disposal' ? `Searching ${demoTourTarget}` : demoTourTarget === 'notes' ? 'Entering job notes' : `Choosing ${demoTourTarget}`}
+          </div>
+        </>
       )}
     </div>
   );
