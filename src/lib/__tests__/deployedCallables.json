@@ -2,7 +2,7 @@
   "capturedAt": "2026-09-12",
   "project": "wellbuilt-sync",
   "source": "firebase functions:list",
-  "count": 180,
+  "count": 182,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -25,6 +25,7 @@
     "adminEmployeeDashboardAccess",
     "adminGetCompanyContractConfiguration",
     "adminGetDashboardCatalog",
+    "adminGetDemoDriverRoster",
     "adminGetPlan",
     "adminGetWellHistory",
     "adminGetWellPerformance",
@@ -115,6 +116,7 @@
     "listTruthRagExports",
     "listTruthSwdReference",
     "liveDemoSnapshot",
+    "liveDemoPhoneFrame",
     "logUnmatched",
     "materializeTransferredTicket",
     "materializerDriftHeartbeat",
@@ -186,6 +188,14 @@
     "writeDiagnosticLog"
   ],
   "verifiedAdditions": {
+    "adminGetDemoDriverRoster": {
+      "verifiedAt": "2026-10-14",
+      "source": "Verified in production Firebase functions inventory"
+    },
+    "liveDemoPhoneFrame": {
+      "verifiedAt": "2026-10-14",
+      "source": "Successful scoped Firebase deployment; verified in production functions inventory"
+    },
     "demoViewerSession": {
       "verifiedAt": "2026-10-12",
       "source": "Successful scoped Firebase deployment from 65122ff3; live token and viewer role verified"
