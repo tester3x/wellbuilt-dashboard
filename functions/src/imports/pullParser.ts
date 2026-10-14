@@ -23,6 +23,8 @@ export interface PullImportRow {
   issues: string[];
   excluded: boolean;
   inferredSeparator?: boolean;
+  levelOnly?: boolean;
+  measurementTimeSource?: 'posted' | 'stated';
 }
 export interface ChatMessage { index: number; date: string; time: string; author: string; body: string }
 const header = /^(?:\[(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*([^\]]+)\]\s*|(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*(.*?)\s+-\s+)(.*)$/;
@@ -140,13 +142,16 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       let low=bottom?level(lines[bottomIndex]):pair?level(pair[2]):unlabelled?levelLines[1]:null;
       if(!labelled&&!bottom&&top!==null&&low!==null&&low>top)[top,low]=[low,top];
       const amount = /\b(\d+(?:\.\d+)?)\s*bbls?\b/i.exec(segment.body);
+      const singleLevel = level((lines[0] || '').replace(/^\s*[@:\-]\s*/, '').replace(/\s+off\s*$/i, '').trim());
+      const levelOnly = !pair && !unlabelled && !bottom && !amount && singleLevel !== null && (matches.length > 0 || !!labelled);
+      if (levelOnly) top = singleLevel;
       const amountLine = lines[pair ? 1 : 2] || '';
       const isClockLine = /^\d{1,2}:\d{2}(?:\s*[ap](?:m)?)?$|^\d{1,4}\s*[ap](?:m)?$/i.test(amountLine);
       const bareAmount = (pair || unlabelled || (labelled && bottom)) && !isClockLine ? /^\s*(\d{2,3})(?:\.(?!\d))?\s*(.*)$/.exec(lines[pair ? 1 : 2] || '') : null;
       const driverDefault = Object.entries(options.driverDefaultBbls || {}).find(([name]) => name.trim().toLowerCase() === message.author.trim().toLowerCase())?.[1];
-      const bbls = amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : driverDefault || options.defaultBbls || null;
+      const bbls = levelOnly ? 0 : amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : driverDefault || options.defaultBbls || null;
       // A routing instruction containing a well and barrels is not a pull.
-      if (!labelled && !pair && !unlabelled) {
+      if (!labelled && !pair && !unlabelled && !levelOnly) {
         if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s*[:=.\-]?\s*)?\d/i.test(segment.body)) { let timestamp='';try{timestamp=chatTimestamp(message.date,message.time,options.timeZone,options.dateOrder);}catch{} rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp, tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false }); }
         continue;
       }
@@ -155,7 +160,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       let postedAt = '';
       try { postedAt = chatTimestamp(message.date, message.time, options.timeZone, options.dateOrder); } catch (error) { issues.push(String(error)); }
       let eventTime = postedAt;
-      const explicit = inlineTime || lines.find((line, index) => index >= (pair ? (bareAmount ? 2 : 1) : (unlabelled || (labelled && bottom)) ? (bareAmount ? 3 : 2) : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
+      const explicit = inlineTime || lines.find((line, index) => index >= (levelOnly ? 1 : pair ? (bareAmount ? 2 : 1) : (unlabelled || (labelled && bottom)) ? (bareAmount ? 3 : 2) : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
       if (explicit && clock(explicit)) {
         let resolved = explicit;
         // Bare 1:30 can mean AM or PM. Choose nearest post only within two hours.
@@ -172,10 +177,11 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       if (matches.length > 1 && !explicit) issues.push('Multiple wells in one message; confirm individual pull times');
       if (!segment.well) issues.push('Choose the well for this shorthand message');
       if (top === null) issues.push('Invalid top level');
-      if (!(bbls && bbls > 0)) issues.push('Missing barrels');
+      if (!levelOnly && !(bbls && bbls > 0)) issues.push('Missing barrels');
+      if (levelOnly && !explicit) issues.push('Confirm measurement time for top-only reading');
       const date = `${message.date.split('/')[2]?.padStart(4, '20')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 1 : 0]?.padStart(2, '0')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 0 : 1]?.padStart(2, '0')}`;
       const excluded = !!((options.startDate && date < options.startDate) || (options.endDate && date > options.endDate));
-      rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded, ...(typoPair ? {inferredSeparator:true} : {}) });
+      rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded, ...(typoPair ? {inferredSeparator:true} : {}), ...(levelOnly ? {levelOnly:true,measurementTimeSource:explicit ? 'stated' as const : 'posted' as const} : {}) });
     }
   }
   if (rows.filter(row => !row.excluded).length > 2000) throw new Error('More than 2,000 pulls; split the export into smaller batches.');

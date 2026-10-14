@@ -2,6 +2,14 @@ import test from 'node:test';import assert from 'node:assert/strict';import {mkd
 test('durable deduplication, edits, deletion and multiple wells',()=>{const dir=mkdtempSync(path.join(os.tmpdir(),'wb-watchdog-'));try{let q=new Queue(dir);const event={id:'message-1',channel:'group-1',chat:header('2026-10-03T01:00:00Z','driver','Kahuna 5\nTop 12.5\nBottom 11.1\n165 bbl')};assert.equal(q.ingest(event).rows,1);q=new Queue(dir);assert.equal(q.ingest(event).duplicate,true);assert.equal(q.snapshot().pullCount,1);q.ingest({...event,chat:event.chat.replace('12.5','12.6')});assert.equal(q.snapshot().messages[0].edited,true);assert.equal(q.snapshot().messages[0].rows[0].tankLevelFeet,12.5);q.ingest({...event,deleted:true});assert.equal(q.snapshot().pullCount,0);assert.equal(q.export('group-1'),'');q.ingest({...event,id:'message-2',chat:header('2026-10-03T01:00:00Z','driver','Gunslinger 3\nTop 14\nBottom 12\nGunslinger 5\nTop 13\nBottom 11\n165 bbl')});assert.equal(q.snapshot().pullCount,2);assert.ok(q.snapshot().messages[0].rows.some(r=>r.issues.length));}finally{rmSync(dir,{recursive:true,force:true});}});
 
 import {Transport,signedRequest} from './transport.mjs';
+test('top-only reaches server identity gate and ignored admin posts are not retried',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'wb-level-only-'));try{
+  const q=new Queue(dir);q.ingest({id:'level-only',channel:'group',senderId:'123456789@lid',chat:header(Date.now(),'Admin','Kahuna 5\n@ 6\u2032 5\u2033 off')});
+  const t=new Transport(q);t.lastLifecycleCheck=Date.now();t.secret='synthetic';t.config={enabled:true,enabledAt:Date.now()-60000};let calls=0;
+  t.request=async(endpoint,body)=>{assert.equal(endpoint,'ingestWatchdogPullV2');assert.equal(body.senderId,'123456789@lid');calls++;return {ok:true,status:'ignored'};};
+  await t.tick(false);await t.tick(false);assert.equal(calls,1);assert.equal(q.reviewInbox().length,0);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
 const {verifyHmacHeaders}=require('../../functions/lib/watchdog/auth.js');
