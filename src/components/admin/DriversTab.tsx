@@ -248,7 +248,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           if (!val || typeof val !== 'object') return;
           // Retired simulator shells were separate identities with no login or
           // governed WB-M scope. Show only the approved secure driver cards.
-          if (val.companyId === 'wellbuilt-demo' && val.isDemo === true && /^demo-driver-(?:antig|claude|grok)$/.test(id)) return;
+          if (val.companyId === 'wellbuilt-demo' && /^demo-driver-(?:antig|claude|grok)$/.test(id)) return;
           canonical.push({
             driverId: id,
             displayName: val.displayName || val.name || 'Unknown',
@@ -269,6 +269,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       {
         const data = (catalog.approved || {}) as Record<string, any>;
         Object.entries(data).forEach(([hash, val]: [string, any]) => {
+          if (val?.companyId === 'wellbuilt-demo' && /^demo-driver-(?:antig|claude|grok)$/.test(hash)) return;
           // New flat structure: drivers/approved/{hash}/ = { displayName, active, ... }
           if (val.displayName || val.name) {
             approved.push({
