@@ -7,6 +7,8 @@
  */
 const { spawnSync } = require('node:child_process');
 const { existsSync, readFileSync } = require('node:fs');
+const { join } = require('node:path');
+const sharp = require('sharp');
 
 const serial = process.argv[2];
 if (!serial || !/^[a-zA-Z0-9_.:-]+$/.test(serial)) {
@@ -28,6 +30,11 @@ let lastAction = '';
 let lastActionAt = 0;
 let enRouteSince = 0;
 let enRouteDestination = '';
+let screenshotMode = false;
+let pickupEntered = false;
+let currentLeg = 'pickup';
+const screenNames = ['home', 'enroute', 'pickup', 'dropoff', 'summary'];
+let referenceScreens;
 process.on('SIGINT', () => { stopped = true; });
 process.on('SIGTERM', () => { stopped = true; });
 
@@ -39,6 +46,37 @@ function call(args, timeout = 12_000) {
     throw new Error(`adb ${args.join(' ')} failed: ${result.error?.message || result.stderr?.trim()}`);
   }
   return result.stdout;
+}
+function screenshot() {
+  const result = spawnSync(adb, ['-s', serial, 'exec-out', 'screencap', '-p'], {
+    timeout: 12_000, maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.error || result.status !== 0 || !result.stdout?.length) {
+    throw new Error(`demo phone screenshot failed: ${result.error?.message || result.stderr?.toString().trim()}`);
+  }
+  return result.stdout;
+}
+async function imageVector(bytes) {
+  return sharp(bytes).resize(54, 120).removeAlpha().raw().toBuffer();
+}
+async function screenFromVerifiedCapture() {
+  referenceScreens ||= await Promise.all(screenNames.map(name =>
+    imageVector(readFileSync(join(__dirname, '..', '..', 'public', 'demo-phone', `${name}.png`)))));
+  const current = await imageVector(screenshot());
+  const scores = referenceScreens.map(reference => {
+    let sum = 0;
+    for (let index = 0; index < current.length; index++) sum += Math.abs(current[index] - reference[index]);
+    return sum / current.length;
+  });
+  const ranked = scores.map((score, index) => ({ name: screenNames[index], score }))
+    .sort((a, b) => a.score - b.score);
+  // A screenshot may be mid-transition, on an unexpected app screen, or from
+  // another company. Ambiguous captures must never receive a blind tap.
+  if (ranked[0].score > 15 || ranked[1].score - ranked[0].score < 2) {
+    console.log(new Date().toISOString(), 'ambiguous-demo-screen', ranked.map(x => `${x.name}:${x.score.toFixed(1)}`).join(' '));
+    return null;
+  }
+  return ranked[0].name;
 }
 function tap(x, y) { call(['shell', 'input', 'tap', String(x), String(y)]); }
 function type(value) { call(['shell', 'input', 'text', value]); }
@@ -75,7 +113,55 @@ function demoOnly(xml) {
 async function drive() {
   if (!existsSync(readyFile) || readFileSync(readyFile, 'utf8').trim() !== 'wellbuilt-demo:AntigDemoDriver') return;
   if (!isForeground()) return;
-  const xml = ui();
+  let xml;
+  if (!screenshotMode) {
+    try { xml = ui(); }
+    catch (error) {
+      // React Native's animated navigation modal prevents uiautomator from
+      // reaching an idle state. Continue only on a close visual match to a
+      // verified demo capture; return to accessibility on the cover screen.
+      if (!String(error.message).includes('Android UI was busy')) throw error;
+      screenshotMode = true;
+      console.log(new Date().toISOString(), 'android-accessibility-busy; using verified screen captures');
+    }
+  }
+  if (!xml) {
+    const screen = await screenFromVerifiedCapture();
+    if (screen === 'home') {
+      screenshotMode = false;
+      pickupEntered = false;
+      currentLeg = 'pickup';
+      enRouteSince = 0;
+    } else if (screen === 'enroute') {
+      if (!enRouteSince) enRouteSince = Date.now();
+      if (Date.now() - enRouteSince >= arrivalDelayMs) {
+        actOnce('arrive-on-verified-route-screen', () => tap(540, 1630));
+      }
+    } else {
+      enRouteSince = 0;
+      if (screen === 'pickup' && currentLeg === 'pickup') {
+        if (!pickupEntered) {
+          actOnce('enter-verified-pickup-measurement', () => {
+            tap(120, 760); type('140'); tap(955, 1800);
+            tap(120, 920); type('11'); tap(955, 1800); tap(955, 1800);
+            pickupEntered = true;
+          });
+        } else {
+          actOnce('depart-verified-pickup', () => {
+            tap(540, 2320);
+            currentLeg = 'dropoff';
+          });
+        }
+      } else if (screen === 'dropoff' || (screen === 'pickup' && currentLeg === 'dropoff')) {
+        // The form is nearly identical at both stops; after Depart, the
+        // bottom action on this same verified layout opens Job Summary.
+        actOnce('open-verified-job-summary', () => tap(540, 2320));
+      } else if (screen === 'summary') {
+        actOnce('confirm-verified-job-summary', () => tap(750, 1780));
+      }
+    }
+    return;
+  }
   // A blank bottom sheet hides the verified company header. Closing that
   // sheet cannot create or change a job; the next action rechecks the header.
   if (visible(xml, 'Job Drawer') && visible(xml, 'No pending dispatches')) {
@@ -83,6 +169,11 @@ async function drive() {
     return;
   }
   if (!demoOnly(xml)) return;
+  screenshotMode = false;
+  if (visible(xml, 'Electronic Ticket Book')) {
+    pickupEntered = false;
+    currentLeg = 'pickup';
+  }
 
   if (visible(xml, 'Starting Job...')) return;
 
