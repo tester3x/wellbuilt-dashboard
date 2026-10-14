@@ -41,3 +41,18 @@ test('untrusted staff is denied, never falls back to driver or public reads', as
   await expect(invoke({ auth: { uid: 'driver', token: {} }, data: { companyId: 'hauler-a' } })).rejects.toThrow('denied');
   expect(mockWhere).not.toHaveBeenCalled();
 });
+
+test('shared demo viewer sees only the synthetic catalog for its fixed tenant', async () => {
+  const auth = { uid: 'wellbuilt-demo-shared-viewer', token: {
+    staffRole: 'demo_viewer', staffCompanyId: 'wellbuilt-demo', isDemo: true,
+  } };
+  const result = await invoke({ auth, data: { companyId: 'wellbuilt-demo' } }) as {
+    companyId: string; wells: Array<{ well_name: string }>;
+  };
+  expect(result.companyId).toBe('wellbuilt-demo');
+  expect(result.wells.map(well => well.well_name)).toContain('Demo Well 1');
+  expect(mockWhere).not.toHaveBeenCalled();
+  expect(mockTrusted).not.toHaveBeenCalled();
+  await expect(invoke({ auth, data: { companyId: 'hauler-a' } }))
+    .rejects.toMatchObject({ code: 'permission-denied' });
+});

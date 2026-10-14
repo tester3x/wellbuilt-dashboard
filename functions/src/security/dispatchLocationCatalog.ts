@@ -3,6 +3,7 @@ import * as admin from 'firebase-admin';
 import { applyDispatchSwdDirectory } from './dispatchSwdDirectory';
 import { authorizeAdminCall } from '../admin/authority';
 import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
+import { DEMO_COMPANY_ID, DEMO_DESTINATIONS, DEMO_WELLS } from '../liveDemo/plan';
 
 /** Read-only catalog. Operator scope comes exclusively from the company record. */
 export const getDispatchLocationCatalog = https.onCall({ timeoutSeconds: 60, memory: '512MiB', enforceAppCheck: false }, async request => {
@@ -10,6 +11,19 @@ export const getDispatchLocationCatalog = https.onCall({ timeoutSeconds: 60, mem
   const db = admin.firestore();
   const requested = typeof request.data?.companyId === 'string' ? request.data.companyId.trim() : '';
   if (!requested || !/^[a-zA-Z0-9_-]{1,128}$/.test(requested)) throw new https.HttpsError('invalid-argument', 'Select a company.');
+  const demoViewer = request.auth.uid === 'wellbuilt-demo-shared-viewer'
+    && request.auth.token.staffRole === 'demo_viewer'
+    && request.auth.token.staffCompanyId === DEMO_COMPANY_ID
+    && request.auth.token.isDemo === true;
+  if (demoViewer) {
+    if (requested !== DEMO_COMPANY_ID) throw new https.HttpsError('permission-denied', 'Company scope mismatch.');
+    return {
+      companyId: DEMO_COMPANY_ID,
+      wells: DEMO_WELLS.map(well_name => ({ well_name, operator: 'Demo Operator', api_no: '', latitude: null, longitude: null })),
+      disposals: DEMO_DESTINATIONS.map(well_name => ({ well_name, operator: 'Demo Operator', api_no: '', latitude: null, longitude: null })),
+      customLocations: [],
+    };
+  }
   const record = await db.collection('platform_admins').doc(request.auth.uid).get();
   const platform = authorizeAdminCall(request.auth, record.exists ? record.data() : null);
   if (!platform.ok) {
