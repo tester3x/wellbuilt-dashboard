@@ -39,6 +39,16 @@ const pngMagic = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const headerRegion = { left: 320, top: 160, width: 520, height: 80 };
 const headerReference = sharp(readFileSync(headerReferencePath))
   .extract(headerRegion).greyscale().raw().toBuffer();
+// WB T alternates the demo company name and its blue logo in this header.
+// Both references must be captured from the dedicated, verified demo login.
+const logoRegion = { left: 235, top: 145, width: 105, height: 95 };
+const logoHeaderPath = process.env.DEMO_PHONE_LOGO_HEADER_REFERENCE;
+if (logoHeaderPath && !existsSync(logoHeaderPath)) {
+  console.error('DEMO_PHONE_LOGO_HEADER_REFERENCE must be a verified demo-company screen capture.');
+  process.exit(2);
+}
+const logoHeaderReference = logoHeaderPath ? sharp(readFileSync(logoHeaderPath))
+  .extract(logoRegion).raw().toBuffer() : null;
 const homeReferencePath = process.env.DEMO_PHONE_HOME_REFERENCE;
 if (homeReferencePath && !existsSync(homeReferencePath)) {
   console.error('DEMO_PHONE_HOME_REFERENCE must be a verified demo-company cover capture.');
@@ -92,13 +102,16 @@ async function main() {
       if (!png.subarray(0, 8).equals(pngMagic) || png.length > 450_000) {
         throw new Error('Invalid or oversized Android frame');
       }
-      const [reference, header, homeReferencePixels, homePixels] = await Promise.all([
+      const [reference, logoReference, header, logo, homeReferencePixels, homePixels] = await Promise.all([
         headerReference,
+        logoHeaderReference,
         sharp(png).extract(headerRegion).greyscale().raw().toBuffer(),
+        logoHeaderReference ? sharp(png).extract(logoRegion).raw().toBuffer() : null,
         homeReference,
         homeReference ? sharp(png).extract(homeRegion).greyscale().raw().toBuffer() : null,
       ]);
-      const verifiedJobHeader = meanDifference(reference, header) <= 8;
+      const verifiedJobHeader = meanDifference(reference, header) <= 8 ||
+        (logoReference && logo && meanDifference(logoReference, logo) <= 8);
       const verifiedHomeHeader = homeReferencePixels && homePixels &&
         meanDifference(homeReferencePixels, homePixels) <= 8;
       if (!verifiedJobHeader && !verifiedHomeHeader) {
