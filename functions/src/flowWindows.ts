@@ -10,8 +10,10 @@ export function calculateFlowWindows(history:JsonRecord,minimumRecoveryInches:nu
  for(const {key,p,time} of rows){
  const identity=String(p.packetId||key);if(seen.has(identity))continue;seen.add(identity);
  const top=Number(p.tankTopInches??Number(p.tankLevelFeet)*12),bottom=Number(p.tankAfterInches),bbl=Number(p.bblsTaken);
+ const provenance=p.watchdogProvenance;
+ const verifiedTopOnly=bbl===0&&top===bottom&&p.source==='whatsapp_watchdog'&&provenance?.principalId==='laptop-watchdog-v2'&&provenance?.observationKind==='top_only'&&provenance?.ownershipSource==='verified_sender_binding'&&typeof p.driverId==='string'&&provenance?.ownerDriverId===p.driverId;
  let action:FlowWindowResult['action']='anchor',flowRateDays=0,recoveryInches=0,timeDifDays=0;
- if(isProvisionalPull(p)||p.noLevel||p.wellDown===true||p.flowIntervalBarrier===true||!Number.isFinite(top)||!Number.isFinite(bottom)||!Number.isFinite(bbl)||bbl<=0||top<=0||bottom<0||bottom>top){anchor=null;removed=0;action='break';}
+ if(isProvisionalPull(p)||p.noLevel||p.wellDown===true||p.flowIntervalBarrier===true||!Number.isFinite(top)||!Number.isFinite(bottom)||!Number.isFinite(bbl)||bbl<0||(bbl===0&&!verifiedTopOnly)||top<=0||bottom<0||bottom>top){anchor=null;removed=0;action='break';}
  else if(!anchor){anchor={time,bottom};}
  else {timeDifDays=(time-anchor.time)/86400000;recoveryInches=top-anchor.bottom+removed;
  if(timeDifDays<=0||timeDifDays>30||recoveryInches<0){action='reset';anchor={time,bottom};removed=0;}
