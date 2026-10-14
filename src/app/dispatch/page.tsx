@@ -545,6 +545,19 @@ function DispatchPageInner() {
     localStorage.setItem('dispatch_builder_tab', tab);
   }, []);
   const [workspaceTab, setWorkspaceTab] = useState<'build' | 'queue' | 'jobs'>('build');
+  // Only an open demo Build Job tab keeps an uncommitted scripted draft alive.
+  // The shared backend continues on its own after the Dispatch stage.
+  useEffect(() => {
+    if (user?.uid !== 'wellbuilt-demo-shared-viewer' || workspaceTab !== 'build') return;
+    let stopped = false;
+    const keepDraft = () => {
+      if (stopped || document.visibilityState === 'hidden') return;
+      void httpsCallable(getFirebaseFunctions(), 'liveDemoSnapshot')({ watchBuilder: true }).catch(() => {});
+    };
+    keepDraft();
+    const timer = window.setInterval(keepDraft, 4_000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [user?.uid, workspaceTab]);
 
   // Edit dispatch modal state (shared for PW + SW)
   const [editSwJob, setEditSwJob] = useState<DispatchJob | null>(null);

@@ -24,7 +24,7 @@ const root = 'live_demo';
 const stageOrder: DemoStage[] = ['planning', 'pending', 'accepted', 'at_pickup', 'departed', 'at_dropoff', 'closed'];
 const STAGE_MS = 15_000;
 const BUILD_MS = 60_000;
-const VIEWER_WINDOW_MS = 120_000;
+const BUILDER_PRESENCE_GRACE_MS = 12_000;
 const LOCK_MS = 130_000; // longer than either function's maximum execution time
 const FIRST_DEMO_TICKET = 900_000_000;
 const DEMO_LOGO_URL = 'https://wellbuilt-sync.web.app/live-demo/logo.svg';
@@ -521,7 +521,7 @@ async function advance(now: number): Promise<void> {
   if (state.day !== day) { state.day = day; state.startedToday = 0; }
   if (!state.active) {
     const viewerAt = Number((await rt().ref(`${root}/viewerAt`).once('value')).val() || 0);
-    if (now - viewerAt > VIEWER_WINDOW_MS || (state.lastClosedAt && now - state.lastClosedAt < 25_000)) {
+    if (now - viewerAt > BUILDER_PRESENCE_GRACE_MS || (state.lastClosedAt && now - state.lastClosedAt < 25_000)) {
       await stateRef.set(state);
       return;
     }
@@ -532,7 +532,18 @@ async function advance(now: number): Promise<void> {
     await stateRef.set(state);
   }
   const active = state.active;
-  if (!active || active.dueAt > now) return;
+  if (!active) return;
+  if (active.stage === 'planning') {
+    const builderAt = Number((await rt().ref(`${root}/viewerAt`).once('value')).val() || 0);
+    if (now - builderAt > BUILDER_PRESENCE_GRACE_MS) {
+      // No job has been dispatched yet. Drop only the unwritten draft when
+      // every browser leaves the Build Job tab; later stages are independent.
+      state.active = null;
+      await stateRef.set(state);
+      return;
+    }
+  }
+  if (active.dueAt > now) return;
   try {
     await applyStage(active, now);
     const index = stageOrder.indexOf(active.stage);
@@ -627,7 +638,9 @@ export const liveDemoSnapshot = httpsV2.onCall(
       throw new httpsV2.HttpsError('permission-denied', 'demo_viewer_required');
     }
     const now = Date.now();
-    await rt().ref(`${root}/viewerAt`).set(now);
+    if (request.data?.watchBuilder === true) {
+      await rt().ref(`${root}/viewerAt`).set(now);
+    }
     const [beforeState, beforeControl] = await Promise.all([
       rt().ref(`${root}/state`).once('value'), rt().ref(`${root}/control`).once('value'),
     ]);
