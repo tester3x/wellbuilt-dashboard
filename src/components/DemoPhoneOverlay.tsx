@@ -21,10 +21,45 @@ const exploreImages: Record<ExploreScreen, string> = {
   settings: '/demo-phone/settings.png',
 };
 
+const screenNames = Object.keys(exploreImages) as ExploreScreen[];
+type ImageVector = Uint8ClampedArray;
+let referenceVectors: Promise<ImageVector[]> | null = null;
+
+async function imageVector(url: string): Promise<ImageVector> {
+  const image = new Image();
+  image.src = url;
+  await image.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = 54;
+  canvas.height = 120;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('Demo phone image comparison is unavailable');
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return context.getImageData(0, 0, canvas.width, canvas.height).data;
+}
+
+async function identifyPhoneScreen(url: string): Promise<ExploreScreen | null> {
+  referenceVectors ||= Promise.all(screenNames.map(name => imageVector(exploreImages[name])))
+    .catch(error => { referenceVectors = null; throw error; });
+  const [current, references] = await Promise.all([imageVector(url), referenceVectors]);
+  const ranked = references.map((reference, index) => {
+    let difference = 0;
+    for (let pixel = 0; pixel < current.length; pixel += 4) {
+      difference += Math.abs(current[pixel] - reference[pixel]);
+      difference += Math.abs(current[pixel + 1] - reference[pixel + 1]);
+      difference += Math.abs(current[pixel + 2] - reference[pixel + 2]);
+    }
+    return { screen: screenNames[index], score: difference / (current.length * 0.75) };
+  }).sort((a, b) => a.score - b.score);
+  // A transition or an unfamiliar Android screen should never acquire guessed controls.
+  return ranked[0].score <= 15 && ranked[1].score - ranked[0].score >= 2
+    ? ranked[0].screen : null;
+}
+
 const exploreHotspots: Partial<Record<ExploreScreen, { label: string; next: ExploreScreen; left: string; top: string; width: string; height: string }[]>> = {
   home: [
     { label: 'Open Job Drawer', next: 'emptyDrawer', left: '27%', top: '95%', width: '48%', height: '5%' },
-    { label: 'Open More menu', next: 'more', left: '3%', top: '86%', width: '13%', height: '9%' },
+    { label: 'Open More menu', next: 'more', left: '3%', top: '90%', width: '13%', height: '5%' },
   ],
   emptyDrawer: [{ label: 'Close Job Drawer', next: 'home', left: '5%', top: '8%', width: '90%', height: '54%' }],
   drawer: [
@@ -33,11 +68,18 @@ const exploreHotspots: Partial<Record<ExploreScreen, { label: string; next: Expl
   ],
   review: [
     { label: 'Back to Job Drawer', next: 'drawer', left: '1%', top: '5%', width: '12%', height: '8%' },
+    { label: 'Cancel demo job review', next: 'drawer', left: '4%', top: '68%', width: '27%', height: '9%' },
     { label: 'Start demo job preview', next: 'enroute', left: '34%', top: '68%', width: '63%', height: '9%' },
   ],
   enroute: [{ label: 'Arrive at demo well', next: 'pickup', left: '12%', top: '65%', width: '76%', height: '9%' }],
-  pickup: [{ label: 'Depart demo well', next: 'dropoff', left: '34%', top: '94%', width: '34%', height: '6%' }],
-  dropoff: [{ label: 'View demo job summary', next: 'summary', left: '34%', top: '94%', width: '34%', height: '6%' }],
+  pickup: [
+    { label: 'Depart demo well', next: 'dropoff', left: '34%', top: '94%', width: '34%', height: '6%' },
+    { label: 'Open More menu', next: 'more', left: '70%', top: '94%', width: '24%', height: '6%' },
+  ],
+  dropoff: [
+    { label: 'View demo job summary', next: 'summary', left: '34%', top: '94%', width: '34%', height: '6%' },
+    { label: 'Open More menu', next: 'more', left: '70%', top: '94%', width: '24%', height: '6%' },
+  ],
   summary: [
     { label: 'Close demo job preview', next: 'home', left: '51%', top: '73%', width: '43%', height: '8%' },
     { label: 'Cancel demo job summary', next: 'dropoff', left: '11%', top: '73%', width: '39%', height: '8%' },
@@ -58,14 +100,25 @@ export function DemoPhoneOverlay() {
   const [expanded, setExpanded] = useState(true);
   const [large, setLarge] = useState(false);
   const [explore, setExplore] = useState<ExploreScreen | null>(null);
+  const [recognized, setRecognized] = useState<{ capturedAt: number; screen: ExploreScreen | null } | null>(null);
+  const liveScreen = frame.available && recognized?.capturedAt === frame.capturedAt ? recognized.screen : null;
 
-  const openExplore = () => {
+  const openExplore = (screen: ExploreScreen) => {
     // Explore a separate captured WB T session. The live driver keeps running
     // for every viewer and never receives public-browser taps.
-    setExplore('home');
+    setExplore(screen);
     setLarge(true);
     setExpanded(true);
   };
+
+  useEffect(() => {
+    if (!frame.available || !frame.live) return;
+    let alive = true;
+    void identifyPhoneScreen(frame.url)
+      .then(screen => { if (alive) setRecognized({ capturedAt: frame.capturedAt, screen }); })
+      .catch(() => { if (alive) setRecognized({ capturedAt: frame.capturedAt, screen: null }); });
+    return () => { alive = false; };
+  }, [frame]);
 
   useEffect(() => {
     if (isSuitePhonePage) return;
@@ -98,11 +151,10 @@ export function DemoPhoneOverlay() {
       <div className="overflow-hidden rounded-[27px] border-[3px] border-[#3a3d42] bg-black shadow-[inset_0_0_0_2px_#0c0d0f]">
       <div className="flex w-full items-center justify-between bg-[#121417] px-3 py-2 text-xs font-semibold text-slate-100">
         <button type="button" onClick={() => setExpanded(value => !value)} className="text-left">
-          {isSuitePhonePage ? 'WB Suite' : 'WB Tickets'} · {explore ? 'phone in use' : 'live demo phone'} <span aria-hidden="true">{expanded ? '▾' : '▴'}</span>
+          {isSuitePhonePage ? 'WB Suite' : 'WB Tickets'} · {explore ? 'phone in use' : frame.available && frame.live ? 'live demo phone' : 'captured phone preview'} <span aria-hidden="true">{expanded ? '▾' : '▴'}</span>
         </button>
         <div className="flex gap-1">
-          {explore ? <button type="button" onClick={() => setExplore(null)} className="rounded border border-cyan-600 px-2 py-1 text-cyan-200 hover:bg-cyan-950">Return to Live</button>
-            : <button type="button" onClick={openExplore} className="rounded border border-cyan-600 px-2 py-1 text-cyan-200 hover:bg-cyan-950">Use phone</button>}
+          {explore && <button type="button" onClick={() => setExplore(null)} className="rounded border border-cyan-600 px-2 py-1 text-cyan-200 hover:bg-cyan-950">Return to Live</button>}
           <button type="button" onClick={() => { setLarge(value => !value); setExpanded(true); }} className="rounded border border-[#5a5e65] px-2 py-1 hover:bg-[#26292d]" aria-label={large ? 'Use normal phone size' : 'Enlarge demo phone'}>
             {large ? 'Normal' : 'Enlarge'}
           </button>
@@ -125,20 +177,34 @@ export function DemoPhoneOverlay() {
             <>
               <img src={frame.url} alt="Live demo driver WB Tickets screen"
                 className="absolute inset-0 h-full w-full select-none object-fill" draggable={false} />
+              {liveScreen && exploreHotspots[liveScreen]?.map(hotspot => (
+                <button key={hotspot.label} type="button" aria-label={`${hotspot.label} on the demo phone`}
+                  onClick={() => openExplore(hotspot.next)}
+                  className="absolute cursor-pointer bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300"
+                  style={{ left: hotspot.left, top: hotspot.top, width: hotspot.width, height: hotspot.height }} />
+              ))}
+            </>
+          ) : !isSuitePhonePage && checked ? (
+            <>
+              <img src={exploreImages.home} alt="Captured WB Tickets demo cover while the live phone is unavailable"
+                className="absolute inset-0 h-full w-full select-none object-fill" draggable={false} />
+              {exploreHotspots.home?.map(hotspot => (
+                <button key={hotspot.label} type="button" aria-label={`${hotspot.label} on the captured demo phone`}
+                  onClick={() => openExplore(hotspot.next)}
+                  className="absolute cursor-pointer bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300"
+                  style={{ left: hotspot.left, top: hotspot.top, width: hotspot.width, height: hotspot.height }} />
+              ))}
+              <div className="pointer-events-none absolute left-1/2 top-[6%] -translate-x-1/2 rounded-full border border-slate-600 bg-black/85 px-2 py-1 text-center text-[10px] font-semibold text-slate-200">
+                Live phone offline · captured screen
+              </div>
             </>
           ) : (
             <div className="flex h-full items-center justify-center px-5 text-center text-sm text-slate-300">
               {isSuitePhonePage
                 ? 'The WB Suite phone feed is not connected yet.'
-                : frame.available
-                  ? 'Demo driver between jobs. Waiting for the next live WB Tickets screen.'
-                : checked
-                  ? 'No verified demo phone screen is available yet.'
-                  : 'Connecting to the demo driver’s WB Tickets app…'}
+                : 'Connecting to the demo driver’s WB Tickets app…'}
             </div>
           )}
-          {!explore && <button type="button" aria-label="Explore the demo phone without interrupting the live driver" onClick={openExplore}
-            className="absolute inset-0 cursor-pointer bg-transparent" />}
         </div>
       )}
       </div>
