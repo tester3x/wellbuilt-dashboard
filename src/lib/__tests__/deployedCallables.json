@@ -2,7 +2,7 @@
   "capturedAt": "2026-09-12",
   "project": "wellbuilt-sync",
   "source": "firebase functions:list",
-  "count": 182,
+  "count": 184,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -64,6 +64,7 @@
     "demoClassifyLocations",
     "demoViewerSession",
     "dismissDispatch",
+    "dispatchDemoViewerJob",
     "driverChangeOwnPasscode",
     "eQuipmentAssignments",
     "eQuipmentDVIR",
@@ -128,6 +129,7 @@
     "onTransferRequestCreated",
     "onUserWrite",
     "parseJsaPdf",
+    "publishJobPacketRevision",
     "processDeleteRequest",
     "processEditRequest",
     "processIncomingPull",
@@ -188,6 +190,14 @@
     "writeDiagnosticLog"
   ],
   "verifiedAdditions": {
+    "dispatchDemoViewerJob": {
+      "verifiedAt": "2026-10-14",
+      "source": "Active production Firebase callable; exercised by the public demo viewer"
+    },
+    "publishJobPacketRevision": {
+      "verifiedAt": "2026-10-14",
+      "source": "Active production Firebase callable verified in functions inventory"
+    },
     "adminGetDemoDriverRoster": {
       "verifiedAt": "2026-10-14",
       "source": "Verified in production Firebase functions inventory"
