@@ -38,13 +38,20 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const rows=parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined,driverDefaultBbls:channel.driverDefaultBbls||{}});
  let row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
  const senderKey=body.senderId===undefined?null:watchdogSenderKey(body.senderId);
+ if(row.levelOnly){
+  const candidate=senderKey?policy.senderBindings?.[senderKey]:null;
+  const start=policy.topOnlyDriverStarts?.[candidate?.driverId];
+  if(candidate?.enabled!==true||typeof start!=='string'||!Number.isFinite(Date.parse(start))||Date.parse(row.postedAt)<Date.parse(start)){
+   res.json({ok:true,status:'ignored',reason:'top_only_sender_not_enabled'});return;
+  }
+ }
  const originalTime=row.dateTimeUTC;
  const review=body.review?normalizeReviewReason(row,body.review):null;
  const originalMeasurements={tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken};
  row=applyReviewCorrections(row,review);
 
  if(Date.parse(row.postedAt)<Math.max(policy.enabledAt,channel.enabledAt||0)||Date.parse(row.dateTimeUTC)<Math.max(policy.enabledAt,channel.enabledAt||0)) {res.json({ok:true,status:'before_activation'});return;}
- if(findPullChatNotices(body.chat).length||row.issues.some(issue=>issue!=='Inferred level separator needs historical validation'&&issue!=='Missing barrels')) {res.json({ok:true,status:'review',issues:row.issues.length?row.issues:['Tank setup needs review']});return;}
+ if(findPullChatNotices(body.chat).length||row.issues.some(issue=>issue!=='Inferred level separator needs historical validation'&&issue!=='Missing barrels'&&!(row.levelOnly&&issue==='Confirm measurement time for top-only reading'))) {res.json({ok:true,status:'review',issues:row.issues.length?row.issues:['Tank setup needs review']});return;}
  const db=admin.database();const configs=(await db.ref('well_config').once('value')).val()||{};
  const mapped=reviewPulls([row],configs,{}, {},new Set())[0];
  if(!channel.wells?.includes(mapped.wellName)||configs[mapped.wellName]?.companyId&&configs[mapped.wellName].companyId!=='liquid-gold')throw Error('well_not_allowed');
@@ -53,6 +60,11 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  if(binding&&(typeof binding.driverId!=='string'||!/^[a-zA-Z0-9_-]{8,128}$/.test(binding.driverId)))throw Error('sender_binding_invalid');
  const profile=binding?(await db.ref('drivers/profiles/'+binding.driverId).once('value')).val():null;
  const owner=resolveWatchdogOwner(binding,profile,mapped.wellName,configs[mapped.wellName]);
+ if(row.levelOnly){
+  if(!owner)throw Error('top_only_owner_required');
+  if(row.bblsTaken!==0||row.bottomLevelFeet!==null)throw Error('invalid_top_only_measurement');
+  row={...row,issues:row.issues.filter(issue=>issue!=='Confirm measurement time for top-only reading')};
+ }
  const [processed,incoming]=await Promise.all([db.ref('packets/processed').orderByChild('wellName').equalTo(mapped.wellName).once('value'),db.ref('packets/incoming').orderByChild('wellName').equalTo(mapped.wellName).once('value')]);
  const history={[mapped.wellName]:{...Object.fromEntries(Object.entries(incoming.val()||{}).map(([key,value])=>[key,{...(value as JsonRecord),watchdogProcessed:false}])),...Object.fromEntries(Object.entries(processed.val()||{}).map(([key,value])=>[key,{...(value as JsonRecord),watchdogProcessed:true}]))}};
  if(row.issues.includes('Inferred level separator needs historical validation')){
@@ -99,7 +111,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  if(prior){res.json({ok:true,status:'queued',identity,packetId:prior.packetId,estimate:prior.estimate,barrelSource:prior.barrelSource,needsReview:prior.barrels?.needsReview===true,measurements:{tankLevelFeet:prior.top,bottomLevelFeet:prior.reportedBottomFeet??prior.bottom,bblsTaken:prior.bbl,dateTimeUTC:prior.dateTimeUTC}});return;}
  const stamp=new Date(row.dateTimeUTC).toISOString().replace(/[-:]/g,'').slice(0,15).replace('T','_');
  const packetId=stamp+'_'+mapped.wellName.replace(/\s+/g,'')+'_'+identity.slice(0,6);
- const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,dateTime:watchdogDisplayTime(row.dateTimeUTC),timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:owner?.driverId??null,driverName:owner?.driverName??null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,...(barrels?{barrels}:{}),...(row.inferredSeparator?{parserInference:{kind:'separator_dot',historicallyCorroborated:!review,manuallyReviewed:!!review}}:{}),...(owner?{senderKey,ownerDriverId:owner.driverId,ownershipSource:'verified_sender_binding'}:{}),reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(estimate?{barrelEstimate:estimate,barrelSource}:{}),...(review?{review:{originalTime,originalMeasurements,correctedMeasurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken},...(review.actorUid?{actorUid:review.actorUid}:{}),correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
+ const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,dateTime:watchdogDisplayTime(row.dateTimeUTC),timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:owner?.driverId??null,driverName:owner?.driverName??null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,...(row.levelOnly?{observationKind:'top_only',measurementTimeSource:review?'reviewed':row.measurementTimeSource}:{}),...(barrels?{barrels}:{}),...(row.inferredSeparator?{parserInference:{kind:'separator_dot',historicallyCorroborated:!review,manuallyReviewed:!!review}}:{}),...(owner?{senderKey,ownerDriverId:owner.driverId,ownershipSource:'verified_sender_binding'}:{}),reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(estimate?{barrelEstimate:estimate,barrelSource}:{}),...(review?{review:{originalTime,originalMeasurements,correctedMeasurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken},...(review.actorUid?{actorUid:review.actorUid}:{}),correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
  const flowDiagnostic=diagnosticFlowWindow(history[mapped.wellName],{...packet,tankTopInches:Number(row.tankLevelFeet)*12,tankAfterInches:Number(checked.afterFeet)*12},6);
  Object.assign(packet.watchdogProvenance,{flowDiagnostic:{...flowDiagnostic,mode:'shadow',minimumRecoveryInches:6}});
  const payloadDigest=digest(packet);
