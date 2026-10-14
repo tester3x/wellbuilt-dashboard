@@ -2690,7 +2690,7 @@ function DispatchPageInner() {
                   <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
                   {isDemoCompany && (
                     <p className="mb-3 rounded border border-cyan-700/60 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-100">
-                      Click Well, Driver, and Disposal to see the demo company’s available choices.
+                      Try a demo load: search for Demo Well 1, choose a demo driver, then search for Demo SWD 1. The real builder searches as you type.
                       {!canCreateDispatch && ' Your viewer account can explore the builder; dispatch is read only.'}
                     </p>
                   )}
@@ -2721,16 +2721,15 @@ function DispatchPageInner() {
                         <BuilderAutocomplete
                           value={assignWellSearch}
                           onValueChange={setAssignWellSearch}
-                          items={assignWellSearch.length >= (isDemoCompany ? 0 : 2)
-                            ? (isDemoCompany && !assignWellSearch ? locationCatalog : locationResults(assignWellSearch))
-                              .filter(w => w.kind === 'WELL' && (!builderOperator || w.operator?.toLowerCase() === builderOperator.toLowerCase()))
+                          items={assignWellSearch.length >= 2
+                            ? locationResults(assignWellSearch).filter(w => w.kind === 'WELL' && (!builderOperator || w.operator?.toLowerCase() === builderOperator.toLowerCase()))
                             : []}
                           onSelect={(w) => { setAssignTarget(wells.find(p => (p.ndicName || p.wellName) === w.well_name) || { wellName: w.well_name, ndicName: w.well_name, ndicApiNo: w.api_no, currentLevel: '', etaToMax: '', flowRate: '', timestamp: '' }); if (!builderOperator) setBuilderOperator(w.operator || ''); setAssignWellSearch(''); }}
                           getItemKey={(w) => w.well_name}
                           renderItem={(w) => <CatalogSearchResult row={w} />}
-                          placeholder={isDemoCompany ? 'Click to choose a demo well...' : 'Search wells or click Assign below...'}
+                          placeholder={isDemoCompany ? 'Search wells — try Demo Well 1' : 'Search wells or click Assign below...'}
                           ariaLabel="Search wells"
-                          minChars={isDemoCompany ? 0 : 2}
+                          minChars={2}
                           inputClassName="w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none border-gray-700 focus:border-blue-500"
                           listClassName="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto"
                           optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
@@ -2805,11 +2804,11 @@ function DispatchPageInner() {
                         <BuilderAutocomplete
                           value={disposalSearch}
                           onValueChange={(v) => { setDisposalSearch(v); setDisposalResults(v.length >= 2 ? locationResults(v) : []); }}
-                          items={assignDisposalWell ? [] : isDemoCompany && !disposalSearch ? locationCatalog.filter(w => w.kind === 'SWD') : disposalResults}
+                          items={assignDisposalWell ? [] : disposalResults}
                           onSelect={(d) => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
                           getItemKey={(d, i) => d.api_no || String(i)}
                           renderItem={(d) => <CatalogSearchResult row={d} />}
-                          placeholder={isDemoCompany ? 'Click to choose a demo disposal...' : 'Search SWD...'}
+                          placeholder={isDemoCompany ? 'Search SWD — try Demo SWD 1' : 'Search SWD...'}
                           ariaLabel="Search SWD disposal"
                           inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
                           listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg"
