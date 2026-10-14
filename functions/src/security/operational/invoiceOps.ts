@@ -163,6 +163,16 @@ export const upsertDriverDispatch = httpsV2.onCall(
     }
     if (typeof data.dispatch.invoiceDocId === 'string') patch.invoiceDocId = data.dispatch.invoiceDocId.trim();
     if (typeof data.dispatch.invoiceNumber === 'string') patch.invoiceNumber = data.dispatch.invoiceNumber.trim();
+    if (typeof data.dispatch.driverStage === 'string') patch.driverStage = data.dispatch.driverStage;
+    if (typeof data.dispatch.driverDest === 'string') patch.driverDest = data.dispatch.driverDest;
+    if (typeof data.dispatch.stageUpdatedAt === 'number') patch.stageUpdatedAt = data.dispatch.stageUpdatedAt;
+    if (typeof data.dispatch.driverLat === 'number' && typeof data.dispatch.driverLng === 'number' &&
+      (data.dispatch.driverLat !== 0 || data.dispatch.driverLng !== 0)) {
+      patch.driverLat = data.dispatch.driverLat;
+      patch.driverLng = data.dispatch.driverLng;
+      if (typeof data.dispatch.driverGpsAt === 'string') patch.driverGpsAt = data.dispatch.driverGpsAt;
+    }
+    if (typeof data.dispatch.hauledTo === 'string') patch.hauledTo = data.dispatch.hauledTo;
     if (typeof data.dispatch.status === 'string') {
       const next = data.dispatch.status.trim().toLowerCase();
       const allowed = DRIVER_DISPATCH_STATUS_TRANSITIONS[prevStatus] || [];

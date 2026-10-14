@@ -787,6 +787,22 @@ describe('merge-upsert is update-only', () => {
     });
     expect(r.ok).toBe(false);
   });
+  it('lets the assigned driver publish a validated pickup stage without changing packet authority', () => {
+    const r = evaluateExistingDispatchDriverUpdate({
+      existing: { ...bound, status: 'in_progress' },
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      patch: { driverStage: 'on_site_pickup', driverDest: 'Demo Well 1', stageUpdatedAt: Date.now() },
+    });
+    expect(r.ok).toBe(true);
+  });
+  it('rejects an invented driver stage', () => {
+    const r = evaluateExistingDispatchDriverUpdate({
+      existing: { ...bound, status: 'in_progress' },
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      patch: { driverStage: 'teleported' },
+    });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe('35. firestore rules deny client dispatch writes', () => {

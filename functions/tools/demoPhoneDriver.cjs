@@ -56,7 +56,8 @@ function isForeground() {
     .split(/\r?\n/).some(line => /topResumedActivity|mResumedActivity/.test(line) && line.includes(PACKAGE));
 }
 function ui() {
-  call(['shell', 'uiautomator', 'dump', '/sdcard/demo-driver-ui.xml'], 18_000);
+  const result = call(['shell', 'uiautomator', 'dump', '/sdcard/demo-driver-ui.xml'], 18_000);
+  if (!result.includes('dumped to:')) throw new Error('Android UI was busy; no action taken');
   return call(['shell', 'cat', '/sdcard/demo-driver-ui.xml']);
 }
 function actOnce(key, action) {
@@ -82,6 +83,8 @@ async function drive() {
     return;
   }
   if (!demoOnly(xml)) return;
+
+  if (visible(xml, 'Starting Job...')) return;
 
   if (visible(xml, 'Job Summary') && visible(xml, 'Close Job')) {
     actOnce('confirm-close', () => tap(750, 1780));

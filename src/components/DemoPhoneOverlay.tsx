@@ -46,6 +46,17 @@ export function DemoPhoneOverlay() {
   const [large, setLarge] = useState(false);
   const [explore, setExplore] = useState<ExploreScreen | null>(null);
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
+  const [clock, setClock] = useState('');
+
+  useEffect(() => {
+    const update = () => {
+      const now = new Date();
+      setClock(`${(now.getHours() + 11) % 12 + 1}:${String(now.getMinutes()).padStart(2, '0')}`);
+    };
+    update();
+    const timer = window.setInterval(update, 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const openExplore = () => {
     const currentUrl = frame.available && frame.live ? frame.url : null;
@@ -134,6 +145,16 @@ export function DemoPhoneOverlay() {
           )}
           {!explore && <button type="button" aria-label="Explore the demo phone without interrupting the live driver" onClick={openExplore}
             className="absolute inset-0 cursor-pointer bg-transparent" />}
+          {(explore || (!isSuitePhonePage && frame.available && frame.live)) && (
+            <div aria-label={`Android status bar, ${clock}`} className="pointer-events-none absolute inset-x-1 top-2 z-10 flex h-8 items-center justify-between bg-black px-3 text-[14px] font-medium leading-none text-white">
+              <time>{clock}</time>
+              <div className="flex items-center gap-1.5" aria-hidden="true">
+                <svg width="17" height="14" viewBox="0 0 17 14" fill="currentColor"><path d="M.5 4.2a12 12 0 0 1 16 0L14 6.6a8.5 8.5 0 0 0-11 0L.5 4.2Zm4 4a6 6 0 0 1 8 0L8.5 12.5l-4-4.3Z" /></svg>
+                <svg width="15" height="14" viewBox="0 0 15 14" fill="currentColor"><path d="M1 12.5 14 1v11.5H1Z" /></svg>
+                <svg width="20" height="12" viewBox="0 0 20 12" fill="none"><rect x=".7" y="1" width="17" height="10" rx="2" stroke="white" strokeWidth="1.4"/><path d="M18.4 4h1v4h-1zM3 3.3h12.5v5.4H3z" fill="white"/></svg>
+              </div>
+            </div>
+          )}
         </div>
       )}
       </div>

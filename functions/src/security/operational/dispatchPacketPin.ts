@@ -588,6 +588,13 @@ export const DRIVER_DISPATCH_UPDATE_ALLOWLIST = Object.freeze([
   'loadsCompleted',
   'invoiceDocId',
   'invoiceNumber',
+  'driverStage',
+  'driverDest',
+  'stageUpdatedAt',
+  'driverLat',
+  'driverLng',
+  'driverGpsAt',
+  'hauledTo',
 ] as const);
 
 const DRIVER_UPDATE_TRANSITIONS: Record<string, readonly string[]> = {
@@ -615,6 +622,33 @@ export function evaluateExistingDispatchDriverUpdate(input: {
     if (!(DRIVER_DISPATCH_UPDATE_ALLOWLIST as readonly string[]).includes(key)) {
       return fail('unexpected_field', key);
     }
+  }
+  if (input.patch.driverStage !== undefined &&
+    !['en_route_pickup', 'on_site_pickup', 'en_route_dropoff', 'on_site_dropoff', 'paused', 'completed'].includes(String(input.patch.driverStage))) {
+    return fail('invalid_driver_stage', 'driverStage');
+  }
+  if (input.patch.driverDest !== undefined &&
+    (typeof input.patch.driverDest !== 'string' || input.patch.driverDest.length > 200)) {
+    return fail('invalid_driver_destination', 'driverDest');
+  }
+  if (input.patch.stageUpdatedAt !== undefined &&
+    (typeof input.patch.stageUpdatedAt !== 'number' || !Number.isFinite(input.patch.stageUpdatedAt))) {
+    return fail('invalid_stage_timestamp', 'stageUpdatedAt');
+  }
+  for (const key of ['driverLat', 'driverLng'] as const) {
+    if (input.patch[key] !== undefined &&
+      (typeof input.patch[key] !== 'number' || !Number.isFinite(input.patch[key]) ||
+        Math.abs(input.patch[key] as number) > (key === 'driverLat' ? 90 : 180))) {
+      return fail('invalid_driver_coordinate', key);
+    }
+  }
+  if (input.patch.driverGpsAt !== undefined &&
+    (typeof input.patch.driverGpsAt !== 'string' || input.patch.driverGpsAt.length > 64)) {
+    return fail('invalid_driver_gps_time', 'driverGpsAt');
+  }
+  if (input.patch.hauledTo !== undefined &&
+    (typeof input.patch.hauledTo !== 'string' || input.patch.hauledTo.length > 200)) {
+    return fail('invalid_hauled_to', 'hauledTo');
   }
   const prev = typeof input.existing.status === 'string' ? input.existing.status.trim().toLowerCase() : '';
   if (['completed', 'cancelled', 'canceled', 'void'].includes(prev)) return fail('terminal_state', prev);
