@@ -4086,3 +4086,4 @@ export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './w
 // Dedicated demo company. The shared viewer can read its real tenant data;
 // the retired scheduled worker does not create operational records.
 export { liveDemoSnapshot, demoViewerSession, liveDemoPhoneFrame, uploadLiveDemoPhoneFrame } from './liveDemo/runtime';
+export { dispatchDemoViewerJob } from './liveDemo/dispatch';

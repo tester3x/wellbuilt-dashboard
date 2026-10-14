@@ -1469,11 +1469,22 @@ function DispatchPageInner() {
       };
 
       const actionId = `assign_${assignTarget.wellName}_${driver.key}`;
-      await staffCreateDispatch(job, {
-        actionId,
-        actionScope: 'assign-modal',
-        unitId: `${assignTarget.wellName}::${driver.key}`,
-      });
+      if (user?.role === 'demo_viewer') {
+        const demoDriverId = driver.driverId || driver.key;
+        await httpsCallable(getFirebaseFunctions(), 'dispatchDemoViewerJob')({
+          wellName: assignTarget.wellName,
+          disposal: assignDisposal,
+          driverId: demoDriverId,
+          loadCount: assignLoadCount,
+          notes: assignNotes,
+        });
+      } else {
+        await staffCreateDispatch(job, {
+          actionId,
+          actionScope: 'assign-modal',
+          unitId: `${assignTarget.wellName}::${driver.key}`,
+        });
+      }
       // Track PW usage for R&D pipeline (non-blocking)
       const compId = user?.companyId || driver.companyId || 'unknown';
       trackJobTypeUsage('Production Water', compId, 'water-hauling');
@@ -2691,7 +2702,7 @@ function DispatchPageInner() {
                   {isDemoCompany && (
                     <p className="mb-3 rounded border border-cyan-700/60 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-100">
                       Try a demo load: search for Demo Well 1, choose a demo driver, then search for Demo SWD 1. The real builder searches as you type.
-                      {!canCreateDispatch && ' Your viewer account can explore the builder; dispatch is read only.'}
+                      {user?.role === 'demo_viewer' && ' Dispatch sends a real demo-company job to the selected driver.'}
                     </p>
                   )}
                   {/* Top: Well input + static info box */}
