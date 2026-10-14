@@ -26,8 +26,22 @@ let demoViewerFunctions: Functions | null = null;
 
 export function getFirebaseApp(): FirebaseApp {
   if (!app) {
+    // A demo tab uses a separate Firebase app (and therefore separate Auth
+    // persistence). Opening the public demo cannot replace a staff session in
+    // another tab. Remember the choice across Dashboard page reloads.
+    if (typeof window !== 'undefined') {
+      try {
+        if (window.location.pathname.replace(/\/$/, '') === '/live-demo') {
+          window.sessionStorage.setItem('wellbuilt-demo-viewer-tab', '1');
+        }
+        if (window.sessionStorage.getItem('wellbuilt-demo-viewer-tab') === '1') {
+          app = getDemoViewerApp();
+          return app;
+        }
+      } catch { /* private browsing can disable sessionStorage */ }
+    }
     const existingApps = getApps();
-    app = existingApps.length > 0 ? existingApps[0] : initializeApp(firebaseConfig);
+    app = existingApps.find(item => item.name === '[DEFAULT]') || initializeApp(firebaseConfig);
   }
   return app;
 }

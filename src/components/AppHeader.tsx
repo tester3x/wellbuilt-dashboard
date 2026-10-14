@@ -132,11 +132,16 @@ export function AppHeader() {
           <button
             onClick={async () => {
               await signOut();
-              router.push('/login');
+              if (user.uid === 'wellbuilt-demo-shared-viewer') {
+                sessionStorage.removeItem('wellbuilt-demo-viewer-tab');
+                window.location.assign('/');
+              } else {
+                router.push('/login');
+              }
             }}
             className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm"
           >
-            Sign Out
+            {user.uid === 'wellbuilt-demo-shared-viewer' ? 'Leave Demo' : 'Sign Out'}
           </button>
         </div>
 

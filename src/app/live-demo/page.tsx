@@ -23,7 +23,8 @@ export default function LiveDemoPage() {
       router.replace('/dispatch?tab=jobs');
       return;
     }
-    // A company employee or WellBuilt admin must keep their existing login.
+    // A staff session reached this route by client navigation. A full reload
+    // starts the isolated demo Firebase app while retaining staff Auth.
     if (user || started.current) return;
     started.current = true;
     const enter = async () => {
@@ -53,7 +54,8 @@ export default function LiveDemoPage() {
       <img src="/live-demo/logo.svg" alt="WellBuilt Demo Hauling logo" className="mx-auto mb-4 h-20 w-20" />
       <h1 className="text-2xl font-bold">WellBuilt Demo Hauling</h1>
       {user && user.uid !== DEMO_UID ? <>
-        <p className="mt-4 text-sm text-gray-300">You are signed in to another WellBuilt account. Open the demo in a private window to keep that session active.</p>
+        <p className="mt-4 text-sm text-gray-300">Your WellBuilt account will stay signed in while you view the demo.</p>
+        <button type="button" onClick={() => window.location.reload()} className="mt-4 rounded-lg bg-cyan-600 px-4 py-2 font-semibold">Open Demo Viewer</button>
         <p className="mt-4 text-xs text-gray-400">The demo uses the actual company Dashboard and a shared read-only viewer.</p>
       </> : error ? <>
         <p role="alert" className="mt-4 text-sm text-amber-300">{error}</p>
