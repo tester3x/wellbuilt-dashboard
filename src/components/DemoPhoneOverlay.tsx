@@ -14,6 +14,7 @@ export function DemoPhoneOverlay() {
   const [frame, setFrame] = useState<PhoneFrame>({ available: false });
   const [checked, setChecked] = useState(false);
   const [expanded, setExpanded] = useState(true);
+  const [large, setLarge] = useState(false);
 
   useEffect(() => {
     if (isSuitePhonePage) return;
@@ -38,13 +39,17 @@ export function DemoPhoneOverlay() {
   }, [isSuitePhonePage]);
 
   return (
-    <aside aria-label="Live WellBuilt demo phone" className="fixed bottom-2 right-2 z-[85] w-[180px] overflow-hidden rounded-[22px] border-2 border-cyan-500 bg-black shadow-2xl shadow-cyan-950/60 md:bottom-4 md:right-4 md:w-[248px]">
-      <button type="button" onClick={() => setExpanded(value => !value)}
-        className="flex w-full items-center justify-between bg-slate-900 px-3 py-2 text-left text-xs font-semibold text-cyan-100">
-        <span>{isSuitePhonePage ? 'WB Suite' : 'WB Tickets'} · demo phone</span><span aria-hidden="true">{expanded ? '▾' : '▴'}</span>
-      </button>
+    <aside aria-label="Live WellBuilt demo phone" className={`fixed bottom-2 right-2 z-[85] w-[min(86vw,320px)] overflow-hidden rounded-[22px] border-2 border-cyan-500 bg-black shadow-2xl shadow-cyan-950/60 md:bottom-4 md:right-4 ${large ? 'md:w-[min(42vw,440px)]' : 'md:w-[320px]'}`}>
+      <div className="flex w-full items-center justify-between bg-slate-900 px-3 py-2 text-xs font-semibold text-cyan-100">
+        <button type="button" onClick={() => setExpanded(value => !value)} className="text-left">
+          {isSuitePhonePage ? 'WB Suite' : 'WB Tickets'} · demo phone <span aria-hidden="true">{expanded ? '▾' : '▴'}</span>
+        </button>
+        <button type="button" onClick={() => { setLarge(value => !value); setExpanded(true); }} className="rounded border border-cyan-600 px-2 py-1 hover:bg-cyan-950" aria-label={large ? 'Use normal phone size' : 'Enlarge demo phone'}>
+          {large ? 'Normal' : 'Enlarge'}
+        </button>
+      </div>
       {expanded && (
-        <div className="relative aspect-[9/19.5] bg-black">
+        <div className="relative aspect-[9/19.5] max-h-[calc(100vh-6rem)] bg-black">
           {!isSuitePhonePage && frame.available ? (
             <>
               <img src={frame.url} alt={frame.live ? 'Live demo driver WB Tickets screen' : 'Last verified demo driver WB Tickets screen'}

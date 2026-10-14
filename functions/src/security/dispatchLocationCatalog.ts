@@ -30,8 +30,8 @@ export const getDispatchLocationCatalog = https.onCall({ timeoutSeconds: 60, mem
     return {
       companyId: DEMO_COMPANY_ID,
       wells: wellRows,
-      disposals: directory.docs.map(doc => ({
-        well_name: String(doc.get('well_name') || doc.get('name') || doc.id),
+      disposals: directory.docs.filter(doc => doc.get('isCustom') === true && doc.get('isBlacklisted') !== true).map(doc => ({
+        well_name: String(doc.get('displayName') || doc.get('well_name') || doc.get('name') || doc.id),
         operator: String(doc.get('operator') || 'Demo Operator'),
         api_no: '', latitude: null, longitude: null,
       })),

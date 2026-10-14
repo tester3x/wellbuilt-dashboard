@@ -2803,8 +2803,8 @@ function DispatchPageInner() {
                       ) : (
                         <BuilderAutocomplete
                           value={disposalSearch}
-                          onValueChange={(v) => { setDisposalSearch(v); setDisposalResults(v.length >= 2 ? locationResults(v) : []); }}
-                          items={assignDisposalWell ? [] : disposalResults}
+                          onValueChange={(v) => { setDisposalSearch(v); setDisposalResults(v.length >= 2 ? locationResults(v).filter(row => row.kind === 'SWD') : []); }}
+                          items={assignDisposalWell ? [] : disposalResults.filter(row => row.kind === 'SWD')}
                           onSelect={(d) => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
                           getItemKey={(d, i) => d.api_no || String(i)}
                           renderItem={(d) => <CatalogSearchResult row={d} />}
