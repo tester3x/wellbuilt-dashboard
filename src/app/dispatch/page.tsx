@@ -544,7 +544,11 @@ function DispatchPageInner() {
     setBuilderTab(tab);
     localStorage.setItem('dispatch_builder_tab', tab);
   }, []);
-  const [workspaceTab, setWorkspaceTab] = useState<'build' | 'queue' | 'jobs'>('build');
+  const [workspaceTab, setWorkspaceTab] = useState<'build' | 'queue' | 'jobs'>(() => {
+    const tab = readInitialParam('tab');
+    return tab === 'jobs' || tab === 'completed' || tab === 'projects' ? 'jobs'
+      : tab === 'queue' ? 'queue' : 'build';
+  });
   // Edit dispatch modal state (shared for PW + SW)
   const [editSwJob, setEditSwJob] = useState<DispatchJob | null>(null);
   const [editSwNotes, setEditSwNotes] = useState('');
@@ -906,6 +910,20 @@ function DispatchPageInner() {
           setAllDisposals(catalog.disposals);
           setCustomCatalogLocations(catalog.customLocations);
           setReadErrors(prev => ({ ...prev, operatorCatalog: undefined }));
+        }
+
+        // The public viewer can inspect the demo builder, but cannot read the
+        // global package collection. Its governed types come from the demo
+        // company record; avoid a forbidden cross-tenant collection scan.
+        if (user?.role === 'demo_viewer') {
+          const customTypes = Array.isArray(companyConfig?.customJobTypes) ? companyConfig.customJobTypes : [];
+          setCustomJobTypesList(customTypes);
+          setDynamicServiceTypes([...new Set([
+            ...FALLBACK_SERVICE_TYPES,
+            ...customTypes.filter((type: any) => type?.baseJobTypeId === 'service-work' && type?.payBasis === 'hourly')
+              .map((type: any) => type.label).filter((label: unknown): label is string => typeof label === 'string'),
+          ])]);
+          return;
         }
 
         const firestore = getFirestoreDb();
