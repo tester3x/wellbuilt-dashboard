@@ -1477,7 +1477,21 @@ function DispatchPageInner() {
         await pause(125);
       }
       await pause(1100); // The real search dropdown remains visible here.
-      const selectedWell = allOperatorWells.find(row => row.well_name === 'Demo Well 1');
+      // The page catalog may still be loading on a fresh public-demo visit.
+      // Fetch the same governed company catalog for this run when needed.
+      let tourWells = allOperatorWells;
+      let tourDisposals = allDisposals.map(row => ({ ...row, kind: 'SWD' as const }));
+      if (!tourWells.some(row => row.well_name === 'Demo Well 1')
+        || !tourDisposals.some(row => row.well_name === 'Demo SWD 1')) {
+        const response = await httpsCallable(getFirebaseFunctions(), 'getDispatchLocationCatalog')({ companyId: 'wellbuilt-demo' });
+        if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
+        const catalog = response.data as { wells: NdicWell[]; disposals: NdicWell[] };
+        tourWells = catalog.wells;
+        tourDisposals = catalog.disposals.map(row => ({ ...row, kind: 'SWD' as const }));
+        setAllOperatorWells(tourWells);
+        setAllDisposals(tourDisposals);
+      }
+      const selectedWell = tourWells.find(row => row.well_name === 'Demo Well 1');
       if (!selectedWell) throw new Error('Demo Well 1 is unavailable');
       setAssignTarget(wells.find(row => (row.ndicName || row.wellName) === selectedWell.well_name) || {
         wellName: selectedWell.well_name, ndicName: selectedWell.well_name,
@@ -1500,11 +1514,11 @@ function DispatchPageInner() {
       for (const letter of 'Demo SWD 1') {
         search += letter;
         setDisposalSearch(search);
-        setDisposalResults(search.length >= 2 ? locationResults(search).filter(row => row.kind === 'SWD') : []);
+        setDisposalResults(search.length >= 2 ? searchDisposals(search, tourDisposals).filter(row => row.kind === 'SWD') : []);
         await pause(125);
       }
       await pause(1000);
-      const selectedDisposal = locationResults('Demo SWD 1').find(row => row.kind === 'SWD' && row.well_name === 'Demo SWD 1');
+      const selectedDisposal = tourDisposals.find(row => row.well_name === 'Demo SWD 1');
       if (!selectedDisposal) throw new Error('Demo SWD 1 is unavailable');
       setAssignDisposalWell(selectedDisposal);
       setAssignDisposal(selectedDisposal.well_name);
