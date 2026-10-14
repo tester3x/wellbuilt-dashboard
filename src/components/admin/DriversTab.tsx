@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { ref, get } from 'firebase/database';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { fetchRouteNames } from '@/lib/wells';
 import { type UserRole, DEFAULT_ROLE_LABELS } from '@/lib/auth';
 import { staffWriteUserRoles, classifyUserRolesError } from '@/lib/staffWriteUserRoles';
@@ -399,31 +399,49 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     (async () => {
       try {
         const firestore = getFirestoreDb();
-        const snap = await getDocs(collection(firestore, 'companies'));
         const list: { id: string; name: string; assignedOperators: string[] }[] = [];
-        snap.forEach(d => {
-          const data = d.data();
-          list.push({ id: d.id, name: data.name || d.id, assignedOperators: data.assignedOperators || [] });
-        });
+        if (scopeCompanyId) {
+          const company = await getDoc(doc(firestore, 'companies', scopeCompanyId));
+          if (company.exists()) {
+            const data = company.data();
+            list.push({ id: company.id, name: data.name || company.id, assignedOperators: data.assignedOperators || [] });
+          }
+        } else {
+          const snap = await getDocs(collection(firestore, 'companies'));
+          snap.forEach(d => {
+            const data = d.data();
+            list.push({ id: d.id, name: data.name || d.id, assignedOperators: data.assignedOperators || [] });
+          });
+        }
         list.sort((a, b) => a.name.localeCompare(b.name));
         setCompaniesList(list);
       } catch (err) {
         console.error('Failed to load companies list:', err);
       }
     })();
-  }, []);
+  }, [scopeCompanyId]);
 
   // Load available routes from well_config
   useEffect(() => {
     (async () => {
       try {
-        const routes = await fetchRouteNames();
+        // Tenant admins cannot read the global RTDB well_config pool. Their
+        // routes come from wells belonging to their own company instead.
+        const routes = scopeCompanyId && scopeCompanyId !== 'liquid-gold'
+          ? await (async () => {
+              const snap = await getDocs(query(
+                collection(getFirestoreDb(), 'wells'),
+                where('companyId', '==', scopeCompanyId),
+              ));
+              return [...new Set(snap.docs.map(d => d.data().route).filter((route): route is string => typeof route === 'string' && !!route.trim()))].sort();
+            })()
+          : await fetchRouteNames();
         setAvailableRoutes(routes);
       } catch (err) {
         console.error('Failed to load routes:', err);
       }
     })();
-  }, []);
+  }, [scopeCompanyId]);
 
   // Load available job packages
   useEffect(() => {

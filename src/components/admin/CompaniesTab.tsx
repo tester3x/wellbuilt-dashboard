@@ -114,11 +114,18 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
   const loadCompanies = async () => {
     setLoading(true);
     try {
-      const snap = await getDocs(collection(firestore, 'companies'));
       const list: CompanyConfig[] = [];
-      snap.forEach(d => {
-        list.push({ id: d.id, ...d.data() } as CompanyConfig);
-      });
+      if (scopeCompanyId) {
+        // A tenant admin can read its own document, but the live rules deny
+        // an unbounded collection scan across other companies.
+        const company = await getDoc(doc(firestore, 'companies', scopeCompanyId));
+        if (company.exists()) list.push({ id: company.id, ...company.data() } as CompanyConfig);
+      } else {
+        const snap = await getDocs(collection(firestore, 'companies'));
+        snap.forEach(d => {
+          list.push({ id: d.id, ...d.data() } as CompanyConfig);
+        });
+      }
       list.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
       setCompanies(list);
     } catch (err) {

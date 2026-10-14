@@ -420,7 +420,7 @@ export default function PayrollPage() {
       setError(null);
 
       // Load company configs for rate sheet + pay config lookup
-      const companies = await loadAllCompanies();
+      const companies = await loadAllCompanies(user?.companyId);
       const companyMap = new Map<string, CompanyConfig>();
       companies.forEach(c => companyMap.set(c.id, c));
 

@@ -551,7 +551,13 @@ export const BILLING_METHODS: { value: 'per_bbl' | 'hourly'; label: string }[] =
 
 // ── Firestore Helpers ──────────────────────────────────────────────────────────
 
-export async function loadAllCompanies(): Promise<CompanyConfig[]> {
+export async function loadAllCompanies(scopeCompanyId?: string): Promise<CompanyConfig[]> {
+  // Company-scoped Dashboard users are permitted to get only their own
+  // company document by the live Firestore rules.
+  if (scopeCompanyId) {
+    const company = await loadCompanyById(scopeCompanyId);
+    return company ? [company] : [];
+  }
   // The public demo identity may read only its own tenant. A collection scan
   // would both fail the scoped rules and disclose other company metadata.
   if (getFirebaseAuth().currentUser?.uid === 'wellbuilt-demo-shared-viewer') {

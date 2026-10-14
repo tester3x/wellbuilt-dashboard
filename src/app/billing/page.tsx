@@ -141,7 +141,7 @@ export default function BillingPage() {
   // Load companies once
   useEffect(() => {
     if (!user) return;
-    loadAllCompanies().then(list => {
+    loadAllCompanies(user.companyId).then(list => {
       const map = new Map<string, CompanyConfig>();
       list.forEach(c => map.set(c.id, c));
       setCompanies(map);
@@ -284,7 +284,7 @@ export default function BillingPage() {
       setEiaDate(new Date().toISOString().split('T')[0]); // Reset to today
       await loadFuelPrices();
       // Refresh companies to get updated currentDieselPrice
-      const list = await loadAllCompanies();
+      const list = await loadAllCompanies(user?.companyId);
       const map = new Map<string, CompanyConfig>();
       list.forEach(c => map.set(c.id, c));
       setCompanies(map);
@@ -348,7 +348,7 @@ export default function BillingPage() {
     if (!canEditBilling) return; // capability gate (control is also disabled)
     try {
       await updateCompanyFields(effectiveCompanyId, buildDoeRegion(region));
-      const list = await loadAllCompanies();
+      const list = await loadAllCompanies(user?.companyId);
       const map = new Map<string, CompanyConfig>();
       list.forEach(c => map.set(c.id, c));
       setCompanies(map);
@@ -392,7 +392,7 @@ export default function BillingPage() {
       await loadFuelPrices();
       // The server updated companies.currentDieselPrice — refresh the company
       // map so the current price + FSC display reflect it (no client write).
-      const list = await loadAllCompanies();
+      const list = await loadAllCompanies(user?.companyId);
       const map = new Map<string, CompanyConfig>();
       list.forEach(c => map.set(c.id, c));
       setCompanies(map);
