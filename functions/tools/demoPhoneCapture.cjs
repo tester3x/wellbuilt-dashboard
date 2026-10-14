@@ -39,6 +39,14 @@ const pngMagic = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const headerRegion = { left: 320, top: 160, width: 520, height: 80 };
 const headerReference = sharp(readFileSync(headerReferencePath))
   .extract(headerRegion).greyscale().raw().toBuffer();
+const homeReferencePath = process.env.DEMO_PHONE_HOME_REFERENCE;
+if (homeReferencePath && !existsSync(homeReferencePath)) {
+  console.error('DEMO_PHONE_HOME_REFERENCE must be a verified demo-company cover capture.');
+  process.exit(2);
+}
+const homeRegion = { left: 220, top: 710, width: 640, height: 110 };
+const homeReference = homeReferencePath ? sharp(readFileSync(homeReferencePath))
+  .extract(homeRegion).greyscale().raw().toBuffer() : null;
 let stopping = false;
 let serverClockOffsetMs = 0;
 let lastError = '';
@@ -53,6 +61,12 @@ function call(args, timeout = 10_000) {
     throw new Error(`adb ${args.join(' ')} failed: ${result.error?.message || result.stderr?.toString().trim()}`);
   }
   return result.stdout;
+}
+
+function meanDifference(reference, frame) {
+  let total = 0;
+  for (let i = 0; i < reference.length; i++) total += Math.abs(reference[i] - frame[i]);
+  return total / reference.length;
 }
 
 async function main() {
@@ -78,15 +92,16 @@ async function main() {
       if (!png.subarray(0, 8).equals(pngMagic) || png.length > 450_000) {
         throw new Error('Invalid or oversized Android frame');
       }
-      const [reference, header] = await Promise.all([
+      const [reference, header, homeReferencePixels, homePixels] = await Promise.all([
         headerReference,
         sharp(png).extract(headerRegion).greyscale().raw().toBuffer(),
+        homeReference,
+        homeReference ? sharp(png).extract(homeRegion).greyscale().raw().toBuffer() : null,
       ]);
-      let headerDifference = 0;
-      for (let i = 0; i < reference.length; i++) {
-        headerDifference += Math.abs(reference[i] - header[i]);
-      }
-      if (headerDifference / reference.length > 8) {
+      const verifiedJobHeader = meanDifference(reference, header) <= 8;
+      const verifiedHomeHeader = homeReferencePixels && homePixels &&
+        meanDifference(homeReferencePixels, homePixels) <= 8;
+      if (!verifiedJobHeader && !verifiedHomeHeader) {
         throw new Error('Verified demo-company header is absent; frame withheld');
       }
       const capturedAt = Date.now() + serverClockOffsetMs;
