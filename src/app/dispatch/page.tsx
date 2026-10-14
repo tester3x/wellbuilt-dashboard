@@ -41,6 +41,7 @@ import {
 import { adminGetDashboardCatalog, adminGetDemoDriverRoster, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant, viewedCompanyId as resolveViewedCompanyId } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
+import { DemoPhoneOverlay } from '@/components/DemoPhoneOverlay';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -2687,6 +2688,7 @@ function DispatchPageInner() {
   return (
     <div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
+      {user.uid === 'wellbuilt-demo-shared-viewer' && <DemoPhoneOverlay />}
       {user.uid === 'wellbuilt-demo-shared-viewer' && workspaceTab === 'build' && demoCursor && (
         <svg aria-hidden="true" viewBox="0 0 24 28" className="pointer-events-none fixed z-[90] h-7 w-6 drop-shadow-lg"
           style={{ left: demoCursor.x, top: demoCursor.y }}>

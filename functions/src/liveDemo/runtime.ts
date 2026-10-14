@@ -2,6 +2,8 @@ import * as admin from 'firebase-admin';
 import * as httpsV2 from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { randomUUID } from 'crypto';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
+import { defineSecret } from 'firebase-functions/params';
 import {
   CLAIM_COLLECTION, INDEX_COLLECTION, REVISION_COLLECTION,
   type ImmutableRevisionEnvelope,
@@ -39,6 +41,8 @@ const LOCK_MS = 130_000; // longer than either function's maximum execution time
 const FIRST_DEMO_TICKET = 900_000_000;
 const DEMO_LOGO_URL = 'https://wellbuilt-sync.web.app/live-demo/logo.svg';
 const DEMO_VIEWER_UID = 'wellbuilt-demo-shared-viewer';
+const DEMO_PHONE_UPLOAD_KEY = defineSecret('DEMO_PHONE_UPLOAD_KEY');
+const DEMO_PHONE_PATH = `${root}/phone/frame`;
 
 type Active = { scenario: DemoScenario; stage: DemoStage; dueAt: number; startedAt: number; loadIndex?: number };
 type RunSummary = { id: string; kind: DemoScenario['kind']; driverName: string; startedAt: number; closedAt: number };
@@ -626,6 +630,59 @@ export const demoViewerSession = httpsV2.onCall(
       staffCompanyId: DEMO_COMPANY_ID, staffRole: 'demo_viewer', isDemo: true,
     });
     return { customToken, companyId: DEMO_COMPANY_ID, role: 'demo_viewer' as const };
+  },
+);
+
+/** Read-only frame from the dedicated WB T device; no browser device controls. */
+export const liveDemoPhoneFrame = httpsV2.onCall(
+  { memory: '256MiB', timeoutSeconds: 15, enforceAppCheck: false },
+  async request => {
+    if (request.auth?.uid !== DEMO_VIEWER_UID
+      || request.auth.token.staffCompanyId !== DEMO_COMPANY_ID
+      || request.auth.token.staffRole !== 'demo_viewer'
+      || request.auth.token.isDemo !== true) {
+      throw new httpsV2.HttpsError('permission-denied', 'demo_viewer_required');
+    }
+    const frame = (await rt().ref(DEMO_PHONE_PATH).once('value')).val();
+    const capturedAt = Number(frame?.capturedAt || 0);
+    if (frame?.companyId !== DEMO_COMPANY_ID || frame?.source !== 'wbt-android'
+      || !Number.isFinite(capturedAt) || Date.now() - capturedAt > 15_000
+      || typeof frame?.pngBase64 !== 'string') {
+      return { available: false as const };
+    }
+    return { available: true as const, url: `data:image/png;base64,${frame.pngBase64}`, capturedAt };
+  },
+);
+
+/** Private emulator-host upload. A keyed frame cannot be forged by a public viewer. */
+export const uploadLiveDemoPhoneFrame = httpsV2.onCall(
+  { memory: '256MiB', timeoutSeconds: 15, enforceAppCheck: false, secrets: [DEMO_PHONE_UPLOAD_KEY] },
+  async request => {
+    const input = request.data || {};
+    const capturedAt = Number(input.capturedAt);
+    const nonce = String(input.nonce || '');
+    const pngBase64 = String(input.pngBase64 || '');
+    const signature = String(input.signature || '');
+    if (!Number.isSafeInteger(capturedAt) || Math.abs(Date.now() - capturedAt) > 10_000
+      || !/^[0-9a-f-]{36}$/i.test(nonce) || pngBase64.length > 600_000
+      || !/^[0-9a-f]{64}$/i.test(signature)) {
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_demo_frame');
+    }
+    const png = Buffer.from(pngBase64, 'base64');
+    if (png.length < 100 || png.length > 450_000
+      || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_demo_png');
+    }
+    const digest = createHash('sha256').update(png).digest('hex');
+    const expected = createHmac('sha256', DEMO_PHONE_UPLOAD_KEY.value())
+      .update(`${capturedAt}.${nonce}.${digest}`).digest();
+    if (!timingSafeEqual(expected, Buffer.from(signature, 'hex'))) {
+      throw new httpsV2.HttpsError('permission-denied', 'invalid_demo_frame_signature');
+    }
+    await rt().ref(DEMO_PHONE_PATH).set({
+      companyId: DEMO_COMPANY_ID, source: 'wbt-android', capturedAt, pngBase64,
+    });
+    return { accepted: true as const };
   },
 );
 
