@@ -876,6 +876,7 @@ function DispatchPageInner() {
     return rows.filter(w => { const k = w.well_name.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   }, [allOperatorWells, allDisposals, customCatalogLocations, catalogRouteWells]);
   const locationResults = (q: string) => searchDisposals(q, locationCatalog);
+  const isDemoCompany = viewedCompanyId === 'wellbuilt-demo';
 
   // Load dynamic service types from job packages
   // WB admins resolve the operating company from the server-authorized catalog
@@ -2687,6 +2688,12 @@ function DispatchPageInner() {
               {builderTab === 'pw' && (
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
+                  {isDemoCompany && (
+                    <p className="mb-3 rounded border border-cyan-700/60 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-100">
+                      Click Well, Driver, and Disposal to see the demo company’s available choices.
+                      {!canCreateDispatch && ' Your viewer account can explore the builder; dispatch is read only.'}
+                    </p>
+                  )}
                   {/* Top: Well input + static info box */}
                   <div className="space-y-2 flex-shrink-0">
                     {/* Well — greyed out in multi-well mode */}
@@ -2714,15 +2721,16 @@ function DispatchPageInner() {
                         <BuilderAutocomplete
                           value={assignWellSearch}
                           onValueChange={setAssignWellSearch}
-                          items={assignWellSearch.length >= 2
-                            ? locationResults(assignWellSearch).filter(w => w.kind === 'WELL' && (!builderOperator || w.operator?.toLowerCase() === builderOperator.toLowerCase()))
+                          items={assignWellSearch.length >= (isDemoCompany ? 0 : 2)
+                            ? (isDemoCompany && !assignWellSearch ? locationCatalog : locationResults(assignWellSearch))
+                              .filter(w => w.kind === 'WELL' && (!builderOperator || w.operator?.toLowerCase() === builderOperator.toLowerCase()))
                             : []}
                           onSelect={(w) => { setAssignTarget(wells.find(p => (p.ndicName || p.wellName) === w.well_name) || { wellName: w.well_name, ndicName: w.well_name, ndicApiNo: w.api_no, currentLevel: '', etaToMax: '', flowRate: '', timestamp: '' }); if (!builderOperator) setBuilderOperator(w.operator || ''); setAssignWellSearch(''); }}
                           getItemKey={(w) => w.well_name}
                           renderItem={(w) => <CatalogSearchResult row={w} />}
-                          placeholder="Search wells or click Assign below..."
+                          placeholder={isDemoCompany ? 'Click to choose a demo well...' : 'Search wells or click Assign below...'}
                           ariaLabel="Search wells"
-                          minChars={2}
+                          minChars={isDemoCompany ? 0 : 2}
                           inputClassName="w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none border-gray-700 focus:border-blue-500"
                           listClassName="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto"
                           optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
@@ -2797,11 +2805,11 @@ function DispatchPageInner() {
                         <BuilderAutocomplete
                           value={disposalSearch}
                           onValueChange={(v) => { setDisposalSearch(v); setDisposalResults(v.length >= 2 ? locationResults(v) : []); }}
-                          items={assignDisposalWell ? [] : disposalResults}
+                          items={assignDisposalWell ? [] : isDemoCompany && !disposalSearch ? locationCatalog.filter(w => w.kind === 'SWD') : disposalResults}
                           onSelect={(d) => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
                           getItemKey={(d, i) => d.api_no || String(i)}
                           renderItem={(d) => <CatalogSearchResult row={d} />}
-                          placeholder="Search SWD..."
+                          placeholder={isDemoCompany ? 'Click to choose a demo disposal...' : 'Search SWD...'}
                           ariaLabel="Search SWD disposal"
                           inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
                           listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg"

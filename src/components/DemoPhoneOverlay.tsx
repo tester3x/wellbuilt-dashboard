@@ -5,7 +5,7 @@ import { httpsCallable } from 'firebase/functions';
 import { usePathname } from 'next/navigation';
 import { getFirebaseFunctions } from '@/lib/firebase';
 
-type PhoneFrame = { available: false } | { available: true; url: string; capturedAt: number };
+type PhoneFrame = { available: false } | { available: true; url: string; capturedAt: number; live: boolean };
 
 /** The pixels come from a dedicated Android device running WB T. Viewers cannot tap it. */
 export function DemoPhoneOverlay() {
@@ -46,14 +46,21 @@ export function DemoPhoneOverlay() {
       {expanded && (
         <div className="relative aspect-[9/19.5] bg-black">
           {!isSuitePhonePage && frame.available ? (
-            <img src={frame.url} alt="Live screen of the demo driver’s WB Tickets Android app"
-              className="h-full w-full select-none object-contain" draggable={false} />
+            <>
+              <img src={frame.url} alt={frame.live ? 'Live demo driver WB Tickets screen' : 'Last verified demo driver WB Tickets screen'}
+                className="h-full w-full select-none object-contain" draggable={false} />
+              {!frame.live && (
+                <div className="absolute bottom-3 left-2 right-2 rounded-md border border-amber-400/60 bg-slate-950/95 px-2 py-1.5 text-center text-[11px] font-semibold leading-tight text-amber-200">
+                  Paused between jobs · Last verified screen
+                </div>
+              )}
+            </>
           ) : (
             <div className="flex h-full items-center justify-center px-5 text-center text-sm text-slate-400">
               {isSuitePhonePage
                 ? 'The WB Suite phone feed is not connected yet.'
                 : checked
-                  ? 'The demo WB Tickets emulator is offline.'
+                  ? 'No verified demo phone screen is available yet.'
                   : 'Connecting to the demo driver’s WB Tickets app…'}
             </div>
           )}

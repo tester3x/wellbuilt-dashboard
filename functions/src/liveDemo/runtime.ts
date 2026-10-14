@@ -71,12 +71,13 @@ export const liveDemoPhoneFrame = httpsV2.onCall(
     }
     const frame = (await rt().ref(DEMO_PHONE_PATH).once('value')).val();
     const capturedAt = Number(frame?.capturedAt || 0);
+    const ageMs = Date.now() - capturedAt;
     if (frame?.companyId !== DEMO_COMPANY_ID || frame?.source !== 'wbt-android'
-      || !Number.isFinite(capturedAt) || Date.now() - capturedAt > 15_000
+      || !Number.isSafeInteger(capturedAt) || ageMs < -10_000 || ageMs > 24 * 60 * 60 * 1000
       || typeof frame?.pngBase64 !== 'string') {
       return { available: false as const };
     }
-    return { available: true as const, url: `data:image/png;base64,${frame.pngBase64}`, capturedAt };
+    return { available: true as const, url: `data:image/png;base64,${frame.pngBase64}`, capturedAt, live: ageMs <= 15_000 };
   },
 );
 
