@@ -27,7 +27,7 @@ export default function Page() {
 }
 
 function RoutePerformancePage() {
-  const { user, loading } = useAuth();
+  const { user, loading, operatingCompanyId } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const routeName = searchParams.get('name') || '';
@@ -50,11 +50,16 @@ function RoutePerformancePage() {
   }, [user, loading, router]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !canViewGlobalWellPool(user, operatingCompanyId)) {
+      setWells([]); setDataLoading(false);
+      return;
+    }
+    let cancelled = false;
 
     const loadData = async () => {
       try {
         const summary = await buildPerformanceSummary();
+        if (cancelled) return;
         const route = summary.routes.find(r => r.routeName === routeName);
 
         if (route) {
@@ -65,17 +70,19 @@ function RoutePerformancePage() {
           setDeclining(route.declining);
         }
       } catch (err) {
+        if (cancelled) return;
         console.error('Error fetching route performance:', err);
         const { classifiedReadFailure } = await import('@/lib/adminDashboardCatalog');
         setLoadError(classifiedReadFailure('route performance', err));
       } finally {
-        setDataLoading(false);
+        if (!cancelled) setDataLoading(false);
       }
     };
 
     setLoadError(null);
     loadData();
-  }, [user, routeName, reloadToken]);
+    return () => { cancelled = true; };
+  }, [user, operatingCompanyId, routeName, reloadToken]);
 
   // Sort wells
   const sortedWells = [...wells].sort((a, b) => {
@@ -121,7 +128,7 @@ function RoutePerformancePage() {
   // Tenant containment (7/9): scoped non-Liquid-Gold companies must not see
   // the global well pool (it is Liquid Gold's operational data — see
   // lib/tenantScope.ts). Unscoped WB admins and liquid-gold keep the view.
-  if (!canViewGlobalWellPool(user)) {
+  if (!canViewGlobalWellPool(user, operatingCompanyId)) {
     return (
       <div className="min-h-screen bg-gray-900">
         <AppHeader />

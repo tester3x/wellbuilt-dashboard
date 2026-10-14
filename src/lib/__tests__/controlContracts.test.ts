@@ -476,7 +476,7 @@ test('Dispatch live-status: governed-primary source-selection (zero forbidden RT
   assert.ok(!/subscribeToWellStatusesUnified/.test(page), 'no direct-client RTDB status subscription attempted');
   // Cold-start: wait for auth before any read.
   assert.match(page, /if \(loading\) return;/, 'read waits for auth readiness');
-  assert.match(page, /\}, \[user, loading\]\);/, 'effect depends on user + loading');
+  assert.match(page, /\}, \[user, loading, operatingCompanyId\]\);/, 'effect tracks selected company as well as auth');
   // Failure semantics: queue-level UNAVAILABLE, never fabricated needs-data.
   assert.match(page, /const \[statusUnavailable, setStatusUnavailable\] = useState\(false\)/);
   assert.match(page, /setStatusUnavailable\(true\)/, 'governed-source failure → UNAVAILABLE');
@@ -680,7 +680,7 @@ test('governed well-pool hook: authorized source only, honest unavailable, bound
   const hook = read('../useGovernedWellPool.ts');
   assert.match(hook, /adminGetWellPool\(\)/, 'governed callable');
   assert.match(hook, /mergeWellPool\(/, 'governed merge contract');
-  assert.match(hook, /canViewGlobalWellPool\(user\)/, 'tenant entitlement gate');
+  assert.match(hook, /canViewGlobalWellPool\(user, operatingCompanyId\)/, 'selected-company entitlement gate');
   assert.match(hook, /setStatusUnavailable\(true\)/, 'honest UNAVAILABLE on genuine failure');
   assert.ok(!/onValue\(/.test(hook), 'no forbidden RTDB onValue read');
   assert.ok(!/subscribeToWellStatusesUnified/.test(hook), 'no unified RTDB subscription fallback');

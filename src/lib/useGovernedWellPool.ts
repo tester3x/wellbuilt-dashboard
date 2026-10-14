@@ -39,7 +39,10 @@ export interface GovernedWellPool {
  * these 60s governed refreshes without any extra network traffic.
  */
 export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
-  const { user, loading } = useAuth();
+  const { user, loading, operatingCompanyId } = useAuth();
+  const scopeKey = user?.companyId || operatingCompanyId || '';
+  const currentScope = useRef(scopeKey);
+  currentScope.current = scopeKey;
   const [wells, setWells] = useState<WellResponse[]>([]);
   const [routes, setRoutes] = useState<string[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
@@ -53,7 +56,7 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
       setDataLoading(false);
       return;
     }
-    if (!canViewGlobalWellPool(user)) {
+    if (!canViewGlobalWellPool(user, operatingCompanyId)) {
       setWells([]); setRoutes([]); setNotEntitled(true);
       setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
       return;
@@ -61,6 +64,7 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
     setNotEntitled(false);
     try {
       const pool = await adminGetWellPool();
+      if (currentScope.current !== scopeKey) return;
       if (pool.canViewWellPool === false) {
         setWells([]); setRoutes([]); setNotEntitled(true);
         setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
@@ -75,13 +79,14 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
       setRoutes(routeList.filter(r => r !== 'Unrouted'));
       setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
     } catch (err) {
+      if (currentScope.current !== scopeKey) return;
       setStatusUnavailable(true);
       setWells([]); setRoutes([]);
       setReadError(classifiedReadFailure('well live status', err));
       setDataLoading(false);
       throw err;
     }
-  }, [user]);
+  }, [user, operatingCompanyId, scopeKey]);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (inFlightRefreshRef.current) return inFlightRefreshRef.current;
@@ -101,7 +106,7 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
   useEffect(() => {
     if (loading) return;
     if (!user) { setDataLoading(false); return; }
-    if (!canViewGlobalWellPool(user)) {
+    if (!canViewGlobalWellPool(user, operatingCompanyId)) {
       setWells([]); setRoutes([]); setNotEntitled(true);
       setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
       return;
@@ -131,7 +136,7 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
       if (retryTimer) clearTimeout(retryTimer);
       if (refreshTimer) clearInterval(refreshTimer);
     };
-  }, [user, loading, refreshMs, fetchPool]);
+  }, [user, loading, operatingCompanyId, refreshMs, fetchPool]);
 
   return { wells, routes, dataLoading, notEntitled, statusUnavailable, readError, refresh };
 }

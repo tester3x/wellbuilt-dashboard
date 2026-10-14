@@ -12,7 +12,7 @@ import { fetchInvoices, DashboardInvoice, getStatusColor } from '@/lib/invoices'
 import Link from 'next/link';
 
 export default function HomePage() {
-  const { user, loading, userCompany } = useAuth();
+  const { user, loading, userCompany, operatingCompanyId } = useAuth();
   const router = useRouter();
 
   // Summary stats
@@ -37,7 +37,7 @@ export default function HomePage() {
     // other scoped companies get zero counts, no subscription. See
     // lib/tenantScope.ts.
     let unsubWells: (() => void) | undefined;
-    if (canViewGlobalWellPool(user)) {
+    if (canViewGlobalWellPool(user, operatingCompanyId)) {
       unsubWells = subscribeToWellStatusesUnified((wells) => {
         setWellCount(wells.length);
         setDownCount(wells.filter(w => w.isDown || w.currentLevel === 'DOWN').length);
@@ -61,7 +61,7 @@ export default function HomePage() {
     }).catch(() => {});
 
     return unsubWells;
-  }, [user]);
+  }, [user, operatingCompanyId]);
 
   if (loading) {
     return (

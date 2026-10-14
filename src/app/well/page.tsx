@@ -84,7 +84,7 @@ export default function Page() {
 }
 
 function WellDetailPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, operatingCompanyId } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   // Canonical identity (company + NDIC API) takes precedence over wellName. Dispatch
@@ -189,11 +189,15 @@ function WellDetailPage() {
 
   // Subscribe to well nav list for prev/next navigation
   useEffect(() => {
+    if (!canViewGlobalWellPool(user, operatingCompanyId)) {
+      setAllWells([]);
+      return;
+    }
     const unsubscribe = subscribeToWellNavList((wells) => {
       setAllWells(wells);
     });
     return unsubscribe;
-  }, []);
+  }, [user, operatingCompanyId]);
 
   // Compute prev/next wells
   const currentIndex = allWells.findIndex((w) => w.wellName === wellName);
@@ -213,7 +217,10 @@ function WellDetailPage() {
 
   // Fetch well history (once on mount, manual refresh via button)
   useEffect(() => {
-    if (!wellName) return;
+    if (!wellName || !canViewGlobalWellPool(user, operatingCompanyId)) {
+      setPulls([]);
+      return;
+    }
 
     console.log('[WellDetail] useEffect fired - fetching history for:', wellName);
 
@@ -246,7 +253,7 @@ function WellDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [wellName]);
+  }, [wellName, user, operatingCompanyId]);
 
   // Manual refresh button handler - updates BOTH Well History and Current Status
   const handleRefresh = async () => {
@@ -464,7 +471,7 @@ function WellDetailPage() {
   // Tenant containment (7/9): scoped non-Liquid-Gold companies must not see
   // the global well pool (it is Liquid Gold's operational data — see
   // lib/tenantScope.ts). Unscoped WB admins and liquid-gold keep the view.
-  if (!canViewGlobalWellPool(user)) {
+  if (!canViewGlobalWellPool(user, operatingCompanyId)) {
     return (
       <div className="min-h-screen bg-gray-900">
         <AppHeader />

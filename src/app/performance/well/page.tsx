@@ -32,7 +32,7 @@ export default function Page() {
 }
 
 function WellPerformanceDetailPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, operatingCompanyId } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const wellName = searchParams.get('name') || '';
@@ -51,7 +51,10 @@ function WellPerformanceDetailPage() {
   }, [user, loading, router]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !canViewGlobalWellPool(user, operatingCompanyId)) {
+      setStats(null); setDataLoading(false);
+      return;
+    }
 
     let cancelled = false;
     const loadData = async () => {
@@ -83,7 +86,7 @@ function WellPerformanceDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [user, wellName, reloadToken]);
+  }, [user, operatingCompanyId, wellName, reloadToken]);
 
   // Sort rows
   const sortedRows = useMemo(() => {
@@ -159,7 +162,7 @@ function WellPerformanceDetailPage() {
   // Tenant containment (7/9): scoped non-Liquid-Gold companies must not see
   // the global well pool (it is Liquid Gold's operational data — see
   // lib/tenantScope.ts). Unscoped WB admins and liquid-gold keep the view.
-  if (!canViewGlobalWellPool(user)) {
+  if (!canViewGlobalWellPool(user, operatingCompanyId)) {
     return (
       <div className="min-h-screen bg-gray-900">
         <AppHeader />

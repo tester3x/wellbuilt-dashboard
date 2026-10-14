@@ -85,7 +85,7 @@ interface RouteWells {
 }
 
 export default function AdminPage() {
-  const { user, loading, userCompany } = useAuth();
+  const { user, loading, userCompany, operatingCompanyId } = useAuth();
   const router = useRouter();
 
   // Capability gates (audit 2026-09-13) — the admin page is role-gated to
@@ -215,7 +215,7 @@ export default function AdminPage() {
   // TENANT admin only: those tabs are hidden and their content replaced with
   // a setup notice. Unscoped WB platform admins and liquid-gold keep full
   // access. Same rule as the well surfaces (lib/tenantScope.ts).
-  const canManageGlobalWellConfig = canViewGlobalWellPool(user);
+  const canManageGlobalWellConfig = canViewGlobalWellPool(user, operatingCompanyId);
   useEffect(() => {
     // Default tab is 'wells' and ?tab= can deep-link into a gated tab —
     // route scoped users to their Companies tab instead.

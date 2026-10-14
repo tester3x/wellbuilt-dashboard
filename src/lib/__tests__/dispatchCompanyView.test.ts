@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { docBelongsToTenant, viewedCompanyId } from '../tenantScope.ts';
+import { canViewGlobalWellPool, docBelongsToTenant, viewedCompanyId } from '../tenantScope.ts';
 
 test('WB owner selection separates Liquid Gold, demo, and all-company jobs', () => {
   const jobs = [
@@ -22,4 +22,13 @@ test('company login cannot show all and unscoped viewer cannot see jobs', () => 
   assert.equal(viewedCompanyId('liquid-gold', null, true), 'liquid-gold');
   assert.equal(docBelongsToTenant('wellbuilt-demo', viewedCompanyId('liquid-gold', null, false)), false);
   assert.equal(docBelongsToTenant('wellbuilt-demo', viewedCompanyId(undefined, null, false)), false);
+});
+
+test('platform owner selection never shows Liquid Gold well routes for another company', () => {
+  const owner = { companyId: undefined };
+  assert.equal(canViewGlobalWellPool(owner, 'liquid-gold'), true);
+  assert.equal(canViewGlobalWellPool(owner, 'wellbuilt-demo'), false);
+  assert.equal(canViewGlobalWellPool(owner, 'another-company'), false);
+  assert.equal(canViewGlobalWellPool(owner, null), true);
+  assert.equal(canViewGlobalWellPool({ companyId: 'wellbuilt-demo' }, 'liquid-gold'), false);
 });

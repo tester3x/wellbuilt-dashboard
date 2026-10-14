@@ -6,7 +6,9 @@
 // company must not see that pool at all.
 //
 // Rule:
-//   - unscoped WB admin (no companyId)      → global view (unchanged)
+//   - unscoped WB admin, Show all selected   → global view
+//   - unscoped WB admin, Liquid Gold selected → legacy well pool
+//   - unscoped WB admin, any other company   → empty well pool
 //   - companyId === 'liquid-gold'           → current view (their data)
 //   - any other companyId (e.g. Home Hauling) → empty state
 //
@@ -34,9 +36,10 @@ export function viewedCompanyId(
 
 /** True when this user may see the global RTDB well pool (well status,
  *  routes, pull history, performance). */
-export function canViewGlobalWellPool(user: ScopedUser | null | undefined): boolean {
+export function canViewGlobalWellPool(user: ScopedUser | null | undefined, operatingCompanyId?: string | null): boolean {
   if (!user) return false;
-  return !user.companyId || user.companyId === LEGACY_WELL_POOL_COMPANY_ID;
+  const viewedCompany = user.companyId || operatingCompanyId;
+  return !viewedCompany || viewedCompany === LEGACY_WELL_POOL_COMPANY_ID;
 }
 
 /** Doc-level tenant match for containment filters (dispatches, drivers,

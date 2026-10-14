@@ -16,7 +16,7 @@ import { AppHeader } from '@/components/AppHeader';
 import { SubHeader } from '@/components/SubHeader';
 
 export default function PerformancePage() {
-  const { user, loading } = useAuth();
+  const { user, loading, operatingCompanyId } = useAuth();
   const router = useRouter();
   const [routes, setRoutes] = useState<RoutePerformanceStats[]>([]);
   const [overallAvg, setOverallAvg] = useState(0);
@@ -32,26 +32,34 @@ export default function PerformancePage() {
   }, [user, loading, router]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !canViewGlobalWellPool(user, operatingCompanyId)) {
+      setRoutes([]); setOverallAvg(0); setTotalWells(0); setTotalPulls(0);
+      setDataLoading(false);
+      return;
+    }
+    let cancelled = false;
 
     const loadData = async () => {
       try {
         setLoadError(null);
         const summary = await buildPerformanceSummary();
+        if (cancelled) return;
         setRoutes(summary.routes);
         setOverallAvg(summary.overallAvg);
         setTotalWells(summary.totalWells);
         setTotalPulls(summary.totalPulls);
       } catch (err) {
+        if (cancelled) return;
         const { classifiedReadFailure } = await import('@/lib/adminDashboardCatalog');
         setLoadError(classifiedReadFailure('performance', err));
       } finally {
-        setDataLoading(false);
+        if (!cancelled) setDataLoading(false);
       }
     };
 
     loadData();
-  }, [user]);
+    return () => { cancelled = true; };
+  }, [user, operatingCompanyId]);
 
   if (loading) {
     return (
@@ -66,7 +74,7 @@ export default function PerformancePage() {
   // Tenant containment (7/9): scoped non-Liquid-Gold companies must not see
   // the global well pool (it is Liquid Gold's operational data — see
   // lib/tenantScope.ts). Unscoped WB admins and liquid-gold keep the view.
-  if (!canViewGlobalWellPool(user)) {
+  if (!canViewGlobalWellPool(user, operatingCompanyId)) {
     return (
       <div className="min-h-screen bg-gray-900">
         <AppHeader />

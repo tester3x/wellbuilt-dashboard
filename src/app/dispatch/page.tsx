@@ -748,7 +748,7 @@ function DispatchPageInner() {
     // A non-liquid-gold scoped company has no entitlement to it AND there is no
     // governed own-company well-status read (backend gap) → empty by design, not
     // an error. Owner / Liquid Gold / platform admins get the governed pool.
-    if (!canViewGlobalWellPool(user)) {
+    if (!canViewGlobalWellPool(user, operatingCompanyId)) {
       setWells([]);
       setRoutes([]);
       setStatusUnavailable(false);
@@ -806,7 +806,7 @@ function DispatchPageInner() {
       if (retryTimer) clearTimeout(retryTimer);
       if (refreshTimer) clearInterval(refreshTimer);
     };
-  }, [user, loading]);
+  }, [user, loading, operatingCompanyId]);
 
   // Catalog callables must wait for the authenticated user.
   useEffect(() => {

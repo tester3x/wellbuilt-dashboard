@@ -27,7 +27,7 @@ import { matchWellInPool } from '@/lib/wellPoolCore';
 
 type ViewMode = 'cards' | 'table';
 export default function MobilePage() {
-  const { user, loading, userCompany } = useAuth();
+  const { user, loading, userCompany, operatingCompanyId } = useAuth();
   // +Add Pull records a load — gate on the dispatch-write capability (same as
   // the dispatch board's Add Pull). UI containment only; the submit path is a
   // recorded BLOCKER pending a governed staff pull-ingest callable.
@@ -266,7 +266,7 @@ export default function MobilePage() {
   // Tenant containment (7/9): scoped non-Liquid-Gold companies must not see
   // the global well pool (it is Liquid Gold's operational data — see
   // lib/tenantScope.ts). Unscoped WB admins and liquid-gold keep the view.
-  if (!canViewGlobalWellPool(user)) {
+  if (!canViewGlobalWellPool(user, operatingCompanyId)) {
     return (
       <div className="min-h-screen bg-gray-900">
         <AppHeader />
