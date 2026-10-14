@@ -8,4 +8,8 @@ Activation is prospective. Existing reviews, delivered packets and historical me
 
 Validation: Functions TypeScript build passed; 53 existing parser/model/alias regressions, 3 new observation parser tests, 6 ownership tests and the new signed intake/receipt test passed. Local queue/transport tests: 29 passed. The full older intake suite retains pre-existing failures involving decimal gauge fixtures interpreted as feet/inches; an unchanged source baseline also fails. No fix to those unrelated fixtures is included.
 
-Deployment and live receiver verification are recorded after installation. This change does not deploy Hosting or security rules.
+Intake source 9814cb9f deployed successfully; HP applied it as b238edde. Marcial and Adan activated prospectively at 2026-10-14T21:55:21.461Z. Adan's unique captured sender was linked to his active canonical Liquid Gold profile. Luiz is date-gated to October 21 midnight Central and still needs a captured, verified sender. Clint's six-well admin batch additionally passes a signed intake regression: six ignored results and no packets.
+
+Flow-window compatibility permits a zero-volume observation only with the verified top-only provenance, matching owner, and identical top/after gauge. It carries zero removal into subsequent recovery. Existing unverified zero-volume observations remain interval breaks. Nine flow/window-average tests pass. To preserve the older deployed packet-processor lane, deployment uses its downloaded live source archive with only the shared flowWindows source/compiled module replaced. The live index and effectiveFlow modules were compared with the checkout. Unrelated differences in parser, intake, catalog and security modules are preserved from the live processor archive, not overwritten by this feature branch.
+
+Receiver verification and final deployment checkpoints are recorded after installation. This change does not deploy Hosting or security rules or recompute historical records.
