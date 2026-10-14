@@ -40,7 +40,9 @@ export default function LiveDemoPage() {
           || token.claims.staffRole !== 'demo_viewer' || token.claims.isDemo !== true) {
           throw new Error('Demo viewer identity mismatch');
         }
-        router.replace('/dispatch?tab=jobs');
+        // AuthProvider will resolve the signed-in viewer and take the first
+        // branch of this effect through to Dispatch. Navigating here before
+        // that callback completes can trip Dispatch's login redirect.
       } catch (cause) {
         started.current = false;
         setError(cause instanceof Error ? cause.message : 'Demo sign-in is unavailable.');

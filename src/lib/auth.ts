@@ -322,6 +322,21 @@ export async function sendDashboardPasswordReset(email: string): Promise<void> {
 
 // Get user with role from database
 async function getUserWithRole(user: User): Promise<WellBuiltUser> {
+  // The public demo identity is governed by its signed custom-token claims.
+  // Its RTDB profile is not a general employee record and may be unreadable
+  // under tenant-scoped rules, so never fall back to an unscoped viewer role.
+  if (user.uid === 'wellbuilt-demo-shared-viewer') {
+    const token = await user.getIdTokenResult();
+    if (token.claims.staffCompanyId !== 'wellbuilt-demo'
+      || token.claims.staffRole !== 'demo_viewer' || token.claims.isDemo !== true) {
+      throw new Error('Demo viewer identity mismatch');
+    }
+    return {
+      uid: user.uid, email: '', role: 'demo_viewer',
+      displayName: 'WellBuilt Demo Viewer', companyId: 'wellbuilt-demo',
+      companyName: 'WellBuilt Demo Hauling', status: 'active',
+    };
+  }
   const db = getFirebaseDatabase();
   const userRef = ref(db, `users/${user.uid}`);
   const snapshot = await get(userRef);
