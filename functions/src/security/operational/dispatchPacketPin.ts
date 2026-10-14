@@ -595,6 +595,17 @@ export const DRIVER_DISPATCH_UPDATE_ALLOWLIST = Object.freeze([
   'driverLng',
   'driverGpsAt',
   'hauledTo',
+  // WB T's close outbox includes measured totals plus display context. The
+  // callable persists only the measured fields; context cannot rewrite the
+  // assigned driver, well, operator, or package.
+  'completedAt',
+  'totalBBL',
+  'ticketNumber',
+  'driver',
+  'truckNumber',
+  'wellName',
+  'operator',
+  'invoicingMode',
 ] as const);
 
 const DRIVER_UPDATE_TRANSITIONS: Record<string, readonly string[]> = {
@@ -621,6 +632,32 @@ export function evaluateExistingDispatchDriverUpdate(input: {
     if (input.patch[key] === undefined) continue;
     if (!(DRIVER_DISPATCH_UPDATE_ALLOWLIST as readonly string[]).includes(key)) {
       return fail('unexpected_field', key);
+    }
+  }
+  const completionFields = ['completedAt', 'totalBBL', 'ticketNumber', 'driver',
+    'truckNumber', 'wellName', 'operator', 'invoicingMode'];
+  if (completionFields.some(key => input.patch[key] !== undefined)) {
+    if (input.patch.status !== 'completed') return fail('completion_fields_require_completed_status');
+    if (input.patch.completedAt !== undefined &&
+      (typeof input.patch.completedAt !== 'number' || !Number.isFinite(input.patch.completedAt) ||
+        input.patch.completedAt < 0 || input.patch.completedAt > 1e15)) {
+      return fail('invalid_completed_at', 'completedAt');
+    }
+    if (input.patch.totalBBL !== undefined &&
+      (typeof input.patch.totalBBL !== 'number' || !Number.isFinite(input.patch.totalBBL) ||
+        input.patch.totalBBL < 0 || input.patch.totalBBL > 1e6)) {
+      return fail('invalid_total_bbl', 'totalBBL');
+    }
+    if (input.patch.ticketNumber !== undefined &&
+      !((typeof input.patch.ticketNumber === 'string' && input.patch.ticketNumber.length <= 64) ||
+        (typeof input.patch.ticketNumber === 'number' && Number.isSafeInteger(input.patch.ticketNumber) && input.patch.ticketNumber >= 0))) {
+      return fail('invalid_ticket_number', 'ticketNumber');
+    }
+    for (const key of ['driver', 'truckNumber', 'wellName', 'operator', 'invoicingMode']) {
+      if (input.patch[key] !== undefined &&
+        (typeof input.patch[key] !== 'string' || input.patch[key].length > 200)) {
+        return fail('invalid_completion_context', key);
+      }
     }
   }
   if (input.patch.driverStage !== undefined &&

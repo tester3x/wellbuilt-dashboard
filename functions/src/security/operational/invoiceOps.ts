@@ -173,6 +173,13 @@ export const upsertDriverDispatch = httpsV2.onCall(
       if (typeof data.dispatch.driverGpsAt === 'string') patch.driverGpsAt = data.dispatch.driverGpsAt;
     }
     if (typeof data.dispatch.hauledTo === 'string') patch.hauledTo = data.dispatch.hauledTo;
+    if (data.dispatch.status === 'completed') {
+      if (typeof data.dispatch.completedAt === 'number') patch.completedAt = data.dispatch.completedAt;
+      if (typeof data.dispatch.totalBBL === 'number') patch.totalBBL = data.dispatch.totalBBL;
+      if (typeof data.dispatch.ticketNumber === 'string' || typeof data.dispatch.ticketNumber === 'number') {
+        patch.ticketNumber = String(data.dispatch.ticketNumber);
+      }
+    }
     if (typeof data.dispatch.status === 'string') {
       const next = data.dispatch.status.trim().toLowerCase();
       const allowed = DRIVER_DISPATCH_STATUS_TRANSITIONS[prevStatus] || [];

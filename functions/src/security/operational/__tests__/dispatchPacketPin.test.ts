@@ -803,6 +803,29 @@ describe('merge-upsert is update-only', () => {
     });
     expect(r.ok).toBe(false);
   });
+  it('accepts the assigned driver close payload without changing its dispatch binding', () => {
+    const r = evaluateExistingDispatchDriverUpdate({
+      existing: { ...bound, status: 'in_progress' },
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      patch: {
+        status: 'completed', completedAt: Date.now(), totalBBL: 140,
+        ticketNumber: '20802', hauledTo: 'Demo SWD 1', invoiceDocId: 'invoice-1',
+        driver: 'AntigDemoDriver', truckNumber: '', wellName: 'Demo Well 1',
+        operator: 'Demo Operator', invoicingMode: 'ticket_only',
+      },
+    });
+    expect(r.ok).toBe(true);
+  });
+  it('rejects close-only measurements before completion and invalid totals', () => {
+    const caller = { driverId: DRIVER, companyId: COMPANY };
+    const existing = { ...bound, status: 'in_progress' };
+    expect(evaluateExistingDispatchDriverUpdate({
+      existing, caller, patch: { status: 'in_progress', totalBBL: 140 },
+    }).ok).toBe(false);
+    expect(evaluateExistingDispatchDriverUpdate({
+      existing, caller, patch: { status: 'completed', totalBBL: -1 },
+    }).ok).toBe(false);
+  });
 });
 
 describe('35. firestore rules deny client dispatch writes', () => {
