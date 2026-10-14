@@ -18,8 +18,27 @@ const DEMO_PHONE_PATH = `${root}/phone/frame`;
 
 /** Compatibility export until the deployed scheduled function is removed. */
 export const advanceLiveDemo = onSchedule(
-  { schedule: 'every 1 minutes', timeZone: 'UTC', memory: '256MiB', timeoutSeconds: 30 },
-  async () => {},
+  { schedule: 'every 1 minutes', timeZone: 'UTC', memory: '256MiB', timeoutSeconds: 60 },
+  async () => {
+    // One-time retirement sweep. The old simulator's retention removed its
+    // dispatches and tickets but left canonical pull jobs behind.
+    const db = admin.firestore();
+    const snapshot = await db.collection('canonical_jobs')
+      .orderBy(admin.firestore.FieldPath.documentId())
+      .startAt('demo-').endAt('demo-\uf8ff').limit(200).get();
+    if (snapshot.empty) return;
+    for (const doc of snapshot.docs) {
+      if (!/^demo-\d{6}-[ab]-pull$/.test(doc.id)
+        || doc.get('companyId') !== DEMO_COMPANY_ID
+        || doc.get('packetId') !== doc.id) {
+        throw new Error(`retired_demo_canonical_conflict:${doc.id}`);
+      }
+    }
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    console.log('[retired-demo] deleted canonical jobs', snapshot.size);
+  },
 );
 /** One shared, company-scoped viewer identity for public demo visitors. */
 export const demoViewerSession = httpsV2.onCall(
