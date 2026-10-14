@@ -556,6 +556,13 @@ function DispatchPageInner() {
   useEffect(() => () => { demoTourRun.current += 1; }, []);
   useEffect(() => {
     if (!demoTourTarget) { setDemoTourPointer(null); return; }
+    const target = document.querySelector(`[data-demo-builder-target="${demoTourTarget}"]`);
+    if (target) {
+      const rect = target.getBoundingClientRect();
+      if (rect.top < 90 || rect.bottom > window.innerHeight - 70) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
     const update = () => {
       const element = document.querySelector(`[data-demo-builder-target="${demoTourTarget}"]`);
       if (!element) return;
