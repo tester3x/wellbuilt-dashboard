@@ -586,6 +586,8 @@ function DispatchPageInner() {
   useEffect(() => {
     const tab = searchParams.get('tab');
     const highlight = searchParams.get('highlight');
+    if (tab === 'jobs' || tab === 'completed' || tab === 'projects') setWorkspaceTab('jobs');
+    else if (tab === 'queue') setWorkspaceTab('queue');
     if (tab === 'completed') {
       setRightPanelTab('completed');
       if (highlight) setHighlightJobId(highlight);
