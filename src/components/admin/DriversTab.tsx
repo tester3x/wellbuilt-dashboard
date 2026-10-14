@@ -437,13 +437,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 collection(getFirestoreDb(), 'wells'),
                 where('companyId', '==', scopeCompanyId),
               ));
-              const companyRoutes = [...new Set(snap.docs.map(d => d.data().route).filter((route): route is string => typeof route === 'string' && !!route.trim()))].sort();
-              // The synthetic demo wells live in RTDB well_config, outside
-              // tenant reads. Their fixed route is provisioned by the demo
-              // runtime and may not have a mirrored Firestore wells row.
-              return scopeCompanyId === 'wellbuilt-demo' && companyRoutes.length === 0
-                ? ['Demo Route']
-                : companyRoutes;
+              const wellRoutes = snap.docs.map(d => d.data().route)
+                .filter((route): route is string => typeof route === 'string' && !!route.trim());
+              const driverRoutes = canonicalDrivers
+                .filter(driver => driver.companyId === scopeCompanyId)
+                .flatMap(driver => driver.assignedRoutes || []);
+              return [...new Set([...wellRoutes, ...driverRoutes])].sort();
             })()
           : await fetchRouteNames();
         setAvailableRoutes(routes);
@@ -451,7 +450,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         console.error('Failed to load routes:', err);
       }
     })();
-  }, [scopeCompanyId]);
+  }, [scopeCompanyId, canonicalDrivers]);
 
   // Load available job packages
   useEffect(() => {
@@ -1425,7 +1424,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       <div className="mb-6 border border-blue-800/60 rounded-lg p-4 bg-gray-900/40">
         <h3 className="text-white font-medium mb-1">WB-M canonical drivers</h3>
         <p className="text-gray-400 text-xs mb-3">
-          Sole WB-M route/well authority. Legacy approved rows below are evidence only.
+          These profiles control WB-M routes and wells. Employee records below show sign-in access.
         </p>
         {canonicalDrivers.length === 0 ? (
           <p className="text-gray-500 text-sm">No canonical profiles in catalog.</p>

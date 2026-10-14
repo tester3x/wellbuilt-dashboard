@@ -987,12 +987,11 @@ function DispatchPageInner() {
   useEffect(() => {
     if (!user) return;
     const firestore = getFirestoreDb();
-    // The shared demo viewer must query only its own company. The synthetic
-    // tenant has a small bounded history, so filter/sort locally without a
-    // cross-tenant status query or a composite-index dependency.
+    // The shared demo viewer queries only its own company. Real jobs in that
+    // tenant do not need a simulator marker.
     const demoViewer = user.uid === 'wellbuilt-demo-shared-viewer' && user.companyId === 'wellbuilt-demo';
     const q = demoViewer
-      ? query(collection(firestore, 'dispatches'), where('companyId', '==', 'wellbuilt-demo'), where('isDemo', '==', true))
+      ? query(collection(firestore, 'dispatches'), where('companyId', '==', 'wellbuilt-demo'))
       : query(
           collection(firestore, 'dispatches'),
           where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed', 'dismissed']),
@@ -1158,7 +1157,7 @@ function DispatchPageInner() {
     try {
       const firestore = getFirestoreDb();
       const q = user?.uid === 'wellbuilt-demo-shared-viewer' && user.companyId === 'wellbuilt-demo'
-        ? query(collection(firestore, 'dispatches'), where('companyId', '==', 'wellbuilt-demo'), where('isDemo', '==', true))
+        ? query(collection(firestore, 'dispatches'), where('companyId', '==', 'wellbuilt-demo'))
         : query(
             collection(firestore, 'dispatches'),
             where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled']),

@@ -11,7 +11,7 @@
     "drivers": {
       "profiles": {
         "$driverId": {
-          ".read": "auth != null && (auth.token.kind == 'driver' && auth.token.driverId == $driverId || (auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.staffCompanyId != null && data.child('companyId').val() == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager' || auth.token.staffRole == 'dispatch')) || (auth.uid == 'wellbuilt-demo-shared-viewer' && auth.token.staffRole == 'demo_viewer' && auth.token.staffCompanyId == 'wellbuilt-demo' && auth.token.isDemo == true && data.child('companyId').val() == 'wellbuilt-demo' && data.child('isDemo').val() == true))",
+          ".read": "auth != null && (auth.token.kind == 'driver' && auth.token.driverId == $driverId || (auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.staffCompanyId != null && data.child('companyId').val() == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager' || auth.token.staffRole == 'dispatch')) || (auth.uid == 'wellbuilt-demo-shared-viewer' && auth.token.staffRole == 'demo_viewer' && auth.token.staffCompanyId == 'wellbuilt-demo' && auth.token.isDemo == true && data.child('companyId').val() == 'wellbuilt-demo'))",
           ".write": false
         }
       },
@@ -70,7 +70,7 @@
 
     "well_config": {
       "$well": {
-        ".read": "auth != null && ((auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.kind == 'driver' && data.child('companyId').val() != null && data.child('companyId').val() == auth.token.companyId) || (auth.token.staffCompanyId != null && data.child('companyId').val() == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager')) || (auth.uid == 'wellbuilt-demo-shared-viewer' && auth.token.staffRole == 'demo_viewer' && auth.token.staffCompanyId == 'wellbuilt-demo' && auth.token.isDemo == true && data.child('companyId').val() == 'wellbuilt-demo' && data.child('isDemo').val() == true))",
+        ".read": "auth != null && ((auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.kind == 'driver' && data.child('companyId').val() != null && data.child('companyId').val() == auth.token.companyId) || (auth.token.staffCompanyId != null && data.child('companyId').val() == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager')) || (auth.uid == 'wellbuilt-demo-shared-viewer' && auth.token.staffRole == 'demo_viewer' && auth.token.staffCompanyId == 'wellbuilt-demo' && auth.token.isDemo == true && data.child('companyId').val() == 'wellbuilt-demo'))",
         ".write": false
       }
     },

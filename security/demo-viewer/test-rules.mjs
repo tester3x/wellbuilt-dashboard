@@ -18,20 +18,20 @@ try {
     await Promise.all([
       db.doc('companies/wellbuilt-demo').set({ companyId: 'wellbuilt-demo', isDemo: true, name: 'WellBuilt Demo Hauling' }),
       db.doc('companies/liquidgold').set({ companyId: 'liquidgold', name: 'Live company' }),
-      db.doc('dispatches/demo-job').set({ companyId: 'wellbuilt-demo', isDemo: true, status: 'pending' }),
+      db.doc('dispatches/demo-job').set({ companyId: 'wellbuilt-demo', status: 'pending' }),
       db.doc('dispatches/live-job').set({ companyId: 'liquidgold', status: 'pending' }),
-      db.doc('tickets/demo-ticket').set({ companyId: 'wellbuilt-demo', isDemo: true }),
+      db.doc('tickets/demo-ticket').set({ companyId: 'wellbuilt-demo' }),
       db.doc('tickets/unmarked-ticket').set({ companyId: 'wellbuilt-demo' }),
-      db.doc('invoices/demo-invoice').set({ companyId: 'wellbuilt-demo', isDemo: true }),
+      db.doc('invoices/demo-invoice').set({ companyId: 'wellbuilt-demo' }),
     ]);
     await context.database().ref().update({
-      'well_config/Demo Well': { companyId: 'wellbuilt-demo', isDemo: true },
+      'well_config/Demo Well': { companyId: 'wellbuilt-demo' },
       'well_config/Live Well': { companyId: 'liquidgold' },
-      'drivers/profiles/demo-driver': { companyId: 'wellbuilt-demo', isDemo: true },
+      'drivers/profiles/demo-driver': { companyId: 'wellbuilt-demo' },
       'drivers/profiles/live-driver': { companyId: 'liquidgold' },
       'packets/outgoing/Demo Well': { companyId: 'wellbuilt-demo', isDemo: true },
       'packets/outgoing/Live Well': { companyId: 'liquidgold' },
-      'packets/processed/demo-pull': { companyId: 'wellbuilt-demo', isDemo: true },
+      'packets/processed/demo-pull': { companyId: 'wellbuilt-demo' },
       'packets/processed/live-pull': { companyId: 'liquidgold' },
     });
   });
@@ -45,10 +45,10 @@ try {
   await assertSucceeds(fs.doc('dispatches/demo-job').get());
   await assertSucceeds(fs.doc('tickets/demo-ticket').get());
   await assertSucceeds(fs.doc('invoices/demo-invoice').get());
-  await assertSucceeds(fs.collection('dispatches').where('companyId', '==', 'wellbuilt-demo').where('isDemo', '==', true).get());
+  await assertSucceeds(fs.collection('dispatches').where('companyId', '==', 'wellbuilt-demo').get());
   await assertFails(fs.doc('companies/liquidgold').get());
   await assertFails(fs.doc('dispatches/live-job').get());
-  await assertFails(fs.doc('tickets/unmarked-ticket').get());
+  await assertSucceeds(fs.doc('tickets/unmarked-ticket').get());
   await assertFails(fs.collection('dispatches').get());
   await assertFails(fs.doc('dispatches/demo-job').set({ status: 'changed' }, { merge: true }));
 
@@ -75,7 +75,7 @@ try {
     await assertFails(impostor.firestore().doc('dispatches/demo-job').get());
     await assertFails(impostor.database().ref('well_config/Demo Well').get());
   }
-  console.log('Demo viewer rules: demo reads allowed; live reads, broad queries, writes, and forged claims denied.');
+  console.log('Demo viewer rules: company-scoped reads allowed; other tenants, broad queries, writes, and forged claims denied.');
 } finally {
   await env.cleanup();
 }

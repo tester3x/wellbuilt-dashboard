@@ -4083,6 +4083,6 @@ export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';
 
 export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './watchdog/remoteReview';
 
-// Dedicated synthetic company. The public callable returns a sanitized view;
-// only the scheduled server worker can advance backend records.
-export { advanceLiveDemo, liveDemoSnapshot, demoViewerSession, liveDemoPhoneFrame, uploadLiveDemoPhoneFrame } from './liveDemo/runtime';
+// Dedicated demo company. The shared viewer can read its real tenant data;
+// the retired scheduled worker does not create operational records.
+export { liveDemoSnapshot, demoViewerSession, liveDemoPhoneFrame, uploadLiveDemoPhoneFrame } from './liveDemo/runtime';

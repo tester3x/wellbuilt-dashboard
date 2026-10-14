@@ -134,7 +134,6 @@ export async function fetchTickets(limitCount = 200, companyId?: string): Promis
       ? query(
           collection(db, 'tickets'),
           where('companyId', '==', companyId),
-          ...(demoViewer ? [where('isDemo', '==', true)] : []),
           orderBy('createdAt', 'desc'),
           limit(limitCount),
         )
@@ -155,7 +154,6 @@ export async function fetchTickets(limitCount = 200, companyId?: string): Promis
     ? query(
         collection(db, 'tickets'),
         where('companyId', '==', companyId),
-        ...(demoViewer ? [where('isDemo', '==', true)] : []),
         orderBy('ticketNumber', 'desc'),
         limit(limitCount),
       )
@@ -185,7 +183,7 @@ export async function searchTicketsArchive(
   // The company predicate is sent to Firestore, not applied only after a global
   // read. The document-ID cursor also reaches older tickets without createdAt.
   const scopedQuery = companyId
-    ? query(ticketsRef, where('companyId', '==', companyId), ...(demoViewer ? [where('isDemo', '==', true)] : []), orderBy(documentId()))
+    ? query(ticketsRef, where('companyId', '==', companyId), orderBy(documentId()))
     : query(ticketsRef, orderBy(documentId()));
   const pageSize = 250;
   let cursor: QueryDocumentSnapshot | undefined;
@@ -296,7 +294,7 @@ function mapTicketDoc(doc: any): Ticket {
     id: doc.id,
     ticketNumber: d.ticketNumber || '',
     date: d.date || (validCreatedAt?.toLocaleDateString('en-US', { timeZone: 'America/Chicago' }) || ''),
-    company: d.company || d.operator || (d.isDemo === true && d.companyId === 'wellbuilt-demo' ? 'Demo Operator' : ''),
+    company: d.company || d.operator || '',
     companyId: d.companyId || '',
     location: d.location || d.wellName || '',
     hauledTo: d.hauledTo || d.disposal || '',

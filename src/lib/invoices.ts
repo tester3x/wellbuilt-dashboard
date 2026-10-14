@@ -38,7 +38,7 @@ export async function fetchInvoices(limitCount = 200, companyId?: string): Promi
   if (demoViewer && companyId !== 'wellbuilt-demo') return [];
   const q = query(
     collection(db, 'invoices'),
-    ...(demoViewer ? [where('companyId', '==', 'wellbuilt-demo'), where('isDemo', '==', true)] : []),
+    ...(demoViewer ? [where('companyId', '==', 'wellbuilt-demo')] : []),
     orderBy('createdAt', 'desc'),
     limit(limitCount)
   );

@@ -1,7 +1,7 @@
 'use client';
 
 // Public location-setup preview. It keeps visitors' entered data in memory;
-// the separate /live-demo route displays the synthetic backend operation.
+// the separate /live-demo route opens the real demo-company Dashboard.
 //
 // Phase 24 — adds a call to the public `demoClassifyLocations`
 // callable (read-only, no auth) so classifications come from the

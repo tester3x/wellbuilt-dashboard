@@ -2,7 +2,7 @@
 
 These files began as the active `wellbuilt-sync` rules on 2026-10-12, before the `demo_viewer` additions. The Firestore release was `projects/wellbuilt-sync/rulesets/c0995ce7-25c5-4f50-934f-ab08d396605a` (SHA-256 `054649211a3d18e492397a54b0fee274d7baef720ca275a1edf5e60868336316`). The active RTDB rules matched `D:/dev/_production-preflight-20260922/evidence/database.rules.json` semantically before editing.
 
-Only the fixed shared Auth UID `wellbuilt-demo-shared-viewer`, with server-minted `staffRole: demo_viewer`, `staffCompanyId: wellbuilt-demo`, and `isDemo: true` claims, can use the added reads. Firestore reads also require `companyId: wellbuilt-demo` and `isDemo: true` on the document. RTDB collection queries must filter `companyId == wellbuilt-demo`; individual demo well and driver records check their demo marker. All new permissions are read-only.
+Only the fixed shared Auth UID `wellbuilt-demo-shared-viewer`, with server-minted `staffRole: demo_viewer`, `staffCompanyId: wellbuilt-demo`, and `isDemo: true` claims, can use the added reads. Firestore records must have `companyId: wellbuilt-demo`; RTDB collection queries must filter `companyId == wellbuilt-demo`, and individual well and driver records must belong to that company. Real demo-company jobs need no simulator marker. All new permissions are read-only.
 
 Deploy only after comparing both rule files against the currently active rules and confirming that the only differences are these demo reads. The repository-root `firestore.rules` and `database.rules.json` are stale and must not be deployed. This scoped config is intended for `firebase deploy --config firebase.demo-viewer.json --only firestore:rules,database --project wellbuilt-sync` after emulator and live-scope verification.
 

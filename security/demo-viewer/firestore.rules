@@ -16,8 +16,7 @@ service cloud.firestore {
     }
     function demoRecord(data) {
       return isDemoViewer()
-        && data.companyId == 'wellbuilt-demo'
-        && data.isDemo == true;
+        && data.companyId == 'wellbuilt-demo';
     }
     // Platform admin: wellbuiltAdmin claim AND enabled platform_admins/{uid}.
     // Company staff: enabled Firestore staff/{uid} (role + optional companyId).
