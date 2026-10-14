@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { DemoPhoneOverlayGate } from "@/components/DemoPhoneOverlayGate";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,6 +31,7 @@ export default function RootLayout({
       >
         <AuthProvider>
           {children}
+          <DemoPhoneOverlayGate />
         </AuthProvider>
       </body>
     </html>

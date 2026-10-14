@@ -41,7 +41,6 @@ import {
 import { adminGetDashboardCatalog, adminGetDemoDriverRoster, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant, viewedCompanyId as resolveViewedCompanyId } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
-import { DemoPhoneOverlay } from '@/components/DemoPhoneOverlay';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -980,18 +979,14 @@ function DispatchPageInner() {
   }, [user, operatingCompanyId]);
 
   // Subscribe to active + completed dispatches in real-time.
-  // Tenant containment (7/9): scoped users see only their company's
-  // dispatches — CLIENT-SIDE filter (no composite index needed for the
-  // status-in + companyId + orderBy combination). liquid-gold also owns
-  // legacy docs written before companyId stamping (docBelongsToTenant).
+  // Company staff query their own tenant at Firestore. A client-side filter
+  // cannot authorize a cross-company query under the deployed rules.
   useEffect(() => {
     if (!user) return;
     const firestore = getFirestoreDb();
-    // The shared demo viewer queries only its own company. Real jobs in that
-    // tenant do not need a simulator marker.
-    const demoViewer = user.uid === 'wellbuilt-demo-shared-viewer' && user.companyId === 'wellbuilt-demo';
-    const q = demoViewer
-      ? query(collection(firestore, 'dispatches'), where('companyId', '==', 'wellbuilt-demo'))
+    const companyScoped = !!user.companyId;
+    const q = companyScoped
+      ? query(collection(firestore, 'dispatches'), where('companyId', '==', user.companyId))
       : query(
           collection(firestore, 'dispatches'),
           where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed', 'dismissed']),
@@ -1003,7 +998,7 @@ function DispatchPageInner() {
         jobs.push({ id: d.id, ...d.data() } as DispatchJob);
       });
       const scopedJobs = jobs.filter(j => docBelongsToTenant(j.companyId, user.companyId));
-      if (demoViewer) scopedJobs.sort((a, b) => Date.parse(String(b.assignedAt || '')) - Date.parse(String(a.assignedAt || '')));
+      if (companyScoped) scopedJobs.sort((a, b) => Date.parse(String(b.assignedAt || '')) - Date.parse(String(a.assignedAt || '')));
       setDispatches(scopedJobs);
       setDispatchesLoaded(true);
       setReadErrors(prev => ({ ...prev, dispatches: undefined }));
@@ -1156,8 +1151,8 @@ function DispatchPageInner() {
   async function loadDispatchesData() {
     try {
       const firestore = getFirestoreDb();
-      const q = user?.uid === 'wellbuilt-demo-shared-viewer' && user.companyId === 'wellbuilt-demo'
-        ? query(collection(firestore, 'dispatches'), where('companyId', '==', 'wellbuilt-demo'))
+      const q = user?.companyId
+        ? query(collection(firestore, 'dispatches'), where('companyId', '==', user.companyId))
         : query(
             collection(firestore, 'dispatches'),
             where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled']),
@@ -1170,7 +1165,7 @@ function DispatchPageInner() {
       });
       // Tenant containment (7/9) — same filter as the live subscription.
       const scopedJobs = jobs.filter(j => docBelongsToTenant(j.companyId, user?.companyId));
-      if (user?.uid === 'wellbuilt-demo-shared-viewer') scopedJobs.sort((a, b) => Date.parse(String(b.assignedAt || '')) - Date.parse(String(a.assignedAt || '')));
+      if (user?.companyId) scopedJobs.sort((a, b) => Date.parse(String(b.assignedAt || '')) - Date.parse(String(a.assignedAt || '')));
       setDispatches(scopedJobs);
     } catch (err) {
       console.error('Failed to load dispatches:', err);
@@ -2569,7 +2564,6 @@ function DispatchPageInner() {
   return (
     <div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
-      {user.uid === 'wellbuilt-demo-shared-viewer' && <DemoPhoneOverlay />}
 
       <main data-dashboard-scroll="dispatch" data-dispatch-scroll="primary" className="dispatch-scroll-main px-4 py-4">
 
