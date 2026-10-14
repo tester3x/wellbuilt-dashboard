@@ -1340,11 +1340,11 @@ function DispatchPageInner() {
   // Needs Pull = physical demand (both groups, started excluded); other views scoped identically.
   const viewCounts = useMemo(() => {
     // ALL counts every route well INCLUDING DOWN (they appear in the ALL view).
-    // next-24h / needs-data derive from wellBucket, which classifies DOWN as its own
-    // 'down' bucket, so those predictive counts naturally exclude DOWN wells.
+    // Next 24h includes wells due now as well as those approaching within 24h.
+    // The view filter keeps DOWN wells out of that predictive count.
     return {
       'needs-pull': needsPullSplit.total,
-      'next-24h': routeWells.filter(w => wellBucket(w, asOfMs) === 'next-24h').length,
+      'next-24h': routeWells.filter(w => matchesView(w, 'next-24h', asOfMs)).length,
       'needs-data': routeWells.filter(w => wellBucket(w, asOfMs) === 'needs-data').length,
       'all': routeWells.length,
     } as Record<QueueView, number>;

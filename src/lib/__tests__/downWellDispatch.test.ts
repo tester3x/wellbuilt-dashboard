@@ -134,7 +134,7 @@ test('non-DOWN wells are unaffected across all views', () => {
   // pullNowWell: ALL yes, needs-pull yes, others no.
   assert.equal(matchesView(pullNowWell, 'all', now), true);
   assert.equal(matchesView(pullNowWell, 'needs-pull', now), true);
-  assert.equal(matchesView(pullNowWell, 'next-24h', now), false);
+  assert.equal(matchesView(pullNowWell, 'next-24h', now), true);
   assert.equal(matchesView(pullNowWell, 'needs-data', now), false);
   // Every view returns a boolean (exhaustive switch, no undefined).
   for (const v of views) assert.equal(typeof matchesView(pullNowWell, v, now), 'boolean');

@@ -4,7 +4,7 @@
  * The estimated current level is the single source of truth for badge, column,
  * filters, TTP, counts, and sorting. estimate = startingBottom + minutesSincePull
  * / flowMinutesPerFoot (cap 20'); readyLevel = allowedBottom + loadBbls/bblsPerFoot;
- * Needs Pull = est >= readyLevel; Next 24h = predictedReadyAt within 24h. No 48h
+ * Needs Pull = est >= readyLevel; Next 24h = due now or predicted ready within 24h. No 48h
  * rejection. Includes DTC's three verified vectors A/B/C.
  *
  * Run: node --test --experimental-strip-types src/lib/__tests__/dispatchPriority.test.ts

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyWell, wellBucket, type QueueView } from '../dispatchPriority.ts';
+import { classifyWell, matchesView, wellBucket, type QueueView } from '../dispatchPriority.ts';
 import type { WellResponse } from '../wellPoolCore.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -31,11 +31,11 @@ function computeRouteViewCounts(
   const needsPullTotal = unassignedNeedsPull + assignedNeedsPull;
 
   // ALL counts every route well INCLUDING DOWN (they appear in the ALL view, badged
-  // DOWN). next-24h / needs-data derive from wellBucket, which sorts DOWN into its own
-  // 'down' bucket, so those predictive counts naturally exclude DOWN.
+  // DOWN). The Next 24h view includes pull-now wells and approaching wells;
+  // both predictive views exclude DOWN.
   return {
     'needs-pull': needsPullTotal,
-    'next-24h': routeWells.filter((w) => wellBucket(w, asOfMs) === 'next-24h').length,
+    'next-24h': routeWells.filter((w) => matchesView(w, 'next-24h', asOfMs)).length,
     'needs-data': routeWells.filter((w) => wellBucket(w, asOfMs) === 'needs-data').length,
     'all': routeWells.length,
   } as Record<QueueView, number>;
@@ -203,8 +203,8 @@ test('route-scoped tab counts: Gabriels route counts only Gabriels wells', () =>
   assert.equal(counts.all, 5, 'All Wells for Gabriels route must be 5');
   // Gabriel 2, 3, 5 are pull-now (level >= 10ft target)
   assert.equal(counts['needs-pull'], 3, 'Needs Pull for Gabriels must count only Gabriels pull-now wells');
-  // Gabriel 6 is approaching within 24h
-  assert.equal(counts['next-24h'], 1, 'Next 24h for Gabriels must count only Gabriel 6');
+  // Gabriel 6 is approaching within 24h; the three pull-now wells are already due.
+  assert.equal(counts['next-24h'], 4, 'Next 24h for Gabriels includes pull-now and approaching wells');
   // Gabriel 7 has no level data
   assert.equal(counts['needs-data'], 1, 'Needs Data for Gabriels must count only Gabriel 7');
 });
@@ -217,7 +217,7 @@ test('route-scoped tab counts: Stock Yards route counts only Stock Yards wells',
   // so All Wells = 3, while the predictive buckets still exclude the DOWN well.
   assert.equal(counts.all, 3, 'All Wells for Stock Yards includes the DOWN well (visible, badged)');
   assert.equal(counts['needs-pull'], 1, 'Stock Yards 1 is pull-now (DOWN excluded)');
-  assert.equal(counts['next-24h'], 1, 'Stock Yards 2 is approaching (DOWN excluded)');
+  assert.equal(counts['next-24h'], 2, 'Stock Yards 1 is due now, 2 is approaching (DOWN excluded)');
   assert.equal(counts['needs-data'], 0, 'No needs-data wells in Stock Yards (DOWN is its own bucket)');
 });
 
@@ -229,7 +229,7 @@ test('route-scoped tab counts: All Routes restores company-wide totals', () => {
   // buckets still exclude the DOWN well.
   assert.equal(counts.all, 9, 'All Routes returns company-wide total incl. the DOWN well');
   assert.equal(counts['needs-pull'], 5, 'Needs pull includes Gabriels (3) + Stock Yards (1) + Wildcat (1)');
-  assert.equal(counts['next-24h'], 2, 'Next 24h includes Gabriel 6 + Stock Yards 2');
+  assert.equal(counts['next-24h'], 7, 'Next 24h includes five due-now wells plus two approaching');
   assert.equal(counts['needs-data'], 1, 'Needs data includes Gabriel 7');
 });
 

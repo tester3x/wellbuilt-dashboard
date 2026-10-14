@@ -341,7 +341,9 @@ export function matchesView(well: WellResponse, view: QueueView, nowMs: number =
   // only ALL returns them. (Status is never faked to achieve this.)
   switch (view) {
     case 'needs-pull': return c.state === 'pull-now';
-    case 'next-24h': return c.state === 'approaching' && c.ttpHours !== null && c.ttpHours <= 24;
+    // This is a time-window view, so a well that is due right now also belongs
+    // here. Needs Pull remains the narrower action queue.
+    case 'next-24h': return c.state === 'pull-now' || (c.state === 'approaching' && c.ttpHours !== null && c.ttpHours <= 24);
     case 'needs-data': return c.state === 'verify' || c.state === 'no-gain';
     case 'all': return true;
   }
