@@ -37,6 +37,16 @@ test('company read uses server-assigned operators and ignores requested operator
   expect(mockWhere).toHaveBeenCalledWith('wells', 'operator', '==', 'Assigned Operator');
   expect(mockWhere).not.toHaveBeenCalledWith('wells', 'operator', '==', 'Unrelated Operator');
 });
+test('demo admin uses its demo-scoped manageDrivers authority', async () => {
+  mockTrusted.mockResolvedValue({ companyId: 'wellbuilt-demo' });
+  mockGet.mockImplementation(async (collection, id) => collection === 'platform_admins'
+    ? { exists: false, data: () => null }
+    : { exists: id === 'wellbuilt-demo', data: () => ({ assignedOperators: ['Demo Operator'] }) });
+  await expect(invoke({ auth: { uid: 'demo-admin', token: {} }, data: { companyId: 'wellbuilt-demo' } }))
+    .resolves.toMatchObject({ companyId: 'wellbuilt-demo' });
+  expect(mockTrusted).toHaveBeenCalledWith('demo-admin', 'manageDrivers');
+  expect(mockWhere).toHaveBeenCalledWith('wells', 'operator', '==', 'Demo Operator');
+});
 test('verified enabled platform admin can select a company', async () => {
   await expect(invoke({ auth: { uid: 'platform', token: { wellbuiltAdmin: true } }, data: { companyId: 'hauler-a' } })).resolves.toMatchObject({ companyId: 'hauler-a' });
   expect(mockTrusted).not.toHaveBeenCalled();

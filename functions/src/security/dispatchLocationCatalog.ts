@@ -41,7 +41,10 @@ export const getDispatchLocationCatalog = https.onCall({ timeoutSeconds: 60, mem
   const record = await db.collection('platform_admins').doc(request.auth.uid).get();
   const platform = authorizeAdminCall(request.auth, record.exists ? record.data() : null);
   if (!platform.ok) {
-    const trusted = await requireTrustedCompanyCapability(request.auth.uid, 'viewDispatch');
+    // Demo admin is deliberately provisioned with demo-scoped manageDrivers
+    // authority so it can dispatch jobs without broader platform access.
+    const capability = requested === DEMO_COMPANY_ID ? 'manageDrivers' : 'viewDispatch';
+    const trusted = await requireTrustedCompanyCapability(request.auth.uid, capability);
     if (trusted.companyId !== requested) throw new https.HttpsError('permission-denied', 'Company scope mismatch.');
   }
   const company = await db.collection('companies').doc(requested).get();
