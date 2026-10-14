@@ -61,10 +61,10 @@ const exploreHotspots: Partial<Record<ExploreScreen, { label: string; next: Expl
     { label: 'Open Job Drawer', next: 'emptyDrawer', left: '27%', top: '95%', width: '48%', height: '5%' },
     { label: 'Open More menu', next: 'more', left: '3%', top: '90%', width: '13%', height: '5%' },
   ],
-  emptyDrawer: [{ label: 'Close Job Drawer', next: 'home', left: '5%', top: '8%', width: '90%', height: '54%' }],
+  emptyDrawer: [{ label: 'Close Job Drawer', next: 'home', left: '0%', top: '0%', width: '100%', height: '74%' }],
   drawer: [
     { label: 'Accept demo job', next: 'review', left: '70%', top: '84%', width: '24%', height: '8%' },
-    { label: 'Close Job Drawer', next: 'home', left: '5%', top: '8%', width: '90%', height: '54%' },
+    { label: 'Close Job Drawer', next: 'home', left: '0%', top: '0%', width: '100%', height: '74%' },
   ],
   review: [
     { label: 'Back to Job Drawer', next: 'drawer', left: '1%', top: '5%', width: '12%', height: '8%' },

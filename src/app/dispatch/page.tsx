@@ -1454,6 +1454,8 @@ function DispatchPageInner() {
     if (!isDemoCompany || user?.role !== 'demo_viewer' || demoTourRunning.current) return;
     demoTourRunning.current = true;
     const run = ++demoTourRun.current;
+    // The walkthrough must use the registered demo identity, not a visible name
+    // or a roster snapshot that may still be loading when the viewer clicks.
     const pause = async (ms: number) => {
       await new Promise(resolve => window.setTimeout(resolve, ms));
       if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
@@ -1485,8 +1487,12 @@ function DispatchPageInner() {
 
       setDemoTourTarget('driver');
       await pause(950);
-      const selectedDriver = drivers.find(row => /AntigDemoDriver/i.test(operationalDriverName(row)));
-      if (!selectedDriver) throw new Error('Antig demo driver is unavailable');
+      const tourDrivers = projectDispatchDriverRoster(await adminGetDemoDriverRoster(), 'wellbuilt-demo');
+      if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
+      const selectedDriver = tourDrivers.find(row =>
+        (row.driverId || row.key) === '2f6e6f75-b468-4239-9831-71faeb623acb');
+      if (!selectedDriver) throw new Error('Antig demo driver is unavailable in the approved demo roster');
+      setDrivers(tourDrivers);
       setAssignDriverHash(selectedDriver.key);
       setDemoTourTarget('disposal');
       await pause(700);
