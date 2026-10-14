@@ -26,18 +26,36 @@ export const advanceLiveDemo = onSchedule(
     const snapshot = await db.collection('canonical_jobs')
       .orderBy(admin.firestore.FieldPath.documentId())
       .startAt('demo-').endAt('demo-\uf8ff').limit(200).get();
-    if (snapshot.empty) return;
-    for (const doc of snapshot.docs) {
-      if (!/^demo-\d{6}-[ab]-pull$/.test(doc.id)
-        || doc.get('companyId') !== DEMO_COMPANY_ID
-        || doc.get('packetId') !== doc.id) {
-        throw new Error(`retired_demo_canonical_conflict:${doc.id}`);
+    if (!snapshot.empty) {
+      for (const doc of snapshot.docs) {
+        if (!/^demo-\d{6}-[ab]-pull$/.test(doc.id)
+          || doc.get('companyId') !== DEMO_COMPANY_ID
+          || doc.get('packetId') !== doc.id) {
+          throw new Error(`retired_demo_canonical_conflict:${doc.id}`);
+        }
+      }
+      const batch = db.batch();
+      snapshot.docs.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+      console.log('[retired-demo] deleted canonical jobs', snapshot.size);
+      return;
+    }
+    const diagnostics = await db.collection('wb_diagnostics')
+      .where('extra.packetId', '>=', 'demo-')
+      .where('extra.packetId', '<=', 'demo-\uf8ff').limit(200).get();
+    if (diagnostics.empty) return;
+    for (const doc of diagnostics.docs) {
+      if (!/^demo-\d{6}-[ab]-pull$/.test(String(doc.get('extra.packetId') || ''))
+        || doc.get('area') !== 'canonical'
+        || doc.get('source') !== 'cf'
+        || doc.get('extra.callsite') !== 'processIncomingPull') {
+        throw new Error(`retired_demo_diagnostic_conflict:${doc.id}`);
       }
     }
     const batch = db.batch();
-    snapshot.docs.forEach(doc => batch.delete(doc.ref));
+    diagnostics.docs.forEach(doc => batch.delete(doc.ref));
     await batch.commit();
-    console.log('[retired-demo] deleted canonical jobs', snapshot.size);
+    console.log('[retired-demo] deleted diagnostics', diagnostics.size);
   },
 );
 /** One shared, company-scoped viewer identity for public demo visitors. */
