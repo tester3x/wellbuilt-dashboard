@@ -545,19 +545,123 @@ function DispatchPageInner() {
     localStorage.setItem('dispatch_builder_tab', tab);
   }, []);
   const [workspaceTab, setWorkspaceTab] = useState<'build' | 'queue' | 'jobs'>('build');
+  const [demoRun, setDemoRun] = useState<{ active: {
+    stage: string; dueAt: number; scenario: {
+      id: string; kind: string; driverId: string;
+      loads: Array<{ pickup: string; stops: Array<{ name: string }> }>;
+    };
+  } | null } | null>(null);
+  const [demoCursor, setDemoCursor] = useState<{ x: number; y: number; click: boolean } | null>(null);
+  const [demoClock, setDemoClock] = useState(() => Date.now());
+  const demoRunIdRef = useRef<string | null>(null);
+  const demoStageRef = useRef<string | null>(null);
   // Only an open demo Build Job tab keeps an uncommitted scripted draft alive.
   // The shared backend continues on its own after the Dispatch stage.
   useEffect(() => {
     if (user?.uid !== 'wellbuilt-demo-shared-viewer' || workspaceTab !== 'build') return;
+    const builderSessionId = crypto.randomUUID();
     let stopped = false;
+    let inFlight: Promise<unknown> | null = null;
+    const snapshot = httpsCallable(getFirebaseFunctions(), 'liveDemoSnapshot');
     const keepDraft = () => {
-      if (stopped || document.visibilityState === 'hidden') return;
-      void httpsCallable(getFirebaseFunctions(), 'liveDemoSnapshot')({ watchBuilder: true }).catch(() => {});
+      if (stopped || inFlight || document.visibilityState === 'hidden') return;
+      const request = snapshot({ builderSessionId, builderPresence: 'join' });
+      inFlight = request;
+      void request.then(result => {
+        setDemoRun(result.data as typeof demoRun);
+        if (inFlight === request) inFlight = null;
+      },
+        () => { if (inFlight === request) inFlight = null; });
     };
     keepDraft();
     const timer = window.setInterval(keepDraft, 4_000);
-    return () => { stopped = true; window.clearInterval(timer); };
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      setDemoRun(null);
+      setDemoCursor(null);
+      void (inFlight ?? Promise.resolve()).then(
+        () => snapshot({ builderSessionId, builderPresence: 'leave' }),
+        () => snapshot({ builderSessionId, builderPresence: 'leave' }),
+      ).catch(() => {});
+    };
   }, [user?.uid, workspaceTab]);
+
+  useEffect(() => {
+    if (user?.uid !== 'wellbuilt-demo-shared-viewer' || workspaceTab !== 'build') return;
+    const active = demoRun?.active;
+    if (!active) {
+      setDemoCursor(null);
+      if (demoRunIdRef.current) {
+        demoRunIdRef.current = null;
+        demoStageRef.current = null;
+        cancelPWDispatch();
+        setBuilderOperator('');
+      }
+      return;
+    }
+    if (demoRunIdRef.current !== active.scenario.id) {
+      demoRunIdRef.current = active.scenario.id;
+      setBuilderTab(active.scenario.kind === 'split_ticket' ? 'sw' : 'pw');
+      cancelPWDispatch();
+      setBuilderOperator('');
+    }
+    if (active.stage !== 'pending') {
+      setDemoCursor(null);
+      if (demoStageRef.current === 'pending' && active.stage !== 'planning') {
+        cancelPWDispatch();
+        setWorkspaceTab('jobs');
+      }
+      demoStageRef.current = active.stage;
+      return;
+    }
+    demoStageRef.current = active.stage;
+    if (active.scenario.kind === 'split_ticket') return;
+    const pickup = active.scenario.loads[0]?.pickup || '';
+    const destination = active.scenario.loads[0]?.stops[0]?.name || '';
+    const animate = () => {
+      setDemoClock(Date.now());
+      const progress = Math.max(0, Math.min(1, (Date.now() - (active.dueAt - 60_000)) / 60_000));
+      setBuilderOperator(progress >= .12 ? 'Demo Operator' : '');
+      if (progress < .34) {
+        setAssignTarget(null);
+        const chars = progress < .2 ? 0 : Math.ceil(pickup.length * Math.min(1, (progress - .2) / .12));
+        setAssignWellSearch(pickup.slice(0, chars));
+      } else {
+        setAssignWellSearch('');
+        setAssignTarget(prev => prev?.wellName === pickup ? prev : {
+          wellName: pickup, ndicName: pickup, ndicApiNo: '', currentLevel: '',
+          etaToMax: '', flowRate: '', timestamp: '',
+        });
+      }
+      const driver = drivers.find(d => d.driverId === active.scenario.driverId);
+      setAssignDriverHash(progress >= .52 ? driver?.key || '' : '');
+      if (progress < .72) {
+        setAssignDisposal('');
+        setAssignDisposalWell(null);
+        const chars = progress < .58 ? 0 : Math.ceil(destination.length * Math.min(1, (progress - .58) / .12));
+        setDisposalSearch(destination.slice(0, chars));
+      } else {
+        setDisposalSearch('');
+        setAssignDisposal(destination);
+        setAssignDisposalWell(allDisposals.find(row => row.well_name === destination) || null);
+      }
+      setAssignNotes(progress >= .82 ? 'Synthetic demo data'.slice(0,
+        Math.ceil('Synthetic demo data'.length * Math.min(1, (progress - .82) / .12))) : '');
+      const target = progress < .2 ? 'operator' : progress < .4 ? 'well'
+        : progress < .58 ? 'driver' : progress < .78 ? 'disposal'
+          : progress < .94 ? 'notes' : 'dispatch';
+      const element = document.querySelector<HTMLElement>(`[data-demo-builder-target="${target}"]`);
+      if (element) {
+        const box = element.getBoundingClientRect();
+        setDemoCursor({ x: box.left + Math.min(box.width - 12, 80), y: box.top + box.height / 2,
+          click: progress > .97 });
+      }
+    };
+    animate();
+    const timer = window.setInterval(animate, 300);
+    return () => window.clearInterval(timer);
+  }, [user?.uid, workspaceTab, demoRun, drivers, allDisposals]);
 
   // Edit dispatch modal state (shared for PW + SW)
   const [editSwJob, setEditSwJob] = useState<DispatchJob | null>(null);
@@ -2583,6 +2687,13 @@ function DispatchPageInner() {
   return (
     <div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
+      {user.uid === 'wellbuilt-demo-shared-viewer' && workspaceTab === 'build' && demoCursor && (
+        <svg aria-hidden="true" viewBox="0 0 24 28" className="pointer-events-none fixed z-[90] h-7 w-6 drop-shadow-lg"
+          style={{ left: demoCursor.x, top: demoCursor.y }}>
+          {demoCursor.click && <circle cx="5" cy="5" r="9" fill="none" stroke="#facc15" strokeWidth="2" />}
+          <path d="M2 2v21l5-6 4 9 4-2-4-8 8-1Z" fill="white" stroke="#111827" strokeWidth="1.5" />
+        </svg>
+      )}
 
       <main data-dashboard-scroll="dispatch" data-dispatch-scroll="primary" className="dispatch-scroll-main px-4 py-4">
 
@@ -2603,6 +2714,20 @@ function DispatchPageInner() {
           )}
         </div>}
 
+        {user.uid === 'wellbuilt-demo-shared-viewer' && workspaceTab === 'build' && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-700 bg-cyan-950/40 px-4 py-3 text-sm text-cyan-100">
+            <div>
+              <strong className="text-cyan-300">Live demo · Build Job</strong>
+              <span className="ml-2">{demoRun?.active?.stage === 'pending'
+                ? `Dispatch in ${Math.max(0, Math.ceil((demoRun.active.dueAt - demoClock) / 1000))}s`
+                : 'Preparing the next job preview…'}</span>
+            </div>
+            <button type="button" onClick={() => { cancelPWDispatch(); setWorkspaceTab('jobs'); }}
+              className="rounded border border-cyan-600 px-3 py-1.5 text-cyan-100 hover:bg-cyan-900">
+              Cancel preview
+            </button>
+          </div>
+        )}
         <nav aria-label="Dispatch workspace" className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-2">
           {([
             ['build', 'Build Job'],
@@ -2663,6 +2788,7 @@ function DispatchPageInner() {
                   <label htmlFor="dispatch-builder-operator" className="block text-xs text-gray-400 mb-1">Customer / Operator</label>
                   <select
                     id="dispatch-builder-operator"
+                    data-demo-builder-target="operator"
                     value={builderOperator}
                     onChange={e => {
                       setBuilderOperator(e.target.value);
@@ -2688,7 +2814,7 @@ function DispatchPageInner() {
                   {/* Top: Well input + static info box */}
                   <div className="space-y-2 flex-shrink-0">
                     {/* Well — greyed out in multi-well mode */}
-                    <div className="relative">
+                    <div className="relative" data-demo-builder-target="well">
                       <label className="block text-xs text-gray-400 mb-1">Well</label>
                       {selectedWells.size > 0 ? (
                         <div className="w-full px-3 py-1.5 bg-gray-900/50 border border-blue-500/50 rounded text-blue-300 text-sm cursor-not-allowed">
@@ -2768,7 +2894,7 @@ function DispatchPageInner() {
                     {/* Driver */}
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">Driver</label>
-                      <select value={assignDriverHash} onChange={(e) => setAssignDriverHash(e.target.value)}
+                      <select value={assignDriverHash} onChange={(e) => setAssignDriverHash(e.target.value)} data-demo-builder-target="driver"
                         className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500">
                         <option value="">Select driver...</option>
                         {assignTarget?.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
@@ -2784,7 +2910,7 @@ function DispatchPageInner() {
                       </select>
                     </div>
                     {/* Disposal */}
-                    <div className="relative">
+                    <div className="relative" data-demo-builder-target="disposal">
                       <label className="block text-xs text-gray-400 mb-1">Disposal</label>
                       {assignDisposalWell ? (
                         <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 border border-cyan-700 rounded text-sm">
@@ -2823,7 +2949,7 @@ function DispatchPageInner() {
                       </div>
                       <div className="flex-1">
                         <label className="block text-xs text-gray-400 mb-1">Notes</label>
-                        <input type="text" value={assignNotes} onChange={(e) => setAssignNotes(e.target.value)}
+                        <input type="text" value={assignNotes} onChange={(e) => setAssignNotes(e.target.value)} data-demo-builder-target="notes"
                           placeholder="Special instructions..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
                       </div>
                     </div>
@@ -2843,7 +2969,7 @@ function DispatchPageInner() {
                           {assigning ? 'Sending...' : `Dispatch ${totalSelectedLoads} Load${totalSelectedLoads !== 1 ? 's' : ''}`}
                         </button>
                       ) : (
-                        <button onClick={submitPWDispatch} disabled={!assignTarget || !assignDriverHash || assigning}
+                        <button onClick={submitPWDispatch} disabled={!assignTarget || !assignDriverHash || assigning} data-demo-builder-target="dispatch"
                           className="flex-1 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
                           {assigning ? 'Sending...' : assignLoadCount > 1 ? `Dispatch ${assignLoadCount} Loads` : 'Dispatch'}
                         </button>

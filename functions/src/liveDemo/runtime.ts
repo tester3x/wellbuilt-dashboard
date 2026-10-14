@@ -25,6 +25,16 @@ const stageOrder: DemoStage[] = ['planning', 'pending', 'accepted', 'at_pickup',
 const STAGE_MS = 15_000;
 const BUILD_MS = 60_000;
 const BUILDER_PRESENCE_GRACE_MS = 12_000;
+
+async function hasBuilderViewer(now: number): Promise<boolean> {
+  const snap = await rt().ref(`${root}/builderSessions`).once('value');
+  const entries = Object.entries((snap.val() || {}) as Record<string, unknown>);
+  if (entries.length > 64) {
+    await Promise.all(entries.filter(([, at]) => now - Number(at) > 60_000)
+      .map(([id]) => rt().ref(`${root}/builderSessions/${id}`).remove()));
+  }
+  return entries.some(([, at]) => now - Number(at) <= BUILDER_PRESENCE_GRACE_MS);
+}
 const LOCK_MS = 130_000; // longer than either function's maximum execution time
 const FIRST_DEMO_TICKET = 900_000_000;
 const DEMO_LOGO_URL = 'https://wellbuilt-sync.web.app/live-demo/logo.svg';
@@ -520,8 +530,7 @@ async function advance(now: number): Promise<void> {
   const day = new Date(now).toISOString().slice(0, 10);
   if (state.day !== day) { state.day = day; state.startedToday = 0; }
   if (!state.active) {
-    const viewerAt = Number((await rt().ref(`${root}/viewerAt`).once('value')).val() || 0);
-    if (now - viewerAt > BUILDER_PRESENCE_GRACE_MS || (state.lastClosedAt && now - state.lastClosedAt < 25_000)) {
+    if (!await hasBuilderViewer(now) || (state.lastClosedAt && now - state.lastClosedAt < 25_000)) {
       await stateRef.set(state);
       return;
     }
@@ -533,11 +542,11 @@ async function advance(now: number): Promise<void> {
   }
   const active = state.active;
   if (!active) return;
-  if (active.stage === 'planning') {
-    const builderAt = Number((await rt().ref(`${root}/viewerAt`).once('value')).val() || 0);
-    if (now - builderAt > BUILDER_PRESENCE_GRACE_MS) {
-      // No job has been dispatched yet. Drop only the unwritten draft when
-      // every browser leaves the Build Job tab; later stages are independent.
+  if (active.stage === 'planning' || active.stage === 'pending') {
+    if (!await hasBuilderViewer(now)) {
+      // Planning and the timed pending stage are still an unwritten draft.
+      // writePending runs only when pending becomes due, after this check.
+      // Once accepted, the dispatch exists and runs independently.
       state.active = null;
       await stateRef.set(state);
       return;
@@ -638,8 +647,13 @@ export const liveDemoSnapshot = httpsV2.onCall(
       throw new httpsV2.HttpsError('permission-denied', 'demo_viewer_required');
     }
     const now = Date.now();
-    if (request.data?.watchBuilder === true) {
-      await rt().ref(`${root}/viewerAt`).set(now);
+    const sessionId = request.data?.builderSessionId;
+    if (typeof sessionId === 'string' && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(sessionId)) {
+      if (request.data?.builderPresence === 'join') {
+        await rt().ref(`${root}/builderSessions/${sessionId}`).set(now);
+      } else if (request.data?.builderPresence === 'leave') {
+        await rt().ref(`${root}/builderSessions/${sessionId}`).remove();
+      }
     }
     const [beforeState, beforeControl] = await Promise.all([
       rt().ref(`${root}/state`).once('value'), rt().ref(`${root}/control`).once('value'),
