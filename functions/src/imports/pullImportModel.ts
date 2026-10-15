@@ -36,7 +36,7 @@ export function canonicalHistory(tree: JsonRecord): JsonRecord[] {
   const seen = new Set<string>();
   const result: JsonRecord[] = [];
   for (const [key, raw] of Object.entries(tree)) {
-    if (!raw || /^(?:edit_|delete_|history_)/.test(key) || raw.deleted || raw.requestType === 'delete') continue;
+    if (!raw || /^(?:edit_|delete_|history_)/.test(key) || raw.deleted || raw.requestType === 'delete' || raw.requestType === 'well_status' || raw.statusOnly === true) continue;
     if (key.startsWith('idem_') && keys.has(key.slice(5))) continue;
     const row = { ...raw, key };
     const time = Date.parse(row.dateTimeUTC || row.gaugeTime || row.dateTime || '');

@@ -60,6 +60,23 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  if(binding&&(typeof binding.driverId!=='string'||!/^[a-zA-Z0-9_-]{8,128}$/.test(binding.driverId)))throw Error('sender_binding_invalid');
  const profile=binding?(await db.ref('drivers/profiles/'+binding.driverId).once('value')).val():null;
  const owner=resolveWatchdogOwner(binding,profile,mapped.wellName,configs[mapped.wellName]);
+ if(row.statusOnly){
+  if(typeof row.wellDown!=='boolean'||row.tankLevelFeet!==null||row.bottomLevelFeet!==null||row.bblsTaken!==0||!Number.isFinite(Date.parse(row.dateTimeUTC))||Date.parse(row.dateTimeUTC)>Date.now()+300000)throw Error('invalid_status_only_observation');
+  const identity=digest(['well_status',mapped.wellName,row.dateTimeUTC,row.wellDown]);
+  const stamp=new Date(row.dateTimeUTC).toISOString().replace(/[-:]/g,'').slice(0,15).replace('T','_');
+  const packetId=stamp+'_'+mapped.wellName.replace(/\s+/g,'')+'_status_'+identity.slice(0,6);
+  const packet={packetId,idempotencyKey:packetId,requestType:'well_status',wellName:mapped.wellName,tankLevelFeet:null,bottomLevelFeet:null,bblsTaken:0,
+   dateTimeUTC:row.dateTimeUTC,timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',wellDown:row.wellDown,wellDownIsAuthoritative:true,
+   driverId:owner?.driverId??null,driverName:owner?.driverName??null,
+   watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,observationKind:'well_status',
+    wellOperatingStatus:{wellDown:row.wellDown,evidence:row.wellStatusEvidence||'',source:'explicit_chat_status'}}};
+  const payloadDigest=digest(packet),entryRef=admin.firestore().collection(root).doc(identity);
+  await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('status_payload_conflict');return;}tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:null,bottom:null,bbl:0,wellDown:row.wellDown,observationKind:'well_status',principalId:'laptop-watchdog-v2',messageHash:sha(body.chatId+':'+body.messageId),createdAt:Date.now()});});
+  if(!(await db.ref('packets/processed/'+packetId).once('value')).exists()){
+   const queued=await db.ref('packets/incoming/'+packetId).transaction(current=>{if(current&&digest(current)!==payloadDigest)return;return current||packet;});if(!queued.committed)throw Error('status_incoming_conflict');
+  }
+  res.json({ok:true,status:'queued',identity,packetId,observationKind:'well_status',wellDown:row.wellDown});return;
+ }
  if(row.levelOnly){
   if(!owner)throw Error('top_only_owner_required');
   if(row.bblsTaken!==0||row.bottomLevelFeet!==null)throw Error('invalid_top_only_measurement');
@@ -128,6 +145,10 @@ export const getWatchdogPullReceiptV2=https.onRequest(options,async(req,res)=>{
  const entryRef=admin.firestore().collection(root).doc(identity);
  let entry=(await entryRef.get()).data();if(!entry||entry.principalId!=='laptop-watchdog-v2')throw Error('receipt_not_owned');
  const db=admin.database();let packet=(await db.ref('packets/processed/'+entry.packetId).once('value')).val();
+ if(entry.observationKind==='well_status'){
+  const matched=packet?.requestType==='well_status'&&packet?.canonicalProcessingComplete===true&&packet?.watchdogProvenance?.observationDigest===identity&&packet?.wellDown===entry.wellDown&&packet?.wellDownIsAuthoritative===true&&packet?.tankLevelFeet===null&&packet?.bblsTaken===0;
+  res.json({ok:true,identity,packetId:entry.packetId,observationKind:'well_status',wellDown:entry.wellDown,statusApplied:packet?.statusApplied,status:matched?'complete':packet?'incomplete':'queued'});return;
+ }
  if(entry.pendingReview){
   const outbox=(await db.ref('packets/editOutbox/'+entry.pendingReview.eventId).once('value')).val();
   const pending=entry.pendingReview.review;

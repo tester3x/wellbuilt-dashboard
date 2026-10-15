@@ -2,6 +2,7 @@ import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecisio
 import { resolveTankBblPerFoot } from './tankCalibration';
 import {refreshFlowWindow} from './refreshFlowWindow';
 import {effectiveFlow} from './effectiveFlow';
+import {processWatchdogWellStatus,selectWellOperatingStatus} from './watchdog/wellStatusEvent';
 import * as functionsV1 from 'firebase-functions/v1';
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as httpsV2 from 'firebase-functions/v2/https';
@@ -383,6 +384,7 @@ const DEFAULTS = {
 };
 
 interface PullPacket {
+  source?: string;
   packetId: string;
   wellName: string;
   tankLevelFeet: number;
@@ -577,7 +579,7 @@ async function getHistoricalPulls(wellName: string, limit: number = 50): Promise
 
     const pulls: HistoricalPull[] = [];
     for (const [key, packet] of Object.entries(packets) as [string, any][]) {
-      if (packet.requestType === 'wellHistory' ||
+      if (packet.requestType === 'wellHistory' || packet.requestType === 'well_status' || packet.statusOnly === true ||
           key.startsWith('history_') ||
           packet.wasEdited === true) {
         continue;
@@ -983,6 +985,10 @@ export const processIncomingPull = functionsV1.database
     // Skip non-pull requests (delete, edit handled separately)
     // Treat missing requestType as 'pull' — WB M app historically didn't set it on pull packets
     const reqType = data.requestType || 'pull';
+    if (reqType === 'well_status') {
+      await processWatchdogWellStatus(db, packetId, data);
+      return null;
+    }
     if (reqType !== 'pull') {
       return null;
     }
@@ -1139,14 +1145,17 @@ export const processIncomingPull = functionsV1.database
     // isDown value. Mark-down + (future) clear-down both come from
     // dashboard with the authority flag set; field clients are non-
     // authoritative by default.
+    const watchdogOperatingStatus = data.source === 'whatsapp_watchdog' && (data as any).watchdogProvenance?.principalId === 'laptop-watchdog-v2' &&
+      (data as any).wellDownIsAuthoritative === true && typeof data.wellDown === 'boolean'
+      ? await selectWellOperatingStatus(db, wellName, {packetId,dateTimeUTC:data.dateTimeUTC,wellDown:data.wellDown}) : null;
     const incomingHasAuthoritativeWellDown =
       (data as any).wellDownIsAuthoritative === true &&
-      typeof (data as any).wellDown === 'boolean';
+      typeof (data as any).wellDown === 'boolean' && (!watchdogOperatingStatus || watchdogOperatingStatus.applied);
     const existingIsDownSnap = await db.ref(`wells/${wellName}/status/isDown`).once('value');
     const existingIsDown = existingIsDownSnap.val() === true;
     const nextIsDown = incomingHasAuthoritativeWellDown
       ? ((data as any).wellDown === true)
-      : existingIsDown;
+      : watchdogOperatingStatus?.selected?.wellDown ?? existingIsDown;
 
     // Immediately update down/up status so the app reflects the change
     // before the heavy AFR/bbls calculations finish

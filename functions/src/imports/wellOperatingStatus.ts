@@ -7,6 +7,8 @@ export function extractWellOperatingStatus(text: string): {
   const down = /^(?:down|off|offline|shut[ -]?in|shut\s*down|turned\s+off|not\s+(?:pumping|producing))$/i;
   const up = /^(?:up|on|live|online|back\s+(?:up|on|online)|turned\s+(?:back\s+)?on|pumping|producing|running)$/i;
   const lines = text.split(/\n|;/).map(line => {
+    const gaugeStatus = /^(\s*[@:\-]?\s*\d{1,2}(?:\s*['’′]\s*\d{0,2}\s*["”″]?|[.,]\d{1,2}|\s*ft)?)\s+(off|on|down|up|live|online)\s*[.!]?$/i.exec(line);
+    if (gaugeStatus) { signals.push({ down: down.test(gaugeStatus[2]), text: gaugeStatus[2] }); return gaugeStatus[1]; }
     // An explicit "well ..." footer can accompany a gauge or barrel line.
     const explicit = /\bwell\s+(?:(?:is|still|now|currently)\s+)*(down|off|offline|shut[ -]?in|shut\s*down|turned\s+off|not\s+(?:pumping|producing)|up|on|live|online|back\s+(?:up|on|online)|turned\s+(?:back\s+)?on|pumping|producing|running)\b/ig;
     const matches = [...line.matchAll(explicit)];

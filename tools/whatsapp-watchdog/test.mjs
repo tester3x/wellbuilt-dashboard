@@ -128,3 +128,12 @@ test('operating status survives capture parsing and transport sends original tex
   await t.tick(false);assert.equal(calls,1);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('status-only messages are captured and sent without manufactured measurements',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'wb-status-only-'));try{
+  const q=new Queue(dir);q.ingest({id:'off',channel:'group',chat:header(Date.now(),'Driver','Thor 1 well down'),options:{wellNames:['Thor 1']}});
+  const row=q.snapshot().messages[0].rows[0];assert.equal(row.statusOnly,true);assert.equal(row.tankLevelFeet,null);assert.equal(row.bblsTaken,0);assert.equal(row.wellDown,true);
+  const t=new Transport(q);t.lastLifecycleCheck=Date.now();t.secret='synthetic';t.config={enabled:true,enabledAt:Date.now()-60000};let calls=0;
+  t.request=async(endpoint,body)=>{assert.equal(endpoint,'ingestWatchdogPullV2');assert.ok(body.chat.includes('Thor 1 well down'));calls++;return {ok:true,status:'queued'};};await t.tick(false);assert.equal(calls,1);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});

@@ -28,6 +28,7 @@ export interface PullImportRow {
   measurementTimeSource?: 'posted' | 'stated';
   wellDown?: boolean;
   wellStatusEvidence?: string;
+  statusOnly?: boolean;
 }
 export interface ChatMessage { index: number; date: string; time: string; author: string; body: string }
 const header = /^(?:\[(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*([^\]]+)\]\s*|(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*(.*?)\s+-\s+)(.*)$/;
@@ -156,6 +157,17 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       const bbls = levelOnly ? 0 : amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : driverDefault || options.defaultBbls || null;
       // A routing instruction containing a well and barrels is not a pull.
       if (!labelled && !pair && !unlabelled && !levelOnly) {
+        if ((typeof operating.wellDown === 'boolean' || operating.ambiguous) && !/\d|\bbbls?\b/i.test(operating.gaugeText)) {
+          let timestamp = ''; const statusIssues: string[] = [];
+          try { timestamp = chatTimestamp(message.date, message.time, options.timeZone, options.dateOrder); } catch { statusIssues.push('Invalid status time'); }
+          if (!segment.well) statusIssues.push('Choose the well for this shorthand message');
+          if (operating.ambiguous) statusIssues.push('Ambiguous well operating status; confirm down or online');
+          rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp,
+            tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: 0, author: message.author, source: body,
+            issues: statusIssues, excluded: false, statusOnly: true,
+            ...(typeof operating.wellDown === 'boolean' ? { wellDown: operating.wellDown, wellStatusEvidence: operating.evidence } : {}) });
+          continue;
+        }
         if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s*[:=.\-]?\s*)?\d/i.test(segment.body)) { let timestamp='';try{timestamp=chatTimestamp(message.date,message.time,options.timeZone,options.dateOrder);}catch{} rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp, tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false }); }
         continue;
       }
