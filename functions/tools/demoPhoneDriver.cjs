@@ -230,7 +230,7 @@ function typePickupPlan(plan, doneY) {
   const feet = Math.floor(plan.topInches / 12);
   const inches = plan.topInches % 12;
   tap(120, 760); type(String(plan.bbls)); tap(955, doneY);
-  tap(120, 920);
+  tap(120, 920); pauseInput(900);
   for (const digit of String(feet)) tapMeasurementDigit(digit);
   tap(400, 2140); pauseInput(700); // Visible SPACE key: feet then inches.
   for (const digit of String(inches)) tapMeasurementDigit(digit);
@@ -240,7 +240,7 @@ function typePickupPlan(plan, doneY) {
       activeWellName, `${plan.topInches}in`, `${plan.bbls}BBL`);
     return false;
   }
-  tap(955, doneY); tap(955, doneY);
+  tap(955, doneY);
   console.log(new Date().toISOString(), 'demo-pickup-measurement', activeWellName,
     `${plan.topInches}in`, `${plan.bbls}BBL`, `bottom=${plan.bottomInches}in`);
   return true;
