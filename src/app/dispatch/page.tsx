@@ -4965,7 +4965,7 @@ function JobTypeBadge({ type, serviceType }: { type: string; serviceType?: strin
 }
 
 // Single job row — shows all info a dispatcher needs
-function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss, isRecommendedNext, isWellDown, operatorName }: {
+function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss, isRecommendedNext, isWellDown, operatorName, haulGroupId = '' }: {
   job: DispatchJob;
   cancelDispatch: (id: string) => void;
   compact?: boolean;
@@ -4977,20 +4977,9 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
   /** Canonical live well state is DOWN — show a prominent warning; the job stays actionable. */
   isWellDown?: boolean;
   operatorName?: string;
+  haulGroupId?: string;
 }) {
   const dropoff = job.hauledTo || job.disposal;
-  const [haulGroupId, setHaulGroupId] = useState('');
-  useEffect(() => {
-    setHaulGroupId('');
-    if (!job.invoiceDocId || !job.companyId) return;
-    return onSnapshot(doc(getFirestoreDb(), 'invoices', job.invoiceDocId), snap => {
-      const invoice = snap.data();
-      // A live invoice owns multi-haul membership, including rollback to single.
-      setHaulGroupId(invoice?.companyId === job.companyId && invoice?.dispatchId === job.id
-        && invoice?.status === 'open' && typeof invoice?.haulGroupId === 'string'
-        ? invoice.haulGroupId : '');
-    }, () => setHaulGroupId(''));
-  }, [job.id, job.invoiceDocId, job.companyId]);
   const assignedDate = job.assignedAt?.toDate?.();
   const assignedLabel = assignedDate instanceof Date && Number.isFinite(assignedDate.getTime())
     ? assignedDate.toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
@@ -5188,6 +5177,22 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   const [confirmDismissJob, setConfirmDismissJob] = useState<DispatchJob | null>(null);
   const [dismissSubmitting, setDismissSubmitting] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
+  const [haulGroups, setHaulGroups] = useState<Record<string, string>>({});
+  const haulSubscriptionKey = JSON.stringify(dispatches
+    .filter(job => job.id && job.invoiceDocId && job.companyId)
+    .map(job => [job.id!, job.invoiceDocId!, job.companyId!]).sort((a, b) => a[0].localeCompare(b[0])));
+  useEffect(() => {
+    setHaulGroups({});
+    let current = true;
+    const unsubs = (JSON.parse(haulSubscriptionKey) as string[][]).map(([id, invoiceDocId, companyId]) =>
+      onSnapshot(doc(getFirestoreDb(), 'invoices', invoiceDocId), snap => {
+        const invoice = snap.data();
+        const group = invoice?.companyId === companyId && invoice?.dispatchId === id
+          && invoice?.status === 'open' && typeof invoice?.haulGroupId === 'string' ? invoice.haulGroupId : '';
+        if (current) setHaulGroups(prev => prev[id] === group ? prev : { ...prev, [id]: group });
+      }, () => { if (current) setHaulGroups(prev => ({ ...prev, [id]: '' })); }));
+    return () => { current = false; unsubs.forEach(unsub => unsub()); };
+  }, [haulSubscriptionKey]);
 
   async function handleExecuteDismiss() {
     if (!confirmDismissJob?.id) return;
@@ -5409,6 +5414,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         const renderJob = (job: DispatchJob) => (
           <DispatchJobRow
             job={job}
+            haulGroupId={haulGroups[job.id || ''] || ''}
             cancelDispatch={cancelDispatch}
             compact={jobs.length > 2}
             onClickServiceWork={onEditServiceWork}
@@ -5479,21 +5485,21 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
             {isExpanded && (
               <div className="space-y-1 p-2 bg-gray-900/30">
-                {groupDispatchRows(jobs).map(row => row.jobs.length === 1 ? (
+                {groupDispatchRows(jobs, job => haulGroups[job.id || ''] || '').map(row => row.jobs.length === 1 ? (
                   <div key={row.key}>{renderJob(row.jobs[0])}</div>
                 ) : (
-                  <details key={row.key} className="group rounded-lg border border-gray-700/60 bg-gray-900/40 overflow-hidden">
+                  <details key={row.key} open={row.multiHaul ? true : undefined} className={`group rounded-lg border ${row.multiHaul ? 'border-yellow-600/50' : 'border-gray-700/60'} bg-gray-900/40 overflow-hidden`}>
                     {/* Compact, tinted stack header: clearly a heading for the child loads */}
                     <summary className="cursor-pointer list-none flex items-center justify-between gap-2 px-3 py-2 bg-gray-800/80 hover:bg-gray-800 transition-colors border-b border-transparent group-open:border-gray-700/50 select-none [&::-webkit-details-marker]:hidden">
                       <div className="flex items-center gap-2 min-w-0 flex-1">
                         <JobTypeBadge type={row.jobs[0].jobType} />
                         <span className="min-w-0 flex-1 break-words text-sm font-semibold text-white" title={row.jobs[0].ndicWellName || row.jobs[0].wellName}>
-                          {row.jobs[0].ndicWellName || row.jobs[0].wellName}
+                          {row.multiHaul ? 'Multi-Haul' : (row.jobs[0].ndicWellName || row.jobs[0].wellName)}
                         </span>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <span className="px-2 py-0.5 bg-gray-700/70 text-gray-300 text-xs font-medium rounded">
-                          {row.remainingLoads} {row.remainingLoads === 1 ? 'load' : 'loads'}
+                          {row.multiHaul ? `${row.jobs.length} jobs` : `${row.remainingLoads} ${row.remainingLoads === 1 ? 'load' : 'loads'}`}
                         </span>
                         <span className="text-xs text-gray-400 transition-transform duration-150 group-open:rotate-180">▼</span>
                       </div>
