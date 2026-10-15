@@ -50,3 +50,28 @@ test('remaining multi-load work cycles pending without refunding cancelled load'
   await invoke({ dispatchId: 'job', action: 'cancel_or_cycle' });
   expect(writes.find(([path]) => path === 'dispatches/job')?.[1]).toMatchObject({ status: 'pending', loadsCompleted: 1 });
 });
+
+test('declining the next pending load does not change the previous closed invoice', async () => {
+  rows.get('dispatches/job').status = 'pending';
+  Object.assign(rows.get('invoices/invoice'), { status: 'closed', totalBBL: 140, tickets: ['old-ticket'] });
+  await invoke({ dispatchId: 'job', action: 'decline', reason: 'Unavailable' });
+  expect(writes).toHaveLength(1);
+  expect(writes[0][0]).toBe('dispatches/job');
+  expect(writes[0][1]).toMatchObject({ status: 'declined', declineReason: 'Unavailable' });
+});
+
+test('return replay cannot refund a pending load twice', async () => {
+  Object.assign(rows.get('dispatches/job'), { status: 'pending', invoiceDocId: undefined, loadsCompleted: 0 });
+  expect(await invoke({ dispatchId: 'job', invoiceDocId: 'invoice', action: 'return_pending' })).toMatchObject({ result: 'pending' });
+  expect(writes).toHaveLength(0);
+});
+
+test('completed jobs and transferred water remain terminal/protected', async () => {
+  rows.get('dispatches/job').status = 'completed';
+  expect(await invoke({ dispatchId: 'job', action: 'cancel' })).toMatchObject({ result: 'completed' });
+  expect(writes).toHaveLength(0);
+  rows.get('dispatches/job').status = 'in_progress';
+  rows.get('invoices/invoice').transferSourceDocId = 'source';
+  await expect(invoke({ dispatchId: 'job', action: 'cancel' })).rejects.toThrow('Loaded');
+  expect(writes).toHaveLength(0);
+});
