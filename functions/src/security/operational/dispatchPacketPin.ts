@@ -610,7 +610,7 @@ export const DRIVER_DISPATCH_UPDATE_ALLOWLIST = Object.freeze([
 
 const DRIVER_UPDATE_TRANSITIONS: Record<string, readonly string[]> = {
   accepted: ['in_progress', 'paused', 'completed'],
-  in_progress: ['paused', 'completed'],
+  in_progress: ['paused', 'completed', 'pending'],
   paused: ['in_progress', 'completed'],
 };
 
@@ -634,10 +634,23 @@ export function evaluateExistingDispatchDriverUpdate(input: {
       return fail('unexpected_field', key);
     }
   }
+  const prev = typeof input.existing.status === 'string' ? input.existing.status.trim().toLowerCase() : '';
+  const next = typeof input.patch.status === 'string' ? input.patch.status.trim().toLowerCase() : prev;
+  const loadCount = Number(input.existing.loadCount ?? 1);
+  const loadsStarted = Number(input.existing.loadsCompleted ?? 0);
+  const linkedInvoiceId = typeof input.existing.invoiceDocId === 'string' ? input.existing.invoiceDocId.trim() : '';
+  const cycleToNextLoad = input.patch.status === 'pending' && ['in_progress', 'pending'].includes(prev)
+    && Number.isInteger(loadCount) && loadCount > 1
+    && Number.isInteger(loadsStarted) && loadsStarted >= 1 && loadsStarted < loadCount
+    && linkedInvoiceId !== '' && input.patch.invoiceDocId === linkedInvoiceId;
+  if (input.patch.status === 'pending' && !cycleToNextLoad) return fail('invalid_multi_load_cycle');
   const completionFields = ['completedAt', 'totalBBL', 'ticketNumber', 'driver',
     'truckNumber', 'wellName', 'operator', 'invoicingMode'];
   if (completionFields.some(key => input.patch[key] !== undefined)) {
-    if (input.patch.status !== 'completed') return fail('completion_fields_require_completed_status');
+    // Older WB Tickets builds persist a close payload before they know whether
+    // this was the final load. A guarded cycle may carry those fields, but the
+    // callable discards them when it writes the next pending load.
+    if (next !== 'completed' && !cycleToNextLoad) return fail('completion_fields_require_completed_status');
     if (input.patch.completedAt !== undefined &&
       (typeof input.patch.completedAt !== 'number' || !Number.isFinite(input.patch.completedAt) ||
         input.patch.completedAt < 0 || input.patch.completedAt > 1e15)) {
@@ -687,10 +700,8 @@ export function evaluateExistingDispatchDriverUpdate(input: {
     (typeof input.patch.hauledTo !== 'string' || input.patch.hauledTo.length > 200)) {
     return fail('invalid_hauled_to', 'hauledTo');
   }
-  const prev = typeof input.existing.status === 'string' ? input.existing.status.trim().toLowerCase() : '';
   if (['completed', 'cancelled', 'canceled', 'void'].includes(prev)) return fail('terminal_state', prev);
   if (typeof input.patch.status === 'string') {
-    const next = input.patch.status.trim().toLowerCase();
     const allowed = DRIVER_UPDATE_TRANSITIONS[prev] || [];
     if (next !== prev && !allowed.includes(next)) return fail('invalid_transition', `${prev}->${next}`);
   }

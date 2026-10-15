@@ -227,7 +227,11 @@ async function drive() {
     actOnce('accept-demo-dispatch', () => { if (!tapText(xml, 'Accept')) tap(875, 2100); });
     return;
   }
-  if (/Job Drawer[^\"]*[•·][^\"]*[1-9]/.test(xml)) {
+  // Match the count inside the drawer tab's own accessibility description.
+  // A broad scan can catch an unrelated digit and reopen an empty drawer
+  // indefinitely after a multi-load close failed to cycle on the server.
+  const drawerTab = /content-desc="[^"]*Job Drawer,\s*[•·],\s*(\d+)"/.exec(xml);
+  if (drawerTab && Number(drawerTab[1]) > 0) {
     actOnce('open-job-drawer', () => tap(540, 2350));
   }
 }

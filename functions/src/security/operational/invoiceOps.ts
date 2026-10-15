@@ -111,7 +111,7 @@ export const upsertDriverInvoice = httpsV2.onCall(
 
 const DRIVER_DISPATCH_STATUS_TRANSITIONS: Record<string, readonly string[]> = {
   accepted: ['in_progress', 'paused', 'completed'],
-  in_progress: ['paused', 'completed'],
+  in_progress: ['paused', 'completed', 'pending'],
   paused: ['in_progress', 'completed'],
 };
 
@@ -136,7 +136,8 @@ export const upsertDriverDispatch = httpsV2.onCall(
     if (!dispatchId) {
       throw new httpsV2.HttpsError('invalid-argument', 'dispatchId required');
     }
-    const ref = admin.firestore().collection('dispatches').doc(dispatchId);
+    const firestore = admin.firestore();
+    const ref = firestore.collection('dispatches').doc(dispatchId);
     const ex = await ref.get();
     const prev = ex.exists ? (ex.data() || {}) : null;
     const decided = evaluateExistingDispatchDriverUpdate({
@@ -155,6 +156,15 @@ export const upsertDriverDispatch = httpsV2.onCall(
     const prevStatus = String((prev || {}).status || '').toLowerCase();
     if (TERMINAL_STATUSES.has(prevStatus)) {
       throw new httpsV2.HttpsError('failed-precondition', 'Cannot reopen terminal dispatch');
+    }
+    if (data.dispatch.status === 'pending') {
+      const invoiceDocId = String(data.dispatch.invoiceDocId || '').trim();
+      const closedInvoice = await firestore.collection('invoices').doc(invoiceDocId).get();
+      const invoice = closedInvoice.data();
+      if (!closedInvoice.exists || invoice?.companyId !== driver.companyId
+        || invoice?.dispatchId !== dispatchId || invoice?.status !== 'closed') {
+        throw new httpsV2.HttpsError('failed-precondition', 'multi_load_cycle_requires_closed_invoice');
+      }
     }
     const patch: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
     if (typeof data.dispatch.notes === 'string') patch.notes = data.dispatch.notes;
@@ -187,6 +197,16 @@ export const upsertDriverDispatch = httpsV2.onCall(
         throw new httpsV2.HttpsError('failed-precondition', `invalid_transition:${prevStatus}->${next}`);
       }
       patch.status = next;
+      if (next === 'pending') {
+        // The finished leg owns its invoice and location history. The shared
+        // dispatch card is now the next, unstarted load.
+        patch.driverStage = FieldValue.delete();
+        patch.driverDest = FieldValue.delete();
+        patch.stageUpdatedAt = FieldValue.delete();
+        patch.driverLat = FieldValue.delete();
+        patch.driverLng = FieldValue.delete();
+        patch.driverGpsAt = FieldValue.delete();
+      }
     }
     delete patch.packageId;
     delete patch.packetRevision;

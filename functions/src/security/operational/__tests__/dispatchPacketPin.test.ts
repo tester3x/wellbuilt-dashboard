@@ -826,6 +826,30 @@ describe('merge-upsert is update-only', () => {
       existing, caller, patch: { status: 'completed', totalBBL: -1 },
     }).ok).toBe(false);
   });
+  it('cycles only a linked, partially used multi-load dispatch', () => {
+    const caller = { driverId: DRIVER, companyId: COMPANY };
+    const existing = {
+      ...bound, status: 'in_progress', loadCount: 2, loadsCompleted: 1,
+      invoiceDocId: 'closed-invoice-1',
+    };
+    const cycle = {
+      status: 'pending', invoiceDocId: 'closed-invoice-1',
+      completedAt: Date.now(), totalBBL: 140, ticketNumber: '20808',
+    };
+    expect(evaluateExistingDispatchDriverUpdate({ existing, caller, patch: cycle }).ok).toBe(true);
+    expect(evaluateExistingDispatchDriverUpdate({
+      existing: { ...existing, status: 'pending' }, caller, patch: cycle,
+    }).ok).toBe(true);
+    expect(evaluateExistingDispatchDriverUpdate({
+      existing: { ...existing, loadCount: 1 }, caller, patch: cycle,
+    }).ok).toBe(false);
+    expect(evaluateExistingDispatchDriverUpdate({
+      existing: { ...existing, loadsCompleted: 2 }, caller, patch: cycle,
+    }).ok).toBe(false);
+    expect(evaluateExistingDispatchDriverUpdate({
+      existing, caller, patch: { ...cycle, invoiceDocId: 'another-invoice' },
+    }).ok).toBe(false);
+  });
 });
 
 describe('35. firestore rules deny client dispatch writes', () => {
