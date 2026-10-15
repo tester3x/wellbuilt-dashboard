@@ -550,7 +550,7 @@ function DispatchPageInner() {
       : tab === 'queue' ? 'queue' : 'build';
   });
   const [demoTourTarget, setDemoTourTarget] = useState<string | null>(null);
-  const [demoTourPointer, setDemoTourPointer] = useState<{ x: number; y: number; width: number; height: number; labelX: number; labelY: number } | null>(null);
+  const [demoTourPointer, setDemoTourPointer] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const demoTourRun = useRef(0);
   const demoTourRunning = useRef(false);
   useEffect(() => () => { demoTourRun.current += 1; }, []);
@@ -569,8 +569,6 @@ function DispatchPageInner() {
       const rect = element.getBoundingClientRect();
       setDemoTourPointer({
         x: rect.left, y: rect.top, width: rect.width, height: rect.height,
-        labelX: Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - 292)),
-        labelY: rect.top > 170 ? rect.top - 62 : Math.min(window.innerHeight - 62, rect.bottom + 12),
       });
     };
     const frame = window.requestAnimationFrame(update);
@@ -1472,15 +1470,15 @@ function DispatchPageInner() {
       await pause(650);
 
       setDemoTourTarget('operator');
-      await pause(1250);
+      await pause(2200);
       setBuilderOperator('Demo Operator');
       setDemoTourTarget('well');
-      await pause(850);
+      await pause(1500);
       for (const letter of 'Demo Well 1') {
         setAssignWellSearch(previous => previous + letter);
-        await pause(220);
+        await pause(320);
       }
-      await pause(1700); // Give viewers time to read the real search dropdown.
+      await pause(3000); // Give viewers time to read the real search dropdown.
       // The page catalog may still be loading on a fresh public-demo visit.
       // Fetch the same governed company catalog for this run when needed.
       let tourWells = allOperatorWells;
@@ -1504,7 +1502,7 @@ function DispatchPageInner() {
       setAssignWellSearch('');
 
       setDemoTourTarget('driver');
-      await pause(1300);
+      await pause(2200);
       const tourDrivers = projectDispatchDriverRoster(await adminGetDemoDriverRoster(), 'wellbuilt-demo');
       if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
       const selectedDriver = tourDrivers.find(row =>
@@ -1513,15 +1511,15 @@ function DispatchPageInner() {
       setDrivers(tourDrivers);
       setAssignDriverHash(selectedDriver.key);
       setDemoTourTarget('disposal');
-      await pause(1000);
+      await pause(1700);
       let search = '';
       for (const letter of 'Demo SWD 1') {
         search += letter;
         setDisposalSearch(search);
         setDisposalResults(search.length >= 2 ? searchDisposals(search, tourDisposals).filter(row => row.kind === 'SWD') : []);
-        await pause(220);
+        await pause(320);
       }
-      await pause(1600);
+      await pause(3000);
       const selectedDisposal = tourDisposals.find(row => row.well_name === 'Demo SWD 1');
       if (!selectedDisposal) throw new Error('Demo SWD 1 is unavailable');
       setAssignDisposalWell(selectedDisposal);
@@ -1530,10 +1528,10 @@ function DispatchPageInner() {
       setDisposalResults([]);
 
       setDemoTourTarget('notes');
-      await pause(1100);
+      await pause(2200);
       setAssignNotes('Demo production water load');
       setDemoTourTarget('dispatch');
-      await pause(1800);
+      await pause(3000);
       // No backend job exists until this exact stage. Leaving the page or
       // stopping the walkthrough before now abandons only the local preview.
       await httpsCallable(getFirebaseFunctions(), 'dispatchDemoViewerJob')({
@@ -4735,8 +4733,7 @@ function DispatchPageInner() {
               <path d="M3 2v25l7-6 5 9 5-3-5-9h10L3 2Z" fill="white" stroke="#111827" strokeWidth="2" strokeLinejoin="round" />
             </svg>
           </div>
-          <div aria-live="polite" data-demo-tour-label={demoTourTarget} className="pointer-events-none fixed z-[91] max-w-[min(280px,calc(100vw-24px))] rounded-lg border border-cyan-400 bg-cyan-950 px-4 py-2 text-sm font-semibold text-white shadow-xl md:text-base"
-            style={{ left: demoTourPointer.labelX, top: demoTourPointer.labelY }}>
+          <div aria-live="polite" data-demo-tour-label={demoTourTarget} className="pointer-events-none fixed left-1/2 top-20 z-[91] max-w-[calc(100vw-24px)] -translate-x-1/2 rounded-lg border-2 border-cyan-400 bg-cyan-950 px-5 py-3 text-center text-base font-semibold text-white shadow-xl md:text-lg">
             {demoTourTarget === 'dispatch' ? 'Dispatching the real demo job' : demoTourTarget === 'well' || demoTourTarget === 'disposal' ? `Searching ${demoTourTarget}` : demoTourTarget === 'notes' ? 'Entering job notes' : `Choosing ${demoTourTarget}`}
           </div>
         </>
