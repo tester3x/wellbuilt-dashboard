@@ -46,6 +46,7 @@ let pickupEntered = false;
 let currentLeg = 'pickup';
 let emptyDrawerUntil = 0;
 let postCloseUntil = 0;
+let activeWellName = '';
 const screenNames = ['home', 'enroute', 'pickup', 'dropoff', 'summary'];
 let referenceScreens;
 process.on('SIGINT', () => { stopped = true; });
@@ -128,11 +129,7 @@ async function matchingPendingDemoDispatch(xml) {
   const disposal = /text="(?:Drop-off: )?(Demo SWD \d+)"/.exec(xml)?.[1];
   if (!well || !disposal) return false;
   try {
-    viewerReady ||= (async () => {
-      const session = await httpsCallable(getFunctions(demoApp, 'us-central1'), 'demoViewerSession')();
-      await signInWithCustomToken(getAuth(demoApp), session.data.customToken);
-    })();
-    await viewerReady;
+    await ensureDemoViewer();
     const snapshot = await Promise.race([
       getDocsFromServer(query(
         collection(getFirestore(demoApp), 'dispatches'),
@@ -141,15 +138,65 @@ async function matchingPendingDemoDispatch(xml) {
       )),
       sleep(10_000).then(() => { throw new Error('demo dispatch read timed out'); }),
     ]);
-    return snapshot.docs.some((item) => {
+    const matched = snapshot.docs.some((item) => {
       const job = item.data();
       return job.driverId === DEMO_DRIVER_ID && job.wellName === well && job.disposal === disposal;
     });
+    if (matched) activeWellName = well;
+    return matched;
   } catch (error) {
     viewerReady = undefined;
     console.warn(new Date().toISOString(), 'demo-dispatch-server-check-failed', error.message);
     return false;
   }
+}
+async function ensureDemoViewer() {
+  viewerReady ||= (async () => {
+    const session = await httpsCallable(getFunctions(demoApp, 'us-central1'), 'demoViewerSession')();
+    await signInWithCustomToken(getAuth(demoApp), session.data.customToken);
+  })();
+  await viewerReady;
+}
+async function pickupPlan(xml = '') {
+  let wellName = /text="(Demo Well [1-3])"/.exec(xml)?.[1] || activeWellName;
+  if (!wellName) {
+    try {
+      await ensureDemoViewer();
+      const snapshot = await getDocsFromServer(query(
+        collection(getFirestore(demoApp), 'dispatches'),
+        where('companyId', '==', 'wellbuilt-demo'),
+        where('status', '==', 'in_progress'),
+      ));
+      const active = snapshot.docs.map(item => item.data()).find(job =>
+        job.driverId === DEMO_DRIVER_ID && /^Demo Well [1-3]$/.test(job.wellName));
+      wellName = active?.wellName || '';
+    } catch (error) {
+      console.warn(new Date().toISOString(), 'demo-active-well-unavailable', error.message);
+    }
+  }
+  if (!wellName) return null;
+  try {
+    await ensureDemoViewer();
+    const result = await httpsCallable(getFunctions(demoApp, 'us-central1'), 'demoWellPullPlan')({ wellName });
+    const plan = result.data;
+    if (plan.companyId !== 'wellbuilt-demo' || plan.wellName !== wellName || !plan.ready
+      || !Number.isInteger(plan.bbls) || plan.bbls < 5 || plan.bbls > 140
+      || !Number.isInteger(plan.topInches) || plan.topInches < plan.allowedBottomInches
+      || plan.bottomInches < plan.allowedBottomInches - 0.1) return null;
+    activeWellName = wellName;
+    return plan;
+  } catch (error) {
+    viewerReady = undefined;
+    console.warn(new Date().toISOString(), 'demo-pickup-plan-unavailable', error.message);
+    return null;
+  }
+}
+function typePickupPlan(plan, doneY) {
+  const topFeet = String(Math.round(plan.topFeet * 1000) / 1000);
+  tap(120, 760); type(String(plan.bbls)); tap(955, doneY);
+  tap(120, 920); type(topFeet); tap(955, doneY); tap(955, doneY);
+  console.log(new Date().toISOString(), 'demo-pickup-measurement', activeWellName,
+    `${plan.topInches}in`, `${plan.bbls}BBL`, `bottom=${plan.bottomInches}in`);
 }
 async function drive() {
   if (!existsSync(readyFile) || readFileSync(readyFile, 'utf8').trim() !== 'wellbuilt-demo:AntigDemoDriver') return;
@@ -173,6 +220,7 @@ async function drive() {
       pickupEntered = false;
       currentLeg = 'pickup';
       enRouteSince = 0;
+      activeWellName = '';
     } else if (screen === 'enroute') {
       if (!enRouteSince) enRouteSince = Date.now();
       if (Date.now() - enRouteSince >= arrivalDelayMs) {
@@ -182,9 +230,9 @@ async function drive() {
       enRouteSince = 0;
       if (screen === 'pickup' && currentLeg === 'pickup') {
         if (!pickupEntered) {
-          actOnce('enter-verified-pickup-measurement', () => {
-            tap(120, 760); type('140'); tap(955, 1800);
-            tap(120, 920); type('11'); tap(955, 1800); tap(955, 1800);
+          const plan = await pickupPlan();
+          if (plan) actOnce('enter-verified-pickup-measurement', () => {
+            typePickupPlan(plan, 1800);
             pickupEntered = true;
           });
         } else {
@@ -253,12 +301,13 @@ async function drive() {
   }
   enRouteDestination = '';
   if (visible(xml, 'AT PICKUP') && visible(xml, 'Depart')) {
-    if (!visible(xml, '140') || !visible(xml, '11')) {
-      actOnce('enter-pickup-measurement', () => {
+    if (!pickupEntered) {
+      const plan = await pickupPlan(xml);
+      if (plan) actOnce('enter-pickup-measurement', () => {
         // Keep the company card collapsed so the form coordinates are stable.
         if (visible(xml, 'P.O. Box 4447')) tap(540, 190);
-        tap(120, 760); type('140'); tap(955, 1780);
-        tap(120, 920); type('11'); tap(955, 1780);
+        typePickupPlan(plan, 1780);
+        pickupEntered = true;
       });
     } else {
       actOnce('depart-pickup', () => { if (!tapText(xml, 'Depart')) tap(540, 2320); });

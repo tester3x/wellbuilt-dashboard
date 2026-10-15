@@ -13,11 +13,14 @@ import {
   TRUSTED_CAPABILITY_MANAGE_DRIVERS,
 } from './trustedStaffAuthority';
 import { staffWriteDispatchAccessFromTrusted } from './operational/staffWriteDispatch';
-import type { DashboardCaller } from './adminAuth';
+import { requireRegisteredDashboardUser, type DashboardCaller } from './adminAuth';
 import {
   callerCanViewGlobalWellPool,
   pickAllowlisted,
   projectDashboardCatalog,
+  projectWellStatus,
+  WELL_CONFIG_ALLOWLIST,
+  WELL_STATUS_ALLOWLIST,
   WELL_HISTORY_ALLOWLIST,
 } from './dashboardCatalogProjection';
 import { projectWellPerformance, wellKeyFromName } from './operational/selectWellPerformance';
@@ -120,7 +123,35 @@ export const adminGetDemoDriverRoster = httpsV2.onCall(
 export const adminGetWellPool = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
+    const sharedDemoViewer = request.auth?.uid === 'wellbuilt-demo-shared-viewer'
+      && request.auth.token.staffCompanyId === DEMO_COMPANY_ID
+      && request.auth.token.staffRole === 'demo_viewer'
+      && request.auth.token.isDemo === true;
+    const requestedCompany = typeof request.data?.companyId === 'string' ? request.data.companyId : '';
+    if (sharedDemoViewer) {
+      if (requestedCompany && requestedCompany !== DEMO_COMPANY_ID) {
+        throw new httpsV2.HttpsError('permission-denied', 'demo_company_scope_required');
+      }
+      return demoCompanyWellPool();
+    }
+    if (requestedCompany === DEMO_COMPANY_ID) {
+      try {
+        const staff = await requireTrustedCatalogCaller(request.auth?.uid);
+        if (staff.companyId === DEMO_COMPANY_ID) return demoCompanyWellPool();
+      } catch { /* Platform readers use the registered-user path below. */ }
+      const reader = await requireRegisteredDashboardUser(request.auth?.uid, request.auth?.token);
+      if (reader.isPlatformAdmin !== true) {
+        throw new httpsV2.HttpsError('permission-denied', 'demo_company_scope_required');
+      }
+      return demoCompanyWellPool();
+    }
     const caller = await requireTrustedCatalogCaller(request.auth?.uid);
+    if (caller.companyId === DEMO_COMPANY_ID) return demoCompanyWellPool();
+    if (requestedCompany && requestedCompany !== caller.companyId
+      && !(caller.companyId === 'liquid-gold' && requestedCompany === 'liquid-gold')) {
+      return { ok: true as const, canViewWellPool: false,
+        wellConfig: {}, wellStatus: {}, counts: { wellConfig: 0, wellStatus: 0 } };
+    }
     const projected = projectDashboardCatalog({
       approved: {},
       users: {},
@@ -158,6 +189,38 @@ export const adminGetWellPool = httpsV2.onCall(
     };
   },
 );
+
+async function demoCompanyWellPool() {
+  const rtdb = admin.database();
+  const [wellSnap, outgoingSnap] = await Promise.all([
+    rtdb.ref('well_config').once('value'),
+    rtdb.ref('packets/outgoing').orderByChild('companyId').equalTo(DEMO_COMPANY_ID).once('value'),
+  ]);
+  return projectDemoCompanyWellPool(wellSnap.val(), outgoingSnap.val());
+}
+
+export function projectDemoCompanyWellPool(rawConfig: unknown, rawOutgoing: unknown) {
+  const rawWells = asRecord(rawConfig);
+  const wellConfig: Record<string, Record<string, unknown>> = {};
+  for (const [name, raw] of Object.entries(rawWells)) {
+    const config = asRecord(raw);
+    if (config.companyId === DEMO_COMPANY_ID && config.isDemo === true) {
+      wellConfig[name] = pickAllowlisted(config, WELL_CONFIG_ALLOWLIST);
+    }
+  }
+  const ownOutgoing = Object.fromEntries(Object.entries(asRecord(rawOutgoing))
+    .filter(([, value]) => asRecord(value).companyId === DEMO_COMPANY_ID));
+  const projected = projectWellStatus(ownOutgoing);
+  const wellStatus: Record<string, Record<string, unknown>> = {};
+  for (const [name, status] of Object.entries(projected)) {
+    if (name in wellConfig && status.companyId === DEMO_COMPANY_ID) {
+      wellStatus[name] = pickAllowlisted(status, WELL_STATUS_ALLOWLIST);
+    }
+  }
+  return { ok: true as const, canViewWellPool: true,
+    wellConfig, wellStatus,
+    counts: { wellConfig: Object.keys(wellConfig).length, wellStatus: Object.keys(wellStatus).length } };
+}
 
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};

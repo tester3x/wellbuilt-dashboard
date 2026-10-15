@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { canViewGlobalWellPool } from '@/lib/tenantScope';
+import { canViewGovernedWellPool } from '@/lib/tenantScope';
 import { adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { WellResponse, mergeWellPool } from '@/lib/wells';
 
@@ -56,14 +56,14 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
       setDataLoading(false);
       return;
     }
-    if (!canViewGlobalWellPool(user, operatingCompanyId)) {
+    if (!canViewGovernedWellPool(user, operatingCompanyId)) {
       setWells([]); setRoutes([]); setNotEntitled(true);
       setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
       return;
     }
     setNotEntitled(false);
     try {
-      const pool = await adminGetWellPool();
+      const pool = await adminGetWellPool(user.companyId || operatingCompanyId);
       if (currentScope.current !== scopeKey) return;
       if (pool.canViewWellPool === false) {
         setWells([]); setRoutes([]); setNotEntitled(true);
@@ -106,7 +106,7 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
   useEffect(() => {
     if (loading) return;
     if (!user) { setDataLoading(false); return; }
-    if (!canViewGlobalWellPool(user, operatingCompanyId)) {
+    if (!canViewGovernedWellPool(user, operatingCompanyId)) {
       setWells([]); setRoutes([]); setNotEntitled(true);
       setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
       return;

@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability, isPlatformAdmin } from '@/lib/auth';
-import { canViewGlobalWellPool } from '@/lib/tenantScope';
+import { canViewGovernedWellPool } from '@/lib/tenantScope';
 import { WellPoolEmptyState } from '@/components/WellPoolEmptyState';
 import { WellResponse } from '@/lib/wells';
 import { useGovernedWellPool } from '@/lib/useGovernedWellPool';
@@ -266,7 +266,7 @@ export default function MobilePage() {
   // Tenant containment (7/9): scoped non-Liquid-Gold companies must not see
   // the global well pool (it is Liquid Gold's operational data — see
   // lib/tenantScope.ts). Unscoped WB admins and liquid-gold keep the view.
-  if (!canViewGlobalWellPool(user, operatingCompanyId)) {
+  if (!canViewGovernedWellPool(user, operatingCompanyId)) {
     return (
       <div className="min-h-screen bg-gray-900">
         <AppHeader />
@@ -284,6 +284,11 @@ export default function MobilePage() {
 
       {/* Main Content */}
       <main className="px-4 py-8">
+        {operatingCompanyId === 'wellbuilt-demo' && (
+          <div className="mb-4 rounded border border-cyan-700/60 bg-cyan-950/30 px-4 py-2 text-sm text-cyan-100">
+            Demo well recovery uses an accelerated clock that pauses at the next pull level. Flow Rate shows the real-world target; current levels and time to pull use demo time. Tank @ Level is the next variable trigger.
+          </div>
+        )}
         {/* Title and Controls */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <div className="flex items-center gap-8">
@@ -633,7 +638,9 @@ function recalcWellForPullBbls(well: WellResponse, overridePullBbls: number, liv
         const flowSecs = parseInt(flowMatch[3]);
         const flowRateTotalMinutes = flowHours * 60 + flowMins + flowSecs / 60;
         const minutesPerInch = flowRateTotalMinutes / 12;
-        const totalMinutes = inchesNeeded * minutesPerInch;
+        const demoMultiplier = well.companyId === 'wellbuilt-demo' && well.demoClockMultiplier
+          ? well.demoClockMultiplier : 1;
+        const totalMinutes = inchesNeeded * minutesPerInch / demoMultiplier;
         const days = Math.floor(totalMinutes / 1440);
         const hours = Math.floor((totalMinutes % 1440) / 60);
         const mins = Math.floor(totalMinutes % 60);

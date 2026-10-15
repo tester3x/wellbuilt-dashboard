@@ -114,6 +114,15 @@ export const WELL_CONFIG_ALLOWLIST = [
   'routeRecording',
   'routeGroupWell',
   'companyId',
+  'isDemo',
+  'demoRealMinutesPerFoot',
+  'demoClockMultiplier',
+  'demoTriggerMinInches',
+  'demoTriggerMaxInches',
+  'demoPullCapBbls',
+  'demoInitialLevelInches',
+  'demoInitialAsOfUTC',
+  'demoInitialTriggerInches',
 ] as const;
 
 /** Bounded live-status fields from packets/outgoing. Never a raw packet tree. */
@@ -141,6 +150,9 @@ export const WELL_STATUS_ALLOWLIST = [
   'tanks',
   'pullBbls',
   'route',
+  'companyId',
+  'demoClockMultiplier',
+  'demoTargetInches',
 ] as const;
 
 export const WELL_HISTORY_ALLOWLIST = [

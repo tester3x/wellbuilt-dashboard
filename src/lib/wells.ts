@@ -336,7 +336,13 @@ export function subscribeToWellStatusesUnified(
         const isDown = outgoing.wellDown || false;
 
         // Get flow rate in minutes from well_config (avgFlowRateMinutes written by Cloud Function)
-        const afrMinutes = (config as any).avgFlowRateMinutes || 0;
+        const realAfrMinutes = (config as any).avgFlowRateMinutes || 0;
+        const demoMultiplier = (config as any).companyId === 'wellbuilt-demo'
+          && (config as any).isDemo === true
+          && Number((config as any).demoClockMultiplier) >= 1
+          && Number((config as any).demoClockMultiplier) <= 120
+          ? Number((config as any).demoClockMultiplier) : 1;
+        const afrMinutes = realAfrMinutes / demoMultiplier;
 
         // Estimate current level from bottom level after last pull + flow rate + time elapsed
         let currentLevelInches: number | undefined;
@@ -344,9 +350,13 @@ export function subscribeToWellStatusesUnified(
           const bottomAfterPull = parseFeetInchesStr(outgoing.lastPullBottomLevel);
           const estInches = estimateCurrentLevel(bottomAfterPull, outgoing.lastPullDateTimeUTC, afrMinutes);
           if (estInches !== null) {
-            currentLevelInches = estInches;
-            currentLevel = inchesToDisplay(estInches);
-            timeTillPull = calcTimeTillPull(estInches, tankAtInches, afrMinutes);
+            const demoInches = demoMultiplier > 1 && typeof outgoing.demoTargetInches === 'number'
+              ? Math.min(estInches, outgoing.demoTargetInches) : estInches;
+            currentLevelInches = demoInches;
+            currentLevel = inchesToDisplay(demoInches);
+            timeTillPull = calcTimeTillPull(demoInches,
+              typeof outgoing.demoTargetInches === 'number' && demoMultiplier > 1
+                ? outgoing.demoTargetInches : tankAtInches, afrMinutes);
           }
         }
         // Fallback: parse from formatted string if no estimation was done
@@ -363,7 +373,9 @@ export function subscribeToWellStatusesUnified(
           ...outgoing,
           route: config.route || 'Unrouted',
           tanks,
-          tankAtLevel,
+          tankAtLevel: demoMultiplier > 1 && typeof outgoing.demoTargetInches === 'number'
+            ? `${tanks} @ ${Math.floor(outgoing.demoTargetInches / 12)}'${outgoing.demoTargetInches % 12}"`
+            : tankAtLevel,
           pullBbls,
           bottomLevel: bottomLevelFeet,
           currentLevel,
@@ -375,6 +387,9 @@ export function subscribeToWellStatusesUnified(
           timestampUTC: outgoing.lastPullDateTimeUTC || outgoing.timestampUTC,
           ndicName: (config as any).ndicName || '',
           bblPerFoot: (config as any).bblPerFoot || undefined,
+          companyId: (config as any).companyId,
+          demoClockMultiplier: demoMultiplier > 1 ? demoMultiplier : undefined,
+          demoTargetInches: demoMultiplier > 1 ? outgoing.demoTargetInches : undefined,
         });
       } else {
         // No outgoing data — placeholder (well exists in config but no pulls yet)

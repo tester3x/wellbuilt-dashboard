@@ -22,6 +22,21 @@ const iso = (hoursFromNow: number) => new Date(NOW + hoursFromNow * 3600_000).to
 // readyLevel = bottomLevel + pullBbls/bblPerFoot = 3 + 140/20 = 10'
 const CFG = { tanks: 1, pullBbls: 140, bottomLevel: 3, bblPerFoot: 20, route: 'North', ndicName: 'NDIC-X' };
 
+test('demo survey and accelerated clock give a ready variable threshold without a fabricated pull', () => {
+  const [well] = mergeWellPool({ 'Demo Well 1': {
+    ...CFG, companyId: 'wellbuilt-demo', isDemo: true,
+    demoClockMultiplier: 12, demoRealMinutesPerFoot: 60,
+    demoInitialLevelInches: 120, demoInitialAsOfUTC: iso(-1 / 12),
+    demoInitialTriggerInches: 126, avgFlowRate: '1:00:00',
+  } });
+  const result = classifyWell(well, NOW);
+  assert.equal(well.lastPullBottomLevel, undefined);
+  assert.equal(result.estFeet, 10.5);
+  assert.equal(result.readyFeet, 10.5);
+  assert.equal(result.state, 'pull-now');
+  assert.equal(well.bbls24hrs, '480');
+});
+
 test('governed merge carries the WB‑M estimator inputs from outgoing status + config target inputs', () => {
   const [w] = mergeWellPool(
     { A: { ...CFG } },

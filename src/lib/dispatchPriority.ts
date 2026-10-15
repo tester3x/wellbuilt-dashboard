@@ -271,12 +271,19 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
   const bblsPerFoot = (typeof well.bblPerFoot === 'number' && well.bblPerFoot > 0)
     ? well.bblPerFoot
     : (typeof well.tanks === 'number' && well.tanks > 0 ? 20 * well.tanks : null);
-  const readyFeet = readyLevelFeet({ allowedBottomFeet, loadBbls, bblsPerFoot });
+  const readyFeet = well.companyId === 'wellbuilt-demo' && well.demoClockMultiplier
+    && typeof well.demoTargetInches === 'number'
+    ? well.demoTargetInches / 12
+    : readyLevelFeet({ allowedBottomFeet, loadBbls, bblsPerFoot });
 
   const inputs: EstimatorInputs = { startingBottomFeet, pullTimeMs, flowMinutesPerFoot, wellDown };
   const est = estimateCurrentFeet(inputs, nowMs);
+  const demoEstFeet = well.companyId === 'wellbuilt-demo' && well.demoClockMultiplier
+    && readyFeet != null && est.feet != null ? Math.min(est.feet, readyFeet) : est.feet;
   const readyAt = predictedReadyAtMs(inputs, readyFeet);
-  const availableLoads = availableLoadsAt({ estFeet: est.feet, allowedBottomFeet, loadBbls, bblsPerFoot });
+  const availableLoads = well.companyId === 'wellbuilt-demo' && well.demoClockMultiplier
+    ? (demoEstFeet != null && readyFeet != null && demoEstFeet >= readyFeet ? 1 : 0)
+    : availableLoadsAt({ estFeet: est.feet, allowedBottomFeet, loadBbls, bblsPerFoot });
   const ageHours = pullTimeMs != null ? (nowMs - pullTimeMs) / 3600000 : null;
 
   const common = {
@@ -284,13 +291,13 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
     lastLevel: (well.currentLevel && well.currentLevel !== '--') ? well.currentLevel : (well.lastPullBottomLevel || null),
     lastLevelInches: startingBottomFeet != null ? startingBottomFeet * 12 : null,
     lastLevelAgeHours: ageHours,
-    estInches: est.feet != null ? est.feet * 12 : null,
-    remainingInches: (readyFeet != null && est.feet != null) ? Math.max(0, (readyFeet - est.feet) * 12) : null,
+    estInches: demoEstFeet != null ? demoEstFeet * 12 : null,
+    remainingInches: (readyFeet != null && demoEstFeet != null) ? Math.max(0, (readyFeet - demoEstFeet) * 12) : null,
     ttpHours: readyAt != null ? (readyAt - nowMs) / 3600000 : null,
     gainValid: est.hasFlow,
     fresh: pullTimeMs != null,
-    estFeet: est.feet,
-    estDisplay: formatFeetWBM(est.feet),
+    estFeet: demoEstFeet,
+    estDisplay: formatFeetWBM(demoEstFeet),
     readyFeet,
     predictedReadyAtMs: readyAt,
     hasFlow: est.hasFlow,
@@ -310,7 +317,7 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
   if (readyFeet == null) return make({ state: 'verify', label: 'NEEDS DATA', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 55, reason: 'missing_target' });
 
   // 4. Estimated current level at/above the pull-ready target → PULL NOW.
-  if (est.feet != null && est.feet >= readyFeet) {
+  if (demoEstFeet != null && demoEstFeet >= readyFeet) {
     return make({ state: 'pull-now', label: 'PULL NOW', color: 'bg-red-600', textColor: 'text-white', sortOrder: 1 });
   }
   // 5. Rising with valid flow → APPROACHING with a deterministic ready time.

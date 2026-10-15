@@ -32,11 +32,22 @@ export function wbmInputsFromWell(well: WellResponse): EstimatorInputs {
   // every tick. No baseline ⇒ the well is unavailable (never fabricated from a
   // projected value). This matches the reference builder, which anchors its estimate
   // on outgoing.lastPullBottomLevel + outgoing.lastPullDateTimeUTC (wells.ts).
-  const startingBottomFeet = parseFeetDecimal(well.lastPullBottomLevel);
-  const rawTs = (well.lastPullDateTimeUTC && !isNaN(Date.parse(well.lastPullDateTimeUTC))) ? Date.parse(well.lastPullDateTimeUTC)
+  const demoSurvey = well.companyId === 'wellbuilt-demo' && well.demoClockMultiplier
+    && !well.lastPullBottomLevel && typeof well.demoInitialLevelInches === 'number'
+    && typeof well.demoInitialAsOfUTC === 'string';
+  const startingBottomFeet = demoSurvey
+    ? well.demoInitialLevelInches! / 12
+    : parseFeetDecimal(well.lastPullBottomLevel);
+  const rawTs = demoSurvey && !isNaN(Date.parse(well.demoInitialAsOfUTC!))
+    ? Date.parse(well.demoInitialAsOfUTC!)
+    : (well.lastPullDateTimeUTC && !isNaN(Date.parse(well.lastPullDateTimeUTC))) ? Date.parse(well.lastPullDateTimeUTC)
     : (well.timestampUTC && !isNaN(Date.parse(well.timestampUTC)) ? Date.parse(well.timestampUTC) : null);
   const pullTimeMs = (rawTs != null && rawTs >= MIN_VALID_PULL_MS) ? rawTs : null;
-  const flowMinutesPerFoot = parseFlowMinutesPerFoot(well.flowRate);
+  const rawFlowMinutesPerFoot = parseFlowMinutesPerFoot(well.flowRate);
+  const demoMultiplier = well.companyId === 'wellbuilt-demo'
+    && well.demoClockMultiplier && well.demoClockMultiplier >= 1 && well.demoClockMultiplier <= 120
+    ? well.demoClockMultiplier : 1;
+  const flowMinutesPerFoot = rawFlowMinutesPerFoot == null ? null : rawFlowMinutesPerFoot / demoMultiplier;
   const wellDown = well.wellDown === true || well.isDown === true || isWbmDownToken(well.currentLevel);
   return { startingBottomFeet, pullTimeMs, flowMinutesPerFoot, wellDown };
 }
@@ -69,9 +80,13 @@ export function projectWellLevel(well: WellResponse, asOfMs: number): WellLevelP
     return { estFeet: null, estDisplay: '--', hasFlow: false, frozen: false, capped: false, wellDown, available: false };
   }
   const est = estimateCurrentFeet(inputs, asOfMs);
+  const demoTargetFeet = well.companyId === 'wellbuilt-demo' && well.demoClockMultiplier
+    && typeof well.demoTargetInches === 'number' ? well.demoTargetInches / 12 : null;
+  const projectedFeet = demoTargetFeet != null && est.feet != null
+    ? Math.min(est.feet, demoTargetFeet) : est.feet;
   return {
-    estFeet: est.feet,
-    estDisplay: formatFeetWBM(est.feet),
+    estFeet: projectedFeet,
+    estDisplay: formatFeetWBM(projectedFeet),
     hasFlow: est.hasFlow,
     frozen: est.frozen,
     capped: est.capped,

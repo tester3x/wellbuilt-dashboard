@@ -39,7 +39,7 @@ import {
   wellQueueUsesSearchHits,
 } from '@/lib/dispatchWellQueueLive';
 import { adminGetDashboardCatalog, adminGetDemoDriverRoster, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
-import { canViewGlobalWellPool, docBelongsToTenant, viewedCompanyId as resolveViewedCompanyId } from '@/lib/tenantScope';
+import { canViewGovernedWellPool, docBelongsToTenant, viewedCompanyId as resolveViewedCompanyId } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
@@ -763,19 +763,15 @@ function DispatchPageInner() {
     };
   }, [builderTab]);
 
-  // Subscribe to well data — tenant containment (7/9): the RTDB well queue is
-  // the global (Liquid Gold) pool with no tenancy dimension. Scoped
-  // non-liquid-gold companies get an empty queue (see lib/tenantScope.ts).
+  // Load the governed well pool. Liquid Gold retains its legacy global pool;
+  // the demo tenant receives only its own explicitly stamped demo wells.
   useEffect(() => {
     // Wait for Firebase Auth persistence + token/claims to restore before ANY
     // read — a cold hard-reload must not read against an unready token.
     if (loading) return;
     if (!user) { setDataLoading(false); return; }
-    // Tenant containment (7/9): the well pool is the global (Liquid Gold) pool.
-    // A non-liquid-gold scoped company has no entitlement to it AND there is no
-    // governed own-company well-status read (backend gap) → empty by design, not
-    // an error. Owner / Liquid Gold / platform admins get the governed pool.
-    if (!canViewGlobalWellPool(user, operatingCompanyId)) {
+    // Other scoped companies remain outside the legacy global pool.
+    if (!canViewGovernedWellPool(user, operatingCompanyId)) {
       setWells([]);
       setRoutes([]);
       setStatusUnavailable(false);
@@ -794,7 +790,7 @@ function DispatchPageInner() {
     // adminGetWellPool callable is the authorized live-status source.
     const load = async () => {
       try {
-        const pool = await adminGetWellPool();
+        const pool = await adminGetWellPool(viewedCompanyId);
         if (cancelled) return;
         if (pool.canViewWellPool === false) {
           // Server confirms no entitlement to the global pool for this caller.
@@ -2843,7 +2839,8 @@ function DispatchPageInner() {
                   {isDemoCompany && (
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded border border-cyan-700/60 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-100">
                       <span>Try a demo load: search for Demo Well 1, choose a demo driver, then search for Demo SWD 1. The real builder searches as you type.
-                        {user?.role === 'demo_viewer' && ' Dispatch sends a real demo-company job to the selected driver.'}</span>
+                        {user?.role === 'demo_viewer' && ' Dispatch sends a real demo-company job to the selected driver.'}
+                        {' '}Demo well levels recover on an accelerated clock that pauses at the next pull level; flow rates show their real-world target. Pull volume is capped by each well’s allowed bottom.</span>
                       {user?.role === 'demo_viewer' && <button type="button" onClick={demoTourRunning.current ? stopDemoDispatchTour : runDemoDispatchTour}
                         className="rounded border border-cyan-500 bg-cyan-700/50 px-3 py-1.5 font-semibold text-white hover:bg-cyan-600/70">
                         {demoTourTarget ? 'Stop walkthrough' : 'Watch a dispatch walkthrough'}

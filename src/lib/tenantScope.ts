@@ -11,6 +11,7 @@
 //   - unscoped WB admin, any other company   → empty well pool
 //   - companyId === 'liquid-gold'           → current view (their data)
 //   - any other companyId (e.g. Home Hauling) → empty state
+// The new demo company has a separate governed, company-filtered read path.
 //
 // This is deliberately a display gate, not a filter — there is nothing on the
 // well records to filter BY. Do not extend this to imply assignedOperators ⇒
@@ -40,6 +41,13 @@ export function canViewGlobalWellPool(user: ScopedUser | null | undefined, opera
   if (!user) return false;
   const viewedCompany = user.companyId || operatingCompanyId;
   return !viewedCompany || viewedCompany === LEGACY_WELL_POOL_COMPANY_ID;
+}
+
+/** Governed own-company demo pool; the server filters by exact demo ownership. */
+export function canViewGovernedWellPool(user: ScopedUser | null | undefined, operatingCompanyId?: string | null): boolean {
+  if (!user) return false;
+  const viewedCompany = user.companyId || operatingCompanyId;
+  return viewedCompany === 'wellbuilt-demo' || canViewGlobalWellPool(user, operatingCompanyId);
 }
 
 /** Doc-level tenant match for containment filters (dispatches, drivers,

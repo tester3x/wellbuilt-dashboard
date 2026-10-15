@@ -41,9 +41,9 @@ export async function adminGetDemoDriverRoster(): Promise<{ profiles: Record<str
   return res.data as { profiles: Record<string, unknown> };
 }
 
-export async function adminGetWellPool(): Promise<WellPool> {
+export async function adminGetWellPool(companyId?: string | null): Promise<WellPool> {
   const fn = httpsCallable(getFirebaseFunctions(), 'adminGetWellPool');
-  const res = await fn({});
+  const res = await fn(companyId ? { companyId } : {});
   return res.data as WellPool;
 }
 

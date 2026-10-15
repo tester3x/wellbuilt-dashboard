@@ -52,6 +52,10 @@ export interface WellResponse {
   ndicName?: string;           // Full NDIC well name (e.g. "GABRIEL 1-36-25H")
   ndicApiNo?: string;          // Canonical NDIC API number — stable per-well identity
   companyId?: string;          // Owning company (tenant) — governed identity, not a name
+  demoClockMultiplier?: number; // Demo-only recovery clock; displayed flow stays physical
+  demoTargetInches?: number;    // Stable per-pull variable ready threshold
+  demoInitialLevelInches?: number; // Demo-only initial survey, not a fabricated pull
+  demoInitialAsOfUTC?: string;
   // Raw numeric level for precision (avoids parsing formatted string)
   currentLevelInches?: number; // Total inches — used by Add Pull modal
   // Tank dimensions from well_config
@@ -94,6 +98,9 @@ export function calcTankAtLevel(
 export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): WellResponse[] {
   return Object.entries(wellConfig).map(([wellName, raw]) => {
     const config = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const isDemoSurvey = config.companyId === 'wellbuilt-demo' && config.isDemo === true
+      && typeof config.demoInitialLevelInches === 'number'
+      && typeof config.demoInitialAsOfUTC === 'string';
     const tanks = typeof config.tanks === 'number'
       ? config.tanks
       : typeof config.numTanks === 'number' ? config.numTanks : 1;
@@ -116,10 +123,13 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
     const { tankAtLevel } = calcTankAtLevel(tanks, pullBbls, bottomInches, bblPerFootPerTank);
     return {
       wellName,
-      currentLevel: '--',
+      currentLevel: isDemoSurvey
+        ? `${Math.floor((config.demoInitialLevelInches as number) / 12)}'${(config.demoInitialLevelInches as number) % 12}"`
+        : '--',
       etaToMax: '',
       flowRate: typeof config.avgFlowRate === 'string' ? config.avgFlowRate : 'Unknown',
-      timestamp: '',
+      timestamp: isDemoSurvey ? config.demoInitialAsOfUTC as string : '',
+      timestampUTC: isDemoSurvey ? config.demoInitialAsOfUTC as string : undefined,
       route: typeof config.route === 'string' ? config.route : 'Unrouted',
       operator: typeof config.operator === 'string' ? config.operator : undefined,
       tanks,
@@ -128,6 +138,9 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
       bottomLevel: bottomLevelFeet,
       maxLevel: typeof config.maxLevel === 'number' ? config.maxLevel : undefined,
       bblPerFoot,
+      bbls24hrs: isDemoSurvey && typeof config.demoRealMinutesPerFoot === 'number'
+        ? String(Math.round((bblPerFoot || 20 * tanks) * 1440 / config.demoRealMinutesPerFoot))
+        : undefined,
       tankHeight,
       waterWeight,
       ndicName: typeof config.ndicName === 'string' ? config.ndicName : '',
@@ -137,6 +150,14 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
       ndicApiNo: typeof config.ndicApiNo === 'string' ? config.ndicApiNo
         : (config.ndicApiNo != null ? String(config.ndicApiNo) : undefined),
       companyId: typeof config.companyId === 'string' ? config.companyId : undefined,
+      demoClockMultiplier: config.companyId === 'wellbuilt-demo' && config.isDemo === true
+        && typeof config.demoClockMultiplier === 'number' ? config.demoClockMultiplier : undefined,
+      demoTargetInches: config.companyId === 'wellbuilt-demo' && config.isDemo === true
+        && typeof config.demoInitialTriggerInches === 'number' ? config.demoInitialTriggerInches : undefined,
+      demoInitialLevelInches: config.companyId === 'wellbuilt-demo' && config.isDemo === true
+        && typeof config.demoInitialLevelInches === 'number' ? config.demoInitialLevelInches : undefined,
+      demoInitialAsOfUTC: config.companyId === 'wellbuilt-demo' && config.isDemo === true
+        && typeof config.demoInitialAsOfUTC === 'string' ? config.demoInitialAsOfUTC : undefined,
       isDown: config.isDown === true,
     };
   });
@@ -175,6 +196,13 @@ export function mergeWellPool(
       lastPullDateTimeUTC: typeof st.lastPullDateTimeUTC === 'string' ? st.lastPullDateTimeUTC : well.lastPullDateTimeUTC,
       lastPullBottomLevel: lastPullBottomLevel ?? well.lastPullBottomLevel,
       lastPullBbls: st.lastPullBbls != null ? String(st.lastPullBbls) : well.lastPullBbls,
+      demoClockMultiplier: well.companyId === 'wellbuilt-demo' && typeof st.demoClockMultiplier === 'number'
+        ? st.demoClockMultiplier : well.demoClockMultiplier,
+      demoTargetInches: well.companyId === 'wellbuilt-demo' && typeof st.demoTargetInches === 'number'
+        ? st.demoTargetInches : well.demoTargetInches,
+      tankAtLevel: well.companyId === 'wellbuilt-demo' && typeof st.demoTargetInches === 'number'
+        ? `${well.tanks || 1} @ ${Math.floor(st.demoTargetInches / 12)}'${st.demoTargetInches % 12}"`
+        : well.tankAtLevel,
       // Positive-gain evidence for the classifier (production field names).
       windowBblsDay: asStr(st.windowBblsDay) ?? well.windowBblsDay,
       bbls24hrs: asStr(st.bbls24hrs) ?? well.bbls24hrs,

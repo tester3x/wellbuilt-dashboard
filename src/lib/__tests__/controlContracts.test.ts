@@ -471,7 +471,7 @@ test('Dispatch live-status: governed-primary source-selection (zero forbidden RT
   const page = read('../../app/dispatch/page.tsx');
   // Governed callable is the chosen source; the direct-client RTDB status
   // subscription (claim-gated, denied for dashboard email users) is NOT attempted.
-  assert.match(page, /adminGetWellPool\(\)/, 'uses governed adminGetWellPool for status');
+  assert.match(page, /adminGetWellPool\(viewedCompanyId\)/, 'uses company-scoped governed adminGetWellPool for status');
   assert.match(page, /mergeWellPool\(/, 'merges governed well status');
   assert.ok(!/subscribeToWellStatusesUnified/.test(page), 'no direct-client RTDB status subscription attempted');
   // Cold-start: wait for auth before any read.
@@ -678,9 +678,9 @@ test('Queue selections carry their operator into PW and survive builder operator
 
 test('governed well-pool hook: authorized source only, honest unavailable, bounded refresh', () => {
   const hook = read('../useGovernedWellPool.ts');
-  assert.match(hook, /adminGetWellPool\(\)/, 'governed callable');
+  assert.match(hook, /adminGetWellPool\(user\.companyId \|\| operatingCompanyId\)/, 'governed callable receives the selected company');
   assert.match(hook, /mergeWellPool\(/, 'governed merge contract');
-  assert.match(hook, /canViewGlobalWellPool\(user, operatingCompanyId\)/, 'selected-company entitlement gate');
+  assert.match(hook, /canViewGovernedWellPool\(user, operatingCompanyId\)/, 'selected-company entitlement gate');
   assert.match(hook, /setStatusUnavailable\(true\)/, 'honest UNAVAILABLE on genuine failure');
   assert.ok(!/onValue\(/.test(hook), 'no forbidden RTDB onValue read');
   assert.ok(!/subscribeToWellStatusesUnified/.test(hook), 'no unified RTDB subscription fallback');

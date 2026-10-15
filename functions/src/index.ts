@@ -39,6 +39,7 @@ import {
   shouldApplyCrossKeyGuard,
 } from './security/operational/crossKeyPullClaim';
 import { computePullRevision } from './security/operational/pullCorrectionSignal';
+import { demoTriggerInches, demoWellClock } from './liveDemo/wellClock';
 import {
   prepareEditOutbox,
   executeEditOutbox,
@@ -444,6 +445,8 @@ interface OutgoingResponse {
   lastPullPacketId?: string | null;
   lastPullRevision?: string | null;
   companyId?: string;
+  demoClockMultiplier?: number;
+  demoTargetInches?: number;
 }
 
 function outgoingCompanyId(config: { companyId?: unknown } | null | undefined): string {
@@ -995,6 +998,7 @@ export const processIncomingPull = functionsV1.database
       configSnap = await db.ref(`well_config/${cleanName}`).once('value');
     }
     const config = configSnap.val() || {};
+    const demoClock = demoWellClock(config);
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
@@ -1120,6 +1124,17 @@ export const processIncomingPull = functionsV1.database
       return null;
     }
 
+    if (config.companyId === 'wellbuilt-demo' && config.isDemo === true
+      && config.demoClockMultiplier != null && !demoClock) {
+      await quarantineIncomingPacket(db.ref(), {
+        packetId, packet: data, nowMs: Date.now(),
+        verdict: { action: 'quarantine', reason: 'DEMO_CLOCK_INVALID',
+          readableReason: 'Demo well clock or tank geometry is invalid; pull held without changing well state.',
+          comparedWatermarkUTC: prevTimestamp || null },
+      });
+      return null;
+    }
+
     // ─── wellDown authoritative-write protection (5/8/2026) ─────────────
     // Pull ≠ Reactivate. Routine WB T pulls hardcode wellDown=false in the
     // packet (utils/firebase.ts:2529, 2584); without this guard, every
@@ -1186,6 +1201,19 @@ export const processIncomingPull = functionsV1.database
 
     const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
     let tankAfterInches = tankTopInches - bblsInInches;
+    if (demoClock && (!Number.isFinite(tankTopInches) || tankTopInches < demoClock.bottomInches
+      || !Number.isFinite(Number(data.bblsTaken)) || Number(data.bblsTaken) <= 0
+      || tankTopInches > demoClock.tankHeightInches
+      || tankAfterInches < demoClock.bottomInches - 0.1
+      || Number(data.bblsTaken) > demoClock.pullCapBbls)) {
+      await quarantineIncomingPacket(db.ref(), {
+        packetId, packet: data, nowMs: Date.now(),
+        verdict: { action: 'quarantine', reason: 'DEMO_BELOW_BOTTOM',
+          readableReason: 'Demo pull exceeds tank height, configured load cap, or allowed bottom.',
+          comparedWatermarkUTC: prevTimestamp || null },
+      });
+      return null;
+    }
     const reportedBottom=Number((data as any).watchdogProvenance?.reportedBottomFeet)*12;
     if(config.flowWindowMinimumRecoveryInches && (data as any).source==='whatsapp_watchdog' && (data as any).watchdogProvenance?.principalId==='laptop-watchdog-v2' && (data as any).watchdogProvenance?.reportedBottomFeet!=null && Number.isFinite(reportedBottom) && reportedBottom>=0 && reportedBottom<=tankTopInches && Math.abs(reportedBottom-tankAfterInches)<=2)tankAfterInches=reportedBottom;
 
@@ -1225,7 +1253,16 @@ export const processIncomingPull = functionsV1.database
       ? await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value') : null;
     const windowed=flowHistorySnap?effectiveFlow({...flowHistorySnap.val(),[packetId]:{...data,packetId,tankTopInches,tankAfterInches,wellDown:nextIsDown}},config):null;
     if(windowed){const sample=windowed.results.find(r=>r.packetId===packetId);flowRateDays=sample?.flowRateDays||0;flowRate=flowRateDays>0?daysToHMMSS(flowRateDays):'';recoveryInches=sample?.recoveryInches||0;timeDifDays=sample?.timeDifDays||0;timeDif=timeDifDays>0?daysToHMM(timeDifDays):'';}
-    const afr = windowed?windowed.averageDays:await calculateAFR(wellName, flowRateDays);
+    // Demo tickets are sent by the real app, but their accelerated wall clock
+    // must never train a physical production rate. Keep the configured real
+    // rate in the normal AFR fields and scale only the demo recovery clock.
+    const afr = demoClock
+      ? demoClock.realMinutesPerFoot / 1440
+      : (windowed ? windowed.averageDays : await calculateAFR(wellName, flowRateDays));
+    if (demoClock) {
+      flowRateDays = afr;
+      flowRate = daysToHMMSS(afr);
+    }
 
     // Calculate window-averaged and overnight bbls/day
     const bblPerFoot = tanks * 20;
@@ -1242,20 +1279,21 @@ export const processIncomingPull = functionsV1.database
     });
     historicalPulls.sort((a, b) => a.timestamp - b.timestamp);
 
-    const windowBblsDay = windowed ? 0 : calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
-    const overnightBblsDay = windowed ? 0 : calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
+    const windowBblsDay = (windowed || demoClock) ? 0 : calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
+    const overnightBblsDay = (windowed || demoClock) ? 0 : calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);
 
     // Recovery Needed
     const pullHeightInches = (pullBbls / 20 / tanks) * 12;
-    const targetLevel = bottomInches + pullHeightInches;
+    const demoTargetInches = demoClock ? demoTriggerInches(demoClock, packetId) : undefined;
+    const targetLevel = demoTargetInches ?? (bottomInches + pullHeightInches);
     const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
 
     // Est Time to Pull
     let estTimeToPull = '';
     let estDateTimePull = '';
     if (afr > 0 && recoveryNeeded > 0) {
-      const estDays = (recoveryNeeded / 12) * afr;
+      const estDays = (recoveryNeeded / 12) * afr / (demoClock?.clockMultiplier || 1);
       estTimeToPull = daysToHMM(estDays);
       const pullDate = new Date(data.dateTimeUTC);
       const estDate = new Date(pullDate.getTime() + estDays * 24 * 60 * 60 * 1000);
@@ -1334,6 +1372,8 @@ export const processIncomingPull = functionsV1.database
       timestampUTC: timestamp.toISOString(),
       windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
       overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+      ...(demoClock ? { demoClockMultiplier: demoClock.clockMultiplier,
+        demoTargetInches } : {}),
     };
 
     // Write to outgoing/ (delete old responses for this well first)
@@ -4087,3 +4127,4 @@ export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './w
 // the retired scheduled worker does not create operational records.
 export { liveDemoSnapshot, demoViewerSession, liveDemoPhoneFrame, uploadLiveDemoPhoneFrame } from './liveDemo/runtime';
 export { dispatchDemoViewerJob } from './liveDemo/dispatch';
+export { demoWellPullPlan } from './liveDemo/wellPlan';

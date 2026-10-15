@@ -33,7 +33,9 @@ export type RejectionReason =
   | 'STRANDED_INCOMING_PACKET'
   | 'PACKET_ID_COLLISION'
   | 'CROSS_KEY_CONFLICT'
-  | 'CROSS_KEY_TENANT';
+  | 'CROSS_KEY_TENANT'
+  | 'DEMO_BELOW_BOTTOM'
+  | 'DEMO_CLOCK_INVALID';
 
 export interface GuardVerdict {
   action: 'process' | 'quarantine';

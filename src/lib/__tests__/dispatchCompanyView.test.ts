@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canViewGlobalWellPool, docBelongsToTenant, viewedCompanyId } from '../tenantScope.ts';
+import { canViewGlobalWellPool, canViewGovernedWellPool, docBelongsToTenant, viewedCompanyId } from '../tenantScope.ts';
 
 test('WB owner selection separates Liquid Gold, demo, and all-company jobs', () => {
   const jobs = [
@@ -31,4 +31,12 @@ test('platform owner selection never shows Liquid Gold well routes for another c
   assert.equal(canViewGlobalWellPool(owner, 'another-company'), false);
   assert.equal(canViewGlobalWellPool(owner, null), true);
   assert.equal(canViewGlobalWellPool({ companyId: 'wellbuilt-demo' }, 'liquid-gold'), false);
+});
+
+test('governed demo route is visible only to the selected demo scope', () => {
+  assert.equal(canViewGovernedWellPool({ companyId: 'wellbuilt-demo' }), true);
+  assert.equal(canViewGovernedWellPool({ companyId: undefined }, 'wellbuilt-demo'), true);
+  // A scoped Liquid Gold user cannot switch company; the operating selection is ignored.
+  assert.equal(canViewGovernedWellPool({ companyId: 'liquid-gold' }, 'wellbuilt-demo'), true);
+  assert.equal(canViewGovernedWellPool({ companyId: 'another-company' }), false);
 });
