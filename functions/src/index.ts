@@ -1,4 +1,5 @@
 import {refreshFlowWindow} from './refreshFlowWindow';
+export { resolveDriverJobCancellation } from './security/operational/resolveDriverJobCancellation';
 import {effectiveFlow} from './effectiveFlow';
 import * as functionsV1 from 'firebase-functions/v1';
 import * as functionsV2 from 'firebase-functions/v2/scheduler';

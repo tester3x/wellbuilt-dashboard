@@ -2790,9 +2790,9 @@ function DispatchPageInner() {
 
         <nav aria-label="Dispatch workspace" className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-2">
           {([
+            ['jobs', 'Jobs'],
             ['build', 'Build Job'],
             ['queue', 'Well Queue'],
-            ['jobs', 'Jobs'],
           ] as const).map(([tab, label]) => {
             const poppedOut = (tab === 'queue' && queueDetached) || (tab === 'jobs' && jobsDetached);
             return <button key={tab} type="button" aria-pressed={workspaceTab === tab}
