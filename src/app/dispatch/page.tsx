@@ -4979,6 +4979,21 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
   operatorName?: string;
 }) {
   const dropoff = job.hauledTo || job.disposal;
+  const [haulGroupId, setHaulGroupId] = useState('');
+  useEffect(() => {
+    setHaulGroupId('');
+    if (!job.invoiceDocId || !job.companyId) return;
+    return onSnapshot(doc(getFirestoreDb(), 'invoices', job.invoiceDocId), snap => {
+      const invoice = snap.data();
+      // A live invoice owns multi-haul membership, including rollback to single.
+      setHaulGroupId(invoice?.companyId === job.companyId && invoice?.dispatchId === job.id
+        && invoice?.status === 'open' && typeof invoice?.haulGroupId === 'string'
+        ? invoice.haulGroupId : '');
+    }, () => setHaulGroupId(''));
+  }, [job.id, job.invoiceDocId, job.companyId]);
+  const assignedDate = job.assignedAt?.toDate?.();
+  const assignedLabel = assignedDate instanceof Date && Number.isFinite(assignedDate.getTime())
+    ? assignedDate.toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   // Resequencing changes the ticket letter without rewriting the original
   // planning note. Show the current letter from the dispatch sequence.
   const displayNotes = job.splitGroupId && typeof job.splitSequence === 'number'
@@ -5042,6 +5057,8 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
       {/* Use the available width for dispatch facts; retain labels for snapshot values. */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-gray-400">
+        {assignedLabel && <span>Created / assigned: <span className="text-gray-200">{assignedLabel}</span></span>}
+        {job.stageUpdatedAt && <span>Stage updated: <span className="text-gray-200">{new Date(typeof job.stageUpdatedAt === 'number' ? job.stageUpdatedAt : job.stageUpdatedAt.toMillis?.()).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span></span>}
         {job.route && <span>Route: <span className="text-gray-200">{job.route}</span></span>}
         {(job.loadCount || 1) > 1 && <span>Loads: <span className="text-gray-200">{job.loadsCompleted || 0}/{job.loadCount} completed</span></span>}
         {job.jobType === 'pw' && job.currentLevel && <span>Level at dispatch: <span className="text-gray-200">{job.currentLevel}</span></span>}
@@ -5093,6 +5110,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
           )}
 
           {/* Job state: origin/progress followed by the current stage and its age. */}
+          {haulGroupId && <CategoryBadge className="bg-yellow-600/30 text-yellow-300" title={`Multi-haul group: ${haulGroupId}`}>Multi-Haul</CategoryBadge>}
           {job.source === 'driver' && (
             <CategoryBadge className="bg-emerald-600/30 text-emerald-300">
               Driver Started
