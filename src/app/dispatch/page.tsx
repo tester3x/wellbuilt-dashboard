@@ -1641,7 +1641,7 @@ function DispatchPageInner() {
           wellName: assignTarget.wellName,
           disposal: assignDisposal,
           driverId: demoDriverId,
-          loadCount: assignLoadCount,
+          loadCount: 1,
           notes: assignNotes,
         });
       } else {
@@ -2327,6 +2327,7 @@ function DispatchPageInner() {
   // ─── Multi-Select Helpers ──────────────────────────────────────────────────
 
   function toggleWellSelection(wellName: string) {
+    if (user?.role === 'demo_viewer') return;
     // Entering multi-well mode clears single-well assignment
     setAssignTarget(null);
     handleBuilderTabChange('pw');
@@ -2358,6 +2359,7 @@ function DispatchPageInner() {
   }
 
   function toggleSelectAll() {
+    if (user?.role === 'demo_viewer') return;
     setAssignTarget(null); // Clear single-well mode
     handleBuilderTabChange('pw');
     // Only actionable (unassigned, dispatchable) rows are bulk-selectable — the
@@ -2386,6 +2388,10 @@ function DispatchPageInner() {
 
   async function submitBulkDispatch() {
     if (selectedWells.size === 0 || !assignDriverHash) return;
+    if (user?.role === 'demo_viewer') {
+      setMessage('Choose one demo well at a time to dispatch a single load.');
+      return;
+    }
     setAssigning(true);
     try {
       const driver = drivers.find(d => d.key === assignDriverHash);
@@ -3007,6 +3013,8 @@ function DispatchPageInner() {
                           <div className="w-full px-2 py-1.5 bg-gray-900/50 border border-gray-600 rounded text-gray-500 text-sm text-center cursor-not-allowed">
                             {totalSelectedLoads}
                           </div>
+                        ) : user?.role === 'demo_viewer' ? (
+                          <div className="w-full px-2 py-1.5 bg-gray-900/50 border border-gray-600 rounded text-gray-300 text-sm text-center" title="Demo jobs are one load each">1</div>
                         ) : (
                           <input type="number" min={1} max={20} value={assignLoadCount}
                             onChange={(e) => setAssignLoadCount(Math.max(1, parseInt(e.target.value) || 1))}
@@ -3030,7 +3038,7 @@ function DispatchPageInner() {
                         Clear
                       </button>
                       {selectedWells.size > 0 ? (
-                        <button onClick={submitBulkDispatch} disabled={!assignDriverHash || assigning}
+                        <button onClick={submitBulkDispatch} disabled={!assignDriverHash || assigning || user?.role === 'demo_viewer'}
                           className="flex-1 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
                           {assigning ? 'Sending...' : `Dispatch ${totalSelectedLoads} Load${totalSelectedLoads !== 1 ? 's' : ''}`}
                         </button>
@@ -3840,7 +3848,7 @@ function DispatchPageInner() {
                         <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-36">
                           <div className="flex items-center justify-end gap-1.5">
                             <span>Action</span>
-                            {(() => { const sel = queueRows.filter(q => !q.assignment && q.priority.state !== 'down'); return (
+                            {user?.role !== 'demo_viewer' && (() => { const sel = queueRows.filter(q => !q.assignment && q.priority.state !== 'down'); return (
                             <input type="checkbox" checked={sel.length > 0 && sel.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
                             ); })()}
                           </div>
@@ -4033,12 +4041,12 @@ function DispatchPageInner() {
                                 )}
                               </div>
                               )}
-                              <input type="checkbox" checked={isSelected}
+                              {user?.role !== 'demo_viewer' && <input type="checkbox" checked={isSelected}
                                 disabled={isAssigned || !!assignTarget || bulkSelectBlocked}
                                 aria-label={`Select ${well.wellName} for bulk dispatch`}
                                 title={isAssigned ? 'Already assigned' : bulkSelectBlocked ? 'DOWN wells require individual confirmation' : assignTarget ? 'Finish the current assignment first' : 'Select for bulk dispatch'}
                                 onChange={() => toggleWellSelection(well.wellName)}
-                                className={`w-4 h-4 flex-shrink-0 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${isAssigned || assignTarget || bulkSelectBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
+                                className={`w-4 h-4 flex-shrink-0 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${isAssigned || assignTarget || bulkSelectBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />}
                               </div>
                             </td>
                           </tr>

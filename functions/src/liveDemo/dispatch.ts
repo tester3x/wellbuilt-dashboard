@@ -33,7 +33,7 @@ export const dispatchDemoViewerJob = https.onCall(
     const loadCount = Number(input.loadCount ?? 1);
     const notes = typeof input.notes === 'string' ? input.notes.trim() : '';
     if (!wellName || !disposal || !/^[0-9a-f-]{36}$/i.test(driverId)
-      || !Number.isInteger(loadCount) || loadCount < 1 || loadCount > 3
+      || !Number.isInteger(loadCount) || loadCount !== 1
       || notes.length > 150) {
       throw new https.HttpsError('invalid-argument', 'invalid_demo_job');
     }
