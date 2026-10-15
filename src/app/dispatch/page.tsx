@@ -5499,7 +5499,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <span className="px-2 py-0.5 bg-gray-700/70 text-gray-300 text-xs font-medium rounded">
-                          {row.multiHaul ? `${row.jobs.length} jobs` : `${row.remainingLoads} ${row.remainingLoads === 1 ? 'load' : 'loads'}`}
+                          {row.multiHaul ? <>{row.jobs.length} jobs</> : <>{row.remainingLoads} {row.remainingLoads === 1 ? 'load' : 'loads'}</>}
                         </span>
                         <span className="text-xs text-gray-400 transition-transform duration-150 group-open:rotate-180">▼</span>
                       </div>
