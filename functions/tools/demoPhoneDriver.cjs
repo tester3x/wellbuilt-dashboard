@@ -9,6 +9,10 @@ const { spawnSync } = require('node:child_process');
 const { existsSync, readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const sharp = require('sharp');
+const { initializeApp } = require('firebase/app');
+const { getFunctions, httpsCallable } = require('firebase/functions');
+const { getAuth, signInWithCustomToken } = require('firebase/auth');
+const { getFirestore, collection, query, where, getDocsFromServer } = require('firebase/firestore');
 
 const serial = process.argv[2];
 if (!serial || !/^[a-zA-Z0-9_.:-]+$/.test(serial)) {
@@ -23,6 +27,13 @@ if (!readyFile) {
 const adb = process.env.ADB_PATH || 'adb';
 const PACKAGE = 'com.testerxxx.waterticket';
 const DEMO_HEADER = 'WELLBUILT DEMO HAULING';
+const DEMO_DRIVER_ID = '2f6e6f75-b468-4239-9831-71faeb623acb';
+const demoApp = initializeApp({
+  apiKey: 'AIzaSyAGWXa-doFGzo7T5SxHVD_v5-SHXIc8wAI',
+  authDomain: 'wellbuilt-sync.firebaseapp.com',
+  projectId: 'wellbuilt-sync',
+});
+let viewerReady;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const arrivalDelayMs = Math.max(10_000, Number(process.env.DEMO_DRIVE_DELAY_MS) || 25_000);
 let stopped = false;
@@ -34,6 +45,7 @@ let screenshotMode = false;
 let pickupEntered = false;
 let currentLeg = 'pickup';
 let emptyDrawerUntil = 0;
+let postCloseUntil = 0;
 const screenNames = ['home', 'enroute', 'pickup', 'dropoff', 'summary'];
 let referenceScreens;
 process.on('SIGINT', () => { stopped = true; });
@@ -111,6 +123,34 @@ function demoOnly(xml) {
   return visible(xml, DEMO_HEADER) || visible(xml, 'WellBuilt Demo Hauling') ||
     (visible(xml, 'Job Drawer') && visible(xml, 'Demo Operator'));
 }
+async function matchingPendingDemoDispatch(xml) {
+  const well = /text="(Demo Well \d+)"/.exec(xml)?.[1];
+  const disposal = /text="(?:Drop-off: )?(Demo SWD \d+)"/.exec(xml)?.[1];
+  if (!well || !disposal) return false;
+  try {
+    viewerReady ||= (async () => {
+      const session = await httpsCallable(getFunctions(demoApp, 'us-central1'), 'demoViewerSession')();
+      await signInWithCustomToken(getAuth(demoApp), session.data.customToken);
+    })();
+    await viewerReady;
+    const snapshot = await Promise.race([
+      getDocsFromServer(query(
+        collection(getFirestore(demoApp), 'dispatches'),
+        where('companyId', '==', 'wellbuilt-demo'),
+        where('status', '==', 'pending'),
+      )),
+      sleep(10_000).then(() => { throw new Error('demo dispatch read timed out'); }),
+    ]);
+    return snapshot.docs.some((item) => {
+      const job = item.data();
+      return job.driverId === DEMO_DRIVER_ID && job.wellName === well && job.disposal === disposal;
+    });
+  } catch (error) {
+    viewerReady = undefined;
+    console.warn(new Date().toISOString(), 'demo-dispatch-server-check-failed', error.message);
+    return false;
+  }
+}
 async function drive() {
   if (!existsSync(readyFile) || readFileSync(readyFile, 'utf8').trim() !== 'wellbuilt-demo:AntigDemoDriver') return;
   if (!isForeground()) return;
@@ -158,7 +198,10 @@ async function drive() {
         // bottom action on this same verified layout opens Job Summary.
         actOnce('open-verified-job-summary', () => tap(540, 2320));
       } else if (screen === 'summary') {
-        actOnce('confirm-verified-job-summary', () => tap(750, 1780));
+        actOnce('confirm-verified-job-summary', () => {
+          tap(750, 1780);
+          postCloseUntil = Date.now() + 90_000;
+        });
       }
     }
     return;
@@ -180,10 +223,15 @@ async function drive() {
   if (visible(xml, 'Starting Job...')) return;
 
   if (visible(xml, 'Job Summary') && visible(xml, 'Close Job')) {
-    actOnce('confirm-close', () => tap(750, 1780));
+    actOnce('confirm-close', () => {
+      tap(750, 1780);
+      postCloseUntil = Date.now() + 90_000;
+    });
     return;
   }
-  if (visible(xml, 'Cannot Depart Yet') || visible(xml, 'Cannot Close Yet') || visible(xml, 'Error')) {
+  if (visible(xml, 'Cannot Depart Yet') || visible(xml, 'Cannot Close Yet') ||
+      visible(xml, 'Dispatch Link failed') || visible(xml, 'Remote acceptance was rejected') ||
+      visible(xml, 'Error')) {
     console.error('Demo driver requires attention; no blind retry or bypass');
     return;
   }
@@ -222,10 +270,12 @@ async function drive() {
     return;
   }
   if (visible(xml, 'JOB REVIEW') && visible(xml, 'Start Job')) {
+    if (Date.now() < postCloseUntil || !(await matchingPendingDemoDispatch(xml))) return;
     actOnce('start-job', () => { if (!tapText(xml, 'Start Job')) tap(700, 1750); });
     return;
   }
   if (visible(xml, 'Job Drawer') && visible(xml, 'Accept') && visible(xml, 'Demo Operator')) {
+    if (Date.now() < postCloseUntil || !(await matchingPendingDemoDispatch(xml))) return;
     actOnce('accept-demo-dispatch', () => { if (!tapText(xml, 'Accept')) tap(875, 2100); });
     return;
   }
