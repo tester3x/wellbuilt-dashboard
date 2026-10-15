@@ -1,3 +1,4 @@
+import { extractWellOperatingStatus } from './wellOperatingStatus';
 /** Shared, side-effect-free WhatsApp parser. Input is data, never instructions. */
 export interface PullImportOptions {
   defaultWell?: string;
@@ -25,6 +26,8 @@ export interface PullImportRow {
   inferredSeparator?: boolean;
   levelOnly?: boolean;
   measurementTimeSource?: 'posted' | 'stated';
+  wellDown?: boolean;
+  wellStatusEvidence?: string;
 }
 export interface ChatMessage { index: number; date: string; time: string; author: string; body: string }
 const header = /^(?:\[(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*([^\]]+)\]\s*|(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*(.*?)\s+-\s+)(.*)$/;
@@ -121,7 +124,8 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       const segment = segments[part];
       if (predatorCanonical && normalizeWell(segment.well) === 'predator') segment.well = predatorCanonical;
       let inlineTime = '';
-      const gaugeBody=segment.body.replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
+      const operating = extractWellOperatingStatus(segment.body);
+      const gaugeBody=operating.gaugeText.replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
       const rawLines=gaugeBody.split('\n').map(line=>line.trim()).filter(Boolean);
       const lines = gaugeBody.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
         const suffix = /\s+(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
@@ -156,6 +160,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
         continue;
       }
       const issues: string[] = typoPair ? ['Inferred level separator needs historical validation'] : [];
+      if (operating.ambiguous) issues.push('Ambiguous well operating status; confirm down or online');
       if(top!==null&&low!==null&&low>top)issues.push('Labelled bottom exceeds top');
       let postedAt = '';
       try { postedAt = chatTimestamp(message.date, message.time, options.timeZone, options.dateOrder); } catch (error) { issues.push(String(error)); }
@@ -181,7 +186,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       if (levelOnly && !explicit) issues.push('Confirm measurement time for top-only reading');
       const date = `${message.date.split('/')[2]?.padStart(4, '20')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 1 : 0]?.padStart(2, '0')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 0 : 1]?.padStart(2, '0')}`;
       const excluded = !!((options.startDate && date < options.startDate) || (options.endDate && date > options.endDate));
-      rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded, ...(typoPair ? {inferredSeparator:true} : {}), ...(levelOnly ? {levelOnly:true,measurementTimeSource:explicit ? 'stated' as const : 'posted' as const} : {}) });
+      rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded, ...(typeof operating.wellDown === 'boolean' ? {wellDown:operating.wellDown,wellStatusEvidence:operating.evidence} : {}), ...(typoPair ? {inferredSeparator:true} : {}), ...(levelOnly ? {levelOnly:true,measurementTimeSource:explicit ? 'stated' as const : 'posted' as const} : {}) });
     }
   }
   if (rows.filter(row => !row.excluded).length > 2000) throw new Error('More than 2,000 pulls; split the export into smaller batches.');

@@ -10,9 +10,9 @@ jest.mock('firebase-admin',()=>({
 import {ingestWatchdogPullV2,getWatchdogPullReceiptV2,stopWatchdogWellV2,getWatchdogWellLifecycleV2,reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from '../intake';
 async function call(endpoint:any,name:string,body:any,tampered=false){const rawBody=Buffer.from(JSON.stringify(body)),timestamp=String(Date.now()),nonce=randomBytes(16).toString('hex');const signature=createHmac('sha256','synthetic-only-key').update(`v1:${name}:POST:${timestamp}:${nonce}:${createHash('sha256').update(rawBody).digest('hex')}`).digest('hex');const req={method:'POST',body,rawBody,headers:{'x-watchdog-key-id':'V1','x-watchdog-timestamp':timestamp,'x-watchdog-nonce':nonce,'x-watchdog-signature':tampered?'0'.repeat(64):signature}};let code=200,result:any;const res={status:(n:number)=>{code=n;return res;},json:(v:any)=>{result=v;return res;}};await (endpoint as any)(req,res);return {code,result};}
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});database.set('packets/outgoing/response_existing',{wellName:'Kahuna 5',wellDown:false,currentLevel:'12',lastPullPacketId:'actual-pull',flowRate:'1:00:00'});});
-const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
+const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5ft\nBottom 11.125\n165 bbl`};};
 test('top-only requires an explicitly enabled canonical sender and keeps zero removal',async()=>{
- const body={...observation(),senderId:'123456789@lid',chat:observation().chat.replace('Top 12.5\nBottom 11.125\n165 bbl', '@ 6\u2032 5\u2033 off')};
+ const body={...observation(),senderId:'123456789@lid',chat:observation().chat.replace('Top 12.5ft\nBottom 11.125\n165 bbl', '@ 6\u2032 5\u2033 off')};
  const {watchdogSenderKey}=require('../senderOwnership');const policy=documents.get('watchdog_v2_config/laptop');
  expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body)).result.status).toBe('ignored');
  policy.senderBindings={[watchdogSenderKey(body.senderId)]:{enabled:true,companyId:'liquid-gold',driverId:'driver-test-123'}};
@@ -41,11 +41,11 @@ test('rejects invalid signature and unconfigured channel',async()=>{expect((awai
 test('queues once, retries preserve packet, and receipt requires exact bottom and completion',async()=>{const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(first.result.status).toBe('queued');const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.driverId).toBeNull();const again=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(again.result.packetId).toBe(first.result.packetId);const receipt={identity:first.result.identity};database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('complete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:140,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');});
 test('accepts missing bottom and suppresses activation history',async()=>{expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chat:observation().chat.replace('Bottom 11.125\n','')})).result.status).toBe('queued');documents.get('watchdog_v2_config/laptop').enabledAt=Date.now()+1000;expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation())).result.status).toBe('before_activation');});
 
-test('reported bottom never overrides calibrated bottom, and impossible removal is held',async()=>{const request={...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 20')};const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request);expect(answer.result.status).toBe('queued');const packet=database.get('packets/incoming/'+answer.result.packetId);expect(packet.bottomLevelFeet).toBe(11.125);expect(packet.watchdogProvenance.reportedBottomFeet).toBe(20);const invalid=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),messageId:'other',chat:observation().chat.replace('Top 12.5','Top 1')});expect(invalid.result.status).toBe('review');expect(invalid.result.issues).toContain('Load exceeds water below the reported top');});
+test('contradictory reported bottom and impossible removal are held',async()=>{const request={...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 20')};const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request);expect(answer.result.status).toBe('review');expect(answer.result.issues).toContain('Labelled bottom exceeds top');const invalid=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),messageId:'other',chat:observation().chat.replace('Top 12.5ft','Top 1').replace('Bottom 11.125\n','')});expect(invalid.result.status).toBe('review');expect(invalid.result.issues).toContain('Load exceeds water below the reported top');});
 test('review retains corrected time and audit but cannot bypass invalid top or future time',async()=>{
  const body=observation();const corrected=new Date(Date.now()-600000).toISOString();const review={confirmed:true,dateTimeUTC:corrected,reason:'Driver confirmed actual measurement'};
  const accepted=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review});expect(accepted.result.status).toBe('queued');const packet=database.get('packets/incoming/'+accepted.result.packetId);expect(packet.dateTimeUTC).toBe(corrected);expect(packet.watchdogProvenance.review.correctedTime).toBe(corrected);expect(packet.watchdogProvenance.review.originalTime).not.toBe(corrected);
- const invalid=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,chat:body.chat.replace('Top 12.5','Top 30'),review});expect(invalid.result.status).toBe('review');
+ const invalid=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,chat:body.chat.replace('Top 12.5ft','Top 30'),review});expect(invalid.result.status).toBe('review');
  const future=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review:{...review,dateTimeUTC:new Date(Date.now()+3600000).toISOString()}});expect(future.result.status).toBe('review');
 });
 test('explicit review clears only nearby-pull warning, never exact duplicates',async()=>{
@@ -93,7 +93,7 @@ test('queued observations include shadow diagnostics without changing canonical 
 });
 test('enabled well uses corroborated reported bottom and receipt recognizes it',async()=>{
  database.get('well_config')['Kahuna 5'].flowWindowMinimumRecoveryInches=6;
- const body={...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 11.2')};
+ const body={...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 11.2ft')};
  const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);const packet=database.get('packets/incoming/'+answer.result.packetId);
  expect(packet.bottomLevelFeet).toBe(11.2);
  database.set('packets/processed/'+answer.result.packetId,{...packet,tankAfterInches:134.4,canonicalProcessingComplete:true});
@@ -128,7 +128,7 @@ test('same verified owner later report never creates another app pull',async()=>
 });
 
 test('separator candidate passes only corroborated historical recovery, otherwise stays reviewable',async()=>{
- const body={...observation(),chat:observation().chat.replace('Top 12.5\nBottom 11.125','12.5.11.2')};
+ const body={...observation(),chat:observation().chat.replace('Top 12.5ft\nBottom 11.125','12.5.11.2')};
  const prior={wellDown:false,packetId:'previous',requestType:'pull',wellName:'Kahuna 5',dateTimeUTC:new Date(Date.now()-30*60000).toISOString(),tankLevelFeet:14,bblsTaken:240,tankAfterInches:144,flowRateDays:60/1440,canonicalProcessingComplete:true};
  database.set('packets/processed/previous',prior);
  const result=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(result.result.status).toBe('queued');
@@ -185,4 +185,24 @@ test('unchanged confirmation completes after processor consumes no-op, without a
  database.delete('packets/incoming/'+event);
  const final=await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity});
  expect(final.result).toMatchObject({status:'complete',needsReview:false,correctionPending:false,packetId:first.result.packetId});
+});
+
+test.each([['well down',true],['well up',false],['live',false],['down',true]])('explicit %s reaches packet as authoritative well state',async(status,down)=>{
+ const body={...observation(),chat:observation().chat+'\n'+status};
+ const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(answer.result.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+answer.result.packetId);
+ expect(packet).toMatchObject({wellDown:down,wellDownIsAuthoritative:true});
+ expect(packet.watchdogProvenance.wellOperatingStatus).toMatchObject({wellDown:down,source:'explicit_chat_status'});
+ const retry=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(retry.result.packetId).toBe(answer.result.packetId);
+ database.set('packets/processed/'+answer.result.packetId,{...packet,tankAfterInches:133.5,canonicalProcessingComplete:true});
+ const receipt=()=>call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:answer.result.identity});
+ expect((await receipt()).result.status).toBe('complete');
+ database.set('packets/processed/'+answer.result.packetId,{...packet,wellDown:!down,tankAfterInches:133.5,canonicalProcessingComplete:true});
+ expect((await receipt()).result.status).toBe('incomplete');
+});
+test('routine pull leaves status alone and ambiguous status cannot publish',async()=>{
+ const ordinary=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());
+ const packet=database.get('packets/incoming/'+ordinary.result.packetId);expect(packet.wellDown).toBeUndefined();expect(packet.wellDownIsAuthoritative).toBe(false);
+ const conflict=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),messageId:'conflict',chat:observation().chat+'\nwell down\nwell live'});
+ expect(conflict.result.status).toBe('review');expect(conflict.result.issues.join(' ')).toMatch(/Ambiguous well operating status/);
 });

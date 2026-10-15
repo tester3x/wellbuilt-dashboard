@@ -117,3 +117,14 @@ test('a processed sibling does not lock a separate held well in an unchanged pos
 
 
 test('format refresh preserves settled measurements',()=>{const dir=mkdtempSync(path.join(os.tmpdir(),'watchdog-'));try{const q=new Queue(dir);q.ingest({id:'settled',channel:'group',chat:header(Date.now(),'Driver','Kahuna 5\n7.9\n5.9\n170'),options:{}});const m=Object.values(q.data.messages)[0];m.rows[0].tankLevelFeet=7.9;q.data.deliveries={[m.rows[0].id]:{status:'complete',needsReview:false}};q.reparseChannels({group:{}});assert.equal(m.rows[0].tankLevelFeet,7.9);}finally{rmSync(dir,{recursive:true,force:true});}});
+
+test('operating status survives capture parsing and transport sends original text for server reparse',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'wb-status-'));try{
+  const q=new Queue(dir);const chat=header(Date.now(),'Driver',`Thor 1\nwell down\n12'6\n5'6\n140 bbl`);
+  q.ingest({id:'status-pull',channel:'group',chat,options:{wellNames:['Thor 1']}});
+  const row=q.snapshot().messages[0].rows[0];assert.equal(row.wellDown,true);assert.equal(row.tankLevelFeet,12.5);assert.deepEqual(row.issues,[]);
+  const t=new Transport(q);t.lastLifecycleCheck=Date.now();t.secret='synthetic';t.config={enabled:true,enabledAt:Date.now()-60000};
+  let calls=0;t.request=async(endpoint,body)=>{assert.equal(endpoint,'ingestWatchdogPullV2');assert.equal(body.chat,chat);assert.equal(body.wellDown,undefined);calls++;return {ok:true,status:'queued'};};
+  await t.tick(false);assert.equal(calls,1);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
