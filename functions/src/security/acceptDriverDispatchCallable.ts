@@ -38,6 +38,10 @@ export const acceptDriverDispatch = httpsV2.onCall(
           const snap = await tx.get(fs.collection('dispatches').doc(id));
           return snap.exists ? (snap.data() as Record<string, unknown>) : null;
         },
+        getInvoice: async (id) => {
+          const snap = await tx.get(fs.collection('invoices').doc(id));
+          return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+        },
         getRevision: async (id) => {
           const snap = await tx.get(fs.collection(REVISION_COLLECTION).doc(id));
           return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };

@@ -38,6 +38,7 @@ export function evaluateAcceptDriverDispatch(input: {
   dispatchId: unknown;
   caller: { driverId: string; companyId: string } | null;
   existing: Record<string, unknown> | null;
+  previousInvoice?: Record<string, unknown> | null;
   invoiceDocId?: unknown;
   invoiceNumber?: unknown;
   targetStatus?: unknown;
@@ -67,16 +68,21 @@ export function evaluateAcceptDriverDispatch(input: {
   const invoiceDocId = str(input.invoiceDocId) || undefined;
   const invoiceNumber = str(input.invoiceNumber) || undefined;
   const existingInvoice = str(input.existing.invoiceDocId);
+  const loads = typeof input.existing.loadsCompleted === 'number' && Number.isFinite(input.existing.loadsCompleted)
+    ? Math.max(0, Math.trunc(input.existing.loadsCompleted))
+    : 0;
+  const loadCount = Number(input.existing.loadCount ?? 1);
+  const prior = input.previousInvoice;
+  const validNextLoad = from === 'pending' && Number.isInteger(loadCount) && loadCount > 1 &&
+    loads >= 1 && loads < loadCount && prior?.status === 'closed' &&
+    prior?.companyId === companyId && prior?.dispatchId === id.dispatchId;
   if (invoiceDocId && existingInvoice && existingInvoice !== invoiceDocId) {
-    return fail('invoice_conflict');
+    if (!validNextLoad) return fail('invoice_conflict');
   }
 
   const already =
     (from === 'accepted' && status === 'accepted') ||
     (from === 'in_progress' && status === 'in_progress');
-  const loads = typeof input.existing.loadsCompleted === 'number' && Number.isFinite(input.existing.loadsCompleted)
-    ? Math.max(0, Math.trunc(input.existing.loadsCompleted))
-    : 0;
   const firstStart = from === 'pending' || from === 'paused';
   return {
     ok: true,
@@ -105,6 +111,7 @@ export async function runAcceptDriverDispatch(input: {
   invoiceNumber?: unknown;
   targetStatus?: unknown;
   getDispatch: (id: string) => Promise<Record<string, unknown> | null>;
+  getInvoice?: (id: string) => Promise<Record<string, unknown> | null>;
   getRevision: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
   getCompany?: (id: string) => Promise<Record<string, unknown> | null>;
   applyUpdate: (id: string, patch: Record<string, unknown>) => void;
@@ -113,10 +120,16 @@ export async function runAcceptDriverDispatch(input: {
   if (!id.ok) return id;
   if (!input.caller?.driverId || !input.caller.companyId) return fail('unauthenticated_driver');
   const existing = await input.getDispatch(id.dispatchId);
+  const existingInvoiceId = str(existing?.invoiceDocId);
+  const nextInvoiceId = str(input.invoiceDocId);
+  const previousInvoice = existingInvoiceId && nextInvoiceId && existingInvoiceId !== nextInvoiceId &&
+    str(existing?.status).toLowerCase() === 'pending' && input.getInvoice
+    ? await input.getInvoice(existingInvoiceId) : null;
   const decided = evaluateAcceptDriverDispatch({
     dispatchId: id.dispatchId,
     caller: input.caller,
     existing,
+    previousInvoice,
     invoiceDocId: input.invoiceDocId,
     invoiceNumber: input.invoiceNumber,
     targetStatus: input.targetStatus,

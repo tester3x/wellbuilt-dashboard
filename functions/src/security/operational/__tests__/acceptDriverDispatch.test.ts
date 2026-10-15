@@ -95,6 +95,34 @@ function boundJob(rev: { packageId: string; revision: number; contentHash: strin
 }
 
 describe('F1 acceptDriverDispatch provenance', () => {
+  it('links the next invoice only after the previous load is closed for this dispatch', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const existing = boundJob(rev, {
+      status: 'pending', loadCount: 2, loadsCompleted: 1, invoiceDocId: 'first-invoice',
+    });
+    const caller = { driverId: DRIVER, companyId: COMPANY };
+    const request = { dispatchId: 'd1', caller, existing, invoiceDocId: 'second-invoice' };
+    const closed = { status: 'closed', companyId: COMPANY, dispatchId: 'd1' };
+    expect(evaluateAcceptDriverDispatch(request).ok).toBe(false);
+    expect(evaluateAcceptDriverDispatch({ ...request, previousInvoice: closed }).ok).toBe(true);
+    expect(evaluateAcceptDriverDispatch({
+      ...request, existing: { ...existing, loadsCompleted: 2 }, previousInvoice: closed,
+    }).ok).toBe(false);
+    expect(evaluateAcceptDriverDispatch({
+      ...request, previousInvoice: { ...closed, companyId: OTHER },
+    }).ok).toBe(false);
+    const updates: Record<string, unknown>[] = [];
+    const result = await runAcceptDriverDispatch({
+      dispatchId: 'd1', caller, invoiceDocId: 'second-invoice',
+      getDispatch: async () => existing,
+      getInvoice: async () => closed,
+      getRevision: async (id) => ({ exists: true, data: store.revisions.get(id) }),
+      applyUpdate: (_id, patch) => { updates.push(patch); },
+    });
+    expect(result.ok).toBe(true);
+    expect(updates[0]).toMatchObject({ invoiceDocId: 'second-invoice', loadsCompleted: 2 });
+  });
   it('presence evaluator can succeed while runtime still loads the stored revision', async () => {
     const store = new MemoryStore();
     const rev = await publishRevision(store);
