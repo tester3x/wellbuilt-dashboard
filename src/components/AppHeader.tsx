@@ -65,12 +65,6 @@ export function AppHeader() {
     <header className="bg-gray-800 border-b border-gray-700 sticky top-0 z-40">
       {/* Compact account identity shares the tools row; navigation stays full-width. */}
       <div className="w-full min-w-0 flex flex-col items-center gap-1 px-3 pt-2">
-        {isPlatformAdmin(user) && <label className="order-1 text-sm text-gray-300">Company
-          <select aria-label="Operating company" value={operatingCompanyId || ''} onChange={e => selectOperatingCompany(e.target.value)} className="ml-2 bg-gray-700 rounded px-3 py-2 text-white">
-            <option value="">Show all companies</option>
-            {companies.map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
-          </select>
-        </label>}
         {/* LEFT: Admin + Truth tools (admin/it) + Sign Out, pinned to left edge */}
         <div aria-label="Account and administration" className="order-2 w-full min-w-0 flex flex-wrap justify-center items-center gap-2 [&>a]:whitespace-nowrap [&>button]:whitespace-nowrap">
           <div aria-label="Signed-in account" className="mr-auto min-w-0 max-w-full text-left">
@@ -79,6 +73,12 @@ export function AppHeader() {
               {user.email} &bull; <span>{getRoleLabel(user.role, userCompany)}</span>
             </p>
           </div>
+        {isPlatformAdmin(user) && <label className="flex max-w-full items-center gap-2 text-xs text-gray-300">Company
+          <select aria-label="Operating company" value={operatingCompanyId || ''} onChange={e => selectOperatingCompany(e.target.value)} className="min-w-0 max-w-[12rem] rounded bg-gray-700 px-2 py-1.5 text-xs text-white">
+            <option value="">Show all companies</option>
+            {companies.map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+          </select>
+        </label>}
           {hasCapability(user, 'viewAdmin', userCompany) && (
             <Link
               href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
