@@ -33,6 +33,7 @@ let enRouteDestination = '';
 let screenshotMode = false;
 let pickupEntered = false;
 let currentLeg = 'pickup';
+let emptyDrawerUntil = 0;
 const screenNames = ['home', 'enroute', 'pickup', 'dropoff', 'summary'];
 let referenceScreens;
 process.on('SIGINT', () => { stopped = true; });
@@ -162,9 +163,10 @@ async function drive() {
     }
     return;
   }
-  // A blank bottom sheet hides the verified company header. Closing that
-  // sheet cannot create or change a job; the next action rechecks the header.
+  // The tab count can include an informational REMAINING-load card while no
+  // dispatch is pending. Avoid repeatedly reopening that empty drawer.
   if (visible(xml, 'Job Drawer') && visible(xml, 'No pending dispatches')) {
+    emptyDrawerUntil = Date.now() + 30_000;
     actOnce('close-empty-drawer', () => tap(540, 1000));
     return;
   }
@@ -231,7 +233,7 @@ async function drive() {
   // A broad scan can catch an unrelated digit and reopen an empty drawer
   // indefinitely after a multi-load close failed to cycle on the server.
   const drawerTab = /content-desc="[^"]*Job Drawer,\s*[•·],\s*(\d+)"/.exec(xml);
-  if (drawerTab && Number(drawerTab[1]) > 0) {
+  if (drawerTab && Number(drawerTab[1]) > 0 && Date.now() >= emptyDrawerUntil) {
     actOnce('open-job-drawer', () => tap(540, 2350));
   }
 }
