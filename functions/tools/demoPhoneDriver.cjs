@@ -13,6 +13,7 @@ const { initializeApp } = require('firebase/app');
 const { getFunctions, httpsCallable } = require('firebase/functions');
 const { getAuth, signInWithCustomToken } = require('firebase/auth');
 const { getFirestore, collection, query, where, getDocsFromServer } = require('firebase/firestore');
+const { verifiedPickupDraftLog } = require('./demoPhoneMeasurement.cjs');
 
 const serial = process.argv[2];
 if (!serial || !/^[a-zA-Z0-9_.:-]+$/.test(serial)) {
@@ -210,20 +211,7 @@ function verifiedPickupDraft(plan, startedAt) {
   // injected into React Native's controlled measurement field. Read the app's
   // own live calculation and fail closed before Depart if it differs.
   const log = call(['logcat', '-d', '-v', 'epoch', '-s', 'ReactNativeJS:V']);
-  for (const line of log.split(/\r?\n/).reverse()) {
-    if (!line.includes('[LiveBottomDiag]')) continue;
-    const observedAt = Number(line.trim().split(/\s+/)[0]) * 1000;
-    if (!Number.isFinite(observedAt) || observedAt < startedAt - 1000) continue;
-    const body = /\{.*\}/.exec(line)?.[0];
-    if (!body) continue;
-    let diag;
-    try { diag = JSON.parse(body); } catch { continue; }
-    if (diag.keypadActiveFieldKey !== 'top') continue;
-    return Math.abs(Number(diag.topFeet) - plan.topFeet) < 0.01
-      && Number(diag.bbls) === plan.bbls
-      && Math.abs(Number(diag.topFeet) * 12 - plan.topInches) < 0.12;
-  }
-  return false;
+  return verifiedPickupDraftLog(log, plan, startedAt);
 }
 function typePickupPlan(plan, doneY) {
   const startedAt = Date.now();
