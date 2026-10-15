@@ -43,6 +43,7 @@ let enRouteSince = 0;
 let enRouteDestination = '';
 let screenshotMode = false;
 let pickupEntered = false;
+let pickupBlocked = false;
 let currentLeg = 'pickup';
 let emptyDrawerUntil = 0;
 let postCloseUntil = 0;
@@ -94,6 +95,19 @@ async function screenFromVerifiedCapture() {
 }
 function tap(x, y) { call(['shell', 'input', 'tap', String(x), String(y)]); }
 function type(value) { call(['shell', 'input', 'text', value]); }
+function pauseInput(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+function tapMeasurementDigit(digit) {
+  const keys = {
+    '0': [120, 2140], '1': [120, 1780], '2': [330, 1780],
+    '3': [540, 1780], '4': [120, 1900], '5': [330, 1900],
+    '6': [540, 1900], '7': [120, 2020], '8': [330, 2020],
+    '9': [540, 2020],
+  };
+  const point = keys[digit];
+  if (!point) throw new Error(`unsupported demo keypad digit: ${digit}`);
+  tap(...point);
+  pauseInput(700);
+}
 function visible(xml, value) { return xml.includes(value); }
 function tapText(xml, label) {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -191,12 +205,45 @@ async function pickupPlan(xml = '') {
     return null;
   }
 }
+function verifiedPickupDraft(plan, startedAt) {
+  // The Android input bridge can drop characters when a whole decimal is
+  // injected into React Native's controlled measurement field. Read the app's
+  // own live calculation and fail closed before Depart if it differs.
+  const log = call(['logcat', '-d', '-v', 'epoch', '-s', 'ReactNativeJS:V']);
+  for (const line of log.split(/\r?\n/).reverse()) {
+    if (!line.includes('[LiveBottomDiag]')) continue;
+    const observedAt = Number(line.trim().split(/\s+/)[0]) * 1000;
+    if (!Number.isFinite(observedAt) || observedAt < startedAt - 1000) continue;
+    const body = /\{.*\}/.exec(line)?.[0];
+    if (!body) continue;
+    let diag;
+    try { diag = JSON.parse(body); } catch { continue; }
+    if (diag.keypadActiveFieldKey !== 'top') continue;
+    return Math.abs(Number(diag.topFeet) - plan.topFeet) < 0.01
+      && Number(diag.bbls) === plan.bbls
+      && Math.abs(Number(diag.topFeet) * 12 - plan.topInches) < 0.12;
+  }
+  return false;
+}
 function typePickupPlan(plan, doneY) {
-  const topFeet = String(Math.round(plan.topFeet * 1000) / 1000);
+  const startedAt = Date.now();
+  const feet = Math.floor(plan.topInches / 12);
+  const inches = plan.topInches % 12;
   tap(120, 760); type(String(plan.bbls)); tap(955, doneY);
-  tap(120, 920); type(topFeet); tap(955, doneY); tap(955, doneY);
+  tap(120, 920);
+  for (const digit of String(feet)) tapMeasurementDigit(digit);
+  tap(400, 2140); pauseInput(700); // Visible SPACE key: feet then inches.
+  for (const digit of String(inches)) tapMeasurementDigit(digit);
+  pauseInput(500);
+  if (!verifiedPickupDraft(plan, startedAt)) {
+    console.error(new Date().toISOString(), 'demo-pickup-entry-unverified; driver paused at pickup',
+      activeWellName, `${plan.topInches}in`, `${plan.bbls}BBL`);
+    return false;
+  }
+  tap(955, doneY); tap(955, doneY);
   console.log(new Date().toISOString(), 'demo-pickup-measurement', activeWellName,
     `${plan.topInches}in`, `${plan.bbls}BBL`, `bottom=${plan.bottomInches}in`);
+  return true;
 }
 async function drive() {
   if (!existsSync(readyFile) || readFileSync(readyFile, 'utf8').trim() !== 'wellbuilt-demo:AntigDemoDriver') return;
@@ -218,6 +265,7 @@ async function drive() {
     if (screen === 'home') {
       screenshotMode = false;
       pickupEntered = false;
+      pickupBlocked = false;
       currentLeg = 'pickup';
       enRouteSince = 0;
       activeWellName = '';
@@ -229,11 +277,12 @@ async function drive() {
     } else {
       enRouteSince = 0;
       if (screen === 'pickup' && currentLeg === 'pickup') {
+        if (pickupBlocked) return;
         if (!pickupEntered) {
           const plan = await pickupPlan();
           if (plan) actOnce('enter-verified-pickup-measurement', () => {
-            typePickupPlan(plan, 1800);
-            pickupEntered = true;
+            pickupEntered = typePickupPlan(plan, 1800);
+            pickupBlocked = !pickupEntered;
           });
         } else {
           actOnce('depart-verified-pickup', () => {
@@ -265,6 +314,7 @@ async function drive() {
   screenshotMode = false;
   if (visible(xml, 'Electronic Ticket Book')) {
     pickupEntered = false;
+    pickupBlocked = false;
     currentLeg = 'pickup';
   }
 
@@ -301,13 +351,14 @@ async function drive() {
   }
   enRouteDestination = '';
   if (visible(xml, 'AT PICKUP') && visible(xml, 'Depart')) {
+    if (pickupBlocked) return;
     if (!pickupEntered) {
       const plan = await pickupPlan(xml);
       if (plan) actOnce('enter-pickup-measurement', () => {
         // Keep the company card collapsed so the form coordinates are stable.
         if (visible(xml, 'P.O. Box 4447')) tap(540, 190);
-        typePickupPlan(plan, 1780);
-        pickupEntered = true;
+        pickupEntered = typePickupPlan(plan, 1780);
+        pickupBlocked = !pickupEntered;
       });
     } else {
       actOnce('depart-pickup', () => { if (!tapText(xml, 'Depart')) tap(540, 2320); });

@@ -5,17 +5,8 @@ import { demoProjectedInches, demoPullPlan, demoTriggerInches, demoWellClock } f
 
 const VIEWER_UID = 'wellbuilt-demo-shared-viewer';
 
-/** Read-only measurement plan for the dedicated Android demo driver. */
-export const demoWellPullPlan = https.onCall(
-  { timeoutSeconds: 15, memory: '256MiB', enforceAppCheck: false },
-  async request => {
-    if (request.auth?.uid !== VIEWER_UID
-      || request.auth.token.staffCompanyId !== DEMO_COMPANY_ID
-      || request.auth.token.staffRole !== 'demo_viewer'
-      || request.auth.token.isDemo !== true) {
-      throw new https.HttpsError('permission-denied', 'demo_viewer_required');
-    }
-    const wellName = typeof request.data?.wellName === 'string' ? request.data.wellName : '';
+/** One source of truth for both demo dispatch readiness and driver measurements. */
+export async function readDemoWellPullPlan(wellName: string) {
     if (!/^Demo Well [1-3]$/.test(wellName)) {
       throw new https.HttpsError('invalid-argument', 'demo_well_required');
     }
@@ -45,7 +36,7 @@ export const demoWellPullPlan = https.onCall(
     }
     const lastPacketId = String(outgoing?.['lastPullPacketId'] || wellName);
     const triggerInches = outgoing
-      ? demoTriggerInches(clock, lastPacketId)
+      ? Number(outgoing['demoTargetInches'] ?? demoTriggerInches(clock, lastPacketId))
       : Number(config['demoInitialTriggerInches']);
     if (!Number.isInteger(triggerInches)
       || triggerInches < clock.minimumTriggerInches
@@ -62,5 +53,18 @@ export const demoWellPullPlan = https.onCall(
       realMinutesPerFoot: clock.realMinutesPerFoot,
       clockMultiplier: clock.clockMultiplier,
     };
+}
+
+/** Read-only measurement plan for the dedicated Android demo driver. */
+export const demoWellPullPlan = https.onCall(
+  { timeoutSeconds: 15, memory: '256MiB', enforceAppCheck: false },
+  async request => {
+    if (request.auth?.uid !== VIEWER_UID
+      || request.auth.token.staffCompanyId !== DEMO_COMPANY_ID
+      || request.auth.token.staffRole !== 'demo_viewer'
+      || request.auth.token.isDemo !== true) {
+      throw new https.HttpsError('permission-denied', 'demo_viewer_required');
+    }
+    return readDemoWellPullPlan(typeof request.data?.wellName === 'string' ? request.data.wellName : '');
   },
 );

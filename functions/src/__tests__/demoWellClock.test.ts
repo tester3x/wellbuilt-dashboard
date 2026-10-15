@@ -42,6 +42,21 @@ describe('demo well recovery and safe pull volume', () => {
     expect(demoTriggerInches(clock, 'ticket-20814')).not.toBe(a);
   });
 
+  test('percentage variation includes the exact target and changes safe pull size', () => {
+    const percentageClock = demoWellClock({ ...config,
+      demoTriggerTargetPercent: 50, demoTriggerVariancePercent: 5,
+    })!;
+    expect(percentageClock.minimumTriggerInches).toBe(108);
+    expect(percentageClock.maximumTriggerInches).toBe(132);
+    const triggers = Array.from({ length: 300 }, (_, index) =>
+      demoTriggerInches(percentageClock, `demo-pull-${index}`));
+    expect(triggers).toContain(120);
+    expect(Math.min(...triggers)).toBeGreaterThanOrEqual(108);
+    expect(Math.max(...triggers)).toBeLessThanOrEqual(132);
+    expect(demoPullPlan(percentageClock, 108, 108).bbls).toBe(120);
+    expect(demoPullPlan(percentageClock, 120, 120).bbls).toBe(140);
+  });
+
   test('simulation is unavailable to a real tenant or an unconfigured demo well', () => {
     expect(demoWellClock({ ...config, companyId: 'liquid-gold' })).toBeNull();
     expect(demoWellClock({ ...config, demoClockMultiplier: undefined })).toBeNull();

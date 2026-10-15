@@ -459,6 +459,7 @@ function DispatchPageInner() {
   const [wellQueueExpanded, setWellQueueExpanded] = useState(true);
   const [stackedLayout, setStackedLayout] = useState(isStackedDispatchLayout);
   const [message, setMessage] = useState('');
+  const [demoWellReadiness, setDemoWellReadiness] = useState<Record<string, boolean>>({});
 
   // Assign modal state (single-well PW)
   // showAssignModal removed — PW card is always visible, assignTarget fills it
@@ -900,6 +901,24 @@ function DispatchPageInner() {
   }, [allOperatorWells, allDisposals, customCatalogLocations, catalogRouteWells]);
   const locationResults = (q: string) => searchDisposals(q, locationCatalog);
   const isDemoCompany = viewedCompanyId === 'wellbuilt-demo';
+
+  useEffect(() => {
+    if (!isDemoCompany || user?.role !== 'demo_viewer') return;
+    let cancelled = false;
+    const refresh = async () => {
+      const entries = await Promise.all([1, 2, 3].map(async number => {
+        const name = `Demo Well ${number}`;
+        try {
+          const result = await httpsCallable(getFirebaseFunctions(), 'demoWellPullPlan')({ wellName: name });
+          return [name, (result.data as { ready?: boolean }).ready === true] as const;
+        } catch { return [name, false] as const; }
+      }));
+      if (!cancelled) setDemoWellReadiness(Object.fromEntries(entries));
+    };
+    void refresh();
+    const interval = window.setInterval(() => { void refresh(); }, 60_000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [isDemoCompany, user]);
 
   // Load dynamic service types from job packages
   // WB admins resolve the operating company from the server-authorized catalog
@@ -1470,7 +1489,17 @@ function DispatchPageInner() {
       setBuilderOperator('Demo Operator');
       setDemoTourTarget('well');
       await pause(1500);
-      for (const letter of 'Demo Well 1') {
+      const readyWells = (await Promise.all([1, 2, 3].map(async number => {
+        const name = `Demo Well ${number}`;
+        try {
+          const result = await httpsCallable(getFirebaseFunctions(), 'demoWellPullPlan')({ wellName: name });
+          return (result.data as { ready?: boolean }).ready ? name : null;
+        } catch { return null; }
+      }))).filter((name): name is string => name !== null);
+      if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
+      if (!readyWells.length) throw new Error('All three demo wells are recovering. Try again shortly.');
+      const tourWellName = readyWells[Math.floor(Date.now() / 60_000) % readyWells.length];
+      for (const letter of tourWellName) {
         setAssignWellSearch(previous => previous + letter);
         await pause(320);
       }
@@ -1479,7 +1508,7 @@ function DispatchPageInner() {
       // Fetch the same governed company catalog for this run when needed.
       let tourWells = allOperatorWells;
       let tourDisposals = allDisposals.map(row => ({ ...row, kind: 'SWD' as const }));
-      if (!tourWells.some(row => row.well_name === 'Demo Well 1')
+      if (!tourWells.some(row => row.well_name === tourWellName)
         || !tourDisposals.some(row => row.well_name === 'Demo SWD 1')) {
         const response = await httpsCallable(getFirebaseFunctions(), 'getDispatchLocationCatalog')({ companyId: 'wellbuilt-demo' });
         if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
@@ -1489,8 +1518,8 @@ function DispatchPageInner() {
         setAllOperatorWells(tourWells);
         setAllDisposals(tourDisposals);
       }
-      const selectedWell = tourWells.find(row => row.well_name === 'Demo Well 1');
-      if (!selectedWell) throw new Error('Demo Well 1 is unavailable');
+      const selectedWell = tourWells.find(row => row.well_name === tourWellName);
+      if (!selectedWell) throw new Error(`${tourWellName} is unavailable`);
       setAssignTarget(wells.find(row => (row.ndicName || row.wellName) === selectedWell.well_name) || {
         wellName: selectedWell.well_name, ndicName: selectedWell.well_name,
         ndicApiNo: selectedWell.api_no, currentLevel: '', etaToMax: '', flowRate: '', timestamp: '',
@@ -1539,7 +1568,7 @@ function DispatchPageInner() {
       });
       if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
       window.dispatchEvent(new Event('wellbuilt:demo-phone-tour'));
-      setMessage('Dispatched Demo Well 1 to AntigDemoDriver. Watch the phone: the driver opens DDJD, taps Accept, then sees Job Review.');
+      setMessage(`Dispatched ${tourWellName} to AntigDemoDriver. Watch the phone: the driver opens DDJD, taps Accept, then sees Job Review.`);
       cancelPWDispatch();
       setDemoTourTarget(null);
       setWorkspaceTab('jobs');
@@ -2838,9 +2867,10 @@ function DispatchPageInner() {
                   <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
                   {isDemoCompany && (
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded border border-cyan-700/60 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-100">
-                      <span>Try a demo load: search for Demo Well 1, choose a demo driver, then search for Demo SWD 1. The real builder searches as you type.
+                      <span>Try a demo load: choose a ready Demo Well (1–3), select a demo driver, then search for Demo SWD 1. The real builder searches as you type.
                         {user?.role === 'demo_viewer' && ' Dispatch sends a real demo-company job to the selected driver.'}
-                        {' '}Demo well levels recover on an accelerated clock that pauses at the next pull level; flow rates show their real-world target. Pull volume is capped by each well’s allowed bottom.</span>
+                        {' '}Demo well levels recover on an accelerated clock that pauses at the next pull level; flow rates show their real-world target. Pull volume is capped by each well’s allowed bottom.
+                        {user?.role === 'demo_viewer' && <> {[1, 2, 3].map(number => <span key={number} className="mr-2 whitespace-nowrap">Well {number}: {demoWellReadiness[`Demo Well ${number}`] === undefined ? 'checking' : demoWellReadiness[`Demo Well ${number}`] ? 'ready' : 'recovering'}</span>)}</>}</span>
                       {user?.role === 'demo_viewer' && <button type="button" onClick={demoTourRunning.current ? stopDemoDispatchTour : runDemoDispatchTour}
                         className="rounded border border-cyan-500 bg-cyan-700/50 px-3 py-1.5 font-semibold text-white hover:bg-cyan-600/70">
                         {demoTourTarget ? 'Stop walkthrough' : 'Watch a dispatch walkthrough'}
@@ -2880,7 +2910,7 @@ function DispatchPageInner() {
                           onSelect={(w) => { setAssignTarget(wells.find(p => (p.ndicName || p.wellName) === w.well_name) || { wellName: w.well_name, ndicName: w.well_name, ndicApiNo: w.api_no, currentLevel: '', etaToMax: '', flowRate: '', timestamp: '' }); if (!builderOperator) setBuilderOperator(w.operator || ''); setAssignWellSearch(''); }}
                           getItemKey={(w) => w.well_name}
                           renderItem={(w) => <CatalogSearchResult row={w} />}
-                          placeholder={isDemoCompany ? 'Search wells — try Demo Well 1' : 'Search wells or click Assign below...'}
+                          placeholder={isDemoCompany ? 'Search wells — Demo Well 1, 2, or 3' : 'Search wells or click Assign below...'}
                           ariaLabel="Search wells"
                           minChars={2}
                           inputClassName="w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none border-gray-700 focus:border-blue-500"

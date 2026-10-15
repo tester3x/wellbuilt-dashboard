@@ -7,6 +7,7 @@ import { loadVerifiedRevision } from '../security/operational/dispatchPinRuntime
 import { resolveCanonicalJobType, stampDispatchBinding } from '../security/operational/dispatchPacketPin';
 import { INDEX_COLLECTION } from '../security/operational/jobPacketRevisionStore';
 import { packageIndexDocId } from '../security/operational/jobPacketPublish';
+import { readDemoWellPullPlan } from './wellPlan';
 
 const VIEWER_UID = 'wellbuilt-demo-shared-viewer';
 const MAX_JOBS = 24;
@@ -57,6 +58,10 @@ export const dispatchDemoViewerJob = https.onCall(
       || driverProfile.active === false) {
       throw new https.HttpsError('failed-precondition', 'demo_catalog_selection_required');
     }
+    const pullPlan = await readDemoWellPullPlan(wellName);
+    if (!pullPlan.ready) {
+      throw new https.HttpsError('failed-precondition', 'demo_well_recovering');
+    }
     const revision = Number(packetHead.get('latestRevision'));
     if (!Number.isInteger(revision) || revision < 1) {
       throw new https.HttpsError('failed-precondition', 'demo_packet_missing');
@@ -78,6 +83,9 @@ export const dispatchDemoViewerJob = https.onCall(
       const jobs = existing.docs.map(doc => ({ ref: doc.ref, data: doc.data() }));
       if (jobs.some(job => job.data.driverId === driverId && ACTIVE.has(String(job.data.status)))) {
         throw new https.HttpsError('resource-exhausted', 'demo_driver_has_active_job');
+      }
+      if (jobs.some(job => job.data.wellName === wellName && ACTIVE.has(String(job.data.status)))) {
+        throw new https.HttpsError('resource-exhausted', 'demo_well_has_active_job');
       }
       if (jobs.length >= MAX_JOBS) {
         const oldest = jobs.filter(job => FINISHED.has(String(job.data.status)))

@@ -16,18 +16,29 @@ export function demoWellClock(config: Record<string, unknown>): DemoWellClock | 
   if (config.companyId !== 'wellbuilt-demo' || config.isDemo !== true) return null;
   const realMinutesPerFoot = Number(config.demoRealMinutesPerFoot);
   const clockMultiplier = Number(config.demoClockMultiplier);
-  const minimumTriggerInches = Number(config.demoTriggerMinInches);
-  const maximumTriggerInches = Number(config.demoTriggerMaxInches);
+  const tankHeightInches = Number(config.tankHeight) * 12;
+  const targetPercent = Number(config.demoTriggerTargetPercent);
+  const variancePercent = Number(config.demoTriggerVariancePercent);
+  const percentageRange = config.demoTriggerTargetPercent !== undefined
+    && config.demoTriggerVariancePercent !== undefined;
+  const minimumTriggerInches = percentageRange
+    ? Math.round(tankHeightInches * (targetPercent - variancePercent) / 100)
+    : Number(config.demoTriggerMinInches);
+  const maximumTriggerInches = percentageRange
+    ? Math.round(tankHeightInches * (targetPercent + variancePercent) / 100)
+    : Number(config.demoTriggerMaxInches);
   const bottomInches = Number(config.bottomLevel) * 12;
   const bblPerFoot = Number(config.bblPerFoot);
   const tanks = Number(config.tanks ?? config.numTanks);
   const pullCapBbls = Number(config.demoPullCapBbls);
-  const tankHeightInches = Number(config.tankHeight) * 12;
   if (![realMinutesPerFoot, clockMultiplier, minimumTriggerInches, maximumTriggerInches,
     bottomInches, bblPerFoot, tanks, pullCapBbls, tankHeightInches].every(Number.isFinite)
     || realMinutesPerFoot < 1 || realMinutesPerFoot > 1440
     || clockMultiplier < 1 || clockMultiplier > 120
     || bottomInches < 0 || tanks !== 1 || bblPerFoot !== 20 || pullCapBbls <= 0
+    || (percentageRange && (targetPercent <= 0 || targetPercent > 100
+      || variancePercent < 0 || variancePercent >= targetPercent
+      || targetPercent + variancePercent > 100))
     || minimumTriggerInches <= bottomInches || maximumTriggerInches < minimumTriggerInches
     || maximumTriggerInches > tankHeightInches) return null;
   return { realMinutesPerFoot, clockMultiplier, minimumTriggerInches, maximumTriggerInches,
