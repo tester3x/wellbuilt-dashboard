@@ -187,7 +187,10 @@ export function DemoPhoneOverlay() {
   }, [phoneTourStep]);
 
   useEffect(() => {
-    if (!phoneTourStep || !liveScreen || explore || !frame.available || frame.capturedAt <= phoneTourStartedAt) return;
+    // The dedicated Android stream and browser can disagree on wall time by
+    // several seconds. Follow a fresh, live screen transition with tolerance.
+    if (!phoneTourStep || !liveScreen || explore || !frame.available || !frame.live
+      || frame.capturedAt <= phoneTourStartedAt - 45_000) return;
     if (liveScreen === 'drawer') setPhoneTourStep('drawer');
     else if (liveScreen === 'review') setPhoneTourStep('review');
     else if (liveScreen === 'enroute' || liveScreen === 'pickup' || liveScreen === 'dropoff') setPhoneTourStep(null);
