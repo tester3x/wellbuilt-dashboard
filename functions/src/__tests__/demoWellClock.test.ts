@@ -9,21 +9,24 @@ import {
 const config = {
   companyId: 'wellbuilt-demo', isDemo: true,
   demoRealMinutesPerFoot: 60, demoClockMultiplier: 12,
-  demoTriggerMinInches: 117, demoTriggerMaxInches: 133,
-  bottomLevel: 3, tanks: 1, bblPerFoot: 20, demoPullCapBbls: 140, tankHeight: 20,
+  demoTriggerMinInches: 108, demoTriggerMaxInches: 132,
+  bottomLevel: 3, tanks: 1, bblPerFoot: 20, demoPullCapBbls: 120, tankHeight: 20,
 };
 
 describe('demo well recovery and safe pull volume', () => {
   const clock = demoWellClock(config)!;
 
-  test('a 9-foot top can supply 120 BBL and no more above a 3-foot bottom', () => {
+  test('9 to 11 foot tops never pull more than 120 BBL or below 3 feet', () => {
     expect(demoPullPlan(clock, 108, 108)).toEqual({
       ready: true, topInches: 108, bbls: 120, bottomInches: 36,
     });
     const varyingTop = demoPullPlan(clock, 117, 117);
-    expect(varyingTop.bbls).toBe(135);
-    expect(varyingTop.bottomInches).toBe(36);
-    expect(demoPullPlan(clock, 133, 133).bbls).toBe(140);
+    expect(varyingTop.bbls).toBe(120);
+    expect(varyingTop.bottomInches).toBe(45);
+    expect(demoPullPlan(clock, 132, 132)).toEqual({
+      ready: true, topInches: 132, bbls: 120, bottomInches: 60,
+    });
+    expect(demoWellClock({ ...config, demoPullCapBbls: 140 })!.pullCapBbls).toBe(120);
   });
 
   test('a real 60-minute-per-foot rate recovers six feet in 30 demo minutes at 12x', () => {
@@ -37,8 +40,8 @@ describe('demo well recovery and safe pull volume', () => {
   test('the next trigger is stable for a packet and stays inside the configured range', () => {
     const a = demoTriggerInches(clock, 'ticket-20813');
     expect(a).toBe(demoTriggerInches(clock, 'ticket-20813'));
-    expect(a).toBeGreaterThanOrEqual(117);
-    expect(a).toBeLessThanOrEqual(133);
+    expect(a).toBeGreaterThanOrEqual(108);
+    expect(a).toBeLessThanOrEqual(132);
     expect(demoTriggerInches(clock, 'ticket-20814')).not.toBe(a);
   });
 
@@ -54,7 +57,7 @@ describe('demo well recovery and safe pull volume', () => {
     expect(Math.min(...triggers)).toBeGreaterThanOrEqual(108);
     expect(Math.max(...triggers)).toBeLessThanOrEqual(132);
     expect(demoPullPlan(percentageClock, 108, 108).bbls).toBe(120);
-    expect(demoPullPlan(percentageClock, 120, 120).bbls).toBe(140);
+    expect(demoPullPlan(percentageClock, 120, 120).bbls).toBe(120);
   });
 
   test('simulation is unavailable to a real tenant or an unconfigured demo well', () => {

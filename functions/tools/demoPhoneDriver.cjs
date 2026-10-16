@@ -49,6 +49,7 @@ let currentLeg = 'pickup';
 let emptyDrawerUntil = 0;
 let postCloseUntil = 0;
 let activeWellName = '';
+let activeServiceJob = null;
 const screenNames = ['home', 'enroute', 'pickup', 'dropoff', 'summary'];
 let referenceScreens;
 process.on('SIGINT', () => { stopped = true; });
@@ -86,6 +87,20 @@ async function screenFromVerifiedCapture() {
   });
   const ranked = scores.map((score, index) => ({ name: screenNames[index], score }))
     .sort((a, b) => a.score - b.score);
+  if (activeServiceJob && ranked[0].score <= 15 && ranked[0].name === 'pickup') {
+    // Service tickets prefill their planned BBLs. Their longer well title
+    // brings the pickup/drop-off reference scores closer together. Match the
+    // green AT PICKUP badge before allowing the pickup-stage action.
+    const badge = await sharp(screenshot()).extract({ left: 12, top: 230, width: 360, height: 75 })
+      .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    let green = 0;
+    for (let offset = 0; offset < badge.data.length; offset += badge.info.channels) {
+      const [red, g, blue] = badge.data.subarray(offset, offset + 3);
+      if (g > 85 && g > red * 1.35 && g > blue * 1.1) green++;
+    }
+    if (green > 70) return 'pickup';
+    if (currentLeg === 'dropoff' && green < 15) return 'dropoff';
+  }
   // A screenshot may be mid-transition, on an unexpected app screen, or from
   // another company. Ambiguous captures must never receive a blind tap.
   if (ranked[0].score > 15 || ranked[1].score - ranked[0].score < 2) {
@@ -140,9 +155,6 @@ function demoOnly(xml) {
     (visible(xml, 'Job Drawer') && visible(xml, 'Demo Operator'));
 }
 async function matchingPendingDemoDispatch(xml) {
-  const well = /text="(Demo Well \d+)"/.exec(xml)?.[1];
-  const disposal = /text="(?:Drop-off: )?(Demo SWD \d+)"/.exec(xml)?.[1];
-  if (!well || !disposal) return false;
   try {
     await ensureDemoViewer();
     const snapshot = await Promise.race([
@@ -153,12 +165,22 @@ async function matchingPendingDemoDispatch(xml) {
       )),
       sleep(10_000).then(() => { throw new Error('demo dispatch read timed out'); }),
     ]);
-    const matched = snapshot.docs.some((item) => {
-      const job = item.data();
-      return job.driverId === DEMO_DRIVER_ID && job.wellName === well && job.disposal === disposal;
+    const matched = snapshot.docs.map(item => item.data()).find((job) => {
+      const ordinary = job.jobType === 'pw' && /^Demo Well [1-3]$/.test(job.wellName)
+        && /^Demo SWD [1-2]$/.test(job.disposal);
+      const service = job.jobType === 'service' && job.serviceType === 'Hot Oiler'
+        && /^Demo Service Well [12]$/.test(job.wellName)
+        && /^Demo Well [1-3]$/.test(job.disposal)
+        && Number.isInteger(job.bbls) && job.bbls >= 5 && job.bbls <= 120;
+      return job.driverId === DEMO_DRIVER_ID && (ordinary || service)
+        && xml.includes(job.wellName) && xml.includes(job.disposal);
     });
-    if (matched) activeWellName = well;
-    return matched;
+    if (matched) {
+      activeWellName = matched.wellName;
+      activeServiceJob = matched.jobType === 'service'
+        ? { wellName: matched.wellName, disposal: matched.disposal, bbls: matched.bbls } : null;
+    }
+    return Boolean(matched);
   } catch (error) {
     viewerReady = undefined;
     console.warn(new Date().toISOString(), 'demo-dispatch-server-check-failed', error.message);
@@ -173,6 +195,10 @@ async function ensureDemoViewer() {
   await viewerReady;
 }
 async function pickupPlan(xml = '') {
+  if (activeServiceJob) {
+    return { companyId: 'wellbuilt-demo', wellName: activeServiceJob.wellName,
+      bbls: activeServiceJob.bbls, service: true };
+  }
   let wellName = /text="(Demo Well [1-3])"/.exec(xml)?.[1] || activeWellName;
   if (!wellName) {
     try {
@@ -195,7 +221,7 @@ async function pickupPlan(xml = '') {
     const result = await httpsCallable(getFunctions(demoApp, 'us-central1'), 'demoWellPullPlan')({ wellName });
     const plan = result.data;
     if (plan.companyId !== 'wellbuilt-demo' || plan.wellName !== wellName || !plan.ready
-      || !Number.isInteger(plan.bbls) || plan.bbls < 5 || plan.bbls > 140
+      || !Number.isInteger(plan.bbls) || plan.bbls < 5 || plan.bbls > 120
       || !Number.isInteger(plan.topInches) || plan.topInches < plan.allowedBottomInches
       || plan.bottomInches < plan.allowedBottomInches - 0.1) return null;
     activeWellName = wellName;
@@ -214,6 +240,13 @@ function verifiedPickupDraft(plan, startedAt) {
   return verifiedPickupDraftLog(log, plan, startedAt);
 }
 function typePickupPlan(plan, doneY) {
+  if (plan.service) {
+    let entered;
+    try { entered = ui(); } catch { return false; }
+    const verified = visible(entered, 'AT PICKUP') && visible(entered, `text="${plan.bbls}"`);
+    if (!verified) console.error(new Date().toISOString(), 'demo-service-bbls-unverified', plan.wellName, plan.bbls);
+    return verified;
+  }
   const startedAt = Date.now();
   const feet = Math.floor(plan.topInches / 12);
   const inches = plan.topInches % 12;
@@ -257,6 +290,7 @@ async function drive() {
       currentLeg = 'pickup';
       enRouteSince = 0;
       activeWellName = '';
+      activeServiceJob = null;
     } else if (screen === 'enroute') {
       if (!enRouteSince) enRouteSince = Date.now();
       if (Date.now() - enRouteSince >= arrivalDelayMs) {
@@ -269,7 +303,10 @@ async function drive() {
         if (!pickupEntered) {
           const plan = await pickupPlan();
           if (plan) actOnce('enter-verified-pickup-measurement', () => {
-            pickupEntered = typePickupPlan(plan, 1800);
+            // WB Tickets pre-populates service BBLs from the dispatch card.
+            // Screenshot mode is only entered after the real app's UI tree
+            // became unavailable; the server-bound job supplies the amount.
+            pickupEntered = plan.service ? true : typePickupPlan(plan, 1800);
             pickupBlocked = !pickupEntered;
           });
         } else {
@@ -304,6 +341,8 @@ async function drive() {
     pickupEntered = false;
     pickupBlocked = false;
     currentLeg = 'pickup';
+    activeWellName = '';
+    activeServiceJob = null;
   }
 
   if (visible(xml, 'Starting Job...')) return;
@@ -324,8 +363,10 @@ async function drive() {
   if (visible(xml, 'EN ROUTE') && visible(xml, 'Arrived (No GPS)')) {
     // The final demo location in the accessibility tree is the modal's
     // destination; earlier matches belong to the underlying ticket header.
-    const locations = [...xml.matchAll(/text="(Demo (?:Well|SWD) \d+)"/g)];
-    const destination = locations.at(-1)?.[1].startsWith('Demo SWD') ? 'dropoff' : 'pickup';
+    const locations = [...xml.matchAll(/text="(Demo (?:Service )?(?:Well|SWD) \d+)"/g)];
+    const modalLocation = locations.at(-1)?.[1] || '';
+    const destination = modalLocation === activeServiceJob?.disposal
+      || modalLocation.startsWith('Demo SWD') ? 'dropoff' : 'pickup';
     if (enRouteDestination !== destination) {
       enRouteDestination = destination;
       enRouteSince = Date.now();

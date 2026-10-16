@@ -30,12 +30,14 @@ export function demoWellClock(config: Record<string, unknown>): DemoWellClock | 
   const bottomInches = Number(config.bottomLevel) * 12;
   const bblPerFoot = Number(config.bblPerFoot);
   const tanks = Number(config.tanks ?? config.numTanks);
-  const pullCapBbls = Number(config.demoPullCapBbls);
+  const configuredPullCapBbls = Number(config.demoPullCapBbls);
+  // A demo load never exceeds 120 BBL, even if an older config has a higher cap.
+  const pullCapBbls = Math.min(configuredPullCapBbls, 120);
   if (![realMinutesPerFoot, clockMultiplier, minimumTriggerInches, maximumTriggerInches,
-    bottomInches, bblPerFoot, tanks, pullCapBbls, tankHeightInches].every(Number.isFinite)
+    bottomInches, bblPerFoot, tanks, configuredPullCapBbls, tankHeightInches].every(Number.isFinite)
     || realMinutesPerFoot < 1 || realMinutesPerFoot > 1440
     || clockMultiplier < 1 || clockMultiplier > 120
-    || bottomInches < 0 || tanks !== 1 || bblPerFoot !== 20 || pullCapBbls <= 0
+    || bottomInches < 0 || tanks !== 1 || bblPerFoot !== 20 || configuredPullCapBbls <= 0
     || (percentageRange && (targetPercent <= 0 || targetPercent > 100
       || variancePercent < 0 || variancePercent >= targetPercent
       || targetPercent + variancePercent > 100))

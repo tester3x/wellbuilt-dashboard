@@ -10,6 +10,8 @@ import { packageIndexDocId } from '../security/operational/jobPacketPublish';
 import { readDemoWellPullPlan } from './wellPlan';
 
 const VIEWER_UID = 'wellbuilt-demo-shared-viewer';
+const DEMO_PHONE_DRIVER_ID = '2f6e6f75-b468-4239-9831-71faeb623acb';
+const DEMO_SERVICE_WELLS = new Set(['Demo Service Well 1', 'Demo Service Well 2']);
 const MAX_JOBS = 24;
 const ACTIVE = new Set(['pending', 'accepted', 'in_progress', 'paused']);
 const FINISHED = new Set(['completed', 'cancelled', 'declined']);
@@ -24,17 +26,27 @@ export const dispatchDemoViewerJob = https.onCall(
       throw new https.HttpsError('permission-denied', 'demo_viewer_required');
     }
     const input = request.data || {};
-    if (Object.keys(input).some(key => !['wellName', 'disposal', 'driverId', 'loadCount', 'notes'].includes(key))) {
+    if (Object.keys(input).some(key => !['wellName', 'disposal', 'driverId', 'loadCount', 'notes', 'jobType', 'serviceType', 'bbls'].includes(key))) {
       throw new https.HttpsError('invalid-argument', 'unsupported_demo_field');
+    }
+    const serviceJob = input.jobType === 'service';
+    if (input.jobType !== undefined && input.jobType !== 'pw' && !serviceJob) {
+      throw new https.HttpsError('invalid-argument', 'unsupported_demo_job_type');
     }
     const wellName = typeof input.wellName === 'string' ? input.wellName.trim() : '';
     const disposal = typeof input.disposal === 'string' ? input.disposal.trim() : '';
     const driverId = typeof input.driverId === 'string' ? input.driverId.trim() : '';
     const loadCount = Number(input.loadCount ?? 1);
     const notes = typeof input.notes === 'string' ? input.notes.trim() : '';
+    const bbls = Number(input.bbls);
     if (!wellName || !disposal || !/^[0-9a-f-]{36}$/i.test(driverId)
       || !Number.isInteger(loadCount) || loadCount !== 1
-      || notes.length > 150) {
+      || notes.length > 150
+      || (serviceJob && (input.serviceType !== 'Hot Oiler' || wellName === disposal
+        || !/^Demo Well [1-3]$/.test(disposal)
+        || !DEMO_SERVICE_WELLS.has(wellName)
+        || !Number.isInteger(bbls) || bbls < 5 || bbls > 120 || bbls % 5 !== 0))
+      || (!serviceJob && (input.serviceType !== undefined || input.bbls !== undefined))) {
       throw new https.HttpsError('invalid-argument', 'invalid_demo_job');
     }
 
@@ -51,16 +63,23 @@ export const dispatchDemoViewerJob = https.onCall(
     }
     const well = Object.values((wells.val() || {}) as Record<string, Record<string, unknown>>)
       .find(value => value.companyId === DEMO_COMPANY_ID && value.name === wellName);
-    const swd = disposalDocs.docs.find(doc => doc.get('displayName') === disposal
-      && doc.get('isCustom') === true && doc.get('isBlacklisted') !== true);
+    const destination = serviceJob
+      ? Object.values((wells.val() || {}) as Record<string, Record<string, unknown>>)
+        .find(value => value.companyId === DEMO_COMPANY_ID && value.name === disposal)
+      : disposalDocs.docs.find(doc => doc.get('displayName') === disposal
+        && doc.get('isCustom') === true && doc.get('isBlacklisted') !== true);
     const driverProfile = driver.val() as Record<string, unknown> | null;
-    if (!well || !swd || !driverProfile || driverProfile.companyId !== DEMO_COMPANY_ID
+    if (!well || !destination || !driverProfile || driverProfile.companyId !== DEMO_COMPANY_ID
       || driverProfile.active === false) {
       throw new https.HttpsError('failed-precondition', 'demo_catalog_selection_required');
     }
-    const pullPlan = await readDemoWellPullPlan(wellName);
-    if (!pullPlan.ready) {
-      throw new https.HttpsError('failed-precondition', 'demo_well_recovering');
+    if (serviceJob) {
+      if (driverId !== DEMO_PHONE_DRIVER_ID || well.route !== 'Unrouted' || well.isDemo !== true) {
+        throw new https.HttpsError('failed-precondition', 'demo_service_well_unavailable');
+      }
+    } else {
+      const pullPlan = await readDemoWellPullPlan(wellName);
+      if (!pullPlan.ready) throw new https.HttpsError('failed-precondition', 'demo_well_recovering');
     }
     const revision = Number(packetHead.get('latestRevision'));
     if (!Number.isInteger(revision) || revision < 1) {
@@ -68,7 +87,7 @@ export const dispatchDemoViewerJob = https.onCall(
     }
     const packet = await loadVerifiedRevision(DEMO_COMPANY_ID, { packageId: 'water-hauling', revision });
     if (!packet.ok) throw new https.HttpsError('failed-precondition', packet.reason);
-    const jobType = resolveCanonicalJobType('pw', packet.envelope.jobTypes,
+    const jobType = resolveCanonicalJobType(serviceJob ? 'service-work' : 'pw', packet.envelope.jobTypes,
       Array.isArray(company.get('customJobTypes')) ? company.get('customJobTypes') : undefined);
     if (!jobType.ok) throw new https.HttpsError('failed-precondition', jobType.reason);
 
@@ -102,7 +121,8 @@ export const dispatchDemoViewerJob = https.onCall(
         driverFirstName: String(driverProfile.legalName || driverProfile.displayName || 'Demo').split(' ')[0],
         wellName, ndicWellName: '', operator: String(well.operator || 'Demo Operator'),
         route: String(well.route || 'Demo Route'), disposal,
-        jobType: 'pw', jobTypeId: jobType.jobTypeId,
+        jobType: serviceJob ? 'service' : 'pw', jobTypeId: jobType.jobTypeId,
+        ...(serviceJob ? { serviceType: 'Hot Oiler', bbls } : {}),
         status: 'pending', loadCount,
         notes, priority: 0,
         assignedAt: FieldValue.serverTimestamp(), assignedBy: VIEWER_UID,
