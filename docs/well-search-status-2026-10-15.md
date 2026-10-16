@@ -43,4 +43,9 @@ No inferred readiness for missing flow or geometry. No operational records chang
 
 New regression: lower fast-filling well precedes higher slow-filling well, and
 two tanks reach a load sooner than one tank at the same level/flow. Three focused
-tests and TypeScript pass. Updated Hosting verification pending at this checkpoint.
+tests and TypeScript pass. Follow-up product source 2231baed deployed and verified
+2026-10-16 03:53 UTC (Oct 15 local): certified preflight passed; live Dispatch HTML
+and 18 linked JS assets, Mobile HTML and 19 linked JS assets byte-match fresh out/.
+Actual-row layout check again passes at 320/344/600/1024 pixels. Full lib suite
+413 pass, 4 unchanged baseline failures, 1 skipped. WB Tickets counterpart f899ffc
+is committed/pushed and Android JS export passes; no APK built or installed.
