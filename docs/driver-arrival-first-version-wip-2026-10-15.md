@@ -126,3 +126,10 @@ Primary references:
 - https://developers.google.com/maps/billing-and-pricing/pricing
 - https://developers.google.com/maps/documentation/javascript/usage-and-billing
 - https://developers.google.com/maps/documentation/javascript/routes/get-a-route-matrix
+
+## Google activation and release candidate — 2026-10-15
+User approved enabling Google and taking the first advisory version live. Enabled Routes API on the existing billed wellbuilt-sync project. A dedicated browser key is restricted to the two wellbuilt-sync Hosting domains and Routes API only. The key is supplied through ignored .env.local (NEXT_PUBLIC_DRIVER_ROUTES_API_KEY); no key value is committed. Existing unrelated Maps key is unchanged. Browser-origin Routes REST probe succeeded with HTTP 200 and a valid road duration/distance.
+
+The panel uses recorded directional history first (at least three matching trips), then basic TRAFFIC_UNAWARE Routes Matrix only for missing travel legs. One element per requested leg; duplicate legs share one promise within a comparison. No persisted Google data, no cross-comparison cache, no paid timers: open or explicit Refresh initiates a comparison. Results show the checked time, lookup count, Google Maps attribution, and a reminder to refresh for newer job/location updates. Everyone remains selectable; no distance cutoff or shift-start requirement. Reliable account-login presence is not yet available and is not inferred.
+
+Validation: 15 focused estimator/provider tests pass; production panel hook regression passes (open/refresh only, feed changes do not poll, unknown row selectable, attribution present); TypeScript passes. Full library suite: 428 pass, four unchanged baseline failures, one skipped. Hosting certified preflight and postdeploy verification pending at this checkpoint.
