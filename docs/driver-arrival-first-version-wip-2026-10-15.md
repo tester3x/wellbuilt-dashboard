@@ -13,6 +13,12 @@ The user requested a cost discussion before deciding whether to enable Google
 APIs. API activation is NOT authorized yet. No Google service/billing/quota or
 credentials changed. No new road-time calls are wired into the product.
 
+User follow-up: recorded drive times must be consulted FIRST. Implemented and
+regression-tested: three clean recent same-direction trips with matching endpoints
+use their median without calling the road provider. Insufficient or reverse-only
+history may consult an explicitly supplied provider; none is enabled in production.
+Google lookup results are not being stored as our recorded-trip history.
+
 ## Read-only live coverage
 
 Checked at 2026-10-16 04:13 UTC (Oct 15 local), company-scoped production reads.

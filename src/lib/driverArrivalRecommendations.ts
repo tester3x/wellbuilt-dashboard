@@ -93,9 +93,11 @@ export async function recommendDriverArrivals(input: {
   const { companyId, nowMs, history } = input;
   const travel = async (from: ArrivalPoint, to: ArrivalPoint) => {
     if (km(from, to) < 0.1) return { minutes: 0, source: 'history' as const, samples: 0 };
+    const recorded = historicalArrivalTravel(history, from, to);
+    if (recorded) return recorded;
     let road: ArrivalTravel | null = null;
-    try { road = await input.roadTime?.(from, to) || null; } catch { /* history remains available */ }
-    return road && Number.isFinite(road.minutes) && road.minutes >= 0 ? road : historicalArrivalTravel(history, from, to);
+    try { road = await input.roadTime?.(from, to) || null; } catch { /* unknown, never invent a journey */ }
+    return road && Number.isFinite(road.minutes) && road.minutes >= 0 ? road : null;
   };
   const result = await Promise.all(input.drivers.map(async driver => {
     const jobs = input.jobs.filter(j => (j.companyId === companyId || (!j.companyId && companyId === 'liquid-gold')) && resolveDispatchDriver(j, [...input.drivers])?.key === driver.key);

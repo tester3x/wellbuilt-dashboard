@@ -91,3 +91,20 @@ test('history ignores pauses, bad timestamps, cancelled/demo data and duplicate 
   const paused = { ...invoice, timeline: [event('arrive', -100, 'pickup'), event('pause', -90, 'pickup'), event('depart_site', -70, 'pickup')] };
   assert.equal(buildArrivalHistory([paused], 'test-company', now).length, 0);
 });
+
+test('recorded trips come first; road provider is called only for insufficient directional history', async () => {
+  let calls = 0;
+  const trips: ArrivalSample[] = [18, 20, 22].map(minutes => ({ kind: 'drive', minutes, driverId: 'free', location: '', from: point, to: target }));
+  const options = { drivers: [driver('free')], jobs: [job({ driverId: 'free', driverHash: 'free', status: 'completed' })],
+    roadTime: async () => { calls++; return { minutes: 25, source: 'road' as const }; } };
+  const known = await run({ ...options, history: trips });
+  assert.equal(known[0].arrivalMinutes, 20);
+  assert.match(known[0].reasons.join(' '), /history, 3 trips/);
+  assert.equal(calls, 0, 'enough local history must avoid the external lookup entirely');
+  const sparse = await run({ ...options, history: trips.slice(0, 2) });
+  assert.equal(sparse[0].arrivalMinutes, 25);
+  assert.equal(calls, 1);
+  const reverse = await run({ ...options, history: trips.map(s => ({ ...s, from: target, to: point })) });
+  assert.equal(reverse[0].arrivalMinutes, 25);
+  assert.equal(calls, 2, 'reverse-direction trips cannot masquerade as the same route');
+});
