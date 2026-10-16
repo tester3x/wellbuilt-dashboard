@@ -33,6 +33,15 @@ test('GPS freshness, unknown shifts and unavailable job feeds never fabricate av
     assert.equal(rows.length, 2, 'everyone remains in the advisory result');
   }
 });
+test('off-shift and unverified accounts do not spend road lookups and remain selectable', async () => {
+  let calls = 0;
+  const rows = await run({ shift: d => d.key === 'busy' ? 'none' : 'unknown',
+    roadTime: async () => { calls++; return { minutes: 10, source: 'road' }; } });
+  assert.equal(calls, 0);
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every(r => r.arrivalMinutes === null));
+  assert.match(rows.find(r => r.driverKey === 'busy')!.reasons.join(' '), /Off shift/);
+});
 test('driving uses fresh GPS to remaining stop, then release point to new job', async () => {
   const calls: unknown[] = [];
   const rows = await run({ drivers: [driver('busy')], jobs: [job({ driverStage: 'en_route_dropoff' })],

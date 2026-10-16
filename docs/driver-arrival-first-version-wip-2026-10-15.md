@@ -19,6 +19,12 @@ use their median without calling the road provider. Insufficient or reverse-only
 history may consult an explicitly supplied provider; none is enabled in production.
 Google lookup results are not being stored as our recorded-trip history.
 
+User follow-up: only the drivers actually working that day should generate travel
+comparisons. Existing canonical open-shift authority is the active-comparison gate;
+persistent login/account existence is not presence. Panel now shows the on-shift
+comparison count. Regression explicitly proves off-shift/unverifiable accounts
+perform zero external travel lookups while remaining in the selectable results.
+
 ## Read-only live coverage
 
 Checked at 2026-10-16 04:13 UTC (Oct 15 local), company-scoped production reads.
