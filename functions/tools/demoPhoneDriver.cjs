@@ -195,7 +195,7 @@ async function pickupPlan(xml = '') {
     const result = await httpsCallable(getFunctions(demoApp, 'us-central1'), 'demoWellPullPlan')({ wellName });
     const plan = result.data;
     if (plan.companyId !== 'wellbuilt-demo' || plan.wellName !== wellName || !plan.ready
-      || !Number.isInteger(plan.bbls) || plan.bbls < 5 || plan.bbls > 140
+      || !Number.isInteger(plan.bbls) || plan.bbls < 5 || plan.bbls > 120
       || !Number.isInteger(plan.topInches) || plan.topInches < plan.allowedBottomInches
       || plan.bottomInches < plan.allowedBottomInches - 0.1) return null;
     activeWellName = wellName;
