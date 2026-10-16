@@ -62,6 +62,23 @@ function findReviewButton(pixels: ImageVector): RecognizedScreen['reviewButton']
   return { top: `${(first - 1) / 120 * 100}%`, height: `${(last - first + 3) / 120 * 100}%` };
 }
 
+function hasDrawerAccept(pixels: ImageVector): boolean {
+  // The well name, destination and flow estimate change on every real DDJD
+  // card. Recognize its fixed teal Accept button when those text differences
+  // make the empty-drawer reference score slightly closer.
+  let filledRows = 0;
+  for (let y = 99; y < 110; y++) {
+    let teal = 0;
+    for (let x = 34; x < 52; x++) {
+      const i = (y * 54 + x) * 4;
+      if (pixels[i] < 40 && pixels[i + 1] >= 85 && pixels[i + 1] < 190
+        && pixels[i + 2] >= 110 && pixels[i + 2] < 230) teal++;
+    }
+    if (teal >= 8) filledRows++;
+  }
+  return filledRows >= 3;
+}
+
 async function identifyPhoneScreen(url: string): Promise<{ screen: ExploreScreen | null; reviewButton?: RecognizedScreen['reviewButton'] }> {
   referenceVectors ||= Promise.all(screenNames.map(name => imageVector(exploreImages[name])))
     .catch(error => { referenceVectors = null; throw error; });
@@ -76,8 +93,10 @@ async function identifyPhoneScreen(url: string): Promise<{ screen: ExploreScreen
     return { screen: screenNames[index], score: difference / (current.length * 0.75) };
   }).sort((a, b) => a.score - b.score);
   // A transition or an unfamiliar Android screen should never acquire guessed controls.
-  const screen = ranked[0].score <= 15 && ranked[1].score - ranked[0].score >= 2
+  let screen = ranked[0].score <= 15 && ranked[1].score - ranked[0].score >= 2
     ? ranked[0].screen : null;
+  if (!screen && ranked[0].score <= 15 && ranked[0].screen === 'emptyDrawer'
+    && ranked[1].screen === 'drawer' && hasDrawerAccept(current)) screen = 'drawer';
   return { screen, reviewButton: screen === 'review' ? findReviewButton(current) : undefined };
 }
 
@@ -256,7 +275,7 @@ export function DemoPhoneOverlay() {
               <img src={frame.url} alt="Live demo driver WB Tickets screen"
                 className="absolute inset-0 h-full w-full select-none object-fill" draggable={false} />
               {liveScreen && exploreHotspots[liveScreen]?.filter(hotspot =>
-                liveScreen !== 'review' || hotspot.label !== 'Start demo job preview' || recognized?.reviewButton
+                liveScreen !== 'review' || hotspot.label === 'Back to Job Drawer' || recognized?.reviewButton
               ).map(hotspot => (
                 <button key={hotspot.label} type="button" aria-label={`${hotspot.label} on the demo phone`}
                   onClick={() => openExplore(hotspot.next)}
@@ -266,9 +285,9 @@ export function DemoPhoneOverlay() {
                     || (phoneTourStep === 'review' && liveScreen === 'review' && hotspot.label === 'Start demo job preview')
                       ? 'rounded-lg ring-2 ring-cyan-300 shadow-[0_0_18px_#22d3ee]' : ''}`}
                   style={{ left: hotspot.left,
-                    top: liveScreen === 'review' && hotspot.label === 'Start demo job preview' ? recognized?.reviewButton?.top : hotspot.top,
+                    top: liveScreen === 'review' && hotspot.label !== 'Back to Job Drawer' ? recognized?.reviewButton?.top : hotspot.top,
                     width: hotspot.width,
-                    height: liveScreen === 'review' && hotspot.label === 'Start demo job preview' ? recognized?.reviewButton?.height : hotspot.height }} />
+                    height: liveScreen === 'review' && hotspot.label !== 'Back to Job Drawer' ? recognized?.reviewButton?.height : hotspot.height }} />
               ))}
             </>
           ) : !isSuitePhonePage && checked ? (

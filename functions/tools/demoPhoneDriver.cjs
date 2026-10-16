@@ -248,7 +248,10 @@ function typePickupPlan(plan, doneY) {
     if (!verified) console.error(new Date().toISOString(), 'demo-service-bbls-unverified', plan.wellName, plan.bbls);
     return verified;
   }
-  const startedAt = Date.now();
+  // logcat -v epoch uses the emulator clock, which can lag the Windows host
+  // by tens of seconds. Compare against that same clock to reject stale input.
+  const startedAt = Number(call(['shell', 'date', '+%s']).toString().trim()) * 1000;
+  if (!Number.isSafeInteger(startedAt)) return false;
   const feet = Math.floor(plan.topInches / 12);
   const inches = plan.topInches % 12;
   // Injecting a multi-character string into React Native's controlled field
@@ -262,7 +265,9 @@ function typePickupPlan(plan, doneY) {
   for (const digit of String(feet)) tapMeasurementDigit(digit);
   tap(400, 2140); pauseInput(700); // Visible SPACE key: feet then inches.
   for (const digit of String(inches)) tapMeasurementDigit(digit);
-  pauseInput(500);
+  // React Native computes the final top/bottom a moment after the last key.
+  // Verify the settled value, not the prior one-digit intermediate state.
+  pauseInput(2000);
   if (!verifiedPickupDraft(plan, startedAt)) {
     console.error(new Date().toISOString(), 'demo-pickup-entry-unverified; driver paused at pickup',
       activeWellName, `${plan.topInches}in`, `${plan.bbls}BBL`);

@@ -57,9 +57,14 @@ if (homeReferencePath && !existsSync(homeReferencePath)) {
 const homeRegion = { left: 220, top: 710, width: 640, height: 110 };
 const homeReference = homeReferencePath ? sharp(readFileSync(homeReferencePath))
   .extract(homeRegion).greyscale().raw().toBuffer() : null;
+// The DDJD sheet covers the company header. Only stream its verified shape
+// briefly after this same device showed the demo-company cover/header.
+const drawerReference = sharp(readFileSync(require('node:path').join(__dirname, '..', '..', 'public', 'demo-phone', 'drawer.png')))
+  .resize(54, 120).removeAlpha().raw().toBuffer();
 let stopping = false;
 let serverClockOffsetMs = 0;
 let lastError = '';
+let lastVerifiedCompanyAt = 0;
 process.on('SIGINT', () => { stopping = true; });
 process.on('SIGTERM', () => { stopping = true; });
 
@@ -114,7 +119,12 @@ async function main() {
         (logoReference && logo && meanDifference(logoReference, logo) <= 8);
       const verifiedHomeHeader = homeReferencePixels && homePixels &&
         meanDifference(homeReferencePixels, homePixels) <= 8;
-      if (!verifiedJobHeader && !verifiedHomeHeader) {
+      if (verifiedJobHeader || verifiedHomeHeader) lastVerifiedCompanyAt = Date.now();
+      const recentDemoCompany = Date.now() - lastVerifiedCompanyAt < 45_000;
+      const verifiedDrawer = !verifiedJobHeader && !verifiedHomeHeader && recentDemoCompany &&
+        meanDifference(await drawerReference,
+          await sharp(png).resize(54, 120).removeAlpha().raw().toBuffer()) <= 10;
+      if (!verifiedJobHeader && !verifiedHomeHeader && !verifiedDrawer) {
         throw new Error('Verified demo-company header is absent; frame withheld');
       }
       const capturedAt = Date.now() + serverClockOffsetMs;
