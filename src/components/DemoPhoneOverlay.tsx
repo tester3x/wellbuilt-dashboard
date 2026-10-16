@@ -24,6 +24,7 @@ const exploreImages: Record<ExploreScreen, string> = {
 
 const screenNames = Object.keys(exploreImages) as ExploreScreen[];
 type ImageVector = Uint8ClampedArray;
+type RecognizedScreen = { capturedAt: number; screen: ExploreScreen | null; reviewButton?: { top: string; height: string } };
 let referenceVectors: Promise<ImageVector[]> | null = null;
 
 async function imageVector(url: string): Promise<ImageVector> {
@@ -39,7 +40,29 @@ async function imageVector(url: string): Promise<ImageVector> {
   return context.getImageData(0, 0, canvas.width, canvas.height).data;
 }
 
-async function identifyPhoneScreen(url: string): Promise<ExploreScreen | null> {
+function findReviewButton(pixels: ImageVector): RecognizedScreen['reviewButton'] {
+  // Job Review grows when dispatch notes are present. Find the filled teal
+  // action button in this actual frame instead of reusing capture coordinates.
+  let first = -1;
+  let last = -1;
+  for (let y = 55; y < 108; y++) {
+    let teal = 0;
+    for (let x = 19; x < 52; x++) {
+      const i = (y * 54 + x) * 4;
+      if (pixels[i] < 40 && pixels[i + 1] >= 85 && pixels[i + 1] < 190
+        && pixels[i + 2] >= 110 && pixels[i + 2] < 230) teal++;
+    }
+    if (teal >= 18) {
+      if (first < 0) first = y;
+      last = y;
+    } else if (first >= 0 && last - first >= 3) break;
+    else if (first >= 0) first = last = -1;
+  }
+  if (first < 0 || last - first < 3 || last - first > 13) return undefined;
+  return { top: `${(first - 1) / 120 * 100}%`, height: `${(last - first + 3) / 120 * 100}%` };
+}
+
+async function identifyPhoneScreen(url: string): Promise<{ screen: ExploreScreen | null; reviewButton?: RecognizedScreen['reviewButton'] }> {
   referenceVectors ||= Promise.all(screenNames.map(name => imageVector(exploreImages[name])))
     .catch(error => { referenceVectors = null; throw error; });
   const [current, references] = await Promise.all([imageVector(url), referenceVectors]);
@@ -53,8 +76,9 @@ async function identifyPhoneScreen(url: string): Promise<ExploreScreen | null> {
     return { screen: screenNames[index], score: difference / (current.length * 0.75) };
   }).sort((a, b) => a.score - b.score);
   // A transition or an unfamiliar Android screen should never acquire guessed controls.
-  return ranked[0].score <= 15 && ranked[1].score - ranked[0].score >= 2
+  const screen = ranked[0].score <= 15 && ranked[1].score - ranked[0].score >= 2
     ? ranked[0].screen : null;
+  return { screen, reviewButton: screen === 'review' ? findReviewButton(current) : undefined };
 }
 
 const exploreHotspots: Partial<Record<ExploreScreen, { label: string; next: ExploreScreen; left: string; top: string; width: string; height: string }[]>> = {
@@ -103,7 +127,7 @@ export function DemoPhoneOverlay() {
   const [explore, setExplore] = useState<ExploreScreen | null>(null);
   const [phoneTourStep, setPhoneTourStep] = useState<PhoneTourStep | null>(null);
   const [phoneTourStartedAt, setPhoneTourStartedAt] = useState(0);
-  const [recognized, setRecognized] = useState<{ capturedAt: number; screen: ExploreScreen | null } | null>(null);
+  const [recognized, setRecognized] = useState<RecognizedScreen | null>(null);
   const [clockNow, setClockNow] = useState(0);
   const liveScreen = frame.available && recognized?.capturedAt === frame.capturedAt ? recognized.screen : null;
   const statusTime = clockNow ? new Intl.DateTimeFormat('en-US', {
@@ -154,7 +178,7 @@ export function DemoPhoneOverlay() {
     if (!frame.available || !frame.live) return;
     let alive = true;
     void identifyPhoneScreen(frame.url)
-      .then(screen => { if (alive) setRecognized({ capturedAt: frame.capturedAt, screen }); })
+      .then(result => { if (alive) setRecognized({ capturedAt: frame.capturedAt, ...result }); })
       .catch(() => { if (alive) setRecognized({ capturedAt: frame.capturedAt, screen: null }); });
     return () => { alive = false; };
   }, [frame]);
@@ -231,7 +255,9 @@ export function DemoPhoneOverlay() {
             <>
               <img src={frame.url} alt="Live demo driver WB Tickets screen"
                 className="absolute inset-0 h-full w-full select-none object-fill" draggable={false} />
-              {liveScreen && exploreHotspots[liveScreen]?.map(hotspot => (
+              {liveScreen && exploreHotspots[liveScreen]?.filter(hotspot =>
+                liveScreen !== 'review' || hotspot.label !== 'Start demo job preview' || recognized?.reviewButton
+              ).map(hotspot => (
                 <button key={hotspot.label} type="button" aria-label={`${hotspot.label} on the demo phone`}
                   onClick={() => openExplore(hotspot.next)}
                   className={`absolute cursor-pointer bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 ${
@@ -239,7 +265,10 @@ export function DemoPhoneOverlay() {
                     || (phoneTourStep === 'drawer' && liveScreen === 'drawer' && hotspot.label === 'Accept demo job')
                     || (phoneTourStep === 'review' && liveScreen === 'review' && hotspot.label === 'Start demo job preview')
                       ? 'rounded-lg ring-2 ring-cyan-300 shadow-[0_0_18px_#22d3ee]' : ''}`}
-                  style={{ left: hotspot.left, top: hotspot.top, width: hotspot.width, height: hotspot.height }} />
+                  style={{ left: hotspot.left,
+                    top: liveScreen === 'review' && hotspot.label === 'Start demo job preview' ? recognized?.reviewButton?.top : hotspot.top,
+                    width: hotspot.width,
+                    height: liveScreen === 'review' && hotspot.label === 'Start demo job preview' ? recognized?.reviewButton?.height : hotspot.height }} />
               ))}
             </>
           ) : !isSuitePhonePage && checked ? (

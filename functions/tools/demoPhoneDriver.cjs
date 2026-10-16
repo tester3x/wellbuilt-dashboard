@@ -47,6 +47,7 @@ let pickupEntered = false;
 let pickupBlocked = false;
 let currentLeg = 'pickup';
 let emptyDrawerUntil = 0;
+let drawerVisibleSince = 0;
 let postCloseUntil = 0;
 let activeWellName = '';
 let activeServiceJob = null;
@@ -250,7 +251,13 @@ function typePickupPlan(plan, doneY) {
   const startedAt = Date.now();
   const feet = Math.floor(plan.topInches / 12);
   const inches = plan.topInches % 12;
-  tap(120, 760); type(String(plan.bbls)); tap(955, doneY);
+  // Injecting a multi-character string into React Native's controlled field
+  // can lose the final digit (120 becomes 12). Use the app's visible keypad.
+  tap(120, 760); pauseInput(500);
+  for (const digit of String(plan.bbls)) tapMeasurementDigit(digit);
+  // The last key can render after ADB reports the tap complete.
+  pauseInput(1800);
+  tap(955, doneY);
   tap(120, 920); pauseInput(900);
   for (const digit of String(feet)) tapMeasurementDigit(digit);
   tap(400, 2140); pauseInput(700); // Visible SPACE key: feet then inches.
@@ -331,6 +338,7 @@ async function drive() {
   // The tab count can include an informational REMAINING-load card while no
   // dispatch is pending. Avoid repeatedly reopening that empty drawer.
   if (visible(xml, 'Job Drawer') && visible(xml, 'No pending dispatches')) {
+    drawerVisibleSince = 0;
     emptyDrawerUntil = Date.now() + 30_000;
     actOnce('close-empty-drawer', () => tap(540, 1000));
     return;
@@ -404,10 +412,16 @@ async function drive() {
     return;
   }
   if (visible(xml, 'Job Drawer') && visible(xml, 'Accept') && visible(xml, 'Demo Operator')) {
+    // Give the live frame stream time to show the actual DDJD card and Accept
+    // button before advancing to Job Review for everyone watching the demo.
+    if (!drawerVisibleSince) drawerVisibleSince = Date.now();
+    if (Date.now() - drawerVisibleSince < 9_000) return;
     if (Date.now() < postCloseUntil || !(await matchingPendingDemoDispatch(xml))) return;
     actOnce('accept-demo-dispatch', () => { if (!tapText(xml, 'Accept')) tap(875, 2100); });
+    drawerVisibleSince = 0;
     return;
   }
+  drawerVisibleSince = 0;
   // Match the count inside the drawer tab's own accessibility description.
   // A broad scan can catch an unrelated digit and reopen an empty drawer
   // indefinitely after a multi-load close failed to cycle on the server.

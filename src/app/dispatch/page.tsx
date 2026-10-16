@@ -1577,6 +1577,9 @@ function DispatchPageInner() {
       await pause(3000);
       // No backend job exists until this exact stage. Leaving the page or
       // stopping the walkthrough before now abandons only the local preview.
+      // Start observing the phone before dispatch: the demo driver can open
+      // DDJD and accept the job before the callable response reaches us.
+      window.dispatchEvent(new Event('wellbuilt:demo-phone-tour'));
       await httpsCallable(getFirebaseFunctions(), 'dispatchDemoViewerJob')({
         wellName: selectedWell.well_name,
         disposal: selectedDisposal.well_name,
@@ -1585,7 +1588,6 @@ function DispatchPageInner() {
         notes: 'Demo production water load',
       });
       if (run !== demoTourRun.current) throw new Error('Walkthrough stopped');
-      window.dispatchEvent(new Event('wellbuilt:demo-phone-tour'));
       setMessage(`Dispatched ${tourWellName} to AntigDemoDriver. Watch the phone: the driver opens DDJD, taps Accept, then sees Job Review.`);
       cancelPWDispatch();
       setDemoTourTarget(null);
