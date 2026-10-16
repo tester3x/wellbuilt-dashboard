@@ -8,7 +8,14 @@ const key = (name: string) => name.trim().toLowerCase();
 export function buildSearchWellStatus(wells: readonly WellResponse[], nowMs: number): ReadonlyMap<string, SearchWellStatus> {
   const index = new Map<string, SearchWellStatus>();
   const ambiguous = new Set<string>();
-  const ordered = wells.map(well => ({ well, priority: classifyWell(well, nowMs) })).sort(compareQueueRows);
+  const ordered = wells.map(well => ({ well, priority: classifyWell(well, nowMs) })).sort((a, b) => {
+    // Summary keeps down wells last, highest frozen level first within that group.
+    if (a.priority.state === 'down' && b.priority.state === 'down') {
+      const height = (b.priority.estFeet ?? -Infinity) - (a.priority.estFeet ?? -Infinity);
+      if (height) return height;
+    }
+    return compareQueueRows(a, b);
+  });
   ordered.forEach(({ well, priority }, order) => {
     const level = priority.state === 'down'
       ? `DOWN${priority.estFeet == null ? '' : ` · ${priority.estDisplay}`}` : priority.estDisplay;
@@ -30,8 +37,9 @@ export function rankWellSearchRows<T>(rows: readonly T[], query: string, nameOf:
     const an = key(nameOf(a)), bn = key(nameOf(b));
     const ar = isWell(a) ? status.get(an)?.order : undefined;
     const br = isWell(b) ? status.get(bn)?.order : undefined;
-    return relevance(an) - relevance(bn)
+    return Number(bn === q) - Number(an === q)
       || (ar ?? Infinity) - (br ?? Infinity)
+      || relevance(an) - relevance(bn)
       || an.localeCompare(bn, undefined, { numeric: true });
   }).slice(0, limit);
 }

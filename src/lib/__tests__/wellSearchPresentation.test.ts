@@ -32,3 +32,18 @@ test('cap follows ranking; unknown, custom and ambiguous rows never borrow statu
   assert.equal(rankWellSearchRows(rows, '', r => r.name, status, 1, r => r.kind === 'WELL')[0], rows[2]);
   assert.deepEqual(rows.map(r => r.name), ['A catalog', 'Z urgent', 'Z urgent']);
 });
+
+test('flow and tank geometry determine the next load, ahead of name prefix and height', () => {
+  const source = [
+    well('Match high slow', { lastPullBottomLevel: "6'", flowRate: '10:00:00' }),
+    well('Z Match low fast', { lastPullBottomLevel: "3'", flowRate: '0:10:00' }),
+    well('B Match two tanks', { lastPullBottomLevel: "3'", flowRate: '0:10:00', tanks: 2 }),
+  ];
+  const status = buildSearchWellStatus(source, now);
+  const rows = source.map(w => ({ name: w.wellName }));
+  assert.deepEqual(rankWellSearchRows(rows, 'match', r => r.name, status).map(r => r.name),
+    ['B Match two tanks', 'Z Match low fast', 'Match high slow']);
+  assert.equal(rankWellSearchRows(rows, 'Match high slow', r => r.name, status)[0], rows[0]);
+  const down = buildSearchWellStatus([well('A down low', { wellDown: true, lastPullBottomLevel: "3'" }), well('Z down high', { wellDown: true, lastPullBottomLevel: "8'" })], now);
+  assert.ok(down.get('z down high')!.order < down.get('a down low')!.order);
+});

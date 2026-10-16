@@ -31,3 +31,16 @@ WB Tickets counterpart: fb01b32 on codex/wbt-enroute-20261014. It is not include
 in Hosting and requires a later APK; no new APK installed for this request.
 
 User confirmed: needs a load soonest. No operational records changed.
+
+## Flow-aware ordering follow-up
+
+Matched wells now sort by flow-derived next-load readiness ahead of prefix/name
+relevance, retaining a directly typed exact match first. The shared estimator
+already accounts for flow, allowed bottom and tank capacity; name ranking had
+been allowed to override that order. Ready wells retain earliest-ready-first
+ordering; down wells now match Summary's highest-frozen-level-first tie breaker.
+No inferred readiness for missing flow or geometry. No operational records changed.
+
+New regression: lower fast-filling well precedes higher slow-filling well, and
+two tanks reach a load sooner than one tank at the same level/flow. Three focused
+tests and TypeScript pass. Updated Hosting verification pending at this checkpoint.
