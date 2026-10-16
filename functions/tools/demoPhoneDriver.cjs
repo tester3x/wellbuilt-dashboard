@@ -87,6 +87,20 @@ async function screenFromVerifiedCapture() {
   });
   const ranked = scores.map((score, index) => ({ name: screenNames[index], score }))
     .sort((a, b) => a.score - b.score);
+  if (activeServiceJob && ranked[0].score <= 15 && ranked[0].name === 'pickup') {
+    // Service tickets prefill their planned BBLs. Their longer well title
+    // brings the pickup/drop-off reference scores closer together. Match the
+    // green AT PICKUP badge before allowing the pickup-stage action.
+    const badge = await sharp(screenshot()).extract({ left: 12, top: 230, width: 360, height: 75 })
+      .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    let green = 0;
+    for (let offset = 0; offset < badge.data.length; offset += badge.info.channels) {
+      const [red, g, blue] = badge.data.subarray(offset, offset + 3);
+      if (g > 85 && g > red * 1.35 && g > blue * 1.1) green++;
+    }
+    if (green > 70) return 'pickup';
+    if (currentLeg === 'dropoff' && green < 15) return 'dropoff';
+  }
   // A screenshot may be mid-transition, on an unexpected app screen, or from
   // another company. Ambiguous captures must never receive a blind tap.
   if (ranked[0].score > 15 || ranked[1].score - ranked[0].score < 2) {
@@ -227,7 +241,6 @@ function verifiedPickupDraft(plan, startedAt) {
 }
 function typePickupPlan(plan, doneY) {
   if (plan.service) {
-    tap(120, 760); type(String(plan.bbls)); tap(955, doneY);
     let entered;
     try { entered = ui(); } catch { return false; }
     const verified = visible(entered, 'AT PICKUP') && visible(entered, `text="${plan.bbls}"`);
@@ -290,7 +303,10 @@ async function drive() {
         if (!pickupEntered) {
           const plan = await pickupPlan();
           if (plan) actOnce('enter-verified-pickup-measurement', () => {
-            pickupEntered = typePickupPlan(plan, 1800);
+            // WB Tickets pre-populates service BBLs from the dispatch card.
+            // Screenshot mode is only entered after the real app's UI tree
+            // became unavailable; the server-bound job supplies the amount.
+            pickupEntered = plan.service ? true : typePickupPlan(plan, 1800);
             pickupBlocked = !pickupEntered;
           });
         } else {
