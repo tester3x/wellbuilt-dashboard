@@ -407,8 +407,72 @@ export default function MobilePage() {
           </div>
         </div>
 
-        {/* Worked tickets are a separate list, always visible above the well routes. */}
-        <section className="mb-6 bg-yellow-900/20 rounded-lg border border-yellow-700/50 overflow-hidden">
+        {dataLoading ? (
+          <div className="text-gray-400">Loading well data...</div>
+        ) : statusUnavailable ? (
+          <div className="rounded-lg border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 text-yellow-300">
+            {readError || 'Well live status is temporarily unavailable. This is a read failure, not an empty list.'}
+          </div>
+        ) : routes.length === 0 ? (
+          <div className="text-gray-400">No well data available</div>
+        ) : viewMode === 'cards' ? (
+          /* Cards View - Grouped by Route */
+          <div className="space-y-4">
+            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
+              <div key={route}>
+                <RouteSection
+                  route={route}
+                  wells={getWellsForRoute(route)}
+                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
+                  onToggle={() => toggleRoute(route)}
+                  pullBbls={routePullBbls[route] || 140}
+                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
+                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                  routeColor={routeColorMap.get(route) || '#888888'}
+                />
+                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
+                  <button
+                    onClick={() => setUnroutedShowAll(true)}
+                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          /* Table View - Grouped by Route */
+          <div className="space-y-4">
+            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
+              <div key={route}>
+                <RouteTable
+                  route={route}
+                  wells={getWellsForRoute(route)}
+                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
+                  onToggle={() => toggleRoute(route)}
+                  sortState={routeSorts[route] || DEFAULT_SUMMARY_SORT}
+                  onSort={(field) => handleRouteSort(route, field)}
+                  pullBbls={routePullBbls[route] || 140}
+                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
+                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                  routeColor={routeColorMap.get(route) || '#888888'}
+                />
+                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
+                  <button
+                    onClick={() => setUnroutedShowAll(true)}
+                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Worked tickets are available below all well routes, collapsed by default. */}
+        <section className="mt-6 bg-yellow-900/20 rounded-lg border border-yellow-700/50 overflow-hidden">
             <button
               onClick={() => setEdgeCaseExpanded(prev => !prev)}
               className="w-full px-4 py-3 bg-yellow-900/30 border-b border-yellow-700/50 hover:bg-yellow-900/40 transition-colors"
@@ -507,69 +571,6 @@ export default function MobilePage() {
               </div>
             )}
         </section>
-        {dataLoading ? (
-          <div className="text-gray-400">Loading well data...</div>
-        ) : statusUnavailable ? (
-          <div className="rounded-lg border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 text-yellow-300">
-            {readError || 'Well live status is temporarily unavailable. This is a read failure, not an empty list.'}
-          </div>
-        ) : routes.length === 0 ? (
-          <div className="text-gray-400">No well data available</div>
-        ) : viewMode === 'cards' ? (
-          /* Cards View - Grouped by Route */
-          <div className="space-y-4">
-            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
-              <div key={route}>
-                <RouteSection
-                  route={route}
-                  wells={getWellsForRoute(route)}
-                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
-                  onToggle={() => toggleRoute(route)}
-                  pullBbls={routePullBbls[route] || 140}
-                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
-                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
-                  routeColor={routeColorMap.get(route) || '#888888'}
-                />
-                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
-                  <button
-                    onClick={() => setUnroutedShowAll(true)}
-                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
-                  >
-                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          /* Table View - Grouped by Route */
-          <div className="space-y-4">
-            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
-              <div key={route}>
-                <RouteTable
-                  route={route}
-                  wells={getWellsForRoute(route)}
-                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
-                  onToggle={() => toggleRoute(route)}
-                  sortState={routeSorts[route] || DEFAULT_SUMMARY_SORT}
-                  onSort={(field) => handleRouteSort(route, field)}
-                  pullBbls={routePullBbls[route] || 140}
-                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
-                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
-                  routeColor={routeColorMap.get(route) || '#888888'}
-                />
-                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
-                  <button
-                    onClick={() => setUnroutedShowAll(true)}
-                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
-                  >
-                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
 
       </main>
 
