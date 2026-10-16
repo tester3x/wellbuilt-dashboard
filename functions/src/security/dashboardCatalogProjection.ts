@@ -3,11 +3,11 @@
  * Admin SDK parent reads stay intact; this layer never returns raw trees,
  * passcodes, hashes, tokens, or records outside the caller's company.
  *
- * well_config is Liquid Gold's global operational pool (most records have
- * no companyId). It is NOT tenant-filtered like employees/users. The
+ * well_config is Liquid Gold's legacy operational pool (most records have
+ * no companyId). Demo-owned records are excluded from this path. The
  * existing canViewGlobalWellPool policy applies:
- *   platform / unscoped → full pool
- *   liquid-gold         → full pool, including unscoped records
+ *   platform / unscoped → legacy pool
+ *   liquid-gold         → legacy pool, including unscoped records
  *   any other company   → no wellConfig / wellStatus
  */
 import type { DashboardCaller } from './adminAuth';
@@ -356,6 +356,20 @@ export function projectDashboardCatalog(input: {
   const filterCompany = scope === 'company' ? (companyId || '__none__') : null;
   const canViewWellPool = callerCanViewGlobalWellPool(input.caller);
 
+  // The new demo company shares the physical RTDB nodes with the legacy
+  // pool. Keep its configured wells and outgoing packets in the demo-only
+  // callable; they must never appear as Liquid Gold routes or status.
+  const legacyWellConfig = Object.fromEntries(Object.entries(asRecord(input.wellConfig))
+    .filter(([, value]) => {
+      const row = asRecord(value);
+      return row.companyId !== 'wellbuilt-demo' && row.isDemo !== true;
+    }));
+  const legacyOutgoing = Object.fromEntries(Object.entries(asRecord(input.outgoing))
+    .filter(([, value]) => {
+      const row = asRecord(value);
+      return row.companyId !== 'wellbuilt-demo' && row.isDemo !== true;
+    }));
+
   const approved = projectMap(input.approved, flattenApprovedEntry, filterCompany);
   const profiles = projectMap(
     input.profiles,
@@ -394,12 +408,12 @@ export function projectDashboardCatalog(input: {
 
   const wellConfig = canViewWellPool
     ? projectMap(
-        input.wellConfig,
+        legacyWellConfig,
         (val) => pickAllowlisted(asRecord(val), WELL_CONFIG_ALLOWLIST),
         null,
       )
     : {};
-  const wellStatus = canViewWellPool ? projectWellStatus(input.outgoing) : {};
+  const wellStatus = canViewWellPool ? projectWellStatus(legacyOutgoing) : {};
 
   return {
     scope,

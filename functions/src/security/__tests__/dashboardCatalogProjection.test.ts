@@ -142,6 +142,26 @@ describe('projectDashboardCatalog', () => {
     expect(out.wellStatus.Python).toBeDefined();
   });
 
+  it('keeps demo wells and their status packets out of Liquid Gold and legacy platform views', () => {
+    const input = {
+      approved: {}, users: {},
+      wellConfig: {
+        'Gabriel 1': { route: 'Gabriels', companyId: 'liquid-gold' },
+        'Demo Service Well 1': { route: 'Unrouted', companyId: 'wellbuilt-demo', isDemo: true },
+        'Demo Well 1': { route: 'Demo Route', companyId: 'wellbuilt-demo', isDemo: true },
+      },
+      outgoing: {
+        response_lg: { wellName: 'Gabriel 1', companyId: 'liquid-gold', currentLevel: '10\'0"' },
+        response_demo: { wellName: 'Demo Well 1', companyId: 'wellbuilt-demo', currentLevel: '9\'0"' },
+      },
+    };
+    for (const caller of [liquidGold, platform]) {
+      const out = projectDashboardCatalog({ ...input, caller });
+      expect(Object.keys(out.wellConfig)).toEqual(['Gabriel 1']);
+      expect(Object.keys(out.wellStatus)).toEqual(['Gabriel 1']);
+    }
+  });
+
   it('other tenant staff receive no global wellConfig or wellStatus', () => {
     const out = projectDashboardCatalog({
       approved: rawApproved,
