@@ -53,6 +53,7 @@ import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOpe
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch as _dismissDispatch } from '@/lib/dismissDispatch';
+import { dispatchRemovalRequiresCancellation } from '@/lib/dismissDispatchCore';
 import {
   staffCancelDispatch as _staffCancelDispatch,
   staffCreateDispatch as _staffCreateDispatch,
@@ -5252,6 +5253,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   const [dismissSubmitting, setDismissSubmitting] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState('');
+  const dismissRequiresCancellation = dispatchRemovalRequiresCancellation(confirmDismissJob?.status);
   useEffect(() => { setDismissReason(''); }, [confirmDismissJob?.id]);
   const [haulGroups, setHaulGroups] = useState<Record<string, string>>({});
   const haulSubscriptionKey = JSON.stringify(dispatches
@@ -5272,6 +5274,10 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
   async function handleExecuteDismiss() {
     if (!confirmDismissJob?.id) return;
+    if (dismissRequiresCancellation) {
+      setDismissError('Cancel this started job with a reason before removing its dispatch.');
+      return;
+    }
     setDismissSubmitting(true);
     setDismissError(null);
     try {
@@ -5281,7 +5287,9 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
       setConfirmDismissJob(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Dismiss failed';
-      setDismissError(msg.replace(/^FirebaseError:\s*/i, ''));
+      setDismissError(/job_in_progress|family_in_progress/.test(msg)
+        ? 'This job or a linked job has started. Cancel it with a reason before removing its dispatch.'
+        : msg.replace(/^FirebaseError:\s*/i, ''));
     } finally {
       setDismissSubmitting(false);
     }
@@ -5697,11 +5705,16 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
               )}
             </div>
 
+            {dismissRequiresCancellation && <p className="mb-4 rounded border border-amber-700 bg-amber-950/40 p-3 text-sm text-amber-200">
+              This job has started. Cancel it with a reason before removing its dispatch. Existing ticket and well history must be preserved.
+            </p>}
+            {!dismissRequiresCancellation && <>
             <label htmlFor="dispatch-dismiss-reason" className="block text-sm text-gray-300 mb-1">Reason (optional)</label>
             <textarea id="dispatch-dismiss-reason" value={dismissReason} onChange={e => setDismissReason(e.target.value)}
               maxLength={1000} rows={3} disabled={dismissSubmitting}
               className="mb-4 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white focus:outline-none focus:border-blue-500 disabled:opacity-50"
               placeholder="Why is this dispatch being removed?" />
+            </>}
 
             {dismissError && (
               <div className="mb-4 p-2.5 rounded bg-red-900/50 border border-red-700 text-red-200 text-xs">
@@ -5723,11 +5736,11 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
               </button>
               <button
                 type="button"
-                disabled={dismissSubmitting}
+                disabled={dismissSubmitting || dismissRequiresCancellation}
                 onClick={handleExecuteDismiss}
                 className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-medium rounded transition-colors disabled:opacity-50 flex items-center gap-1.5"
               >
-                {dismissSubmitting ? 'Removing...' : 'Remove Dispatch'}
+                {dismissSubmitting ? 'Removing...' : dismissRequiresCancellation ? 'Cancel job first' : 'Remove Dispatch'}
               </button>
             </div>
           </div>

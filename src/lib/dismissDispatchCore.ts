@@ -27,3 +27,8 @@ export async function runDismissDispatch(
   const res = await invoke(buildDismissPayload(dispatchId, reason));
   return res.data;
 }
+
+/** Match the server's started-job removal guard before offering dismissal. */
+export function dispatchRemovalRequiresCancellation(status: string | null | undefined): boolean {
+  return ['accepted', 'in_progress', 'paused'].includes(status || '');
+}
