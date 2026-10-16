@@ -14,11 +14,20 @@ Covered surfaces: Dispatch shared location/catalog rows and builders, completed
 job editing, driver destination search, and shared Add Pull well search.
 The shared Add Pull change also applies on Mobile Well Status and Well History.
 
-Validation so far: TypeScript passes; new presentation tests 2/2 pass. Full lib
+Validation: TypeScript passes; new presentation tests 2/2 pass. Full lib
 suite: 412 pass, 4 existing failures (callable inventory and three extensionless
-Node import failures), 1 skipped. Hosting preflight and visual validation pending.
-Not deployed at this checkpoint. WB Tickets counterpart is a separate source
-checkpoint; it is not included in Hosting and requires a later APK.
+Node import failures), 1 skipped. Certified Hosting preflight passes, including
+authenticated route rendering, header navigation, photo review and autocomplete
+scroll. Actual search-row components pass Chromium layout checks at 320, 344,
+600 and 1024 pixels: no overflow or name/level overlap; DOWN visible and unknown
+levels omitted. Reproduce with tools/test-well-search-rows.mjs after a fresh build.
 
-Ordering assumption awaiting user clarification: needs a load soonest, rather
-than a manually saved personal Route Me job order. No operational records changed.
+Deployed product source: 7cc25780. Verified 2026-10-16 03:45 UTC (Oct 15 local):
+live Dispatch HTML + 18 linked JavaScript assets and Mobile HTML + 19 linked
+assets byte-match the fresh out/ artifacts. Existing Job Builder label and
+bottom-of-page unrouted-ticket section remain present.
+
+WB Tickets counterpart: fb01b32 on codex/wbt-enroute-20261014. It is not included
+in Hosting and requires a later APK; no new APK installed for this request.
+
+User confirmed: needs a load soonest. No operational records changed.
