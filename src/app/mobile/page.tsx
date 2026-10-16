@@ -70,7 +70,7 @@ export default function MobilePage() {
   // appear briefly and then disappear when routes finish loading.
   const [fetchedTickets, setFetchedTickets] = useState<Ticket[]>([]);
   const [ticketScope, setTicketScope] = useState<string | null>(null);
-  const [edgeCaseExpanded, setEdgeCaseExpanded] = useState(true);
+  const [edgeCaseExpanded, setEdgeCaseExpanded] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [ticketLimit, setTicketLimit] = useState(500);
   const [hasMoreTickets, setHasMoreTickets] = useState(false);
