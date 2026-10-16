@@ -2983,6 +2983,13 @@ function DispatchPageInner() {
                     {/* Driver */}
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">Driver</label>
+                      {assignTarget && selectedWells.size === 0 ? <div data-demo-builder-target="driver">
+                        <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${assignTarget.ndicName || assignTarget.wellName}`}
+                          picker="single" drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
+                          targetName={assignTarget.ndicName || assignTarget.wellName} locations={arrivalLocations}
+                          jobsComplete={dispatchesLoaded && !readErrors.dispatches}
+                          selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash} />
+                      </div> : (
                       <select value={assignDriverHash} onChange={(e) => setAssignDriverHash(e.target.value)} data-demo-builder-target="driver"
                         className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500">
                         <option value="">Select driver...</option>
@@ -2997,13 +3004,7 @@ function DispatchPageInner() {
                           {drivers.map(d => (<option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>))}
                         </optgroup>
                       </select>
-                      {assignTarget && selectedWells.size === 0 && <div className="mt-2">
-                        <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${assignTarget.ndicName || assignTarget.wellName}`}
-                          drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
-                          targetName={assignTarget.ndicName || assignTarget.wellName} locations={arrivalLocations}
-                          jobsComplete={dispatchesLoaded && !readErrors.dispatches}
-                          selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash} />
-                      </div>}
+                      )}
                     </div>
                     {/* Disposal */}
                     <div className="relative" data-demo-builder-target="disposal">
@@ -3469,11 +3470,6 @@ function DispatchPageInner() {
                                 : `${swBblPlan.plan?.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan?.pickupBbls} BBL. ${swBblPlan.plan?.unallocatedBbls} BBL has no planned stop yet.`}
                       </div>
                     )}
-                    <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${swWellName}`}
-                      drivers={drivers} jobs={dispatches} companyId={viewedCompanyId} targetName={swWellName}
-                      locations={arrivalLocations} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
-                      selectedKeys={swDriverHashes}
-                      onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} />
                     {/* Keep driver selection and notes usable as split cards grow.
                         The builder owns vertical scrolling on desktop. */}
                     <div className="flex gap-3 min-h-[220px]">
@@ -3483,6 +3479,13 @@ function DispatchPageInner() {
                           Driver{swDriverHashes.size > 1 ? 's' : ''}
                           {swDriverHashes.size > 0 && <span className="ml-1 px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full">{swDriverHashes.size}</span>}
                         </label>
+                        {swWellName.trim() ? (
+                          <DriverArrivalRecommendations picker="multiple" key={`${viewedCompanyId || ''}:${swWellName}`}
+                            drivers={drivers} jobs={dispatches} companyId={viewedCompanyId} targetName={swWellName}
+                            locations={arrivalLocations} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
+                            selectedKeys={swDriverHashes}
+                            onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} />
+                        ) : (
                         <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto">
                           {drivers.map(d => {
                             const checked = swDriverHashes.has(d.key);
@@ -3505,6 +3508,7 @@ function DispatchPageInner() {
                             );
                           })}
                         </div>
+                        )}
                       </div>
                       {/* Notes */}
                       <div className="flex-1 flex flex-col min-h-0">

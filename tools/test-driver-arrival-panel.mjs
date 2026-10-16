@@ -32,3 +32,32 @@ button('Refresh estimates').props.onClick();await flush();assert.equal(compariso
 button('Driver arrival recommendations').props.onClick();await flush();assert.equal(comparisons,2);
 button('Driver arrival recommendations').props.onClick();await flush();assert.equal(comparisons,3);
 console.log('PASS: production panel open/refresh only, no feed polling, unknown driver selectable, Google attribution');
+
+// Same production component now owns the actual single-driver selector.
+slots=[];cursor=0;pending=[];dirty=true;comparisons=0;
+props={...props,picker:'single',selectedKeys:new Set()};
+await flush();assert.ok(button('Select driver'));
+button('Select driver').props.onClick();await flush();assert.equal(comparisons,1);
+button('Unknown Driver').props.onClick();await flush();assert.equal(selected,'two');
+assert.equal(button('Select driver').props['aria-expanded'],false);
+props={...props,selectedKeys:new Set(['two'])};dirty=true;await flush();
+assert.equal(button('Unknown Driver').props['aria-expanded'],false);
+button('Unknown Driver').props.onClick();await flush();
+assert.equal(comparisons,2);
+console.log('PASS: ranked single-driver selector selects unknown drivers, collapses, and retains the chosen label');
+import { createElement as element } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { chromium } from 'playwright';
+import path from 'node:path';
+const toElement=node=>node&&typeof node==='object'?element(node.type,node.props,...node.children.map(toElement)):node;
+const markup=renderToStaticMarkup(toElement(tree));
+const css=fs.readdirSync('out/_next/static/css').filter(f=>f.endsWith('.css')).map(f=>fs.readFileSync(path.join('out/_next/static/css',f),'utf8')).join('\n');
+const browser=await chromium.launch({headless:true});
+try {for(const width of [320,344,768,1280]){
+ const page=await browser.newPage({viewport:{width,height:700}});
+ await page.setContent(`<style>${css}</style><main style="padding:12px;background:#111827">${markup}</main>`);
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`selector overflow at ${width}`);
+ assert.equal(await page.getByRole('button',{name:/Unknown Driver/}).count(),2);
+ await page.close();
+}} finally {await browser.close();}
+console.log('PASS: actual selector markup fits 320/344/768/1280px');
