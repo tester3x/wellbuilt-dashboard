@@ -7,6 +7,7 @@ import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { isActiveDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
+import { DriverArrivalRecommendations } from '@/components/DriverArrivalRecommendations';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
@@ -908,6 +909,18 @@ function DispatchPageInner() {
     searchDisposals(q, locationCatalog, locationCatalog.length), q, row => row.well_name,
     searchWellStatus, 15, row => row.kind === 'WELL',
   );
+  const arrivalLocations = useMemo(() => {
+    const rows = [...locationCatalog, ...customCatalogLocations.map(c => ({ well_name: c.locationName, latitude: c.latitude, longitude: c.longitude }))];
+    for (const well of catalogRouteWells) {
+      const linked = allOperatorWells.find(row => row.well_name.toLowerCase() === (well.ndicName || well.wellName).toLowerCase());
+      if (linked) rows.push({ ...linked, well_name: well.wellName });
+    }
+    return rows;
+  }, [locationCatalog, customCatalogLocations, catalogRouteWells, allOperatorWells]);
+  const arrivalShift = useCallback((driver: { key: string; driverId?: string; companyId?: string }) => {
+    const dot = driverShiftDot(driver).dot;
+    return dot === 'green' ? 'open' as const : dot === 'red' ? 'none' as const : 'unknown' as const;
+  }, [driverShiftDot]);
   const isDemoCompany = viewedCompanyId === 'wellbuilt-demo';
 
   useEffect(() => {
@@ -2988,6 +3001,13 @@ function DispatchPageInner() {
                           {drivers.map(d => (<option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>))}
                         </optgroup>
                       </select>
+                      {assignTarget && selectedWells.size === 0 && <div className="mt-2">
+                        <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${assignTarget.ndicName || assignTarget.wellName}`}
+                          drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
+                          targetName={assignTarget.ndicName || assignTarget.wellName} locations={arrivalLocations}
+                          jobsComplete={dispatchesLoaded && !readErrors.dispatches} shift={arrivalShift}
+                          selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash} />
+                      </div>}
                     </div>
                     {/* Disposal */}
                     <div className="relative" data-demo-builder-target="disposal">
@@ -3453,6 +3473,11 @@ function DispatchPageInner() {
                                 : `${swBblPlan.plan?.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan?.pickupBbls} BBL. ${swBblPlan.plan?.unallocatedBbls} BBL has no planned stop yet.`}
                       </div>
                     )}
+                    <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${swWellName}`}
+                      drivers={drivers} jobs={dispatches} companyId={viewedCompanyId} targetName={swWellName}
+                      locations={arrivalLocations} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
+                      shift={arrivalShift} selectedKeys={swDriverHashes}
+                      onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} />
                     {/* Keep driver selection and notes usable as split cards grow.
                         The builder owns vertical scrolling on desktop. */}
                     <div className="flex gap-3 min-h-[220px]">
