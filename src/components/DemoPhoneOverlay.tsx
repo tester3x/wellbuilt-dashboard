@@ -173,18 +173,18 @@ export function DemoPhoneOverlay() {
 
   return (
     <aside aria-label="Live WellBuilt demo phone" className="fixed bottom-3 right-3 z-[85] rounded-[38px] border-[10px] border-[#17191d] bg-[#090a0c] p-[4px] shadow-[inset_0_0_0_2px_#373a40,0_18px_42px_#000b,4px_4px_0_#08090a] ring-2 ring-[#34363b] md:bottom-5 md:right-5"
-      style={{ width: large ? 'min(90vw, 480px, calc((100dvh - 5rem) * 9 / 20))' : 'min(90vw, 370px, calc((100dvh - 5rem) * 9 / 20))' }}>
+      style={{ width: large ? 'min(90vw, 480px, calc((100dvh - 8rem) * 9 / 20))' : 'min(90vw, 370px, calc((100dvh - 8rem) * 9 / 20))' }}>
       <span aria-hidden="true" className="absolute -left-[13px] top-[19%] h-16 w-[5px] rounded-l bg-[#34363b] shadow-[inset_1px_0_#63676b]" />
       <span aria-hidden="true" className="absolute -left-[13px] top-[31%] h-10 w-[5px] rounded-l bg-[#34363b] shadow-[inset_1px_0_#63676b]" />
       <span aria-hidden="true" className="absolute -right-[13px] top-[25%] h-20 w-[5px] rounded-r bg-[#34363b] shadow-[inset_-1px_0_#63676b]" />
       <div className="overflow-hidden rounded-[27px] border-[3px] border-[#3a3d42] bg-black shadow-[inset_0_0_0_2px_#0c0d0f]">
-      <div className="flex w-full items-center justify-between bg-[#121417] px-3 py-2 text-xs font-semibold text-slate-100">
-        <button type="button" onClick={() => setExpanded(value => !value)} className="text-left">
+      <div className="flex h-[42px] w-full items-center justify-between gap-1.5 bg-[#121417] px-2 text-[11px] font-semibold text-slate-100">
+        <button type="button" onClick={() => setExpanded(value => !value)} className="min-w-0 truncate whitespace-nowrap text-left">
           {isSuitePhonePage ? 'WB Suite' : 'WB Tickets'} · {explore ? 'phone in use' : frame.available && frame.live ? 'live demo phone' : 'captured phone preview'} <span aria-hidden="true">{expanded ? '▾' : '▴'}</span>
         </button>
-        <div className="flex gap-1">
-          {explore && <button type="button" onClick={() => setExplore(null)} className="rounded border border-cyan-600 px-2 py-1 text-cyan-200 hover:bg-cyan-950">Return to Live</button>}
-          <button type="button" onClick={() => { setLarge(value => !value); setExpanded(true); }} className="rounded border border-[#5a5e65] px-2 py-1 hover:bg-[#26292d]" aria-label={large ? 'Use normal phone size' : 'Enlarge demo phone'}>
+        <div className="flex shrink-0 gap-1 whitespace-nowrap">
+          {explore && <button type="button" onClick={() => setExplore(null)} className="rounded border border-cyan-600 px-1.5 py-1 text-cyan-200 hover:bg-cyan-950">Return to Live</button>}
+          <button type="button" onClick={() => { setLarge(value => !value); setExpanded(true); }} className="rounded border border-[#5a5e65] px-1.5 py-1 hover:bg-[#26292d]" aria-label={large ? 'Use normal phone size' : 'Enlarge demo phone'}>
             {large ? 'Normal' : 'Enlarge'}
           </button>
         </div>
@@ -197,7 +197,7 @@ export function DemoPhoneOverlay() {
         </div>
       )}
       {expanded && (
-        <div className="relative aspect-[9/20] bg-black">
+        <div className="relative mt-6 aspect-[9/20] bg-black">
           {explore ? (
             <>
               <img src={exploreImages[explore]} alt={`Captured WB Tickets demo ${explore} screen`}
