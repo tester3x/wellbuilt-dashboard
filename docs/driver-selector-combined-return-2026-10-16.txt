@@ -1,0 +1,31 @@
+Dashboard driver selector return packet — 2026-10-16
+
+COMPLETED: laptop integrated the new ranked driver selector WITH desktop's combined release. Source is committed and pushed to GitHub. Hosting has NOT been deployed by laptop; do not confuse the local successful build with a live release.
+
+Repository: https://github.com/tester3x/wellbuilt-dashboard.git
+Integrated branch: release/dashboard-compact-identity-20261015
+Combined runtime source: 8410a3f9
+Includes desktop release: 5385c3de318f0ac4cec29bab2375b26df66f9c8c
+Includes new selector: dd9fa825
+Laptop checkout: C:/dev/dashboard-current-20261004
+
+Preservation verified: desktop's release is an ancestor of this combined checkpoint. Against 5385c3de, changes are ONLY src/app/dispatch/page.tsx, src/components/DriverArrivalRecommendations.tsx, tools/test-driver-arrival-panel.mjs, and docs/dashboard-deployment-coordination-2026-10-16.md. Desktop demo phone status pixels, normal/enlarged phone layout, service-well work, 120 BBL cap, compact header, collapsed bottom unrouted tickets, dispatch ordering/cards, and flow-aware search are preserved. No Functions/rules changes were authored for this integration; desktop's existing Function source changes remain in history unchanged.
+
+Product behavior: for a selected single PW job, Select driver now opens the arrival-ranked list itself instead of showing a duplicate recommendations panel underneath. Choosing any driver, including Arrival unknown, updates existing selected-driver state and collapses the chooser. The chosen name stays visible; Clear selection returns it to empty. Service Work uses the same chooser with multiple selections retained. Bulk PW and not-yet-chosen locations retain the ordinary selection control. No driver distance cutoff or shift requirement. Missing location is unknown, not proof of account logout/working status.
+
+Cost/Google: recorded directional trip history first; restricted basic TRAFFIC_UNAWARE Google Routes fallback only for missing travel legs. Explicit opening/Refresh only; no paid feed polling. Identical legs share one lookup within a comparison, no persisted Google cache. Keep desktop's ignored NEXT_PUBLIC_DRIVER_ROUTES_API_KEY environment setting. Do NOT commit its value or overwrite .env.local.
+
+DEMO AUTOMATION ATTENTION: data-demo-builder-target=driver stays present, but for a selected single PW job its descendant is now an expandable button and driver-row buttons, not a native select. If external Dashboard autoplay uses selectOption, update that action to open the chooser then click the intended driver row. No such selectOption driver automation was found in tracked tools. The Android demoPhoneDriver.cjs was not edited. Confirm external autoplay on desktop before the next Hosting release.
+
+Safe integration on desktop:
+1. Inspect git status; preserve any newer local desktop work first. Do not reset/overwrite it.
+2. git fetch origin
+3. Inspect/compare origin/release/dashboard-compact-identity-20261015 against desktop HEAD.
+4. If desktop remains clean at 5385c3de on release/dashboard-current-20260927, git merge --ff-only origin/release/dashboard-compact-identity-20261015 will include both histories. If it has advanced, merge normally and review; do not force it.
+5. Recheck the external demo driver-selection action, retain private env, then run the certified preflight for any separately authorized Hosting release. Laptop left live Hosting untouched.
+
+Validation of combined source: TypeScript passed; next build --webpack passed. All 25 authenticated routes passed at desktop/mobile/fold widths. Header/navigation, photo review, well-search rows, Well Status toolbar and production driver chooser tests passed. Fifteen focused estimator/provider tests passed. Full lib suite: 429 pass, three known extensionless Node-import failures, one skipped. Chooser interaction tests cover unknown-row selection, retained label, no automatic paid feed refresh; browser layout checked at 320/344/768/1280px. No new live artifact verification is claimed because there was no new Hosting deployment.
+
+Separate operational/app work: user-authorized private guarded cleanup closed five already-completed stale invoices and removed two empty abandoned starts; zero owned open invoices remained after verification. No WB M pulls/wells, tickets or dispatches changed. WB Tickets recovery fix is committed/pushed at 253ceb1 on codex/wbt-enroute-20261014 in tester3x/wellbuilt-ticket. No APK built or installed. It restores missing close-delivery intents only from validated existing closed-ledger payloads and never closes jobs by calendar age. Do not replace WB Tickets desktop/demo source with another checkout; coordinate separately.
+
+User request for this packet: integration and GitHub push; no laptop Hosting deployment. Source and handoff are preserved; desktop may continue from the combined checkpoint after checking for its own newer work.
