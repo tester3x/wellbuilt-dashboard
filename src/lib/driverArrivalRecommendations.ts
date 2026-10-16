@@ -50,7 +50,7 @@ export function buildArrivalHistory(invoices: readonly ArrivalInvoice[], company
     if (invoice.companyId !== companyId || companyId === 'wellbuilt-demo'
       || !['closed', 'submitted', 'approved', 'paid'].includes(invoice.status || '')
       || !/^production water/i.test(invoice.commodityType || '') || !invoice.driverId) continue;
-    const events = [...(invoice.timeline || [])].filter(e => arrivalTimestampMs(e.timestamp) > 0)
+    const events = [...(Array.isArray(invoice.timeline) ? invoice.timeline : [])].filter(e => arrivalTimestampMs(e.timestamp) > 0)
       .sort((a, b) => arrivalTimestampMs(a.timestamp) - arrivalTimestampMs(b.timestamp));
     for (let i = 0; i < events.length - 1; i++) {
       const a = events[i], b = events[i + 1], end = arrivalTimestampMs(b.timestamp);

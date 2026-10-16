@@ -87,9 +87,6 @@ import {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-// The laptop branch preserves this work in progress; the advisory stays off until its field checks are complete.
-const DRIVER_ARRIVAL_PREVIEW = process.env.NEXT_PUBLIC_DRIVER_ARRIVAL_PREVIEW === 'true';
-
 interface ApprovedDriver {
   key: string;           // drivers/approved record key (canonical UUID OR legacy passcodeHash)
   driverId?: string;     // immutable canonical driver id (preferred join key)
@@ -3023,7 +3020,7 @@ function DispatchPageInner() {
                           {drivers.map(d => (<option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>))}
                         </optgroup>
                       </select>
-                      {DRIVER_ARRIVAL_PREVIEW && assignTarget && selectedWells.size === 0 && <div className="mt-2">
+                      {assignTarget && selectedWells.size === 0 && <div className="mt-2">
                         <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${assignTarget.ndicName || assignTarget.wellName}`}
                           drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
                           targetName={assignTarget.ndicName || assignTarget.wellName} locations={arrivalLocations}
@@ -3511,11 +3508,11 @@ function DispatchPageInner() {
                                 : `${swBblPlan.plan?.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan?.pickupBbls} BBL. ${swBblPlan.plan?.unallocatedBbls} BBL has no planned stop yet.`}
                       </div>
                     )}
-                    {DRIVER_ARRIVAL_PREVIEW && <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${swWellName}`}
+                    <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${swWellName}`}
                       drivers={drivers} jobs={dispatches} companyId={viewedCompanyId} targetName={swWellName}
                       locations={arrivalLocations} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
                       selectedKeys={swDriverHashes}
-                      onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} />}
+                      onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} />
                     {/* Keep driver selection and notes usable as split cards grow.
                         The builder owns vertical scrolling on desktop. */}
                     <div className="flex gap-3 min-h-[220px]">
