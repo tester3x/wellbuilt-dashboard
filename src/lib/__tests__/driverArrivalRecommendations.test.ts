@@ -13,7 +13,7 @@ const job = (extra: Partial<ArrivalJob> = {}): ArrivalJob => ({ id: 'j1', driver
 const run = (extra: Partial<Parameters<typeof recommendDriverArrivals>[0]> = {}) => recommendDriverArrivals({
   drivers: [driver('busy'), driver('free')], jobs: [job(), job({ id: 'old', driverId: 'free', driverHash: 'free', status: 'completed' })],
   invoices: [], companyId: 'test-company', target, nowMs: now, jobsComplete: true, history,
-  shift: () => 'open', locate: name => name === 'drop' ? drop : name === 'pickup' ? point : null,
+  locate: name => name === 'drop' ? drop : name === 'pickup' ? point : null,
   roadTime: async from => ({ minutes: from === drop ? 15 : 20, miles: 10, source: 'road' }), ...extra,
 });
 
@@ -23,24 +23,27 @@ test('farther free driver beats nearby busy driver; travel begins at release loc
   assert.equal(rows[1].releaseMinutes, 15);
   assert.match(rows[1].reasons.join(' '), /Available after current work at drop/);
 });
-test('GPS freshness, unknown shifts and unavailable job feeds never fabricate availability', async () => {
+test('GPS freshness and unavailable job feeds never fabricate availability', async () => {
   for (const patch of [
     { jobs: [job({ driverId: 'free', driverHash: 'free', status: 'completed', driverGpsAt: new Date(now - 16 * 60000).toISOString() })] },
-    { shift: () => 'unknown' as const }, { jobsComplete: false }, { target: null },
+    { jobsComplete: false }, { target: null },
   ]) {
     const rows = await run(patch);
     assert.equal(rows.find(r => r.driverKey === 'free')!.arrivalMinutes, null);
     assert.equal(rows.length, 2, 'everyone remains in the advisory result');
   }
 });
-test('off-shift and unverified accounts do not spend road lookups and remain selectable', async () => {
+test('only confirmed account logout excludes a calculation; shift start is not required', async () => {
   let calls = 0;
-  const rows = await run({ shift: d => d.key === 'busy' ? 'none' : 'unknown',
+  const rows = await run({ accountPresence: () => 'logged_out',
     roadTime: async () => { calls++; return { minutes: 10, source: 'road' }; } });
   assert.equal(calls, 0);
   assert.equal(rows.length, 2);
   assert.ok(rows.every(r => r.arrivalMinutes === null));
-  assert.match(rows.find(r => r.driverKey === 'busy')!.reasons.join(' '), /Off shift/);
+  assert.match(rows.find(r => r.driverKey === 'busy')!.reasons.join(' '), /account logged out/);
+  const unknownPresence = await run({ accountPresence: () => 'unknown' });
+  assert.equal(unknownPresence.find(r => r.driverKey === 'busy')!.arrivalMinutes, 30,
+    'unknown account presence must not exclude someone with usable work evidence');
 });
 test('driving uses fresh GPS to remaining stop, then release point to new job', async () => {
   const calls: unknown[] = [];

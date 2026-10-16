@@ -917,10 +917,6 @@ function DispatchPageInner() {
     }
     return rows;
   }, [locationCatalog, customCatalogLocations, catalogRouteWells, allOperatorWells]);
-  const arrivalShift = useCallback((driver: { key: string; driverId?: string; companyId?: string }) => {
-    const dot = driverShiftDot(driver).dot;
-    return dot === 'green' ? 'open' as const : dot === 'red' ? 'none' as const : 'unknown' as const;
-  }, [driverShiftDot]);
   const isDemoCompany = viewedCompanyId === 'wellbuilt-demo';
 
   useEffect(() => {
@@ -3005,7 +3001,7 @@ function DispatchPageInner() {
                         <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${assignTarget.ndicName || assignTarget.wellName}`}
                           drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
                           targetName={assignTarget.ndicName || assignTarget.wellName} locations={arrivalLocations}
-                          jobsComplete={dispatchesLoaded && !readErrors.dispatches} shift={arrivalShift}
+                          jobsComplete={dispatchesLoaded && !readErrors.dispatches}
                           selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash} />
                       </div>}
                     </div>
@@ -3476,7 +3472,7 @@ function DispatchPageInner() {
                     <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${swWellName}`}
                       drivers={drivers} jobs={dispatches} companyId={viewedCompanyId} targetName={swWellName}
                       locations={arrivalLocations} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
-                      shift={arrivalShift} selectedKeys={swDriverHashes}
+                      selectedKeys={swDriverHashes}
                       onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} />
                     {/* Keep driver selection and notes usable as split cards grow.
                         The builder owns vertical scrolling on desktop. */}

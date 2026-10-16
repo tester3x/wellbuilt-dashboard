@@ -12,7 +12,6 @@ type Location = { well_name: string; latitude?: number; longitude?: number };
 export interface DriverArrivalRecommendationsProps {
   drivers: DriverIdentity[]; jobs: ArrivalJob[]; companyId?: string | null;
   targetName: string; locations: Location[]; jobsComplete: boolean;
-  shift: (driver: DriverIdentity) => 'open' | 'none' | 'unknown';
   selectedKeys: ReadonlySet<string>; onSelect: (key: string) => void;
   roadTime?: (from: ArrivalPoint, to: ArrivalPoint) => Promise<ArrivalTravel | null>;
 }
@@ -20,7 +19,7 @@ const normalized = (s: string) => s.trim().toLowerCase();
 
 /** Advisory only: never creates jobs, changes a queue or restricts driver selection. */
 export function DriverArrivalRecommendations(props: DriverArrivalRecommendationsProps) {
-  const { drivers, jobs, companyId, targetName, locations, jobsComplete, shift, roadTime } = props;
+  const { drivers, jobs, companyId, targetName, locations, jobsComplete, roadTime } = props;
   const [expanded, setExpanded] = useState(false);
   const [invoices, setInvoices] = useState<ArrivalInvoice[]>([]);
   const [historyReady, setHistoryReady] = useState(false);
@@ -108,20 +107,19 @@ export function DriverArrivalRecommendations(props: DriverArrivalRecommendations
     if (!expanded || !companyId || !historyReady || !openReady) return;
     setBusy(true);
     recommendDriverArrivals({ drivers, jobs, invoices: combined, companyId, target, nowMs: now,
-      jobsComplete: jobsComplete && !historyError && !openError, history, shift,
+      jobsComplete: jobsComplete && !historyError && !openError, history,
       locate: name => locationIndex.get(normalized(name)) || null, roadTime,
     }).then(result => { if (alive) { setRows(result); setBusy(false); } }).catch(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
-  }, [expanded, companyId, historyReady, openReady, drivers, jobs, combined, target, now, jobsComplete, historyError, openError, history, shift, locationIndex, roadTime]);
+  }, [expanded, companyId, historyReady, openReady, drivers, jobs, combined, target, now, jobsComplete, historyError, openError, history, locationIndex, roadTime]);
   if (!targetName.trim()) return null;
-  const onShiftCount = drivers.filter(driver => (!driver.companyId || driver.companyId === companyId) && shift(driver) === 'open').length;
   return <section className="rounded border border-cyan-800/60 bg-gray-950/40 text-xs" data-driver-arrival-recommendations>
     <button type="button" className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-cyan-300" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>
       <span>Driver arrival recommendations</span><span aria-hidden="true">{expanded ? '▴' : '▾'}</span>
     </button>
     {expanded && <div className="space-y-2 border-t border-cyan-900/60 p-3">
       <p className="break-words text-gray-300">To {targetName}. After current work; existing queued assignments are shown separately. All drivers remain selectable.</p>
-      {!!companyId && <p className="text-cyan-300">Comparing {onShiftCount} on-shift driver{onShiftCount === 1 ? '' : 's'}. Off-shift or unverified drivers remain selectable; no travel lookup is made for them.</p>}
+      {!!companyId && <p className="text-cyan-300">No shift start required. Recommendations use recent job/location evidence; missing data shows Arrival unknown.</p>}
       {!companyId && <p className="text-amber-300">Select a company to compare arrivals.</p>}
       {!!companyId && !target && <p className="text-amber-300">Pickup coordinates unavailable or ambiguous.</p>}
       {(historyError || openError) && <p className="text-amber-300">Timing/job history unavailable. Arrival estimates withheld. <button type="button" className="underline" onClick={() => setRetry(v => v + 1)}>Retry</button></p>}

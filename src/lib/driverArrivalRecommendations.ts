@@ -86,7 +86,8 @@ function onsiteEstimate(samples: readonly ArrivalSample[], kind: 'load' | 'unloa
 export async function recommendDriverArrivals(input: {
   drivers: readonly DriverIdentity[]; jobs: readonly ArrivalJob[]; invoices: readonly ArrivalInvoice[];
   companyId: string; target: ArrivalPoint | null; nowMs: number; jobsComplete: boolean;
-  history: readonly ArrivalSample[]; shift: (driver: DriverIdentity) => 'open' | 'none' | 'unknown';
+  history: readonly ArrivalSample[];
+  accountPresence?: (driver: DriverIdentity) => 'logged_in' | 'logged_out' | 'unknown';
   locate: (name: string) => ArrivalPoint | null;
   roadTime?: (from: ArrivalPoint, to: ArrivalPoint) => Promise<ArrivalTravel | null>;
 }): Promise<ArrivalRecommendation[]> {
@@ -109,8 +110,7 @@ export async function recommendDriverArrivals(input: {
     if (!driver.companyId && companyId !== 'liquid-gold') return unknown('Driver company identity unavailable');
     if (!input.jobsComplete) return unknown('Current job feed unavailable; cannot assume this driver is free');
     if (!input.target) return unknown('Pickup coordinates unavailable or ambiguous');
-    const shift = input.shift(driver);
-    if (shift !== 'open') return unknown(shift === 'none' ? 'Off shift; next start time unknown' : 'Shift status unavailable');
+    if (input.accountPresence?.(driver) === 'logged_out') return unknown('WB account logged out; next availability unknown');
     const active = jobs.filter(j => ['accepted', 'in_progress', 'paused'].includes(j.status));
     let origin: ArrivalPoint | null = null, release = 0;
     if (active.length) {

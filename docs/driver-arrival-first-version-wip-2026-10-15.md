@@ -25,6 +25,20 @@ persistent login/account existence is not presence. Panel now shows the on-shift
 comparison count. Regression explicitly proves off-shift/unverifiable accounts
 perform zero external travel lookups while remaining in the selectable results.
 
+CORRECTION: the user clarified that other drivers use WB account login without
+starting WB-S/WB-T shifts. Removed the shift gate and on-shift comparison count.
+Shift dots remain informational on existing controls. Unknown presence is not
+logged-out. Explicit logged-out evidence may withhold a travel estimate; usable
+recent work/location can still support one without a shift start. Tests updated.
+
+Presence audit: governed Dashboard catalog does NOT expose reliable account
+presence. WB-M has old lastLoginAt company-device tracking behind
+DEVICE_MANAGEMENT_AVAILABLE, with no call sites found in the inspected login
+file; manual logout clears its local auth/session, not a shared presence flag.
+Suite logoutAt is an SSO logout instruction, not a cross-app online roster.
+No account-presence feed has been invented or deployed. A true logged-in list
+still needs a scoped, current session/presence source; paid APIs remain disabled.
+
 ## Read-only live coverage
 
 Checked at 2026-10-16 04:13 UTC (Oct 15 local), company-scoped production reads.
