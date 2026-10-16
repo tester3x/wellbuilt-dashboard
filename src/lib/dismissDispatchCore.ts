@@ -15,14 +15,15 @@ export interface DismissDispatchResult {
 
 export type CallableInvoker<T> = (payload: unknown) => Promise<{ data: T }>;
 
-export function buildDismissPayload(dispatchId: string): { dispatchId: string } {
-  return { dispatchId };
+export function buildDismissPayload(dispatchId: string, reason?: string): { dispatchId: string; reason?: string } {
+  return { dispatchId, ...(reason !== undefined ? { reason: reason.trim() } : {}) };
 }
 
 export async function runDismissDispatch(
   invoke: CallableInvoker<DismissDispatchResult>,
   dispatchId: string,
+  reason?: string,
 ): Promise<DismissDispatchResult> {
-  const res = await invoke(buildDismissPayload(dispatchId));
+  const res = await invoke(buildDismissPayload(dispatchId, reason));
   return res.data;
 }

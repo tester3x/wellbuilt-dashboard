@@ -9,7 +9,7 @@ import { DISMISS_DISPATCH_CALLABLE, runDismissDispatch, type DismissDispatchResu
 export { DISMISS_DISPATCH_CALLABLE } from './dismissDispatchCore';
 export type { DismissDispatchResult } from './dismissDispatchCore';
 
-export async function dismissDispatch(dispatchId: string): Promise<DismissDispatchResult> {
+export async function dismissDispatch(dispatchId: string, reason?: string): Promise<DismissDispatchResult> {
   const fn = httpsCallable(getFirebaseFunctions(), DISMISS_DISPATCH_CALLABLE);
-  return runDismissDispatch((payload) => fn(payload) as Promise<{ data: DismissDispatchResult }>, dispatchId);
+  return runDismissDispatch((payload) => fn(payload) as Promise<{ data: DismissDispatchResult }>, dispatchId, reason);
 }

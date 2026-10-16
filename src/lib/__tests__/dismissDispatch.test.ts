@@ -60,3 +60,11 @@ test('runDismissDispatch surfaces errors visibly (never a silent no-op)', async 
     { message: /cross_company/ },
   );
 });
+
+test('dismiss reason is trimmed and explicit blank remains present', async () => {
+  assert.deepEqual(buildDismissPayload('job', '  Testing resume bug  '), {dispatchId:'job',reason:'Testing resume bug'});
+  assert.deepEqual(buildDismissPayload('job', '   '), {dispatchId:'job',reason:''});
+  let sent: unknown;
+  await runDismissDispatch(async payload => {sent=payload;return {data:{ok:true,idempotent:false,dispatchIds:['job']}};}, 'job', 'test');
+  assert.deepEqual(sent,{dispatchId:'job',reason:'test'});
+});

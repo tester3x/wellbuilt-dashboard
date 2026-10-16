@@ -12,7 +12,7 @@ import {
   type DispatchDismissView,
 } from './operational/dismissDispatch';
 
-const ALLOWED_KEYS = new Set(['dispatchId']);
+const ALLOWED_KEYS = new Set(['dispatchId', 'reason']);
 const FORBIDDEN_KEYS = Object.freeze([
   'companyId',
   'targetCompanyId',
@@ -75,6 +75,10 @@ export const dismissDispatch = httpsV2.onCall(
     const parsed = parseDispatchId(raw.dispatchId);
     if (!parsed.ok) throwDecided(parsed);
 
+    if (raw.reason !== undefined && (typeof raw.reason !== 'string' || raw.reason.length > 1000)) {
+      throw new httpsV2.HttpsError('invalid-argument', 'reason must be a string of at most 1000 characters');
+    }
+    const reason = typeof raw.reason === 'string' ? raw.reason.trim() : '';
     const fs = admin.firestore();
     const outcome = await fs.runTransaction(async (tx) => {
       const jobRef = fs.collection('dispatches').doc(parsed.dispatchId);
@@ -103,6 +107,7 @@ export const dismissDispatch = httpsV2.onCall(
             status: 'dismissed',
             dismissedAt: FieldValue.serverTimestamp(),
             dismissedBy: access.uid,
+            dismissReason: reason,
           });
         }
       }

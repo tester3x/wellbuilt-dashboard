@@ -390,9 +390,9 @@ function DispatchPageInner() {
     ensureCanCreateDispatch();
     return _staffCancelDispatch(dispatchId);
   };
-  const dismissDispatch = (dispatchId: string) => {
+  const dismissDispatch = (dispatchId: string, reason?: string) => {
     ensureCanCreateDispatch();
-    return _dismissDispatch(dispatchId);
+    return _dismissDispatch(dispatchId, reason);
   };
 
   // Data state
@@ -1909,9 +1909,9 @@ function DispatchPageInner() {
 
   // ─── Cancel Dispatch ───────────────────────────────────────────────────────
 
-  async function dismissDeclinedDispatch(jobId: string) {
+  async function dismissDeclinedDispatch(jobId: string, reason?: string) {
     try {
-      await dismissDispatch(jobId);
+      await dismissDispatch(jobId, reason);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Dismiss failed';
       setMessage(`Dismiss failed: ${msg.replace(/^FirebaseError:\s*/i, '')}`);
@@ -5225,7 +5225,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   onEditServiceWork?: (job: DispatchJob) => void;
   onReassignDeclined?: (job: DispatchJob) => void;
-  onDismissDeclined?: (jobId: string) => Promise<void> | void;
+  onDismissDeclined?: (jobId: string, reason?: string) => Promise<void> | void;
   /** True once auth/company resolved AND the first real Active Jobs dataset loaded. */
   activeJobsReady?: boolean;
   /** Canonical well pool + shared clock — for the SAME physical-readiness order + live DOWN state as the Well Queue. */
@@ -5251,6 +5251,8 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   const [confirmDismissJob, setConfirmDismissJob] = useState<DispatchJob | null>(null);
   const [dismissSubmitting, setDismissSubmitting] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
+  const [dismissReason, setDismissReason] = useState('');
+  useEffect(() => { setDismissReason(''); }, [confirmDismissJob?.id]);
   const [haulGroups, setHaulGroups] = useState<Record<string, string>>({});
   const haulSubscriptionKey = JSON.stringify(dispatches
     .filter(job => job.id && job.invoiceDocId && job.companyId)
@@ -5274,7 +5276,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     setDismissError(null);
     try {
       if (onDismissDeclined) {
-        await onDismissDeclined(confirmDismissJob.id);
+        await onDismissDeclined(confirmDismissJob.id, dismissReason);
       }
       setConfirmDismissJob(null);
     } catch (err: unknown) {
@@ -5694,6 +5696,12 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                 </div>
               )}
             </div>
+
+            <label htmlFor="dispatch-dismiss-reason" className="block text-sm text-gray-300 mb-1">Reason (optional)</label>
+            <textarea id="dispatch-dismiss-reason" value={dismissReason} onChange={e => setDismissReason(e.target.value)}
+              maxLength={1000} rows={3} disabled={dismissSubmitting}
+              className="mb-4 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              placeholder="Why is this dispatch being removed?" />
 
             {dismissError && (
               <div className="mb-4 p-2.5 rounded bg-red-900/50 border border-red-700 text-red-200 text-xs">
