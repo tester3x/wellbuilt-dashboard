@@ -38,6 +38,9 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const rows=parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined,driverDefaultBbls:channel.driverDefaultBbls||{}});
  let row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
  const senderKey=body.senderId===undefined?null:watchdogSenderKey(body.senderId);
+ // Pumper rounds listing many gauges are not driver load observations.
+ if(rows.length>=3&&rows.every(candidate=>candidate.levelOnly===true)){res.json({ok:true,status:'ignored',reason:'pumper_gauge_list'});return;}
+
  if(row.levelOnly){
   const candidate=senderKey?policy.senderBindings?.[senderKey]:null;
   const start=policy.topOnlyDriverStarts?.[candidate?.driverId];
