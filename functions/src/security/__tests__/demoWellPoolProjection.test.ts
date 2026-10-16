@@ -31,4 +31,17 @@ describe('demo company well pool containment', () => {
     expect(result.wellConfig['Demo Well 2'].demoInitialTriggerInches).toBe(128);
     expect(result.wellConfig['Demo Well 2'].secret).toBeUndefined();
   });
+
+  test('includes demo-owned service wells without inventing tank measurements', () => {
+    const result = projectDemoCompanyWellPool({
+      'Demo Service Well 1': { companyId: 'wellbuilt-demo', isDemo: true,
+        name: 'Demo Service Well 1', route: 'Unrouted', operator: 'Demo Operator' },
+      'Demo Service Well 2': { companyId: 'wellbuilt-demo', isDemo: true,
+        name: 'Demo Service Well 2', route: 'Unrouted', operator: 'Demo Operator' },
+    }, {});
+    expect(result.counts).toEqual({ wellConfig: 2, wellStatus: 0 });
+    expect(result.wellConfig['Demo Service Well 1'].route).toBe('Unrouted');
+    expect(result.wellConfig['Demo Service Well 2'].route).toBe('Unrouted');
+    expect(result.wellStatus).toEqual({});
+  });
 });

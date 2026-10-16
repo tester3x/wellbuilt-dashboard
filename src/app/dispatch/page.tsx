@@ -500,6 +500,7 @@ function DispatchPageInner() {
   const [swSplitBBbls, setSwSplitBBbls] = useState('');
   const [swSplitBNotes, setSwSplitBNotes] = useState('');
   const [swServiceType, setSwServiceType] = useState('');
+  const [swDemoBbls, setSwDemoBbls] = useState('60');
   const [swOnsiteBy, setSwOnsiteBy] = useState('');
   const [swOnsiteByDraft, setSwOnsiteByDraft] = useState(false);
   const [swOnsiteByInputKey, setSwOnsiteByInputKey] = useState(0);
@@ -1713,6 +1714,28 @@ function DispatchPageInner() {
       const firestore = getFirestoreDb();
       const selectedDrivers = drivers.filter(d => swDriverHashes.has(d.key));
       if (selectedDrivers.length === 0) throw new Error('No drivers found');
+      if (user?.role === 'demo_viewer') {
+        const bbls = Number(swDemoBbls);
+        if (!/^Demo Service Well [12]$/.test(swWellName.trim())
+          || !/^Demo Well [1-3]$/.test(swDropoff.trim())
+          || swServiceType !== 'Hot Oiler'
+          || selectedDrivers.length !== 1
+          || (selectedDrivers[0].driverId || selectedDrivers[0].key) !== '2f6e6f75-b468-4239-9831-71faeb623acb'
+          || swSplitTicket || !Number.isInteger(bbls) || bbls < 5 || bbls > 120 || bbls % 5 !== 0) {
+          throw new Error('Choose a demo service well, a different demo well for drop-off, Antig, Hot Oiler, and 5–120 BBL in steps of 5.');
+        }
+        await httpsCallable(getFirebaseFunctions(), 'dispatchDemoViewerJob')({
+          jobType: 'service', serviceType: 'Hot Oiler', bbls,
+          wellName: swWellName.trim(), disposal: swDropoff.trim(),
+          driverId: selectedDrivers[0].driverId || selectedDrivers[0].key,
+          loadCount: 1, notes: swNotes.trim(),
+        });
+        setMessage(`Hot Oiler service job dispatched to Antig: ${bbls} BBL from ${swWellName.trim()} to ${swDropoff.trim()}.`);
+        setSwWellName(''); setSwDropoff(''); setSwServiceType(''); setSwNotes('');
+        setSwDriverHashes(new Set());
+        setWorkspaceTab('jobs');
+        return;
+      }
 
       // Look up NDIC name from wells list or operator wells
       const trimmedTarget = swWellName.trim();
@@ -3061,7 +3084,7 @@ function DispatchPageInner() {
                     {/* Decide the load before choosing its pickup well. */}
                     <div className="flex items-center gap-4 flex-shrink-0 flex-wrap rounded border border-purple-700/40 bg-gray-900/60 px-3 py-2">
                       <label className="flex items-center gap-2 cursor-pointer group">
-                        <input type="checkbox" checked={swSplitTicket} onChange={(e) => {
+                        <input type="checkbox" checked={swSplitTicket} disabled={user?.role === 'demo_viewer'} onChange={(e) => {
                           const checked = e.target.checked;
                           setSwSplitTicket(checked);
                           if (!checked) {
@@ -3113,6 +3136,14 @@ function DispatchPageInner() {
                             optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
                         </div>
+                        {user?.role === 'demo_viewer' && (
+                          <div className="flex gap-2 text-xs">
+                            {['Demo Service Well 1', 'Demo Service Well 2'].map(name => (
+                              <button key={name} type="button" onClick={() => setSwWellName(name)}
+                                className="rounded border border-purple-600 px-2 py-1 text-purple-300 hover:bg-purple-900/30">{name} · Unrouted</button>
+                            ))}
+                          </div>
+                        )}
                         {swHeavyWater && <div className="text-[11px] text-amber-300">10+ lb/gal wells first by estimated level, then 9.9, 9.8…; unknown weights last.</div>}
                         {swWellName.trim() && (
                           <div className="text-xs text-gray-400 mt-1">
@@ -3144,11 +3175,19 @@ function DispatchPageInner() {
                           <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
                             className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
                             <option value="">Select type...</option>
-                            {dynamicServiceTypes.map(st => (
+                            {user?.role === 'demo_viewer' && <option value="Hot Oiler">Hot Oiler</option>}
+                            {(user?.role === 'demo_viewer' ? [] : dynamicServiceTypes).map(st => (
                               <option key={st} value={st}>{st === 'Production Water' ? 'Production Water (hr)' : st}</option>
                             ))}
                           </select>
                         </div>
+                        {user?.role === 'demo_viewer' && !swSplitTicket && (
+                          <label className="block text-xs text-gray-400">Planned BBLs
+                            <input type="number" min={5} max={120} step={5} value={swDemoBbls}
+                              onChange={e => setSwDemoBbls(e.target.value)}
+                              className="block mt-1 w-full rounded border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm text-white" />
+                          </label>
+                        )}
                         <div>
                           <label htmlFor="sw-onsite-by" className="block text-xs text-gray-400 mb-1">Be onsite by</label>
                           {swKeyboardDateInput ? (
