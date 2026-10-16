@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DISMISS_DISPATCH_CALLABLE,
+  dispatchRemovalRequiresCancellation,
   buildDismissPayload,
   runDismissDispatch,
   type DismissDispatchResult,
@@ -67,4 +68,9 @@ test('dismiss reason is trimmed and explicit blank remains present', async () =>
   let sent: unknown;
   await runDismissDispatch(async payload => {sent=payload;return {data:{ok:true,idempotent:false,dispatchIds:['job']}};}, 'job', 'test');
   assert.deepEqual(sent,{dispatchId:'job',reason:'test'});
+});
+
+test('started jobs require cancellation before removal; terminal and unstarted jobs retain dismissal', () => {
+  for (const status of ['accepted','in_progress','paused']) assert.equal(dispatchRemovalRequiresCancellation(status),true);
+  for (const status of ['pending','pending_approval','cancelled','declined','dismissed']) assert.equal(dispatchRemovalRequiresCancellation(status),false);
 });
