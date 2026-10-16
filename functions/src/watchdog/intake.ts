@@ -126,6 +126,16 @@ export const getWatchdogPullReceiptV2=https.onRequest(options,async(req,res)=>{
  const entryRef=admin.firestore().collection(root).doc(identity);
  let entry=(await entryRef.get()).data();if(!entry||entry.principalId!=='laptop-watchdog-v2')throw Error('receipt_not_owned');
  const db=admin.database();let packet=(await db.ref('packets/processed/'+entry.packetId).once('value')).val();
+ // A processor rejection is terminal attention, never an indefinitely queued receipt.
+ if(!packet){
+  const rejected=(await db.ref('packets/rejected/'+entry.packetId).once('value')).val();
+  if(rejected?.packetId===entry.packetId && rejected.packet?.watchdogProvenance?.observationDigest===identity && rejected.packet?.watchdogProvenance?.principalId===entry.principalId){
+   res.json({ok:true,identity,packetId:entry.packetId,status:'review',needsReview:true,correctionPending:false,
+    issues:['Processor held this load: '+String(rejected.reason||'rejected')+'. Review the original record before retrying.'],
+    measurements:{tankLevelFeet:entry.top,bottomLevelFeet:entry.reportedBottomFeet??entry.bottom,bblsTaken:entry.bbl,dateTimeUTC:entry.dateTimeUTC}});return;
+  }
+ }
+
  if(entry.pendingReview){
   const outbox=(await db.ref('packets/editOutbox/'+entry.pendingReview.eventId).once('value')).val();
   const pending=entry.pendingReview.review;
