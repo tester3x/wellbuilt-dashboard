@@ -39,6 +39,14 @@ Suite logoutAt is an SSO logout instruction, not a cross-app online roster.
 No account-presence feed has been invented or deployed. A true logged-in list
 still needs a scoped, current session/presence source; paid APIs remain disabled.
 
+User clarification: no geographic eligibility cutoff for the small driver pool.
+Audit confirms there is no maximum driver distance or radius exclusion. A new
+regression proves a driver whose assigned release point is 250 road miles away
+still appears with an estimated arrival; distance affects ordering, not selection.
+The 0.5 km endpoint tolerance only matches historical trips; it is NOT a driver
+eligibility radius. Assigned-site coordinates infer the location of current work
+and eventual release, never assert that a driving truck has already arrived there.
+
 ## Read-only live coverage
 
 Checked at 2026-10-16 04:13 UTC (Oct 15 local), company-scoped production reads.

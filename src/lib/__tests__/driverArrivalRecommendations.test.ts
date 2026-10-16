@@ -120,3 +120,15 @@ test('recorded trips come first; road provider is called only for insufficient d
   assert.equal(reverse[0].arrivalMinutes, 25);
   assert.equal(calls, 2, 'reverse-direction trips cannot masquerade as the same route');
 });
+
+test('distance never eliminates a driver, including a distant assigned release location', async () => {
+  const farDrop = { lat: 46, lng: -100 };
+  const rows = await run({ locate: name => name === 'drop' ? farDrop : point,
+    roadTime: async from => ({ minutes: from.lat === farDrop.lat ? 300 : 20, miles: from.lat === farDrop.lat ? 250 : 10, source: 'road' }) });
+  assert.equal(rows.length, 2);
+  const distant = rows.find(r => r.driverKey === 'busy')!;
+  assert.equal(distant.arrivalMinutes, 315);
+  assert.equal(distant.miles, 250);
+  assert.equal(rows[0].driverKey, 'free');
+  assert.match(distant.reasons.join(' '), /Available after current work at drop/);
+});
