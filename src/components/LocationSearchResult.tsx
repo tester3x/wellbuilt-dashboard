@@ -1,4 +1,5 @@
 import type { CombinedLocation } from '@/lib/builderWellSearch';
+import { WellSearchLevel } from './WellSearchStatus';
 
 /** Matches WB-T: type badge beside name, operator and county underneath. */
 export function LocationSearchResult({ item }: { item: CombinedLocation }) {
@@ -8,10 +9,10 @@ export function LocationSearchResult({ item }: { item: CombinedLocation }) {
       <span className="wb-option-sub block text-xs text-gray-400">{[item.sub, item.county ? `${item.county} Co.` : ''].filter(Boolean).join(' — ')}</span>
       {item.showWaterDetails && <span className="block text-xs text-amber-300">
         {item.waterWeight == null ? 'Weight unknown' : `${item.waterWeight} lb/gal`}
-        {' · '}Level {item.estimatedLevel || '--'}
         {' · '}Tank height {item.tankHeight == null ? 'unknown' : `${item.tankHeight} ft`}
       </span>}
     </span>
+    {(item.kind === 'WELL' || !item.kind) && <WellSearchLevel name={item.value} fallback={item.estimatedLevel} />}
   </span>;
 }
 

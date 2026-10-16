@@ -16,6 +16,8 @@ import { SegmentedOnsiteByInput } from '@/components/SegmentedOnsiteByInput';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { CatalogSearchResult, LocationSearchResult } from '@/components/LocationSearchResult';
+import { WellSearchStatusProvider, useSearchWellStatus } from '@/components/WellSearchStatus';
+import { buildSearchWellStatus, rankWellSearchRows } from '@/lib/wellSearchPresentation';
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
 import { combinedLocationResults, dropoffSourcesForBuilderOperator, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
 import { heavyWaterWellResults } from '@/lib/heavyWaterWellSearch';
@@ -841,12 +843,14 @@ function DispatchPageInner() {
   }, [user, loading, viewedCompanyId]);
 
   const catalogRouteWells = useMemo(() => !operatingCompanyId || operatingCompanyId === 'liquid-gold' ? wells : wells.filter(w => w.companyId === operatingCompanyId), [wells, operatingCompanyId]);
+  const searchWellStatus = useMemo(() => buildSearchWellStatus(catalogRouteWells, asOfMs), [catalogRouteWells, asOfMs]);
   const swWellOptions = useMemo(() => {
     const scopedWells = wellsForBuilderOperator(catalogRouteWells, allOperatorWells, builderOperator);
     const scopedOperatorWells = builderOperator
       ? allOperatorWells.filter(w => w.operator?.toLowerCase() === builderOperator.toLowerCase())
       : allOperatorWells;
     const sources = {
+      wellStatus: searchWellStatus,
       wells: scopedWells,
       operatorWells: scopedOperatorWells,
       disposalMatches: builderOperator ? [] : searchDisposals(swWellName.trim().toLowerCase(), allDisposals),
@@ -867,9 +871,10 @@ function DispatchPageInner() {
       seen.add(key);
       return true;
     }).map(item => item.kind === 'WELL' ? { ...item, showWaterDetails: true } : item)];
-  }, [catalogRouteWells, allOperatorWells, builderOperator, allDisposals, customCatalogLocations, swWellName, swHeavyWater, asOfMs]);
+  }, [catalogRouteWells, allOperatorWells, builderOperator, allDisposals, customCatalogLocations, swWellName, swHeavyWater, asOfMs, searchWellStatus]);
   function swDestinationOptions(query: string) {
     const sources = dropoffSourcesForBuilderOperator({
+      wellStatus: searchWellStatus,
       wells: catalogRouteWells,
       operatorWells: allOperatorWells,
       disposalMatches: searchDisposals(query.trim().toLowerCase(), allDisposals),
@@ -899,7 +904,10 @@ function DispatchPageInner() {
     const seen = new Set<string>();
     return rows.filter(w => { const k = w.well_name.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   }, [allOperatorWells, allDisposals, customCatalogLocations, catalogRouteWells]);
-  const locationResults = (q: string) => searchDisposals(q, locationCatalog);
+  const locationResults = (q: string) => rankWellSearchRows(
+    searchDisposals(q, locationCatalog, locationCatalog.length), q, row => row.well_name,
+    searchWellStatus, 15, row => row.kind === 'WELL',
+  );
   const isDemoCompany = viewedCompanyId === 'wellbuilt-demo';
 
   useEffect(() => {
@@ -2766,7 +2774,7 @@ function DispatchPageInner() {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="dashboard-viewport-shell bg-gray-900">
+    <WellSearchStatusProvider wells={catalogRouteWells} nowMs={asOfMs}><div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
 
       <main data-dashboard-scroll="dispatch" data-dispatch-scroll="primary" className="dispatch-scroll-main px-4 py-4">
@@ -4773,7 +4781,7 @@ function DispatchPageInner() {
           </div>
         </>
       )}
-    </div>
+    </div></WellSearchStatusProvider>
   );
 }
 
@@ -5670,6 +5678,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
   updateCompletedJob: (dispatchId: string, record: Record<string, unknown>) => Promise<void>;
 }) {
   const [driverFilter, setDriverFilter] = useState<string>('all');
+  const searchWellStatus = useSearchWellStatus();
   const [searchQuery, setSearchQuery] = useState('');
   const [dateRange, setDateRange] = useState<'today' | '7d' | '30d' | 'custom' | 'all'>('today');
   const [customFrom, setCustomFrom] = useState('');
@@ -6038,7 +6047,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                         setEditForm(f => ({ ...f, wellName: v }));
                         if (v.length >= 2 && allWells) {
                           const q = v.toLowerCase();
-                          setWellResults(allWells.filter(w => w.well_name.toLowerCase().includes(q)).slice(0, 8));
+                          setWellResults(rankWellSearchRows(allWells.filter(w => w.well_name.toLowerCase().includes(q)), v, w => w.well_name, searchWellStatus, 8, w => !w.kind || w.kind === 'WELL'));
                           setShowWellDropdown(true);
                         } else { setShowWellDropdown(false); }
                       }}
@@ -6063,7 +6072,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                         setEditForm(f => ({ ...f, disposal: v }));
                         if (v.length >= 2 && allDisposals) {
                           const q = v.toLowerCase();
-                          setDisposalResults(allDisposals.filter(d => d.well_name.toLowerCase().includes(q)).slice(0, 8));
+                          setDisposalResults(rankWellSearchRows(allDisposals.filter(d => d.well_name.toLowerCase().includes(q)), v, d => d.well_name, searchWellStatus, 8, d => d.kind === 'WELL'));
                           setShowDisposalDropdown(true);
                         } else { setShowDisposalDropdown(false); }
                       }}
@@ -6608,8 +6617,9 @@ function DriverDisposalRow({ hash, name, disposal, borderColor, allDisposals, on
   onSetDisposal: (disp: { name: string; lat?: number; lng?: number } | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const searchWellStatus = useSearchWellStatus();
   const [search, setSearch] = useState('');
-  const results = search.length >= 2 ? searchDisposals(search, allDisposals) : [];
+  const results = search.length >= 2 ? rankWellSearchRows(searchDisposals(search, allDisposals, allDisposals.length), search, d => d.well_name, searchWellStatus, 15, d => d.kind === 'WELL') : [];
 
   return (
     <div className={`bg-gray-900 border ${borderColor} rounded px-3 py-1.5`}>

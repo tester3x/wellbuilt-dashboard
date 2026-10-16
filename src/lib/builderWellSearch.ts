@@ -1,3 +1,5 @@
+import { rankWellSearchRows, type SearchWellStatus } from './wellSearchPresentation.ts';
+
 /**
  * Shared "combined" location search for the Service Work Builder fields (Well /
  * Location and Drop-off): merges the governed well pool, the full company operator
@@ -26,6 +28,7 @@ export interface CombinedSearchSources {
   /** SWD/disposal directory search result rows (well_name). */
   disposalMatches: Array<{ well_name: string; operator?: string; county?: string }>;
   customLocations?: Array<{ locationName: string; company: string; usageCount?: number }>;
+  wellStatus?: ReadonlyMap<string, SearchWellStatus>;
 }
 
 export const COMBINED_SEARCH_LIMIT = 15;
@@ -104,7 +107,10 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
   const customMatches: CombinedLocation[] = (s.customLocations || [])
     .filter(c => locationQueryMatches(q, c.locationName) && !seen.has(c.locationName.toLowerCase()))
     .map(c => ({ label: c.locationName, sub: `Used ${c.usageCount || 0}× — ${c.company || 'Custom'}`, kind: 'LOC', value: c.locationName }));
-  return rankLocationRows([...wellMatches, ...operatorMatches, ...disposalMatches, ...customMatches], q, row => row.label, COMBINED_SEARCH_LIMIT);
+  const rows = [...wellMatches, ...operatorMatches, ...disposalMatches, ...customMatches];
+  return s.wellStatus
+    ? rankWellSearchRows(rows, q, row => row.label, s.wellStatus, COMBINED_SEARCH_LIMIT, row => row.kind === 'WELL')
+    : rankLocationRows(rows, q, row => row.label, COMBINED_SEARCH_LIMIT);
 }
 
 /** Match and ranking parity with WB-T: ignore location noise words; cap after ranking. */
