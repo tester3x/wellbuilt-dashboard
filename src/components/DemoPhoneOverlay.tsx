@@ -142,6 +142,7 @@ export function DemoPhoneOverlay() {
   const [frame, setFrame] = useState<PhoneFrame>({ available: false });
   const [checked, setChecked] = useState(false);
   const [expanded, setExpanded] = useState(true);
+  const [minimized, setMinimized] = useState(() => !pathname.startsWith('/dispatch'));
   const [large, setLarge] = useState(false);
   const [explore, setExplore] = useState<ExploreScreen | null>(null);
   const [phoneTourStep, setPhoneTourStep] = useState<PhoneTourStep | null>(null);
@@ -159,6 +160,12 @@ export function DemoPhoneOverlay() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    // Keep the driver visible for the dispatch walkthrough, while letting
+    // visitors read the full tables on the other Dashboard pages.
+    setMinimized(!pathname.startsWith('/dispatch'));
+  }, [pathname]);
+
   const openExplore = (screen: ExploreScreen) => {
     // Explore a separate captured WB T session. The live driver keeps running
     // for every viewer and never receives public-browser taps.
@@ -171,6 +178,7 @@ export function DemoPhoneOverlay() {
   useEffect(() => {
     const startPhoneTour = () => {
       setExplore(null);
+      setMinimized(false);
       setExpanded(true);
       setLarge(true);
       setPhoneTourStartedAt(Date.now());
@@ -227,6 +235,17 @@ export function DemoPhoneOverlay() {
     return () => { alive = false; window.clearInterval(timer); };
   }, [isSuitePhonePage]);
 
+  if (minimized) {
+    return (
+      <button type="button" onClick={() => setMinimized(false)}
+        aria-label="Show demo phone"
+        className="fixed bottom-4 right-4 z-[85] flex items-center gap-2 rounded-full border border-cyan-600 bg-[#121417] px-4 py-2 text-xs font-semibold text-cyan-100 shadow-lg shadow-black/50 hover:bg-cyan-950 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">
+        <span aria-hidden="true" className={`h-2 w-2 rounded-full ${!isSuitePhonePage && frame.available && frame.live ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+        Show demo phone
+      </button>
+    );
+  }
+
   return (
     <aside aria-label="Live WellBuilt demo phone" className="fixed bottom-3 right-3 z-[85] rounded-[38px] border-[10px] border-[#17191d] bg-[#090a0c] p-[4px] shadow-[inset_0_0_0_2px_#373a40,0_18px_42px_#000b,4px_4px_0_#08090a] ring-2 ring-[#34363b] md:bottom-5 md:right-5"
       style={{ width: large ? 'min(90vw, 480px, calc((100dvh - 8rem) * 9 / 20))' : 'min(90vw, 370px, calc((100dvh - 8rem) * 9 / 20))' }}>
@@ -240,6 +259,7 @@ export function DemoPhoneOverlay() {
         </button>
         <div className="flex shrink-0 gap-1 whitespace-nowrap">
           {explore && <button type="button" onClick={() => setExplore(null)} className="rounded border border-cyan-600 px-1.5 py-1 text-cyan-200 hover:bg-cyan-950">Return to Live</button>}
+          <button type="button" onClick={() => setMinimized(true)} className="rounded border border-[#5a5e65] px-1.5 py-1 hover:bg-[#26292d]" aria-label="Minimize demo phone">Hide</button>
           <button type="button" onClick={() => { setLarge(value => !value); setExpanded(true); }} className="rounded border border-[#5a5e65] px-1.5 py-1 hover:bg-[#26292d]" aria-label={large ? 'Use normal phone size' : 'Enlarge demo phone'}>
             {large ? 'Normal' : 'Enlarge'}
           </button>
