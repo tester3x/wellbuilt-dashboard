@@ -70,7 +70,7 @@ export default function MobilePage() {
   // appear briefly and then disappear when routes finish loading.
   const [fetchedTickets, setFetchedTickets] = useState<Ticket[]>([]);
   const [ticketScope, setTicketScope] = useState<string | null>(null);
-  const [edgeCaseExpanded, setEdgeCaseExpanded] = useState(true);
+  const [edgeCaseExpanded, setEdgeCaseExpanded] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [ticketLimit, setTicketLimit] = useState(500);
   const [hasMoreTickets, setHasMoreTickets] = useState(false);
@@ -290,21 +290,21 @@ export default function MobilePage() {
           </div>
         )}
         {/* Title and Controls */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-          <div className="flex items-center gap-8">
-            <h2 className="text-xl font-semibold text-white">
+        <div data-well-status-toolbar className="flex flex-col gap-3 mb-6 xl:flex-row xl:flex-wrap xl:items-center xl:justify-between">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <h2 className="w-full sm:w-auto shrink-0 whitespace-nowrap text-xl font-semibold text-white">
               Well Status
               <span className="text-gray-400 text-base font-normal ml-2">
                 ({wells.length} wells)
               </span>
             </h2>
-            <div className="relative">
+            <div className="relative flex-1 min-w-0 sm:flex-none">
               <input
                 type="text"
                 value={wellSearch}
                 onChange={(e) => setWellSearch(e.target.value)}
                 placeholder="Search wells..."
-                className="px-3 py-1.5 pr-8 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-teal-500 focus:outline-none w-64"
+                className="px-3 py-1.5 pr-8 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-teal-500 focus:outline-none w-full sm:w-64"
               />
               {wellSearch && (
                 <button
@@ -348,41 +348,41 @@ export default function MobilePage() {
                   loadDisposals().then(setAddPullDisposals).catch(() => {});
                 }
               }}
-              className="px-3 py-1.5 text-sm font-medium rounded transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700"
+              className="shrink-0 whitespace-nowrap px-3 py-1.5 text-sm font-medium rounded transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700"
             >
               <span className="text-sm">+</span> Add Pull
             </button>
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 sm:justify-end">
             {/* Performance link */}
             <Link
               href="/performance"
-              className="px-3 py-1 text-sm text-gray-400 hover:text-white transition-colors"
+              className="shrink-0 whitespace-nowrap px-2 py-1 text-sm text-gray-400 hover:text-white transition-colors"
             >
               Performance
             </Link>
 
             {/* Expand/Collapse All */}
-            <div className="flex gap-2">
+            <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
               <button
                 onClick={expandAll}
-                className="px-3 py-1 text-sm text-gray-400 hover:text-white transition-colors"
+                className="shrink-0 whitespace-nowrap px-2 py-1 text-sm text-gray-400 hover:text-white transition-colors"
               >
                 Expand All
               </button>
               <span className="text-gray-600">|</span>
               <button
                 onClick={collapseAll}
-                className="px-3 py-1 text-sm text-gray-400 hover:text-white transition-colors"
+                className="shrink-0 whitespace-nowrap px-2 py-1 text-sm text-gray-400 hover:text-white transition-colors"
               >
                 Collapse All
               </button>
             </div>
 
             {/* View Toggle */}
-            <div className="flex bg-gray-700 rounded-lg p-1">
+            <div className="flex shrink-0 bg-gray-700 rounded-lg p-1">
               <button
                 onClick={() => setViewMode('table')}
                 className={`px-3 py-1 text-sm rounded transition-colors ${
@@ -407,8 +407,72 @@ export default function MobilePage() {
           </div>
         </div>
 
-        {/* Worked tickets are a separate list, always visible above the well routes. */}
-        <section className="mb-6 bg-yellow-900/20 rounded-lg border border-yellow-700/50 overflow-hidden">
+        {dataLoading ? (
+          <div className="text-gray-400">Loading well data...</div>
+        ) : statusUnavailable ? (
+          <div className="rounded-lg border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 text-yellow-300">
+            {readError || 'Well live status is temporarily unavailable. This is a read failure, not an empty list.'}
+          </div>
+        ) : routes.length === 0 ? (
+          <div className="text-gray-400">No well data available</div>
+        ) : viewMode === 'cards' ? (
+          /* Cards View - Grouped by Route */
+          <div className="space-y-4">
+            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
+              <div key={route}>
+                <RouteSection
+                  route={route}
+                  wells={getWellsForRoute(route)}
+                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
+                  onToggle={() => toggleRoute(route)}
+                  pullBbls={routePullBbls[route] || 140}
+                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
+                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                  routeColor={routeColorMap.get(route) || '#888888'}
+                />
+                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
+                  <button
+                    onClick={() => setUnroutedShowAll(true)}
+                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          /* Table View - Grouped by Route */
+          <div className="space-y-4">
+            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
+              <div key={route}>
+                <RouteTable
+                  route={route}
+                  wells={getWellsForRoute(route)}
+                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
+                  onToggle={() => toggleRoute(route)}
+                  sortState={routeSorts[route] || DEFAULT_SUMMARY_SORT}
+                  onSort={(field) => handleRouteSort(route, field)}
+                  pullBbls={routePullBbls[route] || 140}
+                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
+                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                  routeColor={routeColorMap.get(route) || '#888888'}
+                />
+                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
+                  <button
+                    onClick={() => setUnroutedShowAll(true)}
+                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Worked tickets are available below all well routes, collapsed by default. */}
+        <section className="mt-6 bg-yellow-900/20 rounded-lg border border-yellow-700/50 overflow-hidden">
             <button
               onClick={() => setEdgeCaseExpanded(prev => !prev)}
               className="w-full px-4 py-3 bg-yellow-900/30 border-b border-yellow-700/50 hover:bg-yellow-900/40 transition-colors"
@@ -507,69 +571,6 @@ export default function MobilePage() {
               </div>
             )}
         </section>
-        {dataLoading ? (
-          <div className="text-gray-400">Loading well data...</div>
-        ) : statusUnavailable ? (
-          <div className="rounded-lg border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 text-yellow-300">
-            {readError || 'Well live status is temporarily unavailable. This is a read failure, not an empty list.'}
-          </div>
-        ) : routes.length === 0 ? (
-          <div className="text-gray-400">No well data available</div>
-        ) : viewMode === 'cards' ? (
-          /* Cards View - Grouped by Route */
-          <div className="space-y-4">
-            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
-              <div key={route}>
-                <RouteSection
-                  route={route}
-                  wells={getWellsForRoute(route)}
-                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
-                  onToggle={() => toggleRoute(route)}
-                  pullBbls={routePullBbls[route] || 140}
-                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
-                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
-                  routeColor={routeColorMap.get(route) || '#888888'}
-                />
-                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
-                  <button
-                    onClick={() => setUnroutedShowAll(true)}
-                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
-                  >
-                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          /* Table View - Grouped by Route */
-          <div className="space-y-4">
-            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
-              <div key={route}>
-                <RouteTable
-                  route={route}
-                  wells={getWellsForRoute(route)}
-                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
-                  onToggle={() => toggleRoute(route)}
-                  sortState={routeSorts[route] || DEFAULT_SUMMARY_SORT}
-                  onSort={(field) => handleRouteSort(route, field)}
-                  pullBbls={routePullBbls[route] || 140}
-                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
-                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
-                  routeColor={routeColorMap.get(route) || '#888888'}
-                />
-                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
-                  <button
-                    onClick={() => setUnroutedShowAll(true)}
-                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
-                  >
-                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
 
       </main>
 

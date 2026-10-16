@@ -6,7 +6,8 @@ import { CatalogSearchResult } from '@/components/LocationSearchResult';
 // Submits through staffIngestDashboardPull (Admin SDK). Client incoming writes are denied.
 // Optionally creates Firestore invoice + ticket for billing/payroll.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { buildSearchWellStatus, rankWellSearchRows } from '@/lib/wellSearchPresentation';
 import { collection, addDoc, updateDoc, Timestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions, getFirestoreDb, getNextInvoiceNumber, getNextTicketNumber } from '@/lib/firebase';
@@ -91,6 +92,12 @@ export function AddPullModal({
     return unsub;
   }, [wellsProp, user?.companyId]);
   const wells = (wellsProp && wellsProp.length > 0) ? wellsProp : selfWells;
+  const [searchAsOfMs, setSearchAsOfMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setSearchAsOfMs(Date.now()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+  const searchStatus = useMemo(() => buildSearchWellStatus(wells, searchAsOfMs), [wells, searchAsOfMs]);
 
   // Form state
   const [pullWell, setPullWell] = useState(preselectedWell || '');
@@ -388,13 +395,13 @@ export function AddPullModal({
           />
           {showWellDropdown && pullWellSearch && (
             <div className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-              {[...new Set(wells.map(w => w.wellName))].sort()
-                .filter(w => w.toLowerCase().includes(pullWellSearch.toLowerCase()))
-                .slice(0, 10)
+              {rankWellSearchRows([...new Set(wells.map(w => w.wellName))]
+                .filter(w => w.toLowerCase().includes(pullWellSearch.toLowerCase())), pullWellSearch, w => w, searchStatus, 10)
                 .map(w => (
                   <button key={w} onClick={() => { setPullWell(w); setPullWellSearch(w); setShowWellDropdown(false); }}
-                    className="wb-option-row px-3 py-2 text-sm text-white">
-                    {w}
+                    className="wb-option-row flex items-center gap-3 px-3 py-2 text-sm text-white">
+                    <span className="min-w-0 break-words">{w}</span>
+                    {searchStatus.get(w.trim().toLowerCase())?.level !== '--' && <span className="ml-auto shrink-0 whitespace-nowrap text-xs font-semibold text-cyan-300" title="WB Mobile estimated level">{searchStatus.get(w.trim().toLowerCase())?.level}</span>}
                   </button>
                 ))
               }

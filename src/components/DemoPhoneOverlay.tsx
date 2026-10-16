@@ -104,7 +104,17 @@ export function DemoPhoneOverlay() {
   const [phoneTourStep, setPhoneTourStep] = useState<PhoneTourStep | null>(null);
   const [phoneTourStartedAt, setPhoneTourStartedAt] = useState(0);
   const [recognized, setRecognized] = useState<{ capturedAt: number; screen: ExploreScreen | null } | null>(null);
+  const [clockNow, setClockNow] = useState(0);
   const liveScreen = frame.available && recognized?.capturedAt === frame.capturedAt ? recognized.screen : null;
+  const statusTime = clockNow ? new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit', hour12: true,
+  }).format(frame.available && frame.live ? frame.capturedAt : clockNow).replace(/\s[AP]M$/, '') : '';
+
+  useEffect(() => {
+    setClockNow(Date.now());
+    const timer = window.setInterval(() => setClockNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const openExplore = (screen: ExploreScreen) => {
     // Explore a separate captured WB T session. The live driver keeps running
@@ -198,6 +208,14 @@ export function DemoPhoneOverlay() {
       )}
       {expanded && (
         <div className="relative mt-6 aspect-[9/20] bg-black">
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-10 flex h-[3.8%] items-center justify-between bg-black px-[5%] text-xs font-medium leading-none text-white">
+            <span className="tabular-nums">{statusTime}</span>
+            <span className="flex items-center gap-1">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1 5.2a11.2 11.2 0 0 1 14 0L8 13.8 1 5.2Z" /></svg>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1 14h14V2L1 14Z" /></svg>
+              <svg width="13" height="14" viewBox="0 0 14 16" fill="none"><rect x="1" y="2" width="11" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.5" /><path d="M4 1h5M6.5 5l-2 4h2l-.5 3 3-5H7l.5-2Z" fill="currentColor" /></svg>
+            </span>
+          </div>
           {explore ? (
             <>
               <img src={exploreImages[explore]} alt={`Captured WB Tickets demo ${explore} screen`}

@@ -268,7 +268,7 @@ export async function runHeaderNavigationGuardrails() {
         const header = document.querySelector('header')?.getBoundingClientRect();
         const scrollWidth = document.documentElement.scrollWidth;
         const clientWidth = window.innerWidth;
-        const clipped = [...document.querySelectorAll('header a, header button')].some((el) => {
+        const clipped = [...document.querySelectorAll('header a, header button, header summary')].filter((el) => el.checkVisibility()).some((el) => {
           const r = el.getBoundingClientRect();
           return r.left < -1 || r.right > clientWidth + 1;
         });
@@ -279,7 +279,7 @@ export async function runHeaderNavigationGuardrails() {
           scrollWidth,
           clientWidth,
           headerHeight: header ? header.height : 0,
-          titleOffset: title ? Math.abs(title.x + title.width / 2 - clientWidth / 2) : 999,
+          titleLeft: title ? title.left : 999,
           navOffset: nav ? Math.abs(nav.x + nav.width / 2 - clientWidth / 2) : 999,
         };
       });
@@ -290,13 +290,33 @@ export async function runHeaderNavigationGuardrails() {
       if (metrics.clipped) {
         throw new Error(`FAIL at ${width}px: Header button or link is clipped offscreen.`);
       }
-      if (metrics.titleOffset > 1.5) {
-        throw new Error(`FAIL at ${width}px: Header title is off-center by ${metrics.titleOffset.toFixed(1)}px.`);
+      if (metrics.titleLeft < 0 || metrics.titleLeft > 16) {
+        throw new Error(`FAIL at ${width}px: Compact identity is not in the top-left corner (${metrics.titleLeft}px).`);
+      }
+      if (width >= 1024 && metrics.headerHeight > 140) {
+        throw new Error(`FAIL at ${width}px: Compact desktop header is too tall (${metrics.headerHeight}px).`);
       }
       if (metrics.navOffset > 1.5) {
         throw new Error(`FAIL at ${width}px: Header nav is off-center by ${metrics.navOffset.toFixed(1)}px.`);
       }
-      console.log(`✓ Viewport ${width}px passed (height: ${metrics.headerHeight.toFixed(0)}px, titleOffset: ${metrics.titleOffset.toFixed(1)}px, overflow: false).`);
+      if (width === 344 || width === 1280) {
+        const summary = page.locator('details summary');
+        await summary.focus();
+        await page.keyboard.press('Enter');
+        const tools = page.getByLabel('Admin tools', { exact: true });
+        if (!await tools.isVisible()) throw new Error('Admin tools did not open using the keyboard.');
+        const bounds = await tools.boundingBox();
+        if (!bounds || bounds.x < -1 || bounds.x + bounds.width > width + 1) {
+          throw new Error(`Admin tools dropdown clipped at ${width}px.`);
+        }
+        if (process.env.HEADER_SCREENSHOT_DIR) {
+          await page.screenshot({ path: path.join(process.env.HEADER_SCREENSHOT_DIR, `dashboard-header-${width}-tools.png`) });
+        }
+        await summary.focus();
+        await page.keyboard.press('Enter');
+        if (await tools.isVisible()) throw new Error('Admin tools did not collapse.');
+      }
+      console.log(`✓ Viewport ${width}px passed (height: ${metrics.headerHeight.toFixed(0)}px, titleLeft: ${metrics.titleLeft.toFixed(1)}px, overflow: false).`);
     }
 
     console.log('=== All Header & Navigation Guardrail Tests Passed Mechanically ===');

@@ -2,6 +2,29 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { groupDispatchRows, type StackableDispatch } from '../dispatchJobStacks.ts';
 
+test('multi-haul groups different active wells while retaining separate jobs', () => {
+  const a = job('a', { status: 'in_progress', driverStage: 'en_route_dropoff' });
+  const b = job('b', { status: 'paused', wellName: 'OTHER WELL' });
+  const rows = groupDispatchRows([a, b], () => 'trip-1');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].multiHaul, true);
+  assert.deepEqual(rows[0].jobs, [a, b]);
+  assert.strictEqual(rows[0].jobs[0], a);
+});
+
+test('multi-haul cannot combine different trips, tenants, or drivers', () => {
+  const a = job('a', { status: 'in_progress' });
+  for (const change of [{ companyId: 'other' }, { driverHash: 'other' }]) {
+    assert.equal(groupDispatchRows([a, job('b', { status: 'in_progress', ...change })], () => 'trip-1').length, 2);
+  }
+  assert.equal(groupDispatchRows([a, job('b', { status: 'in_progress' })], j => j.id!).length, 2);
+});
+
+test('clearing invoice membership returns active jobs to independent cards', () => {
+  const jobs = [job('a', { status: 'in_progress' }), job('b', { status: 'in_progress' })];
+  assert.equal(groupDispatchRows(jobs, () => '').length, 2);
+});
+
 function job(id: string, overrides: Partial<StackableDispatch> = {}): StackableDispatch {
   return {
     id, companyId: 'liquid-gold', driverHash: 'mike', driverName: 'Mike',

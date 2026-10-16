@@ -63,20 +63,26 @@ export function AppHeader() {
 
   return (
     <header className="bg-gray-800 border-b border-gray-700 sticky top-0 z-40">
-      {/* Full-width rows keep the title and navigation centered independently of tools. */}
-      <div className="w-full min-w-0 flex flex-col items-center gap-2 px-3 pt-3">
-        {isPlatformAdmin(user) && <label className="order-1 text-sm text-gray-300">Company
-          <select aria-label="Operating company" value={operatingCompanyId || ''} onChange={e => selectOperatingCompany(e.target.value)} className="ml-2 bg-gray-700 rounded px-3 py-2 text-white">
+      {/* Compact account identity shares the tools row; navigation stays full-width. */}
+      <div className="w-full min-w-0 flex flex-col items-center gap-1 px-3 pt-2">
+        {/* LEFT: Admin + Truth tools (admin/it) + Sign Out, pinned to left edge */}
+        <div aria-label="Account and administration" className="order-2 w-full min-w-0 flex flex-wrap justify-center items-center gap-2 [&>a]:whitespace-nowrap [&>button]:whitespace-nowrap">
+          <div aria-label="Signed-in account" className="mr-auto min-w-0 max-w-full text-left">
+            <h1 className="text-sm font-semibold leading-tight text-white">WellBuilt Suite</h1>
+            <p className="max-w-[18rem] truncate text-xs leading-tight text-gray-400" title={`${user.email} • ${getRoleLabel(user.role, userCompany)}`}>
+              {user.email} &bull; <span>{getRoleLabel(user.role, userCompany)}</span>
+            </p>
+          </div>
+        {isPlatformAdmin(user) && <label className="flex max-w-full items-center gap-2 text-xs text-gray-300">Company
+          <select aria-label="Operating company" value={operatingCompanyId || ''} onChange={e => selectOperatingCompany(e.target.value)} className="min-w-0 max-w-[12rem] rounded bg-gray-700 px-2 py-1.5 text-xs text-white">
             <option value="">Show all companies</option>
             {companies.map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
           </select>
         </label>}
-        {/* LEFT: Admin + Truth tools (admin/it) + Sign Out, pinned to left edge */}
-        <div aria-label="Account and administration" className="order-2 w-full min-w-0 flex flex-wrap justify-center items-center gap-2 [&>a]:whitespace-nowrap [&>button]:whitespace-nowrap">
           {hasCapability(user, 'viewAdmin', userCompany) && (
             <Link
               href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
-              className="relative px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
+              className="relative px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-xs"
             >
               Admin
               {pendingDriverCount > 0 && !pathname.startsWith('/admin') && (
@@ -89,45 +95,54 @@ export function AppHeader() {
               )}
             </Link>
           )}
-          {!user?.companyId && hasCapability(user, 'viewTruthDebug', userCompany) && (
-            <>
-              {/* Plain <a> (full document load) — bypasses App Router prefetch
-                  cache + stale chunk refs that caused intermittent click failures
-                  on these admin-only routes. Right-click open-in-new-tab already
-                  does this; the buttons should match. */}
-              <a
-                href="/admin/truth-debug/"
-                className={`px-3 py-2 rounded-lg transition-colors text-sm ${
-                  pathname.startsWith('/admin/truth-debug')
-                    ? 'bg-gray-600 text-white'
-                    : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
-                }`}
-              >
-                Truth Debug
-              </a>
-              <a
-                href="/admin/truth-rag-exports/"
-                className={`px-3 py-2 rounded-lg transition-colors text-sm ${
-                  pathname.startsWith('/admin/truth-rag-exports')
-                    ? 'bg-gray-600 text-white'
-                    : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
-                }`}
-              >
-                Truth RAG
-              </a>
-            </>
-          )}
-          {!user?.companyId && hasCapability(user, 'viewDiagnostics', userCompany) && (
-            <a
-              href="/admin/diagnostics/"
-              className={`px-3 py-2 rounded-lg transition-colors text-sm ${
-                pathname.startsWith('/admin/diagnostics')
-                  ? 'bg-gray-600 text-white'
-                  : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
-              }`}
-            >
-              WB Diagnostics
-            </a>
+          {!user?.companyId && (hasCapability(user, 'viewTruthDebug', userCompany) || hasCapability(user, 'viewDiagnostics', userCompany)) && (
+            <details className="relative group">
+              <summary className="cursor-pointer list-none rounded px-2.5 py-1.5 text-xs text-gray-200 bg-gray-700 hover:bg-gray-600 select-none">
+                Admin Tools <span aria-hidden="true">▾</span>
+              </summary>
+              <div aria-label="Admin tools" className="absolute left-0 top-full mt-1 z-50 flex min-w-40 flex-col gap-1 rounded-lg border border-gray-600 bg-gray-800 p-2 shadow-xl">
+                {!user?.companyId && hasCapability(user, 'viewTruthDebug', userCompany) && (
+                  <>
+                    {/* Plain <a> (full document load) — bypasses App Router prefetch
+                        cache + stale chunk refs that caused intermittent click failures
+                        on these admin-only routes. Right-click open-in-new-tab already
+                        does this; the buttons should match. */}
+                    <a
+                      href="/admin/truth-debug/"
+                      className={`px-3 py-2 rounded-lg transition-colors text-xs ${
+                        pathname.startsWith('/admin/truth-debug')
+                          ? 'bg-gray-600 text-white'
+                          : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                      }`}
+                    >
+                      Truth Debug
+                    </a>
+                    <a
+                      href="/admin/truth-rag-exports/"
+                      className={`px-3 py-2 rounded-lg transition-colors text-xs ${
+                        pathname.startsWith('/admin/truth-rag-exports')
+                          ? 'bg-gray-600 text-white'
+                          : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                      }`}
+                    >
+                      Truth RAG
+                    </a>
+                  </>
+                )}
+                {!user?.companyId && hasCapability(user, 'viewDiagnostics', userCompany) && (
+                  <a
+                    href="/admin/diagnostics/"
+                    className={`px-3 py-2 rounded-lg transition-colors text-xs ${
+                      pathname.startsWith('/admin/diagnostics')
+                        ? 'bg-gray-600 text-white'
+                        : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                    }`}
+                  >
+                    WB Diagnostics
+                  </a>
+                )}
+              </div>
+            </details>
           )}
           <button
             onClick={async () => {
@@ -139,27 +154,18 @@ export function AppHeader() {
                 router.push('/login');
               }
             }}
-            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm"
+            className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-xs"
           >
             {user.uid === 'wellbuilt-demo-shared-viewer' ? 'Leave Demo' : 'Sign Out'}
           </button>
+          <div aria-label="Chat and notifications" className="ml-auto flex items-center gap-2">
+            <ChatIcon onClick={() => setChatOpen(!chatOpen)} unreadCount={chatUnread} />
+            <NotificationBell />
+          </div>
         </div>
 
-        {/* CENTER: Title + user info + tabs */}
+        {/* Main navigation keeps its own centered row. */}
         <div className="contents">
-          <div className="order-1 w-full min-w-0 grid grid-cols-[5.5rem_minmax(0,1fr)_5.5rem] items-start text-center">
-            <div aria-hidden="true" />
-            <div className="min-w-0">
-            <h1 className="text-xl sm:text-3xl font-bold text-white">WellBuilt Suite</h1>
-            <p className="text-gray-400 text-sm break-words">
-              {user.email} &bull; <span>{getRoleLabel(user.role, userCompany)}</span>
-            </p>
-            </div>
-            <div aria-label="Chat and notifications" className="flex justify-end items-center gap-2">
-              <ChatIcon onClick={() => setChatOpen(!chatOpen)} unreadCount={chatUnread} />
-              <NotificationBell />
-            </div>
-          </div>
           <nav aria-label="Main navigation" className="order-3 flex w-full min-w-0 flex-wrap justify-center gap-x-1 gap-y-0">
             {TABS.filter(tab => {
               if (tab.id === 'equipment') return hasEQuipmentAccess(user, userCompany);

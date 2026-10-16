@@ -49,6 +49,7 @@ export interface DispatchRowGroup<T extends StackableDispatch> {
   key: string;
   jobs: T[];
   remainingLoads: number;
+  multiHaul?: boolean;
 }
 
 /** Only fields describing the job itself. Document IDs and timestamps are unique
@@ -78,18 +79,22 @@ function stackKey(job: StackableDispatch): string | null {
 }
 
 /** A visual grouping only: each result retains every original dispatch object. */
-export function groupDispatchRows<T extends StackableDispatch>(jobs: readonly T[]): DispatchRowGroup<T>[] {
+export function groupDispatchRows<T extends StackableDispatch>(jobs: readonly T[], haulGroupFor?: (job: T) => string): DispatchRowGroup<T>[] {
   const rows: DispatchRowGroup<T>[] = [];
   const stacks = new Map<string, DispatchRowGroup<T>>();
   jobs.forEach((job, index) => {
-    const identity = stackKey(job);
+    const haulGroup = haulGroupFor?.(job);
+    const multiHaul = !!haulGroup && !!job.companyId && !!job.driverHash
+      && ['accepted', 'in_progress', 'paused'].includes(job.status);
+    const identity = multiHaul
+      ? JSON.stringify(['multi-haul', job.companyId, job.driverHash, haulGroup]) : stackKey(job);
     if (identity === null) {
       rows.push({ key: `single:${job.id || index}`, jobs: [job], remainingLoads: remaining(job) });
       return;
     }
     let row = stacks.get(identity);
     if (!row) {
-      row = { key: `stack:${job.id}`, jobs: [], remainingLoads: 0 };
+      row = { key: multiHaul ? `haul:${identity}` : `stack:${job.id}`, jobs: [], remainingLoads: 0, multiHaul };
       stacks.set(identity, row);
       rows.push(row);
     }

@@ -20,6 +20,8 @@
 
 import { useState, type ReactNode } from 'react';
 import { useAutocompleteKeyboard } from '@/lib/useAutocompleteKeyboard';
+import { useSearchWellStatus } from './WellSearchStatus';
+import { rankWellSearchRows } from '@/lib/wellSearchPresentation';
 
 export interface BuilderAutocompleteProps<T> {
   value: string;
@@ -47,7 +49,7 @@ export interface BuilderAutocompleteProps<T> {
 export function BuilderAutocomplete<T>({
   value,
   onValueChange,
-  items,
+  items: sourceItems,
   onSelect,
   renderItem,
   getItemKey,
@@ -62,6 +64,14 @@ export function BuilderAutocomplete<T>({
   autoFocus,
   autoComplete = 'off',
 }: BuilderAutocompleteProps<T>) {
+  const status = useSearchWellStatus();
+  // Only catalog well rows participate. Operator lists and explicit weighted
+  // Heavy Water results keep their own ordering.
+  const items = sourceItems.some(item => (item as any)?.showWaterDetails) ? sourceItems
+    : rankWellSearchRows(sourceItems, value,
+      item => (item as any)?.well_name || (item as any)?.label || '', status, sourceItems.length,
+      item => !!(item as any)?.well_name && (!(item as any)?.kind || (item as any)?.kind === 'WELL')
+        || (item as any)?.kind === 'WELL');
   const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const meetsMin = value.trim().length >= minChars;
@@ -70,7 +80,7 @@ export function BuilderAutocomplete<T>({
   const kb = useAutocompleteKeyboard({
     count: items.length,
     open,
-    query: value,
+    query: JSON.stringify([value, items.map(getItemKey)]),
     onSelect: (i) => {
       if (i >= 0 && i < items.length) {
         onSelect(items[i], i);

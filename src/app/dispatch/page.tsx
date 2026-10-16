@@ -7,6 +7,7 @@ import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { isActiveDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
+import { DriverArrivalRecommendations } from '@/components/DriverArrivalRecommendations';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
@@ -16,6 +17,8 @@ import { SegmentedOnsiteByInput } from '@/components/SegmentedOnsiteByInput';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { CatalogSearchResult, LocationSearchResult } from '@/components/LocationSearchResult';
+import { WellSearchStatusProvider, useSearchWellStatus } from '@/components/WellSearchStatus';
+import { buildSearchWellStatus, rankWellSearchRows } from '@/lib/wellSearchPresentation';
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
 import { combinedLocationResults, dropoffSourcesForBuilderOperator, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
 import { heavyWaterWellResults } from '@/lib/heavyWaterWellSearch';
@@ -83,6 +86,9 @@ import {
 } from '@/lib/ticketCompanyLookup';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
+
+// The laptop branch preserves this work in progress; the advisory stays off until its field checks are complete.
+const DRIVER_ARRIVAL_PREVIEW = process.env.NEXT_PUBLIC_DRIVER_ARRIVAL_PREVIEW === 'true';
 
 interface ApprovedDriver {
   key: string;           // drivers/approved record key (canonical UUID OR legacy passcodeHash)
@@ -842,12 +848,14 @@ function DispatchPageInner() {
   }, [user, loading, viewedCompanyId]);
 
   const catalogRouteWells = useMemo(() => !operatingCompanyId || operatingCompanyId === 'liquid-gold' ? wells : wells.filter(w => w.companyId === operatingCompanyId), [wells, operatingCompanyId]);
+  const searchWellStatus = useMemo(() => buildSearchWellStatus(catalogRouteWells, asOfMs), [catalogRouteWells, asOfMs]);
   const swWellOptions = useMemo(() => {
     const scopedWells = wellsForBuilderOperator(catalogRouteWells, allOperatorWells, builderOperator);
     const scopedOperatorWells = builderOperator
       ? allOperatorWells.filter(w => w.operator?.toLowerCase() === builderOperator.toLowerCase())
       : allOperatorWells;
     const sources = {
+      wellStatus: searchWellStatus,
       wells: scopedWells,
       operatorWells: scopedOperatorWells,
       disposalMatches: builderOperator ? [] : searchDisposals(swWellName.trim().toLowerCase(), allDisposals),
@@ -868,9 +876,10 @@ function DispatchPageInner() {
       seen.add(key);
       return true;
     }).map(item => item.kind === 'WELL' ? { ...item, showWaterDetails: true } : item)];
-  }, [catalogRouteWells, allOperatorWells, builderOperator, allDisposals, customCatalogLocations, swWellName, swHeavyWater, asOfMs]);
+  }, [catalogRouteWells, allOperatorWells, builderOperator, allDisposals, customCatalogLocations, swWellName, swHeavyWater, asOfMs, searchWellStatus]);
   function swDestinationOptions(query: string) {
     const sources = dropoffSourcesForBuilderOperator({
+      wellStatus: searchWellStatus,
       wells: catalogRouteWells,
       operatorWells: allOperatorWells,
       disposalMatches: searchDisposals(query.trim().toLowerCase(), allDisposals),
@@ -900,7 +909,18 @@ function DispatchPageInner() {
     const seen = new Set<string>();
     return rows.filter(w => { const k = w.well_name.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   }, [allOperatorWells, allDisposals, customCatalogLocations, catalogRouteWells]);
-  const locationResults = (q: string) => searchDisposals(q, locationCatalog);
+  const locationResults = (q: string) => rankWellSearchRows(
+    searchDisposals(q, locationCatalog, locationCatalog.length), q, row => row.well_name,
+    searchWellStatus, 15, row => row.kind === 'WELL',
+  );
+  const arrivalLocations = useMemo(() => {
+    const rows = [...locationCatalog, ...customCatalogLocations.map(c => ({ well_name: c.locationName, latitude: c.latitude, longitude: c.longitude }))];
+    for (const well of catalogRouteWells) {
+      const linked = allOperatorWells.find(row => row.well_name.toLowerCase() === (well.ndicName || well.wellName).toLowerCase());
+      if (linked) rows.push({ ...linked, well_name: well.wellName });
+    }
+    return rows;
+  }, [locationCatalog, customCatalogLocations, catalogRouteWells, allOperatorWells]);
   const isDemoCompany = viewedCompanyId === 'wellbuilt-demo';
 
   useEffect(() => {
@@ -2789,7 +2809,7 @@ function DispatchPageInner() {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="dashboard-viewport-shell bg-gray-900">
+    <WellSearchStatusProvider wells={catalogRouteWells} nowMs={asOfMs}><div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
 
       <main data-dashboard-scroll="dispatch" data-dispatch-scroll="primary" className="dispatch-scroll-main px-4 py-4">
@@ -2813,9 +2833,9 @@ function DispatchPageInner() {
 
         <nav aria-label="Dispatch workspace" className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-2">
           {([
-            ['build', 'Build Job'],
-            ['queue', 'Well Queue'],
             ['jobs', 'Jobs'],
+            ['build', 'Job Builder'],
+            ['queue', 'Well Queue'],
           ] as const).map(([tab, label]) => {
             const poppedOut = (tab === 'queue' && queueDetached) || (tab === 'jobs' && jobsDetached);
             return <button key={tab} type="button" aria-pressed={workspaceTab === tab}
@@ -3003,6 +3023,13 @@ function DispatchPageInner() {
                           {drivers.map(d => (<option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>))}
                         </optgroup>
                       </select>
+                      {DRIVER_ARRIVAL_PREVIEW && assignTarget && selectedWells.size === 0 && <div className="mt-2">
+                        <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${assignTarget.ndicName || assignTarget.wellName}`}
+                          drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
+                          targetName={assignTarget.ndicName || assignTarget.wellName} locations={arrivalLocations}
+                          jobsComplete={dispatchesLoaded && !readErrors.dispatches}
+                          selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash} />
+                      </div>}
                     </div>
                     {/* Disposal */}
                     <div className="relative" data-demo-builder-target="disposal">
@@ -3484,6 +3511,11 @@ function DispatchPageInner() {
                                 : `${swBblPlan.plan?.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan?.pickupBbls} BBL. ${swBblPlan.plan?.unallocatedBbls} BBL has no planned stop yet.`}
                       </div>
                     )}
+                    {DRIVER_ARRIVAL_PREVIEW && <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${swWellName}`}
+                      drivers={drivers} jobs={dispatches} companyId={viewedCompanyId} targetName={swWellName}
+                      locations={arrivalLocations} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
+                      selectedKeys={swDriverHashes}
+                      onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} />}
                     {/* Keep driver selection and notes usable as split cards grow.
                         The builder owns vertical scrolling on desktop. */}
                     <div className="flex gap-3 min-h-[220px]">
@@ -4812,7 +4844,7 @@ function DispatchPageInner() {
           </div>
         </>
       )}
-    </div>
+    </div></WellSearchStatusProvider>
   );
 }
 
@@ -5004,7 +5036,7 @@ function JobTypeBadge({ type, serviceType }: { type: string; serviceType?: strin
 }
 
 // Single job row — shows all info a dispatcher needs
-function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss, isRecommendedNext, isWellDown, operatorName }: {
+function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss, isRecommendedNext, isWellDown, operatorName, haulGroupId = '' }: {
   job: DispatchJob;
   cancelDispatch: (id: string) => void;
   compact?: boolean;
@@ -5016,8 +5048,12 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
   /** Canonical live well state is DOWN — show a prominent warning; the job stays actionable. */
   isWellDown?: boolean;
   operatorName?: string;
+  haulGroupId?: string;
 }) {
   const dropoff = job.hauledTo || job.disposal;
+  const assignedDate = job.assignedAt?.toDate?.();
+  const assignedLabel = assignedDate instanceof Date && Number.isFinite(assignedDate.getTime())
+    ? assignedDate.toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   // Resequencing changes the ticket letter without rewriting the original
   // planning note. Show the current letter from the dispatch sequence.
   const displayNotes = job.splitGroupId && typeof job.splitSequence === 'number'
@@ -5081,6 +5117,8 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
       {/* Use the available width for dispatch facts; retain labels for snapshot values. */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-gray-400">
+        {assignedLabel && <span>Created / assigned: <span className="text-gray-200">{assignedLabel}</span></span>}
+        {job.stageUpdatedAt && <span>Stage updated: <span className="text-gray-200">{new Date(typeof job.stageUpdatedAt === 'number' ? job.stageUpdatedAt : job.stageUpdatedAt.toMillis?.()).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span></span>}
         {job.route && <span>Route: <span className="text-gray-200">{job.route}</span></span>}
         {(job.loadCount || 1) > 1 && <span>Loads: <span className="text-gray-200">{job.loadsCompleted || 0}/{job.loadCount} completed</span></span>}
         {job.jobType === 'pw' && job.currentLevel && <span>Level at dispatch: <span className="text-gray-200">{job.currentLevel}</span></span>}
@@ -5132,6 +5170,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
           )}
 
           {/* Job state: origin/progress followed by the current stage and its age. */}
+          {haulGroupId && <CategoryBadge className="bg-yellow-600/30 text-yellow-300" title={`Multi-haul group: ${haulGroupId}`}>Multi-Haul</CategoryBadge>}
           {job.source === 'driver' && (
             <CategoryBadge className="bg-emerald-600/30 text-emerald-300">
               Driver Started
@@ -5209,6 +5248,22 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   const [confirmDismissJob, setConfirmDismissJob] = useState<DispatchJob | null>(null);
   const [dismissSubmitting, setDismissSubmitting] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
+  const [haulGroups, setHaulGroups] = useState<Record<string, string>>({});
+  const haulSubscriptionKey = JSON.stringify(dispatches
+    .filter(job => job.id && job.invoiceDocId && job.companyId)
+    .map(job => [job.id!, job.invoiceDocId!, job.companyId!]).sort((a, b) => a[0].localeCompare(b[0])));
+  useEffect(() => {
+    setHaulGroups({});
+    let current = true;
+    const unsubs = (JSON.parse(haulSubscriptionKey) as string[][]).map(([id, invoiceDocId, companyId]) =>
+      onSnapshot(doc(getFirestoreDb(), 'invoices', invoiceDocId), snap => {
+        const invoice = snap.data();
+        const group = invoice?.companyId === companyId && invoice?.dispatchId === id
+          && invoice?.status === 'open' && typeof invoice?.haulGroupId === 'string' ? invoice.haulGroupId : '';
+        if (current) setHaulGroups(prev => prev[id] === group ? prev : { ...prev, [id]: group });
+      }, () => { if (current) setHaulGroups(prev => ({ ...prev, [id]: '' })); }));
+    return () => { current = false; unsubs.forEach(unsub => unsub()); };
+  }, [haulSubscriptionKey]);
 
   async function handleExecuteDismiss() {
     if (!confirmDismissJob?.id) return;
@@ -5430,6 +5485,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         const renderJob = (job: DispatchJob) => (
           <DispatchJobRow
             job={job}
+            haulGroupId={haulGroups[job.id || ''] || ''}
             cancelDispatch={cancelDispatch}
             compact={jobs.length > 2}
             onClickServiceWork={onEditServiceWork}
@@ -5500,21 +5556,21 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
             {isExpanded && (
               <div className="space-y-1 p-2 bg-gray-900/30">
-                {groupDispatchRows(jobs).map(row => row.jobs.length === 1 ? (
+                {groupDispatchRows(jobs, job => haulGroups[job.id || ''] || '').map(row => row.jobs.length === 1 ? (
                   <div key={row.key}>{renderJob(row.jobs[0])}</div>
                 ) : (
-                  <details key={row.key} className="group rounded-lg border border-gray-700/60 bg-gray-900/40 overflow-hidden">
+                  <details key={row.key} open={row.multiHaul ? true : undefined} className={`group rounded-lg border ${row.multiHaul ? 'border-yellow-600/50' : 'border-gray-700/60'} bg-gray-900/40 overflow-hidden`}>
                     {/* Compact, tinted stack header: clearly a heading for the child loads */}
                     <summary className="cursor-pointer list-none flex items-center justify-between gap-2 px-3 py-2 bg-gray-800/80 hover:bg-gray-800 transition-colors border-b border-transparent group-open:border-gray-700/50 select-none [&::-webkit-details-marker]:hidden">
                       <div className="flex items-center gap-2 min-w-0 flex-1">
                         <JobTypeBadge type={row.jobs[0].jobType} />
                         <span className="min-w-0 flex-1 break-words text-sm font-semibold text-white" title={row.jobs[0].ndicWellName || row.jobs[0].wellName}>
-                          {row.jobs[0].ndicWellName || row.jobs[0].wellName}
+                          {row.multiHaul ? 'Multi-Haul' : (row.jobs[0].ndicWellName || row.jobs[0].wellName)}
                         </span>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <span className="px-2 py-0.5 bg-gray-700/70 text-gray-300 text-xs font-medium rounded">
-                          {row.remainingLoads} {row.remainingLoads === 1 ? 'load' : 'loads'}
+                          {row.multiHaul ? <>{row.jobs.length} jobs</> : <>{row.remainingLoads} {row.remainingLoads === 1 ? 'load' : 'loads'}</>}
                         </span>
                         <span className="text-xs text-gray-400 transition-transform duration-150 group-open:rotate-180">▼</span>
                       </div>
@@ -5685,6 +5741,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
   updateCompletedJob: (dispatchId: string, record: Record<string, unknown>) => Promise<void>;
 }) {
   const [driverFilter, setDriverFilter] = useState<string>('all');
+  const searchWellStatus = useSearchWellStatus();
   const [searchQuery, setSearchQuery] = useState('');
   const [dateRange, setDateRange] = useState<'today' | '7d' | '30d' | 'custom' | 'all'>('today');
   const [customFrom, setCustomFrom] = useState('');
@@ -6053,7 +6110,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                         setEditForm(f => ({ ...f, wellName: v }));
                         if (v.length >= 2 && allWells) {
                           const q = v.toLowerCase();
-                          setWellResults(allWells.filter(w => w.well_name.toLowerCase().includes(q)).slice(0, 8));
+                          setWellResults(rankWellSearchRows(allWells.filter(w => w.well_name.toLowerCase().includes(q)), v, w => w.well_name, searchWellStatus, 8, w => !w.kind || w.kind === 'WELL'));
                           setShowWellDropdown(true);
                         } else { setShowWellDropdown(false); }
                       }}
@@ -6078,7 +6135,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                         setEditForm(f => ({ ...f, disposal: v }));
                         if (v.length >= 2 && allDisposals) {
                           const q = v.toLowerCase();
-                          setDisposalResults(allDisposals.filter(d => d.well_name.toLowerCase().includes(q)).slice(0, 8));
+                          setDisposalResults(rankWellSearchRows(allDisposals.filter(d => d.well_name.toLowerCase().includes(q)), v, d => d.well_name, searchWellStatus, 8, d => d.kind === 'WELL'));
                           setShowDisposalDropdown(true);
                         } else { setShowDisposalDropdown(false); }
                       }}
@@ -6623,8 +6680,9 @@ function DriverDisposalRow({ hash, name, disposal, borderColor, allDisposals, on
   onSetDisposal: (disp: { name: string; lat?: number; lng?: number } | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const searchWellStatus = useSearchWellStatus();
   const [search, setSearch] = useState('');
-  const results = search.length >= 2 ? searchDisposals(search, allDisposals) : [];
+  const results = search.length >= 2 ? rankWellSearchRows(searchDisposals(search, allDisposals, allDisposals.length), search, d => d.well_name, searchWellStatus, 15, d => d.kind === 'WELL') : [];
 
   return (
     <div className={`bg-gray-900 border ${borderColor} rounded px-3 py-1.5`}>
