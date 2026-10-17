@@ -53,7 +53,7 @@ export default function LiveDemoPage() {
 
   return <main className="flex min-h-screen items-center justify-center bg-[#0b1424] p-4 text-white">
     <section className="w-full max-w-md rounded-xl border border-cyan-800/70 bg-gray-800 p-8 text-center shadow-2xl">
-      <img src="/live-demo/gear-drop-gold-outline-cover.png" alt="WellBuilt gear and drop logo" className="mx-auto mb-4 h-24 w-24 object-contain" />
+      <img src="/live-demo/gear-drop-white-outline-cover.png" alt="WellBuilt gear and drop logo" className="mx-auto mb-4 h-24 w-24 object-contain" />
       <h1 className="text-2xl font-bold">WellBuilt Demo Hauling</h1>
       {user && user.uid !== DEMO_UID ? <>
         <p className="mt-4 text-sm text-gray-300">Your WellBuilt account will stay signed in while you view the demo.</p>
