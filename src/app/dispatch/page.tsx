@@ -7,6 +7,7 @@ import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { isActiveDispatchCard, isCancelledDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
+import { WaterOrderBuilder } from '@/components/WaterOrderBuilder';
 import { DriverArrivalRecommendations } from '@/components/DriverArrivalRecommendations';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
@@ -539,14 +540,14 @@ function DispatchPageInner() {
   const [showAddPullModal, setShowAddPullModal] = useState(false);
 
   // Builder tab state (PW / SW / Projects) — persists across page visits
-  const [builderTab, setBuilderTab] = useState<'pw' | 'sw' | 'projects'>(() => {
+  const [builderTab, setBuilderTab] = useState<'pw' | 'sw' | 'projects' | 'water'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('dispatch_builder_tab');
-      if (saved === 'pw' || saved === 'sw' || saved === 'projects') return saved;
+      if (saved === 'pw' || saved === 'sw' || saved === 'projects' || saved === 'water') return saved;
     }
     return 'pw';
   });
-  const handleBuilderTabChange = useCallback((tab: 'pw' | 'sw' | 'projects') => {
+  const handleBuilderTabChange = useCallback((tab: 'pw' | 'sw' | 'projects' | 'water') => {
     setBuilderTab(tab);
     localStorage.setItem('dispatch_builder_tab', tab);
   }, []);
@@ -2862,6 +2863,7 @@ function DispatchPageInner() {
                 {([
                   { key: 'pw' as const, label: 'PW', active: 'bg-blue-600/30 text-blue-400' },
                   { key: 'sw' as const, label: 'SW', active: 'bg-purple-600/30 text-purple-400' },
+                  { key: 'water' as const, label: 'Water Orders', active: 'bg-cyan-600/30 text-cyan-400' },
                   { key: 'projects' as const, label: 'Projects', active: 'bg-emerald-600/30 text-emerald-400' },
                 ] as const).map(tab => (
                   <button key={tab.key} onClick={() => { if (demoTourRunning.current) stopDemoDispatchTour(); handleBuilderTabChange(tab.key); }}
@@ -2913,6 +2915,7 @@ function DispatchPageInner() {
               )}
 
               {/* ── PW Tab ── */}
+              {builderTab === 'water' && <WaterOrderBuilder key={`${viewedCompanyId}:${user?.uid||''}`} companyId={viewedCompanyId} userId={user?.uid||''} wells={wells} drivers={drivers} jobs={dispatches} ready={!dataLoading&&!driversLoading&&dispatchesLoaded&&!statusUnavailable&&!readErrors.wells&&!readErrors.dispatches} canWrite={canCreateDispatch} createDispatch={staffCreateDispatch}/>}
               {builderTab === 'pw' && (
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
