@@ -1,4 +1,4 @@
-import {isProvisionalPull} from '../../watchdog/barrelDecision';
+import {isProvisionalPull,reportedTrackingBottom} from '../../watchdog/barrelDecision';
 import { resolveTankBblPerFoot } from '../../tankCalibration';
 import {effectiveFlow} from '../../effectiveFlow';
 import {refreshFlowWindow} from '../../refreshFlowWindow';
@@ -332,9 +332,8 @@ export async function prepareEditOutbox(
   // Recalculate tankAfter
   const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / bblPerFoot) * 12 : 0;
   const rawNewTankAfterInches = newTankTopInches - bblsInInches;
-  const reportedReviewBottom=Number(data.bottomLevelFeet??origPacket.watchdogProvenance?.reportedBottomFeet)*12;
-  const useReportedBottom=isProvisionalPull(origPacket)&&Number.isFinite(reportedReviewBottom)&&reportedReviewBottom>=0&&reportedReviewBottom<=newTankTopInches;
-  const newTankAfterInches = useReportedBottom?reportedReviewBottom:Math.max(rawNewTankAfterInches, loadLineInches);
+  const reportedReviewBottom=reportedTrackingBottom({...origPacket,watchdogProvenance:{...origPacket.watchdogProvenance,reportedBottomFeet:data.bottomLevelFeet??origPacket.watchdogProvenance?.reportedBottomFeet}},newTankTopInches);
+  const newTankAfterInches = reportedReviewBottom??Math.max(rawNewTankAfterInches, loadLineInches);
   const editHitLoadLine = rawNewTankAfterInches < loadLineInches;
 
   // Previous pull for interval flow rate

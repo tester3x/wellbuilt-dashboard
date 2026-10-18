@@ -21,3 +21,11 @@ test('only scoped provisional watchdog pulls can use reported bottom for trackin
 test('small rounding over a configured load ceiling stays provisional without mandatory review',()=>{expect(decideBarrels({...base,top:11.25,bottom:8.75,bank:67.2,rateMinutesPerFoot:0,driverCapacity:165})).toMatchObject({bbls:165,provisional:true,needsReview:false});expect(decideBarrels({...base,top:12,bottom:8,rateMinutesPerFoot:0,driverCapacity:165})).toMatchObject({needsReview:true});});
 
 test('assumed inflow above a known full-load drop does not demand review',()=>{expect(decideBarrels({...base,top:11,bottom:8.5,bank:67.2,rateMinutesPerFoot:114,driverCapacity:165})).toMatchObject({bbls:165,provisional:true,needsReview:false});expect(decideBarrels({...base,top:11,bottom:8,bank:67.2,rateMinutesPerFoot:114,driverCapacity:165})).toMatchObject({needsReview:true});});
+
+test('trusted written loads keep measured bottom; legacy estimates remain excluded until explicitly confirmed',()=>{
+ const p={source:'whatsapp_watchdog',watchdogProvenance:{principalId:'laptop-watchdog-v2',reportedBottomFeet:9,barrelSource:'estimated'}};
+ expect(reportedTrackingBottom(p,138)).toBe(108);expect(isProvisionalPull(p)).toBe(true);
+ expect(isProvisionalPull({...p,watchdogProvenance:{...p.watchdogProvenance,barrels:{status:'confirmed'}}})).toBe(false);
+ expect(reportedTrackingBottom({...p,watchdogProvenance:{...p.watchdogProvenance,barrelSource:'written'}},138)).toBe(108);
+ expect(reportedTrackingBottom({...p,watchdogProvenance:{...p.watchdogProvenance,reportedBottomFeet:-1}},138)).toBeNull();
+});

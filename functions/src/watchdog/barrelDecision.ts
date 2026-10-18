@@ -14,9 +14,11 @@ export function decideBarrels(input:{written:number|null;fallback:number|null;to
  return {bbls,source:estimate?'estimated' as const:'default' as const,provisional:true,needsReview:!routineCap,estimate:estimate?{...estimate,mode:'provisional',caveat:'Estimated loading duration and reported bottom are unverified; tracking uses the reported bottom and estimated barrels do not train AFR.'}:null,limit,issues:[estimate?'Estimated barrels; verify loading duration and actual load':'Driver fallback barrels; verify actual load',...(limit!==null&&guess>limit?['Estimate exceeds configured load limit; capped provisionally']:[])]};
 }
 export function isProvisionalPull(packet:any):boolean {
- return packet?.source==='whatsapp_watchdog'&&packet?.watchdogProvenance?.principalId==='laptop-watchdog-v2'&&packet?.watchdogProvenance?.barrels?.status==='provisional';
+ const provenance=packet?.watchdogProvenance;
+ return packet?.source==='whatsapp_watchdog'&&provenance?.principalId==='laptop-watchdog-v2'&&
+  (provenance?.barrels?.status==='provisional'||(!provenance?.barrels?.status&&['estimated','default'].includes(provenance?.barrelSource))); 
 }
 export function reportedTrackingBottom(packet:any,topInches:number):number|null {
  const bottom=Number(packet?.watchdogProvenance?.reportedBottomFeet)*12;
- return isProvisionalPull(packet)&&packet?.watchdogProvenance?.reportedBottomFeet!=null&&Number.isFinite(bottom)&&bottom>=0&&bottom<=topInches?bottom:null;
+ return packet?.source==='whatsapp_watchdog'&&packet?.watchdogProvenance?.principalId==='laptop-watchdog-v2'&&packet?.watchdogProvenance?.reportedBottomFeet!=null&&Number.isFinite(bottom)&&bottom>=0&&bottom<=topInches?bottom:null;
 }
