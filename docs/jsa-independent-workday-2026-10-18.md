@@ -21,3 +21,19 @@ Weekly acknowledgement records now carry the exact server-selected first full re
 Closure uses a separate historical-coverage read: an already-completed JSA for the exact owned job remains valid after midnight/clock-out. It does not grant a new job's Start requirement. The server searches only protected receipts and acknowledgements for the authenticated company/driver/job; local cache and return links grant nothing. This avoids introducing another end-of-job read requirement.
 
 The new scope-read coverage callable associates the already-required first full read with later jobs for a once-per-shift company. It performs no acknowledgement ceremony, never relaxes per-job policy, and writes only a protected exact-job reference after verifying current full-read evidence. Historical Close/Close All verification accepts those scope references and protected prior read/acknowledgement records, without re-imposing today's Start requirement. Final targeted server suite: 48 passed. Deployment remains pending; there is no live API or device behavior change yet.
+
+## Coordinated native release deployment — 2026-10-18
+
+Deployed from source 08ed895d before installing JSA63 / WB T189 / TicketTime124. Functions build and41 focused JSA tests passed. All11 scoped functions are ACTIVE; signed-out callable probes return401. No Hosting/rules deployment and no JSA/shift/HOS records changed.
+
+- jsaRegisterJobReadRequest: jsaregisterjobreadrequest-00001-qak
+- jsaResolveJobReadEvidence: jsaresolvejobreadevidence-00001-vug
+- jsaAcknowledgeJobDay: jsaacknowledgejobday-00001-huc
+- jsaRecordJobReadCoverage: jsarecordjobreadcoverage-00001-wal
+- jsaRegisterReadRequest: jsaregisterreadrequest-00004-doh
+- jsaGetReadRequest: jsagetreadrequest-00005-yuf
+- jsaPersistGovernedArtifact: jsapersistgovernedartifact-00003-val
+- jsaCompleteReadRequest: jsacompletereadrequest-00003-vad
+- jsaConsumeReadResult: jsaconsumereadresult-00003-wus
+- ssoIssueAuthorizationCode: ssoissueauthorizationcode-00010-mos
+- jsaWeeklyForms: jsaweeklyforms-00002-rep
