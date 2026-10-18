@@ -34,3 +34,10 @@ These older entries were left unchanged pending review; no historical replay,
 quantity guesses, well history edits, or outgoing WhatsApp messages performed.
 
 Private evidence and corrected host connection details remain outside Git.
+
+Post-restart verification: the WhatsApp receiver initially stalled during browser
+resynchronization. Restarted only the Watchdog-owned browser with the saved
+profile and queue; no unrelated browser processes were stopped. Confirmed
+Connected/unpaused with no receiver error and advancing successful checks at
+07:35:10.370Z and 07:35:18.569Z (October 18). Capture freshness was verified,
+not inferred solely from the connected badge.
