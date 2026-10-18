@@ -21,7 +21,7 @@ import {
 } from './jsaReceiptHandlers.js';
 import { handleResolveCurrentShiftReadEvidence } from './jsaCurrentShiftReadEvidence.js';
 import { handleAcknowledgeJob } from './jsaJobAcknowledgment.js';
-import {companyJsaDay,jobDayPrincipal,resolveJobDayPolicy,type JobDayDeps} from './jsaJobDayPolicy';
+import {hasHistoricalJobCoverage,companyJsaDay,jobDayPrincipal,resolveJobDayPolicy,type JobDayDeps} from './jsaJobDayPolicy';
 import {decideInvoiceJobFields,parseRegisterInput} from './jsaReceiptCore';
 import { fromStored } from './jsaReceiptCore.js';
 
@@ -333,7 +333,7 @@ async function ownedJob(p:ReturnType<typeof jobDayPrincipal>,jobRef:string,allow
 }
 function jobDayRequest(data:unknown):{jobRef:string} {
  const d=data as Record<string,unknown>;
- if(!d||typeof d!=='object'||Array.isArray(d)||Object.keys(d).some(k=>!['protocolVersion','jobRef'].includes(k))||d.protocolVersion!==1||typeof d.jobRef!=='string'||!/^[A-Za-z0-9._-]{1,128}$/.test(d.jobRef))throw new JsaReceiptError('invalid-argument','malformed','request');
+ if(!d||typeof d!=='object'||Array.isArray(d)||Object.keys(d).some(k=>!['protocolVersion','jobRef','purpose'].includes(k))||d.protocolVersion!==1||(d.purpose!==undefined&&!['start','coverage'].includes(String(d.purpose)))||typeof d.jobRef!=='string'||!/^[A-Za-z0-9._-]{1,128}$/.test(d.jobRef))throw new JsaReceiptError('invalid-argument','malformed','request');
  return {jobRef:d.jobRef};
 }
 const jobDayAckPath=(company:string,driver:string,job:string,day:string)=>JSA_JOB_ACK_COLLECTION+'/'+createHash('sha256').update(JSON.stringify(['job-day',company,driver,job,day])).digest('hex');
@@ -369,6 +369,15 @@ export const jsaResolveJobReadEvidence=httpsV2.onCall(OPTIONS,async request=>{
    return {protocolVersion:1,policyDay:day,requirementKey:day,hasRead:false,jobSatisfied:false,policy:{mode:'off',allowAcknowledge:false,intent:'read'}};
   }
   const scope=await resolveJobDayPolicy(deps,p),day=scope.binding.policyDay!;
+  if((request.data as Record<string,unknown>).purpose==='coverage'){
+   const db=admin.firestore();
+   const reads=await db.collection('jsa_governed_requests').where('companyId','==',p.companyId).where('driverId','==',p.driverId).where('jobRef','==',jobRef).where('state','==','completed').limit(20).get();
+   const acknowledgements=await db.collection(JSA_JOB_ACK_COLLECTION).where('companyId','==',p.companyId).where('driverId','==',p.driverId).where('jobRef','==',jobRef).limit(20).get();
+   const linkedCoverage=(await db.doc('jsa_job_read_coverage/'+createHash('sha256').update(JSON.stringify([p.companyId,p.driverId,jobRef])).digest('hex')).get()).data();
+   const historical=jobExists&&hasHistoricalJobCoverage(p,jobRef,reads.docs.map(d=>fromStored(d.data())).filter((r):r is NonNullable<typeof r>=>!!r),acknowledgements.docs.map(d=>d.data()),linkedCoverage||null);
+   return {protocolVersion:1,policy: {mode:scope.mode},historicalJobSatisfied:historical};
+  }
+
   const rows=scope.rows;
   const ack=(await admin.firestore().doc(jobDayAckPath(p.companyId,p.driverId,jobRef,day)).get()).data();
   const full=rows.some(r=>r.jobRef===jobRef&&r.state==='completed'&&(r.action==='read_and_acknowledged'||scope.style!=='read_and_acknowledge'&&r.action==='read_completed'));
@@ -387,8 +396,25 @@ export const jsaAcknowledgeJobDay=httpsV2.onCall(OPTIONS,async request=>{
   const state=await admin.firestore().runTransaction(async tx=>{
    const old=(await tx.get(ref)).data();
    if(old){if(old.companyId!==p.companyId||old.driverId!==p.driverId||old.jobRef!==jobRef||old.policyDay!==day||old.method!=='acknowledged')throw new JsaReceiptError('failed-precondition','binding_mismatch','ack');return 'already_recorded';}
-   const firstRead=scope.rows.filter(r=>r.state==='completed'&&['read_completed','read_and_acknowledged'].includes(r.action||'')).sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0)||a.requestId.localeCompare(b.requestId))[0];
+   const firstRead=scope.rows.filter(r=>r.state==='completed'&&(r.action==='read_and_acknowledged'||scope.style!=='read_and_acknowledge'&&r.action==='read_completed')).sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0)||a.requestId.localeCompare(b.requestId))[0];
    tx.create(ref,{fullReadId:firstRead?.requestId||null,schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,policyDay:day,periodId:scope.binding.associatedPeriodId||null,method:'acknowledged',recordedAtMs:Date.now()});return 'recorded';
   });return {protocolVersion:1,state,policyDay:day};
+ }catch(e){throw toHttps(e);}
+});
+
+/** Link a once-per-scope full read to a particular job without inventing a
+ * per-job acknowledgement or asking the driver for another ceremony. */
+export const jsaRecordJobReadCoverage=httpsV2.onCall(OPTIONS,async request=>{
+ if(!request.auth?.uid)throw new httpsV2.HttpsError('unauthenticated','not_authorized');
+ await limited(request.auth.uid,'jsa_scope_read_coverage');
+ try{
+  const {jobRef}=jobDayRequest(request.data),p=jobDayPrincipal(authOf(request));await ownedJob(p,jobRef);
+  const scope=await resolveJobDayPolicy(jobDayDeps(),p);
+  if(scope.mode!=='per_shift'||!scope.hasRead)throw new JsaReceiptError('failed-precondition','no_qualifying_read','scope_read_required');
+  const first=scope.rows.filter(r=>r.companyId===p.companyId&&r.driverId===p.driverId&&r.state==='completed'&&(r.action==='read_and_acknowledged'||scope.style!=='read_and_acknowledge'&&r.action==='read_completed')).sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0))[0];
+  if(!first)throw new JsaReceiptError('failed-precondition','no_qualifying_read','scope_read_required');
+  const recordId=createHash('sha256').update(JSON.stringify([p.companyId,p.driverId,jobRef])).digest('hex'),ref=admin.firestore().doc('jsa_job_read_coverage/'+recordId);
+  await admin.firestore().runTransaction(async tx=>{const prior=(await tx.get(ref)).data();if(prior){if(prior.companyId!==p.companyId||prior.driverId!==p.driverId||prior.jobRef!==jobRef||prior.method!=='scope_read')throw new JsaReceiptError('failed-precondition','binding_mismatch','coverage');return;}tx.create(ref,{schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,method:'scope_read',fullReadId:first.requestId,requirementKey:scope.requirementKey,policyDay:scope.binding.policyDay,periodId:scope.binding.associatedPeriodId||null,recordedAtMs:Date.now()});});
+  return {protocolVersion:1,state:'recorded',recordId};
  }catch(e){throw toHttps(e);}
 });

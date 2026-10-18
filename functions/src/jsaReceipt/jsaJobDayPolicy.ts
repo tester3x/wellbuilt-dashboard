@@ -5,6 +5,7 @@ import type { ResolveResult } from "../security/operational/shiftAuthority";
 import type { SsoDeps } from "../sso/ssoDeps";
 import { JsaReceiptError } from "./jsaReceiptHandlers";
 import {
+  decideActionSatisfies,
   parseAuthPrincipal,
   requireAudience,
   type AuthPrincipal,
@@ -143,7 +144,7 @@ export async function resolveJobDayPolicy(
     }
   }
   const scopedPeriod=mode==='per_shift'?associatedPeriodId:undefined;
-  const rows=await deps.records(p.companyId,p.driverId,day,scopedPeriod);
+  const rows=(await deps.records(p.companyId,p.driverId,day,scopedPeriod)).filter(r=>r.companyId===p.companyId&&r.driverId===p.driverId&&r.binding.shiftState==='independent'&&(scopedPeriod?r.binding.associatedPeriodId===scopedPeriod:r.binding.policyDay===day));
   const hasRead=hasJobDayRead(rows,p,day,style==='read_and_acknowledge',scopedPeriod);
   const requirementKey=scopedPeriod ? `shift:${scopedPeriod}` : day;
   return {
@@ -168,4 +169,12 @@ export async function resolveJobDayPolicy(
     rows,
     mode,
   };
+}
+
+/** A completed job keeps its verified evidence; this never authorizes a new job. */
+export function hasHistoricalJobCoverage(p:AuthPrincipal,jobRef:string,reads:JsaGovernedRecord[],acks:Record<string,unknown>[],linked:Record<string,unknown>|null):boolean {
+ const owned=(r:{companyId?:unknown;driverId?:unknown;jobRef?:unknown})=>r.companyId===p.companyId&&r.driverId===p.driverId&&r.jobRef===jobRef;
+ return reads.some(r=>owned(r)&&r.state==='completed'&&!!r.action&&decideActionSatisfies(r.intent,r.action).ok)
+  ||acks.some(a=>owned(a)&&a.schemaVersion===1&&a.method==='acknowledged'&&typeof a.recordedAtMs==='number'&&Number.isFinite(a.recordedAtMs))
+  ||!!linked&&owned(linked)&&linked.schemaVersion===1&&linked.method==='scope_read'&&typeof linked.fullReadId==='string'&&!!linked.fullReadId;
 }

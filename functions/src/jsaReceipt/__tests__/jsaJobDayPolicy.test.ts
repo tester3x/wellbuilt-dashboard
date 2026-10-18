@@ -6,6 +6,7 @@ import {
   type ReceiptDeps,
 } from "../jsaReceiptHandlers";
 import {
+  hasHistoricalJobCoverage,
   companyJsaDay,
   resolveJobDayPolicy,
   hasJobDayRead,
@@ -412,4 +413,12 @@ test('once-per-shift full read survives midnight in the same real shift',async()
  const period='2026-10-18_210000',prior=row({binding:{...binding,associatedPeriodId:period}});
  const overnight=await resolveJobDayPolicy(deps('acknowledge',[prior],{nowMs:()=>Date.parse('2026-10-19T10:00:00Z'),company:async()=>({jsaMode:'per_shift',jsaJobPolicy:'acknowledge',timeZone:'America/Chicago'}),shift:async()=>({state:'open',periodId:period,originLocalDate:day})}),principal);
  expect(overnight).toMatchObject({hasRead:true,requirementKey:`shift:${period}`,binding:{policyDay:'2026-10-19'}});
+});
+
+test('historical exact-job coverage survives workday changes but not foreign actors, unfinished or weaker evidence',()=>{
+ expect(hasHistoricalJobCoverage(principal,'job',[row({binding:{...binding,policyDay:'2026-10-17'}})],[],null)).toBe(true);
+ for(const r of [row({driverId:'foreign'}),row({jobRef:'other'}),row({state:'pending'}),row({intent:'read_and_acknowledge',action:'acknowledged'})])expect(hasHistoricalJobCoverage(principal,'job',[r],[],null)).toBe(false);
+ expect(hasHistoricalJobCoverage(principal,'job',[],[{companyId:'c',driverId:'d',jobRef:'job',schemaVersion:1,method:'acknowledged',recordedAtMs:now}],null)).toBe(true);
+ expect(hasHistoricalJobCoverage(principal,'job',[],[],{companyId:'c',driverId:'d',jobRef:'job',schemaVersion:1,method:'scope_read',fullReadId:'first'})).toBe(true);
+ expect(hasHistoricalJobCoverage(principal,'other',[],[],{companyId:'c',driverId:'d',jobRef:'job',schemaVersion:1,method:'scope_read',fullReadId:'first'})).toBe(false);
 });
