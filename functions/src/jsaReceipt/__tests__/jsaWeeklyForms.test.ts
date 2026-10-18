@@ -27,3 +27,8 @@ test('first full JSA reference matches the exact shift, not the nearest date or 
  ]:c==='jsa_job_acknowledgments'?[{...scope,id:'ack1',recordedAtMs:ms,periodId:'2026-10-12_080000',jobRef:'job2',method:'acknowledged'}]:[],artifact:async id=>({...scope,requestId:id,jobRef:id==='right-read'?'job1':'other',action:'read_completed',snapshot:{signature:{data:'example'}}})}),auth,body);
  expect(out.records.find(r=>r.id==='ack1')).toMatchObject({fullReadId:'right-read'});
 });
+
+test('off-shift workday acknowledgements retain the exact first full read and no invented shift',async()=>{
+ const out=await readWeeklyJsaForms(deps({list:async c=>c==='jsa_governed_requests'?[{...scope,requestId:'day-read',state:'completed',action:'read_and_acknowledged',completedAtMs:ms-1000,jobRef:'job1',binding:{shiftState:'independent',policyDay:'2026-10-12'}}]:c==='jsa_job_acknowledgments'?[{...scope,id:'day-ack',recordedAtMs:ms,policyDay:'2026-10-12',jobRef:'job2',method:'acknowledged'}]:[],artifact:async()=>({...scope,requestId:'day-read',jobRef:'job1',action:'read_and_acknowledged',snapshot:{signature:{data:'example'}}})}),auth,body);
+ expect(out.records.find(r=>r.id==='day-ack')).toMatchObject({shiftId:null,fullReadId:'day-read',kind:'jsa_ack'});
+});
