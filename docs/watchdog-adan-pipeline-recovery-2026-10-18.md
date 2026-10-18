@@ -1,0 +1,13 @@
+# Adan Pipeline and three Watchdog reviews — 2026-10-18
+
+User explicitly authorized adding Pipeline to Adan's existing routes, processing the two held Kahuna 5 loads and excluding Atlas 1 if it matched an existing record.
+
+Applied an authenticated CLI operator maintenance action with the existing canonical assignment digest/revision/catalog/company validation and a conditional ETag write. Preserved all existing routes and well selections; appended Pipeline. Stored security audit of before/after, exact owner authorization and operator account. Canonical sender-owner scope evaluation passes after the change. No client rules or sender-binding identity changes.
+
+Two historical Kahuna observations at06:19 and08:27 Central,185BBL each, were backfilled under their exact normal Watchdog observation digests and stable packet IDs. Retained reported top/bottom, dates/times and Adan ownership. The maintenance backfill is explicitly identified in provenance rather than claiming a new sender signature. Firestore receipt manifests let the HP's normal signed retry/receipt path recognize the same records without another incoming load. This avoids rewinding current state through the stale-pull path. Exactly two processed keys added; pre-existing Kahuna records and current status verified unchanged. No synthetic loads or shifted timestamps.
+
+Atlas report08:36:54 matches one existing completed same-company record at08:43:49: Atlas1,140BBL,top11ft3in,bottom7ft9in. Exclusion reason/audit references the exact retained packet; existing Atlas records verified unchanged. Original WhatsApp report retained. Posted author and app driver differ, so disposition is based on the owner-authorized exact physical measurement/volume/time comparison, not a claim that sender identities matched.
+
+Queued revision-checked commands through the existing mirrored review contract and recorded watchdog_review_audit entries identifying authenticated CLI maintenance and the owner's request. HP acknowledged all three commands as applied: both Kahuna rows complete, Atlas excluded. Cloud completion audit confirms both new same-ID receipts processed; no pending/rejected packet among the refreshed post05:11 receipts. Private before/after snapshots remain outside Git.
+
+A newer Kahuna review at13:13 Central remains untouched; it is not one of the three explicitly resolved here. No code, APK, Hosting, Functions or rules deployment needed for these operations.
