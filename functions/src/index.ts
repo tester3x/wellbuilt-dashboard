@@ -4094,6 +4094,7 @@ export {
 } from './jsaReceipt/jsaReceiptCallables';
 export { jsaStandalone } from './jsaReceipt/jsaStandaloneCallable';
 export { jsaWeeklyForms } from './jsaReceipt/jsaWeeklyFormsCallable';
+export { jsaGetSavedJob } from './jsaReceipt/jsaSavedJobCallable';
 export { jsaManageTemplate } from './jsaReceipt/jsaTemplateManagementCallable';
 
 // ── vc51.9A6-B: protected platform-admin callables ─────────────────────────
