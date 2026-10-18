@@ -35,3 +35,12 @@ was retained. Receiver freshness after the restart is verified separately.
 
 Refresh the Watchdog browser page to load the new dismissal button. Private
 connection details, queue backups and record-level audit data remain outside Git.
+
+Final runtime checks: Connected, unpaused, no receiver error; successful receiver
+checks advanced from 07:56:00.749Z to 07:56:08.750Z on October 18. The private
+before/after audit verifies all 21 dismissals retained identity, packet id,
+measurements, estimate, barrel source and pending-correction metadata unchanged.
+Subsequent user clarification supplied an actual volume for one estimate; the
+existing cloud correction was verified, without writing a second load. An older
+claimed test pull needs date/identity clarification before a separate governed
+history deletion; clearing its review has not deleted the historical pull.
