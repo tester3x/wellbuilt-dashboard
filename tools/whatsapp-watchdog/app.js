@@ -44,7 +44,11 @@ function reviewControls(row,post,card){
  row={...row,...current.deliveries?.[row.id]?.measurements};
  const diagnostic=current.deliveries?.[row.id];if(diagnostic?.estimate){const e=diagnostic.estimate;node('p',`Barrels: ${row.bblsTaken} (${diagnostic.barrelSource==='estimated'?'estimated':diagnostic.barrelSource==='default'?'assumed default':'written'}). Level estimate: ${e.estimatedBbls!==null?e.estimatedBbls+' bbl; range ':''}${e.lowBbls}${e.highBbls!==null?'–'+e.highBbls:''} bbl. Uses 20-minute estimated loading (range 10–30 min).`,card);}
 
- const delivery=current.deliveries?.[row.id];if(!(delivery?.status==='review'||delivery?.needsReview)||!canReviewPost(post,row.id))return;
+ const delivery=current.deliveries?.[row.id];if(!(delivery?.status==='review'||delivery?.needsReview))return;
+ const dismissBox=node('div','',card),dismissFeedback=node('p','',dismissBox);dismissFeedback.setAttribute('role','status');
+ const dismissButton=node('button','Dismiss review; keep records',dismissBox);
+ dismissButton.onclick=()=>action(()=>api('/dismiss-review',JSON.stringify({rowId:row.id,category:'archived',reason:'Dismissed manually; existing WB M record and original estimate retained'})),dismissButton,'Review cleared. Recorded loads and estimates are unchanged.',dismissFeedback);
+ if(!canReviewPost(post,row.id))return;
  row={...row,...delivery.measurements};
  const box=node('div','',card);node('p',row.wellName+' · Review measurement time (Central)',box);
  const time=node('input','',box);time.type='datetime-local';const parsed=Date.parse(delivery.review?.dateTimeUTC||row.dateTimeUTC);const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(Number.isFinite(parsed)?parsed:Date.now())).map(p=>[p.type,p.value]));time.value=Number.isFinite(parsed)?parts.year+'-'+parts.month+'-'+parts.day+'T'+parts.hour+':'+parts.minute:'';time.setAttribute('aria-label','Measurement time for '+row.wellName);

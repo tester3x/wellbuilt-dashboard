@@ -12,6 +12,7 @@ import {CodexBridge} from './codex-bridge.mjs';
 import {OverlordCommands} from './commands.mjs';
 import {ReviewAlerts} from './alerts.mjs';
 import {RemoteReviews} from './remote-review.mjs';
+import {dismissReview} from './dismiss-review.mjs';
 const require=createRequire(import.meta.url);
 const {splitChat,parsePullChat,chatTimestamp}=require('../../functions/lib/imports/pullParser.js');
 const root=path.dirname(fileURLToPath(import.meta.url));
@@ -96,6 +97,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/remote-reviews'){const value=JSON.parse(bytes);if(typeof value.enabled!=='boolean')throw Error('Invalid remote review setting');queue.data.remoteReviewsEnabled=value.enabled;queue.save();return respond(res,200,{ok:true});}
  if(url.pathname==='/overlord-message'){const value=JSON.parse(bytes),group=queue.data.reviewAlerts?.groupId;if(!client||state!=='Connected'||!group||typeof value.text!=='string'||value.text.length<1||value.text.length>3000)throw Error('Alert destination unavailable or invalid message');await client.sendMessage(group,value.text);return respond(res,200,{ok:true});}
  if(url.pathname==='/review-alerts'){const value=JSON.parse(bytes);if(typeof value.enabled!=='boolean'||(value.enabled&&!chats.some(c=>c.id===value.groupId)))throw Error('Choose an available alert group');if(value.enabled&&channels.some(c=>c.id===value.groupId))throw Error('Choose an alert-only group, not a watched route');queue.data.reviewAlerts={...queue.data.reviewAlerts,enabled:value.enabled,groupId:value.groupId||queue.data.reviewAlerts?.groupId||''};queue.save();return respond(res,200,{ok:true});}
+ if(url.pathname==='/dismiss-review')return respond(res,200,dismissReview(queue,JSON.parse(bytes)));
  if(url.pathname==='/review'){const value=JSON.parse(bytes);if(typeof value.rowId!=='string'||!['confirm','exclude'].includes(value.decision)||typeof value.reason!=='string'||(value.decision==='exclude'&&value.reason.trim().length<3)||value.reason.length>300)throw Error('Enter a review reason');let at;if(value.decision==='confirm'){if(typeof value.time!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.time))throw Error('Choose a valid measurement time');const [date,time]=value.time.split('T');const [y,m,d]=date.split('-');at=chatTimestamp(m+'/'+d+'/'+y,time);}await transport.review(value.rowId,value.decision,at,value.reason.trim(),value.corrections||{});return respond(res,200,{ok:true});}
  if(url.pathname==='/refresh-groups'){await loadGroups();return respond(res,200,{ok:true});}
  if(url.pathname==='/connect'){await connect();return respond(res,200,{ok:true});}
