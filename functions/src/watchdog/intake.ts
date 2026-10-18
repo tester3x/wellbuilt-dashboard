@@ -62,7 +62,14 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const binding=senderKey?policy.senderBindings?.[senderKey]:null;
  if(binding&&(typeof binding.driverId!=='string'||!/^[a-zA-Z0-9_-]{8,128}$/.test(binding.driverId)))throw Error('sender_binding_invalid');
  const profile=binding?(await db.ref('drivers/profiles/'+binding.driverId).once('value')).val():null;
- const owner=resolveWatchdogOwner(binding,profile,mapped.wellName,configs[mapped.wellName]);
+ let owner;
+ try { owner=resolveWatchdogOwner(binding,profile,mapped.wellName,configs[mapped.wellName]); }
+ catch(error) {
+  const code=String((error as Error).message);
+  if(!['sender_well_out_of_scope','sender_driver_unavailable','sender_binding_invalid'].includes(code))throw error;
+  // Hold the observation without weakening ownership or blocking later messages.
+  res.json({ok:true,status:'review',issues:[code]});return;
+ }
  if(row.levelOnly){
   if(!owner)throw Error('top_only_owner_required');
   if(row.bblsTaken!==0||row.bottomLevelFeet!==null)throw Error('invalid_top_only_measurement');
