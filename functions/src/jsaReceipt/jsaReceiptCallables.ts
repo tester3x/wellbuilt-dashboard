@@ -320,8 +320,8 @@ export const jsaAcknowledgeJob = httpsV2.onCall(OPTIONS, async (request) => {
 function jobDayDeps():JobDayDeps {
  const db=admin.firestore();return {shift:(d,c)=>buildReceiptDeps().resolveShift(d,c),sso:buildSsoDeps(),nowMs:()=>Date.now(),
   company:async id=>(await db.collection('companies').doc(id).get()).data()||{},
-  records:async(company,driver,day)=>{
-   const snap=await db.collection('jsa_governed_requests').where('companyId','==',company).where('driverId','==',driver).where('binding.policyDay','==',day).get();
+  records:async(company,driver,day,period)=>{
+   const snap=await db.collection('jsa_governed_requests').where('companyId','==',company).where('driverId','==',driver).where(period?'binding.associatedPeriodId':'binding.policyDay','==',period||day).get();
    return snap.docs.map(d=>fromStored(d.data())).filter((r):r is NonNullable<typeof r>=>!!r);
   }};
 }
@@ -346,10 +346,12 @@ export const jsaRegisterJobReadRequest=httpsV2.onCall(OPTIONS,async request=>{
    const p=jobDayPrincipal(authOf(request)),old=await deps.readRequest!(parsed.value.requestId);
    if(old&&old.companyId===p.companyId&&old.driverId===p.driverId&&old.binding.shiftState==='independent'){
     const current=await resolveJobDayPolicy(jobDayDeps(),p);
-    if(old.binding.policyDay!==current.binding.policyDay)throw new JsaReceiptError('failed-precondition','expired','workday_changed');
+    if(old.binding.policyDay!==current.binding.policyDay && !(current.mode==='per_shift' && current.binding.associatedPeriodId && old.binding.associatedPeriodId===current.binding.associatedPeriodId))throw new JsaReceiptError('failed-precondition','expired','workday_changed');
    }
   }
-  return await handleRegister({...deps,registerJobDay:true},authOf(request),request.data);
+  const result=await handleRegister({...deps,registerJobDay:true},authOf(request),request.data);
+  const stored=await deps.readRequest!(result.requestId);
+  return {...result,policyDay:stored?.binding.policyDay};
  }catch(e){throw toHttps(e);}
 });
 export const jsaResolveJobReadEvidence=httpsV2.onCall(OPTIONS,async request=>{
@@ -363,14 +365,15 @@ export const jsaResolveJobReadEvidence=httpsV2.onCall(OPTIONS,async request=>{
   if((cfg.jsaMode??'off')==='off'){
    const member=await deps.sso.getDriver(p.driverId);
    if(!member?.active||member.companyId!==p.companyId||member.driverId!==p.driverId)throw new JsaReceiptError('permission-denied','not_owner','membership');
-   return {protocolVersion:1,policyDay:companyJsaDay(deps.nowMs(),String(cfg.timeZone||cfg.timezone||'America/Chicago')),hasRead:false,jobSatisfied:false,policy:{mode:'off',allowAcknowledge:false,intent:'read'}};
+   const day=companyJsaDay(deps.nowMs(),String(cfg.timeZone||cfg.timezone||'America/Chicago'));
+   return {protocolVersion:1,policyDay:day,requirementKey:day,hasRead:false,jobSatisfied:false,policy:{mode:'off',allowAcknowledge:false,intent:'read'}};
   }
   const scope=await resolveJobDayPolicy(deps,p),day=scope.binding.policyDay!;
   const rows=scope.rows;
   const ack=(await admin.firestore().doc(jobDayAckPath(p.companyId,p.driverId,jobRef,day)).get()).data();
   const full=rows.some(r=>r.jobRef===jobRef&&r.state==='completed'&&(r.action==='read_and_acknowledged'||scope.style!=='read_and_acknowledge'&&r.action==='read_completed'));
   const ackOk=scope.policy.allowAcknowledge&&ack?.companyId===p.companyId&&ack?.driverId===p.driverId&&ack?.jobRef===jobRef&&ack?.policyDay===day&&ack?.method==='acknowledged';
-  return {protocolVersion:1,policyDay:day,hasRead:scope.hasRead,jobSatisfied:jobExists&&(full||ackOk),policy:{mode:scope.mode,allowAcknowledge:scope.style==='acknowledge',intent:scope.style==='read_and_acknowledge'?'read_and_acknowledge':'read'}};
+  return {protocolVersion:1,policyDay:day,requirementKey:scope.requirementKey,hasRead:scope.hasRead,jobSatisfied:jobExists&&(full||ackOk),policy:{mode:scope.mode,allowAcknowledge:scope.style==='acknowledge',intent:scope.style==='read_and_acknowledge'?'read_and_acknowledge':'read'}};
  }catch(e){throw toHttps(e);}
 });
 export const jsaAcknowledgeJobDay=httpsV2.onCall(OPTIONS,async request=>{

@@ -397,3 +397,19 @@ test("handler flow: off-shift read, each later job ack, policy tightening and ac
     ),
   ).rejects.toMatchObject({ refusal: "not_found" });
 });
+
+test('once-per-shift companies retain each actual shift scope, with an off-shift daily scope available',async()=>{
+ const original='2026-10-18_070000',next='2026-10-18_120000';
+ const prior=row({binding:{...binding,associatedPeriodId:original}});
+ const scenario=(period:string|null,mode='per_shift')=>deps('acknowledge',[prior],{company:async()=>({jsaMode:mode,jsaJobPolicy:'acknowledge'}),shift:async()=>period?{state:'open',periodId:period,originLocalDate:day}:{state:'none'}});
+ expect(await resolveJobDayPolicy(scenario(original),principal)).toMatchObject({hasRead:true,requirementKey:`shift:${original}`});
+ expect(await resolveJobDayPolicy(scenario(next),principal)).toMatchObject({hasRead:false,requirementKey:`shift:${next}`});
+ expect(await resolveJobDayPolicy(scenario(null),principal)).toMatchObject({hasRead:true,requirementKey:day});
+ expect(await resolveJobDayPolicy(scenario(next,'per_job'),principal)).toMatchObject({hasRead:true,requirementKey:day});
+});
+
+test('once-per-shift full read survives midnight in the same real shift',async()=>{
+ const period='2026-10-18_210000',prior=row({binding:{...binding,associatedPeriodId:period}});
+ const overnight=await resolveJobDayPolicy(deps('acknowledge',[prior],{nowMs:()=>Date.parse('2026-10-19T10:00:00Z'),company:async()=>({jsaMode:'per_shift',jsaJobPolicy:'acknowledge',timeZone:'America/Chicago'}),shift:async()=>({state:'open',periodId:period,originLocalDate:day})}),principal);
+ expect(overnight).toMatchObject({hasRead:true,requirementKey:`shift:${period}`,binding:{policyDay:'2026-10-19'}});
+});

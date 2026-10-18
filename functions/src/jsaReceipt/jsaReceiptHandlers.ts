@@ -194,7 +194,7 @@ export async function handleRegister(
 ): Promise<{ requestId: string; state: 'pending' | 'completed'; reused: boolean }> {
   const p = principal(auth, JSA_APP_WBT);
   const meta = unwrap(parseRegisterInput(data));
-  const { binding, policy } = await authorBinding(deps, p, undefined, meta.jobRef);
+  const { binding, policy } = await authorBinding(deps, p, meta.requestId, meta.jobRef);
   if (binding.shiftState === 'independent' && policy.minimumIntent === 'read_and_acknowledge' && meta.intent !== 'read_and_acknowledge') throw new JsaReceiptError('failed-precondition','intent_not_permitted','combined_required');
   return deps.runTransaction(async (txn) => {
     const path = recordPath(meta.requestId);

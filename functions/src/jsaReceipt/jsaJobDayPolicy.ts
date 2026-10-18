@@ -21,6 +21,7 @@ export interface JobDayDeps {
     companyId: string,
     driverId: string,
     day: string,
+    periodId?: string,
   ): Promise<JsaGovernedRecord[]>;
 }
 export function companyJsaDay(at: number, zone: string): string {
@@ -53,13 +54,14 @@ export function hasJobDayRead(
   p: AuthPrincipal,
   day: string,
   combined: boolean,
+  periodId?:string,
 ): boolean {
   return rows.some(
     (r) =>
       r.companyId === p.companyId &&
       r.driverId === p.driverId &&
       r.binding.shiftState === "independent" &&
-      r.binding.policyDay === day &&
+      (periodId ? r.binding.associatedPeriodId === periodId : r.binding.policyDay === day) &&
       r.state === "completed" &&
       (r.action === "read_and_acknowledged" ||
         (!combined && r.action === "read_completed")),
@@ -76,6 +78,7 @@ export async function resolveJobDayPolicy(
   style: string;
   rows: JsaGovernedRecord[];
   mode: string;
+  requirementKey:string;
 }> {
   const driver = await deps.sso.getDriver(p.driverId);
   if (
@@ -130,8 +133,6 @@ export async function resolveJobDayPolicy(
   const day = frozenDay || companyJsaDay(deps.nowMs(), zone);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day))
     throw new JsaReceiptError("failed-precondition", "malformed", "policy_day");
-  const rows = await deps.records(p.companyId, p.driverId, day),
-    hasRead = hasJobDayRead(rows, p, day, style === "read_and_acknowledge");
   let associatedPeriodId: string | undefined;
   if (deps.shift) {
     try {
@@ -141,7 +142,12 @@ export async function resolveJobDayPolicy(
       /* Shift association is optional; auth and JSA policy were already verified. */
     }
   }
+  const scopedPeriod=mode==='per_shift'?associatedPeriodId:undefined;
+  const rows=await deps.records(p.companyId,p.driverId,day,scopedPeriod);
+  const hasRead=hasJobDayRead(rows,p,day,style==='read_and_acknowledge',scopedPeriod);
+  const requirementKey=scopedPeriod ? `shift:${scopedPeriod}` : day;
   return {
+    requirementKey,
     binding: {
       ...(associatedPeriodId ? { associatedPeriodId } : {}),
       shiftState: "independent",
