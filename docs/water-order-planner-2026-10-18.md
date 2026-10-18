@@ -14,3 +14,5 @@ Dashboard Hosting is not deployed in this work session; desktop release ownershi
 
 Final source checkpoint: a70772382e302de838dcdbe01e00b6ea3ad6d43d. Production `npm run build` succeeded at that checkpoint; planner 9/9 and TypeScript passed. Combined relevant suites: 72 passed, 1 existing skipped. Source is pushed, Hosting remains unchanged. The forecast is capped at 300 trips; any remaining quantity is reported as shortfall.
 
+
+Planning remains advisory: existing live dispatch commitments reduce the forecast, and release rechecks current supply. Future forecasts are not server-side stock reservations across concurrent orders. Source suitability and approximate travel times remain dispatch inputs. Driver hours entered here mean hours available to this order; the planner does not alter HOS or claim to calculate remaining legal hours.
