@@ -549,7 +549,7 @@ export async function prepareEditOutbox(
     stage: 'prepared',
     completed: false,
     measurements: {
-      ...(useReportedBottom?{bottomLevelFeet:reportedReviewBottom/12}:{}),
+      ...(reportedReviewBottom!==null?{bottomLevelFeet:reportedReviewBottom/12}:{}),
       tankTopInches: newTankTopInches,
       tankLevelFeet: newTankTopInches / 12,
       bblsTaken: newBblsTaken,
