@@ -11,3 +11,5 @@ Only currently ready trips are released. Later trips for a truck wait for its ea
 Validation: planner cases cover buffers, existing stock, partial loads, nearer supply, shared inventory, daily refill, work windows, deadlines, stable IDs, commitments, down/unknown wells and invalid inputs. Relevant identity/authority/control suites: 72 passed, 1 existing skipped, no failures. TypeScript and production Next build passed before final formatting; repeat at the preserved checkpoint.
 
 Dashboard Hosting is not deployed in this work session; desktop release ownership remains in place. No customer orders or driver shifts were created or modified for testing. Pre-existing untracked app.json is excluded from this checkpoint.
+
+Final source checkpoint: a70772382e302de838dcdbe01e00b6ea3ad6d43d. Production `npm run build` succeeded at that checkpoint; planner 9/9 and TypeScript passed. Combined relevant suites: 72 passed, 1 existing skipped. Source is pushed, Hosting remains unchanged. The 1,000-iteration upper bound is not claimed: this implementation deliberately caps the forecast at 300 trips and reports any remaining quantity as shortfall.
