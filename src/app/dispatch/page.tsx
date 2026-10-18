@@ -7,6 +7,7 @@ import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { isActiveDispatchCard, isCancelledDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
+import { preferredDropoff } from '@/lib/preferredDropoff';
 import { WaterOrderBuilder } from '@/components/WaterOrderBuilder';
 import { DriverArrivalRecommendations } from '@/components/DriverArrivalRecommendations';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
@@ -497,6 +498,21 @@ function DispatchPageInner() {
   const [bulkDisposalSearch, setBulkDisposalSearch] = useState('');
   const [bulkDisposalResults, setBulkDisposalResults] = useState<NdicWell[]>([]);
   const [bulkDispatching, setBulkDispatching] = useState(false);
+  const autoDropoffScope = useRef('');
+  useEffect(() => {
+    if (!viewedCompanyId || !dispatchesLoaded || readErrors.dispatches || !allDisposals.length) return;
+    const pickups = selectedWells.size ? [...selectedWells.keys()].sort() : assignTarget ? [assignTarget.wellName] : [];
+    const scope = JSON.stringify([viewedCompanyId, pickups, builderOperator]);
+    if (autoDropoffScope.current === scope) return;
+    // Wait for a real pickup selection. An explicit clear/change stays manual
+    // for this selection; later snapshots must not put an unwanted default back.
+    if (!pickups.length) { autoDropoffScope.current = ''; return; }
+    autoDropoffScope.current = scope;
+    if (assignDisposalWell || assignDisposal || disposalSearch) return;
+    const preferred = preferredDropoff({companyId:viewedCompanyId,wellNames:pickups,operator:assignTarget?.operator||builderOperator,catalog:allDisposals,jobs:dispatches});
+    if (preferred) {setAssignDisposal(preferred.well_name);setAssignDisposalWell(preferred);setDisposalSearch('');setDisposalResults([]);}
+  }, [viewedCompanyId, dispatchesLoaded, readErrors.dispatches, allDisposals, dispatches, selectedWells, assignTarget, builderOperator, assignDisposalWell, assignDisposal, disposalSearch]);
+
 
   // Service work form state
   const [swWellName, setSwWellName] = useState('');

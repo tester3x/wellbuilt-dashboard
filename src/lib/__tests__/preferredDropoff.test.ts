@@ -1,0 +1,10 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {preferredDropoff} from '../preferredDropoff.ts';
+const catalog=[{well_name:'Near SWD',kind:'SWD'},{well_name:'Far SWD',kind:'SWD'},{well_name:'Not a disposal',kind:'OIL'}];
+const job=(id:string,disposal:string,extra={})=>({id,wellName:'Well 1',companyId:'a',operator:'Op',status:'completed',disposal,...extra});
+const choose=(jobs:ReturnType<typeof job>[],extra={})=>preferredDropoff({companyId:'a',wellNames:['Well 1'],operator:'Op',catalog,jobs,...extra})?.well_name;
+test('well history wins over company frequency',()=>assert.equal(choose([job('1','Near SWD'),job('2','Far SWD',{wellName:'Other'}),job('3','Far SWD',{wellName:'Other'})]),'Near SWD'));
+test('operator then company fallback',()=>{assert.equal(choose([job('1','Near SWD',{wellName:'Other'})]),'Near SWD');assert.equal(choose([job('1','Far SWD',{wellName:'Other',operator:'Other'})]),'Far SWD');});
+test('ignores other tenants, unfinished jobs, duplicates and invalid locations',()=>assert.equal(choose([job('1','Near SWD'),job('1','Near SWD'),job('2','Far SWD',{companyId:'b'}),job('3','Far SWD',{status:'cancelled'}),job('4','Not a disposal')]),'Near SWD'));
+test('tie selects most recent and empty history leaves manual input',()=>{assert.equal(choose([job('1','Near SWD',{assignedAt:'2026-10-01'}),job('2','Far SWD',{assignedAt:'2026-10-02'})]),'Far SWD');assert.equal(choose([]),undefined);});

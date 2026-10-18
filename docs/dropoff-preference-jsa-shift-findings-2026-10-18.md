@@ -1,0 +1,9 @@
+# Drop-off preference and JSA shift coupling — 2026-10-18
+
+PW Job Builder now chooses a default SWD after a pickup selection, from completed jobs in the viewed company: selected well history first, then operator history, then company-wide history. Counts deduplicate dispatch IDs and ignore cancelled/in-progress/other-company jobs and locations absent from the current SWD catalog. Ties use recency, then name. Manual selection, typed searches and an explicit clear are preserved for the current pickup selection. The existing governed dispatch writer remains unchanged.
+
+Validation: preferredDropoff four regression cases and TypeScript passed. No customer jobs created during testing.
+
+JSA investigation: WB T utils/jsaStartGate.ts inspectStartJsa calls jsaResolveCurrentShiftReadEvidence and throws unless a periodId exists. The server's jsaReceiptHandlers authorBinding uses canonical SSO access and company/plan shift policy; required-work receipts and acknowledgement evidence are period-bound. Standalone JSA already has an independent authenticated off-shift workflow, but those standalone records deliberately do not satisfy required-job receipts. Thus deleting the visible message or silently accepting standalone records would not implement the requested independent company-policy workflow.
+
+Required follow-up: make job-bound company JSA reading usable without an active shift, retain authenticated company/driver and immutable job completion verification, attach a shift only when one exists, and preserve the first full read/subsequent acknowledgement rule. Do not fabricate or start a shift, grant fake JSA completion, or disable company policy to remove the shift prerequisite. No JSA security or shift-gate code was changed in this checkpoint. The notification animation remains the working v187 version pending the user's optional swirl refinement.
