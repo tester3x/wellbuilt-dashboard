@@ -107,3 +107,19 @@ test('double slash keeps Kahuna decimal levels and explicit barrels', () => {
     expect(row.issues).toEqual([]);
   }
 });
+
+// Pump status after the matched well must not displace the first gauge.
+test('leading On annotation preserves gauges, volume and message timestamp', () => {
+ const [row]=parsePullChat(msg('Atlas 1. On\n11’ 5”\n7’ 8”\n150 bbl'),{wellNames:['Atlas 1'],defaultBbls:165});
+ expect(row.wellName).toBe('Atlas 1');
+ expect(row.tankLevelFeet).toBeCloseTo(11+5/12);
+ expect(row.bottomLevelFeet).toBeCloseTo(7+8/12);
+ expect(row.bblsTaken).toBe(150);
+ expect(row.dateTimeUTC).toBe(row.postedAt);
+ expect(row.issues).toEqual([]);
+});
+test('unknown prose and pump-status-only messages do not become fabricated pulls', () => {
+ const [held]=parsePullChat(msg('Atlas 1. Unknown note\n11 5\n7 8\n150 bbl'),{wellNames:['Atlas 1']});
+ expect(held.issues).toContain('Unreadable levels');
+ expect(parsePullChat(msg('Atlas 1. On'),{wellNames:['Atlas 1']})).toEqual([]);
+});

@@ -132,7 +132,9 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
         if (named && (/^(?:\s*(?:top|t)\s*[:=.\-]?\s*\d|\s*\d{1,2}(?:[ .,:']\d{1,2})?\s*\/\s*\d)/i.test(named[2]) || /^(?:\s*\d{1,2}[^\n]*\n){2}/.test(named[2]))) { segment.body = named[2]; segment.well = ''; }
       }
       let inlineTime = '';
-      const gaugeBody=segment.body.replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
+      // A well-name suffix such as '. On' is pump status, not a gauge line.
+      // Strip only that exact leading annotation; keep arbitrary prose held.
+      const gaugeBody=segment.body.replace(/^\s*[.,:]?\s*on\s*(?:\r?\n|$)/i,'\n').replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
       const rawLines=gaugeBody.split('\n').map(line=>line.trim()).filter(Boolean);
       const lines = gaugeBody.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
         const suffix = /\s+(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
