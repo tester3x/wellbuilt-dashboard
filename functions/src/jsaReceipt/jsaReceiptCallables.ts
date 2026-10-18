@@ -387,7 +387,8 @@ export const jsaAcknowledgeJobDay=httpsV2.onCall(OPTIONS,async request=>{
   const state=await admin.firestore().runTransaction(async tx=>{
    const old=(await tx.get(ref)).data();
    if(old){if(old.companyId!==p.companyId||old.driverId!==p.driverId||old.jobRef!==jobRef||old.policyDay!==day||old.method!=='acknowledged')throw new JsaReceiptError('failed-precondition','binding_mismatch','ack');return 'already_recorded';}
-   tx.create(ref,{schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,policyDay:day,periodId:scope.binding.associatedPeriodId||null,method:'acknowledged',recordedAtMs:Date.now()});return 'recorded';
+   const firstRead=scope.rows.filter(r=>r.state==='completed'&&['read_completed','read_and_acknowledged'].includes(r.action||'')).sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0)||a.requestId.localeCompare(b.requestId))[0];
+   tx.create(ref,{fullReadId:firstRead?.requestId||null,schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,policyDay:day,periodId:scope.binding.associatedPeriodId||null,method:'acknowledged',recordedAtMs:Date.now()});return 'recorded';
   });return {protocolVersion:1,state,policyDay:day};
  }catch(e){throw toHttps(e);}
 });

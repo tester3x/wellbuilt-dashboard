@@ -32,3 +32,8 @@ test('off-shift workday acknowledgements retain the exact first full read and no
  const out=await readWeeklyJsaForms(deps({list:async c=>c==='jsa_governed_requests'?[{...scope,requestId:'day-read',state:'completed',action:'read_and_acknowledged',completedAtMs:ms-1000,jobRef:'job1',binding:{shiftState:'independent',policyDay:'2026-10-12'}}]:c==='jsa_job_acknowledgments'?[{...scope,id:'day-ack',recordedAtMs:ms,policyDay:'2026-10-12',jobRef:'job2',method:'acknowledged'}]:[],artifact:async()=>({...scope,requestId:'day-read',jobRef:'job1',action:'read_and_acknowledged',snapshot:{signature:{data:'example'}}})}),auth,body);
  expect(out.records.find(r=>r.id==='day-ack')).toMatchObject({shiftId:null,fullReadId:'day-read',kind:'jsa_ack'});
 });
+
+test('overnight acknowledgement retains the server-selected full read even when its policy day differs',async()=>{
+ const out=await readWeeklyJsaForms(deps({list:async c=>c==='jsa_governed_requests'?[{...scope,requestId:'night-read',state:'completed',action:'read_and_acknowledged',completedAtMs:ms-1000,jobRef:'job1',binding:{shiftState:'independent',policyDay:'2026-10-11',associatedPeriodId:'2026-10-11_210000'}}]:c==='jsa_job_acknowledgments'?[{...scope,id:'night-ack',recordedAtMs:ms,policyDay:'2026-10-12',periodId:'2026-10-11_210000',fullReadId:'night-read',jobRef:'job2',method:'acknowledged'}]:[],artifact:async()=>({...scope,requestId:'night-read',jobRef:'job1',action:'read_and_acknowledged',snapshot:{signature:{data:'example'}}})}),auth,body);
+ expect(out.records.find(r=>r.id==='night-ack')).toMatchObject({fullReadId:'night-read'});
+});
