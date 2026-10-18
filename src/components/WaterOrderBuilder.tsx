@@ -223,7 +223,10 @@ export function WaterOrderBuilder({
         );
         setOrderJobsReady(true);
       },
-      () => setMessage("Order job status unavailable; retry before dispatch."),
+      () => {
+        setOrderJobsReady(false);
+        setMessage("Order job status unavailable; retry before dispatch.");
+      },
     );
     return () => {
       a();
@@ -328,7 +331,10 @@ export function WaterOrderBuilder({
           })
           .filter(
             (s): s is NonNullable<typeof s> =>
-              !!s && !!s.operator && (s.available > 0 || s.daily > 0),
+              !!s &&
+              !!s.operator &&
+              s.capacity > 0 &&
+              (s.available > 0 || s.daily > 0),
           );
       const trucks: WaterTruck[] = draft.truckKeys.map((key) => {
         const d = scopeDrivers.find((d) => d.key === key);
