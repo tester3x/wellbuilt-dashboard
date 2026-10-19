@@ -11,3 +11,9 @@ Response allowlists counts, first-read timestamp, JSA numbers, selected shift an
 Validation: Functions compilation and31 tests across summary, saved-job and work-period suites passed. Actual production query shapes (including new-context lookup fields) succeeded read-only without new indexes. Read-only projection of the latest closed owner shift found1 signed read and1 legacy acknowledgement, issues0. No records changed. Private audit evidence remains outside Git.
 
 Companion Suite source uses this callable, preserves shiftId in server event parsing and retains exact finalized DVIR shift scope after active storage clears. JSA check/retry is independent of work statistics. Old day-status queries and unreachable legacy shift-end acknowledgement/launch handlers are removed. Full Suite tsc and37 summary/client tests passed. New APK and authenticated on-device verification remain pending.
+
+## Live deployment verified
+
+Backend source762648176616cf95813a667ff805533b0f38f214 was deployed with only functions:dashboard:jsaShiftSummary. Verified ACTIVE at2026-10-19T06:16:21Z, revision jsashiftsummary-00001-weg, updateTime2026-10-19T06:15:37Z. An actual signed-out callable request returned401. Existing17 JSA functions, Hosting, rules and indexes were not redeployed. Signed-in phone invocation remains pending the next Suite APK; the production datastore projection was checked read-only separately as described above.
+
+Suite source b14c052f60ad592937f6a54807dfd77e4204a92a is pushed and wired to this endpoint. No APK build/install was performed. Deployment log and private metadata receipts remain in C:/dev/tmp outside Git.
