@@ -14,6 +14,11 @@ export const jsaGetSavedJob = https.onCall({timeoutSeconds:30,memory:'256MiB',en
       if(typeof id!=='string'||!/^[A-Za-z0-9_-]{1,160}$/.test(id))throw Error('scope_or_size');
       const d=await db.collection('jsa_governed_requests').doc(id).get();return d.exists?d.data()!:null;
     },
+    async linkedStops(readId,company,driver){
+      const pages=await Promise.all(['jsa_job_acknowledgments','jsa_job_read_coverage'].map(collection=>
+        db.collection(collection).where('companyId','==',company).where('driverId','==',driver).where('fullReadId','==',readId).limit(2001).get()));
+      return pages.flatMap(page=>page.docs.map(d=>({...d.data(),id:d.id})));
+    },
     async list(collection,company,driver,jobRef){
       const rows:Record<string,unknown>[]=[];let cursor:admin.firestore.QueryDocumentSnapshot|undefined;
       do{let q=db.collection(collection).where('companyId','==',company).where('driverId','==',driver).orderBy(admin.firestore.FieldPath.documentId()).limit(100);

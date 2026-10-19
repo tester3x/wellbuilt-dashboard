@@ -47,3 +47,11 @@ test('explicit references use one exact request lookup and job-scoped lists',asy
  expect(list).toHaveBeenCalledTimes(2);
  await expect(readSavedJobJsa(deps({list,request:async()=>({...read,driverId:'other'})}),auth,body)).rejects.toThrow('scope_or_size');
 });
+
+test('current locations include recorded stops linked to the same read, never unrelated reads',async()=>{
+ const linked={...ack,fullReadId:id,job:{wellName:'Second well',jobType:'Service Work',dropOff:'Disposal'}};
+ const out=await readSavedJobJsa(deps({linkedStops:async()=>[linked,{...linked,fullReadId:'other',job:{wellName:'Wrong read'}},{...linked,recordedAtMs:50,job:{wellName:'Before read'}}]}),auth,body);
+ expect(out.coveredJobs?.map(x=>x.wellName)).toEqual(['Original well','Second well']);
+ expect(out.coveredJobs?.[1]).toMatchObject({jobType:'Service Work',dropOff:'Disposal'});
+ await expect(readSavedJobJsa(deps({linkedStops:async()=>[{...linked,companyId:'foreign'}]}),auth,body)).rejects.toThrow('scope_or_size');
+});

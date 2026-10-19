@@ -6,6 +6,7 @@ export type SavedJobDeps = {
   invoice(id:string):Promise<Row|null>;
   list(collection:string,company:string,driver:string,jobRef?:string):Promise<Row[]>;
   request?(id:string):Promise<Row|null>;
+  linkedStops?(readId:string,company:string,driver:string):Promise<Row[]>;
   artifact(id:string):Promise<Row|null>;
 };
 /** Historical read only: no current-shift or current-policy requirement. */
@@ -32,12 +33,26 @@ export async function readSavedJobJsa(deps:SavedJobDeps,auth:{uid?:string|null;c
   const read=ack?completed.filter(r=>inAckScope(r)&&(!ack.fullReadId||r.requestId===ack.fullReadId)).sort((a,b)=>a.completedAtMs-b.completedAtMs||String(a.requestId).localeCompare(String(b.requestId)))[0]
     :linked?completed.find(r=>r.requestId===linked.fullReadId&&r.completedAtMs<=linked.recordedAtMs):direct;
   const acknowledgement=ack?{recordedAt:new Date(ack.recordedAtMs).toISOString(),method:'acknowledged'}:null;
-  const base={jsaNumber:ack?.jsaNumber||(read?'JSA-'+String(read.requestId):null),protocolVersion:1,jobRef:b.jobRef,companyId:p.companyId,driverId:p.driverId,wellName:String(invoice.wellName||''),acknowledgement};
+  const base={coveredJobs:[] as Row[],jsaNumber:ack?.jsaNumber||(read?'JSA-'+String(read.requestId):null),protocolVersion:1,jobRef:b.jobRef,companyId:p.companyId,driverId:p.driverId,wellName:String(invoice.wellName||''),acknowledgement};
   if(!read)return {...base,fullRead:null};
   const artifact=await deps.artifact(read.requestId);
   if(!artifact||!owned(artifact)||artifact.requestId!==read.requestId||artifact.jobRef!==read.jobRef||artifact.action!==read.action)return {...base,fullRead:null};
   // Re-parse and allowlist signed content; never return receipt handles, tokens or actor metadata.
   const snapshot=parseArtifactInput({requestId:read.requestId,snapshot:artifact.snapshot});
   if(!snapshot.ok)return {...base,fullRead:null};
-  return {...base,fullRead:{requestId:read.requestId,jobRef:read.jobRef,completedAt:new Date(read.completedAtMs).toISOString(),snapshot:snapshot.value.snapshot}};
+  const stops=deps.linkedStops?await deps.linkedStops(read.requestId,p.companyId,p.driverId):[...acks,...coverage];
+  if(stops.length>2000||stops.some(r=>!owned(r)))throw Error('scope_or_size');
+  const coveredJobs:Row[]=[];
+  const add=(job:Row,jobRef:string,recordedAtMs:number)=>{
+    const text=(v:unknown)=>typeof v==='string'?v.slice(0,300):'';
+    if(!text(job.wellName))return;
+    coveredJobs.push({jobRef,wellName:text(job.wellName),jobType:text(job.jobType),dropOff:text(job.dropOff),recordedAt:new Date(recordedAtMs).toISOString()});
+  };
+  add(read,read.jobRef,read.completedAtMs);
+  for(const location of snapshot.value.snapshot.locations||[])
+    if(!coveredJobs.some(job=>job.wellName===location))add({wellName:location,jobType:read.jobType},read.jobRef,read.completedAtMs);
+  for(const stop of stops)if(stop.fullReadId===read.requestId&&['acknowledged','scope_read'].includes(stop.method)
+    && Number.isFinite(stop.recordedAtMs)&&stop.recordedAtMs>=read.completedAtMs&&stop.job)
+    add(stop.job,stop.jobRef,stop.recordedAtMs);
+  return {...base,coveredJobs,fullRead:{requestId:read.requestId,jobRef:read.jobRef,completedAt:new Date(read.completedAtMs).toISOString(),snapshot:snapshot.value.snapshot}};
 }
