@@ -28,3 +28,16 @@ test('closed Sept22 standalone cannot make Resume',async()=>{
 test('rejects caller-selected owner, shift, date and operation',async()=>{
  for(const b of [null,[],{...body,driverId:'other'},{...body,shiftId},{...body,date:'2026-10-19'},{...body,operation:'close'}])await expect(readJsaHomeState(deps(),owner,b)).rejects.toThrow('invalid_input');
 });
+
+test('Resume includes owned original job, company and linked acknowledgements only',async()=>{
+ const d=deps({companyName:async()=> 'Test Hauler',job:async()=>({...owner,wellName:'Original Well',commodityType:'Production Water'}),list:async c=>c==='jsa_job_acknowledgments'?[
+ {...owner,id:'ack',fullReadId:requestId,jobRef:'second',method:'acknowledged',recordedAtMs:200,job:{wellName:'Second Well',jobType:'Service Work'}},
+ {...owner,id:'unrelated',fullReadId:'other',jobRef:'no',method:'acknowledged',recordedAtMs:201,job:{wellName:'Wrong Well'}}
+ ]:rows[c]||[]});
+ const out:any=await readJsaHomeState(d,owner,{...body,operation:'read'});
+ expect(out.record.companyName).toBe('Test Hauler');expect(out.record.coveredJobs.map((j:any)=>j.wellName)).toEqual(['Original Well','Second Well']);
+ expect(out.record.assessmentArchiveUnavailable).toBe(true);expect(out.record.signatureImage).toMatch(/^data:image/);
+});
+test('foreign original job cannot enrich Resume',async()=>{
+ await expect(readJsaHomeState(deps({job:async()=>({companyId:'other',driverId:'d'})}),owner,{...body,operation:'read'})).rejects.toThrow('scope_or_size');
+});

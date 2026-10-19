@@ -23,5 +23,7 @@ export const jsaHomeState=https.onCall({timeoutSeconds:30,memory:'256MiB',enforc
    const pages=await Promise.all(filters.map(([f,v])=>db.collection(path).where('companyId','==',owner.companyId).where('driverId','==',owner.driverId).where(f,'==',v).limit(2001).get()));
    return [...new Map(pages.flatMap(p=>p.docs.map(d=>[d.id,{...d.data(),id:d.id}] as const))).values()];
   },artifact:store.artifact,
+  job:async id=>{const snap=await db.collection('invoices').doc(id).get();return snap.exists?snap.data()!:null;},
+  companyName:async()=>{const snap=await db.collection('companies').doc(owner.companyId).get();const c=snap.data();return String(c?.name||c?.companyName||c?.displayName||'');},
  },owner,request.data);}catch(e){throw new https.HttpsError(e instanceof Error&&e.message==='invalid_input'?'invalid-argument':'failed-precondition','jsa_home_unavailable');}
 });
