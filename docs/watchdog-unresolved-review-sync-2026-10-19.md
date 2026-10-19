@@ -8,4 +8,4 @@ Mirror now accepts bounded unresolved-well snapshots from the authenticated Watc
 
 Current local queue has three review cards covering four named wells (one combined Gunslinger post). No queue row, measurement, load, or review decision changed. Private before-queue and status snapshots retained outside Git.
 
-Source checkpoint; deployment and actual cloud sync verification pending.
+Deployed only syncWatchdogReviewV2 from a5f6d599. Verified ACTIVE revision syncwatchdogreviewv2-00002-goz, update 2026-10-19T23:44:44Z; unsigned requests rejected (400). The normal HP timer synced all three current local review row IDs to exactly three cloud review records, with no extra pending cloud rows and no pending decision commands. HP remains Connected/unpaused; remoteReviewError is empty. Dashboard Refresh can now retrieve the mirrored cards. No frontend release, rules or indexes deployed.
