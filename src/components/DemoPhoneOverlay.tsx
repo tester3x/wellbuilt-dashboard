@@ -10,15 +10,15 @@ type ExploreScreen = 'home' | 'emptyDrawer' | 'drawer' | 'review' | 'enroute' | 
 type PhoneTourStep = 'waiting' | 'drawer' | 'review';
 
 const exploreImages: Record<ExploreScreen, string> = {
-  home: '/demo-phone/home.png',
-  emptyDrawer: '/demo-phone/empty-drawer.png',
+  home: '/demo-phone/home.png?v=6993bb7128fd',
+  emptyDrawer: '/demo-phone/empty-drawer.png?v=194274199fa1',
   drawer: '/demo-phone/drawer.png',
   review: '/demo-phone/review.png',
   enroute: '/demo-phone/enroute.png',
   pickup: '/demo-phone/pickup.png',
   dropoff: '/demo-phone/dropoff.png',
   summary: '/demo-phone/summary.png',
-  more: '/demo-phone/more.png',
+  more: '/demo-phone/more.png?v=ccb5270c019d',
   settings: '/demo-phone/settings.png',
 };
 
