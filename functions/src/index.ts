@@ -4098,6 +4098,7 @@ export {
 } from './jsaReceipt/jsaReceiptCallables';
 export { jsaStandalone } from './jsaReceipt/jsaStandaloneCallable';
 export { jsaWeeklyForms } from './jsaReceipt/jsaWeeklyFormsCallable';
+export { jsaShiftSummary } from './jsaReceipt/jsaShiftSummaryCallable';
 export { jsaGetSavedJob } from './jsaReceipt/jsaSavedJobCallable';
 export { jsaManageTemplate } from './jsaReceipt/jsaTemplateManagementCallable';
 
