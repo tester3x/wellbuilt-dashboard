@@ -19,9 +19,12 @@ export const syncWatchdogReviewV2=https.onRequest({region:'us-central1',timeoutS
  await authenticate(req,'syncWatchdogReviewV2');const b=req.body;
  if(!b||typeof b.rowId!=='string'||b.rowId.length>200||typeof b.revision!=='string'||!/^[a-f0-9]{64}$/.test(b.revision)||typeof b.channel!=='string'||!['review','complete','duplicate','excluded','queued','archived','before_activation','incomplete'].includes(b.status)||typeof b.body!=='string'||b.body.length>6000||!Array.isArray(b.issues)||b.issues.length>30||b.issues.some((x:any)=>typeof x!=='string'||x.length>500))throw Error('invalid_review_snapshot');
  const policy=(await admin.firestore().doc('watchdog_v2_config/laptop').get()).data();if(!policy?.enabled||!policy.channels?.[b.channel])throw Error('channel_not_allowed');
- if(!b.row||typeof b.row.wellName!=='string'||!policy.channels[b.channel].wells?.includes(b.row.wellName))throw Error('well_not_allowed');
+ // Mirroring a hold is observational, not permission to ingest a load.
+ // Unknown/blank wells are precisely why these messages need human review.
+ if(!b.row||typeof b.row!=='object'||Array.isArray(b.row)||typeof b.row.wellName!=='string'||b.row.wellName.length>200||JSON.stringify(b.row).length>24000)throw Error('invalid_review_row');
+ const wellAllowed=policy.channels[b.channel].wells?.includes(b.row.wellName)===true;
  const ref=admin.firestore().doc(root+'/liquid-gold/items/'+sha(b.rowId));
- const result=await admin.firestore().runTransaction(async tx=>{const snap=await tx.get(ref),old=snap.data();const fields={companyId:'liquid-gold',principalId:'laptop-watchdog-v2',rowId:b.rowId,revision:b.revision,channel:b.channel,groupName:typeof b.groupName==='string'?b.groupName.slice(0,200):'',body:b.body,author:typeof b.author==='string'?b.author.slice(0,200):'',postedAt:b.postedAt||'',row:b.row,issues:b.issues,status:b.status,editable:b.editable===true,updatedAt:Date.now()};
+ const result=await admin.firestore().runTransaction(async tx=>{const snap=await tx.get(ref),old=snap.data();const fields={companyId:'liquid-gold',principalId:'laptop-watchdog-v2',rowId:b.rowId,revision:b.revision,channel:b.channel,groupName:typeof b.groupName==='string'?b.groupName.slice(0,200):'',body:b.body,author:typeof b.author==='string'?b.author.slice(0,200):'',postedAt:b.postedAt||'',row:b.row,issues:b.issues,status:b.status,editable:b.editable===true&&wellAllowed,updatedAt:Date.now()};
  if(!old||old.revision!==b.revision||old.status!==b.status)tx.set(ref,fields,{merge:true});
  const command=old?.command?.state==='pending'&&old.command.revision===b.revision&&b.status==='review'?old.command:null;
  if(b.result&&old?.command?.id===b.result.id){tx.update(ref,{'command.state':b.result.ok?'applied':'failed','command.error':typeof b.result.error==='string'?b.result.error.slice(0,300):'','command.appliedAt':Date.now()});return {command:null};}
