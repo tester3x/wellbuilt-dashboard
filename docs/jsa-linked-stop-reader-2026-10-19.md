@@ -12,4 +12,7 @@ Existing signed documents and identifiers remain unchanged. The callable uses
 owner-scoped fullReadId queries for the two stop collections. Both query shapes
 were verified read-only against live Firestore with existing indexes.
 
-Validation: Functions build and12 saved-job tests. Source only; not deployed.
+Validation: Functions build and12 saved-job tests. Deployed only jsaGetSavedJob
+from58f69f4e on2026-10-19. Verified ACTIVE revision jsagetsavedjob-00003-com,
+updateTime2026-10-19T19:58:00.595629807Z, signed-out401 at19:59:19Z. No rules,
+indexes or Hosting deployment; no customer evidence records changed.
