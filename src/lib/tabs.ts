@@ -94,7 +94,7 @@ export const TABS: TabConfig[] = [
     capability: 'viewSettings',
     minRole: 'admin',
   },
-  ...(process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW === 'enabled'
+  ...(process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW !== 'disabled'
     ? [{ id: 'watchdog', label: 'Watchdog', href: '/watchdog', matchPrefixes: ['/watchdog'], capability: 'viewDispatch' as const }]
     : []),
 ];
