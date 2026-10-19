@@ -71,7 +71,7 @@ export interface ReceiptTxn {
 export interface ReceiptDeps {
   registerJobDay?: boolean;
   readRequest?(requestId:string):Promise<JsaGovernedRecord|null>;
-  jobDayBinding?(p:AuthPrincipal,day?:string):Promise<{binding:JsaAuthorityBinding;policy:JsaCompanyPolicy}>;
+  jobDayBinding?(p:AuthPrincipal,day?:string,contextId?:string):Promise<{binding:JsaAuthorityBinding;policy:JsaCompanyPolicy}>;
   nowMs(): number;
   randomBytes(n: number): Uint8Array;
   base64Url(bytes: Uint8Array): string;
@@ -146,7 +146,7 @@ async function authorBinding(
       const invoice=await deps.readInvoice(jobRef);
       unwrap(decideInvoiceJobFields({expectedCompanyId:p.companyId,expectedDriverId:p.driverId,invoice:{exists:invoice.exists,...invoice.data}}));
     }
-    const result=await deps.jobDayBinding(p,stored?.binding.policyDay);
+    const result=await deps.jobDayBinding(p,stored?.binding.policyDay,stored?.binding.jsaPeriodId);
     if (stored?.intent === 'acknowledge' && !result.policy.allowAcknowledge || stored && result.policy.minimumIntent === 'read_and_acknowledge' && stored.intent !== 'read_and_acknowledge') throw new JsaReceiptError('failed-precondition','intent_not_permitted','current_policy');
     return result;
   }

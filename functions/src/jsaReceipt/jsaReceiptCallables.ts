@@ -6,6 +6,8 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { createHash, randomBytes } from 'crypto';
 import {resolveJsaWorkPeriod} from './jsaWorkPeriodStore';
+import {resolveJobDayPolicy as resolveLegacyJobDayPolicy} from './jsaLegacyJobDayPolicy';
+import {createLegacyJobDayCallables} from './jsaLegacyJobDayCallables';
 import { checkRateLimit } from '../security/rateLimit';
 import { decideResolve } from '../security/operational/shiftAuthority.js';
 import { shiftAuthorityPath, type ShiftAuthorityRecord } from '../security/operational/shiftAuthority.js';
@@ -46,7 +48,7 @@ function authOf(request: httpsV2.CallableRequest) {
   };
 }
 
-export function buildReceiptDeps(): ReceiptDeps {
+export function buildReceiptDeps(useShiftContext=false): ReceiptDeps {
   const db = admin.firestore();
   // CANONICAL POLICY READERS — the very same functions SSO issuance uses,
   // taken from its production deps builder rather than re-implemented, so
@@ -55,7 +57,7 @@ export function buildReceiptDeps(): ReceiptDeps {
   const sso = buildSsoDeps();
   return {
     readRequest: async requestId => fromStored((await db.collection('jsa_governed_requests').doc(requestId).get()).data()),
-    jobDayBinding: (p,day) => resolveJobDayPolicy(jobDayDeps(),p,day),
+    jobDayBinding: (p,day,contextId) => useShiftContext||contextId ? resolveJobDayPolicy(jobDayDeps(),p,day) : resolveLegacyJobDayPolicy(legacyJobDayDeps(),p,day),
     nowMs: () => Date.now(),
     randomBytes: (n) => new Uint8Array(randomBytes(n)),
     base64Url: (b) => Buffer.from(b).toString('base64url'),
@@ -327,6 +329,13 @@ function jobDayDeps():JobDayDeps {
    return snap.docs.map(d=>fromStored(d.data())).filter((r):r is NonNullable<typeof r>=>!!r);
   }};
 }
+function legacyJobDayDeps():JobDayDeps {
+ const deps=jobDayDeps();delete deps.workPeriod;
+ deps.records=async(company,driver,day,period)=>{
+  const rows=await admin.firestore().collection('jsa_governed_requests').where('companyId','==',company).where('driverId','==',driver).where(period?'binding.associatedPeriodId':'binding.policyDay','==',period||day).get();
+  return rows.docs.map(d=>fromStored(d.data())).filter((r):r is NonNullable<typeof r>=>!!r&&!r.binding.jsaPeriodId);
+ };return deps;
+}
 async function ownedJob(p:ReturnType<typeof jobDayPrincipal>,jobRef:string,allowMissing=false){
  const invoice=await buildReceiptDeps().readInvoice(jobRef);
  if(!invoice.exists&&allowMissing)return false;
@@ -344,11 +353,11 @@ function jobDayRequest(data:unknown):{jobRef:string} {
  return {jobRef:d.jobRef};
 }
 const jobDayAckPath=(company:string,driver:string,job:string,day:string)=>JSA_JOB_ACK_COLLECTION+'/'+createHash('sha256').update(JSON.stringify(['job-day',company,driver,job,day])).digest('hex');
-export const jsaRegisterJobReadRequest=httpsV2.onCall(OPTIONS,async request=>{
+export const jsaRegisterJobShiftReadRequest=httpsV2.onCall(OPTIONS,async request=>{
  if(!request.auth?.uid)throw new httpsV2.HttpsError('unauthenticated','not_authorized');
  await limited(request.auth.uid,'jsa_register_job_day');
  try{
-  const deps=buildReceiptDeps(),parsed=parseRegisterInput(request.data);
+  const deps=buildReceiptDeps(true),parsed=parseRegisterInput(request.data);
   if(parsed.ok){
    const p=jobDayPrincipal(authOf(request)),old=await deps.readRequest!(parsed.value.requestId);
    if(old&&old.companyId===p.companyId&&old.driverId===p.driverId&&old.binding.shiftState==='independent'){
@@ -361,7 +370,7 @@ export const jsaRegisterJobReadRequest=httpsV2.onCall(OPTIONS,async request=>{
   return {...result,policyDay:stored?.binding.policyDay};
  }catch(e){throw toHttps(e);}
 });
-export const jsaResolveJobReadEvidence=httpsV2.onCall(OPTIONS,async request=>{
+export const jsaResolveJobShiftEvidence=httpsV2.onCall(OPTIONS,async request=>{
  if(!request.auth?.uid)throw new httpsV2.HttpsError('unauthenticated','not_authorized');
  await limited(request.auth.uid,'jsa_job_day_evidence');
  try{
@@ -393,7 +402,7 @@ export const jsaResolveJobReadEvidence=httpsV2.onCall(OPTIONS,async request=>{
   return {protocolVersion:1,policyDay:day,requirementKey:scope.requirementKey,readJobRef:rows.find(r=>r.state==='completed'&&r.action==='read_and_acknowledged')?.jobRef||null,hasRead:scope.hasRead,jobSatisfied:jobExists&&(full||ackOk),policy:{mode:scope.mode,allowAcknowledge:true,intent:'read_and_acknowledge'}};
  }catch(e){throw toHttps(e);}
 });
-export const jsaAcknowledgeJobDay=httpsV2.onCall(OPTIONS,async request=>{
+export const jsaAcknowledgeJobShift=httpsV2.onCall(OPTIONS,async request=>{
  if(!request.auth?.uid)throw new httpsV2.HttpsError('unauthenticated','not_authorized');
  await limited(request.auth.uid,'jsa_ack_job_day');
  try{
@@ -412,7 +421,7 @@ export const jsaAcknowledgeJobDay=httpsV2.onCall(OPTIONS,async request=>{
 
 /** Link a once-per-scope full read to a particular job without inventing a
  * per-job acknowledgement or asking the driver for another ceremony. */
-export const jsaRecordJobReadCoverage=httpsV2.onCall(OPTIONS,async request=>{
+export const jsaRecordJobShiftReadCoverage=httpsV2.onCall(OPTIONS,async request=>{
  if(!request.auth?.uid)throw new httpsV2.HttpsError('unauthenticated','not_authorized');
  await limited(request.auth.uid,'jsa_scope_read_coverage');
  try{
@@ -426,3 +435,7 @@ export const jsaRecordJobReadCoverage=httpsV2.onCall(OPTIONS,async request=>{
   return {protocolVersion:1,state:'recorded',recordId};
  }catch(e){throw toHttps(e);}
 });
+
+// Preserve the deployed protocol for installed clients until their APK update.
+const legacyJobDayCallables=createLegacyJobDayCallables({buildReceiptDeps:()=>buildReceiptDeps(false),limited,authOf,toHttps});
+export const {jsaRegisterJobReadRequest,jsaResolveJobReadEvidence,jsaAcknowledgeJobDay,jsaRecordJobReadCoverage}=legacyJobDayCallables;

@@ -4080,6 +4080,10 @@ export { ssoIssueAuthorizationCode, ssoExchangeAuthorizationCode } from './sso/s
 
 // Governed JSA producers. These are source exports, not a deployment.
 export {
+  jsaRegisterJobShiftReadRequest,
+  jsaResolveJobShiftEvidence,
+  jsaAcknowledgeJobShift,
+  jsaRecordJobShiftReadCoverage,
   jsaRecordJobReadCoverage,
   jsaRegisterJobReadRequest,
   jsaResolveJobReadEvidence,
