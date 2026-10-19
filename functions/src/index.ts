@@ -4135,3 +4135,5 @@ export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './w
 export { liveDemoSnapshot, demoViewerSession, liveDemoPhoneFrame, uploadLiveDemoPhoneFrame } from './liveDemo/runtime';
 export { dispatchDemoViewerJob } from './liveDemo/dispatch';
 export { demoWellPullPlan } from './liveDemo/wellPlan';
+
+export {jsaFinalizeShiftContext} from './jsaReceipt/jsaWorkPeriodLifecycle';

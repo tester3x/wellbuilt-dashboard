@@ -97,10 +97,10 @@ test("no shift dependency: first job requires full read; later acknowledgement b
   expect(later.policy.allowAcknowledge).toBe(true);
 });
 test.each(["read", "read_and_acknowledge"])(
-  "%s never gains acknowledgement-only shortcut",
+  "%s uses the shared acknowledgement after the signed first read",
   async (style) => {
     const policy = await resolveJobDayPolicy(deps(style, [row()]), principal);
-    expect(policy.policy.allowAcknowledge).toBe(false);
+    expect(policy.policy.allowAcknowledge).toBe(true);
     expect(policy.policy.minimumIntent).toBe(style);
   },
 );
@@ -389,7 +389,7 @@ test("handler flow: off-shift read, each later job ack, policy tightening and ac
   style = "read";
   await expect(
     handleGetContext(adapter, jsaAuth, { requestId: next }),
-  ).rejects.toMatchObject({ refusal: "intent_not_permitted" });
+  ).resolves.toMatchObject({jobRef:"split-2"});
   await expect(
     handleRegister(
       adapter,
@@ -406,7 +406,7 @@ test('once-per-shift companies retain each actual shift scope, with an off-shift
  expect(await resolveJobDayPolicy(scenario(original),principal)).toMatchObject({hasRead:true,requirementKey:`shift:${original}`});
  expect(await resolveJobDayPolicy(scenario(next),principal)).toMatchObject({hasRead:false,requirementKey:`shift:${next}`});
  expect(await resolveJobDayPolicy(scenario(null),principal)).toMatchObject({hasRead:true,requirementKey:day});
- expect(await resolveJobDayPolicy(scenario(next,'per_job'),principal)).toMatchObject({hasRead:true,requirementKey:day});
+ expect(await resolveJobDayPolicy(scenario(next,'per_job'),principal)).toMatchObject({hasRead:false,requirementKey:`shift:${next}`} );
 });
 
 test('once-per-shift full read survives midnight in the same real shift',async()=>{
@@ -422,3 +422,15 @@ test('historical exact-job coverage survives workday changes but not foreign act
  expect(hasHistoricalJobCoverage(principal,'job',[],[],{companyId:'c',driverId:'d',jobRef:'job',schemaVersion:1,method:'scope_read',fullReadId:'first'})).toBe(true);
  expect(hasHistoricalJobCoverage(principal,'other',[],[],{companyId:'c',driverId:'d',jobRef:'job',schemaVersion:1,method:'scope_read',fullReadId:'first'})).toBe(false);
 });
+
+ test.each(['per_shift','per_job'])('%s retains signed context across midnight and isolates the next context',async mode=>{
+  const period='a'.repeat(48),saved=row({binding:{...binding,jsaPeriodId:period}});
+  const scenario=(id:string)=>deps('read',[saved],{company:async()=>({jsaMode:mode,jsaJobPolicy:'read'}),nowMs:()=>Date.parse('2026-10-19T08:00:00Z'),workPeriod:async()=>({id,originDate:day,shiftId:'2026-10-18_220000'})});
+  expect(await resolveJobDayPolicy(scenario(period),principal)).toMatchObject({hasRead:true,requirementKey:'jsa:'+period,binding:{policyDay:day},policy:{allowAcknowledge:true,minimumIntent:'read_and_acknowledge'}});
+  expect(await resolveJobDayPolicy(scenario('b'.repeat(48)),principal)).toMatchObject({hasRead:false,policy:{allowAcknowledge:false}});
+ });
+ test('frozen historical display date cannot set the origin of a newly created shift context',async()=>{
+  const context=jest.fn(async (_p:unknown,date:string)=>({id:'a'.repeat(48),originDate:date,shiftId:null}));
+  const resolved=await resolveJobDayPolicy(deps('acknowledge',[],{workPeriod:context}),principal,'2026-09-22');
+  expect(context.mock.calls[0][1]).toBe(day);expect(resolved.binding.policyDay).toBe(day);
+ });

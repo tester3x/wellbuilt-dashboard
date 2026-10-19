@@ -24,16 +24,13 @@ interface Props {
 
 import {
   canonicalizeJsaMode,
-  canonicalizeJsaJobPolicy,
   isLegacyJsaMode,
-  JSA_JOB_POLICIES,
-  type JsaJobPolicy,
 } from '@/lib/jsaPolicy';
 
 const JSA_MODES = [
   { value: 'off', label: 'Off', desc: 'JSA available in menu but not required' },
-  { value: 'per_shift', label: 'Per Shift', desc: '1 JSA per shift — prompted at the first job close of the shift; wells auto-stamp all day; shift end stays blocked until the JSA is acknowledged. A separate shift-level policy.' },
-  { value: 'per_job', label: 'Per Job', desc: 'Every job (each ticket / invoice / split-haul leg) carries its own JSA requirement, enforced before job work starts. Choose the per-job requirement below.' },
+  { value: 'per_shift', label: 'Per Shift', desc: 'Read and sign before the first job. Later jobs link to that JSA; shift end finalizes it automatically.' },
+  { value: 'per_job', label: 'Per Job', desc: 'Read and sign before the first job. Each later pickup, multi-haul member, or split leg requires acknowledgement and receives its own JSA number.' },
 ] as const;
 
 type UploadState = 'idle' | 'uploading' | 'parsing' | 'error';
@@ -42,15 +39,6 @@ export function JsaCard({ company, onSave, canEdit }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const currentMode = canonicalizeJsaMode(company.jsaMode);
-  // Default true — legacy companies that never had this field still get the
-  // per-shift shortcut. Per-job behavior is governed by jsaJobPolicy below;
-  // this toggle only matters for the per-shift close shortcut now.
-  const allowAcknowledge = company.jsaAllowAcknowledge !== false;
-  // Per-job policy: an explicit stored value wins; absent/malformed maps
-  // from the legacy toggle so existing companies keep today's effective
-  // behavior until they deliberately save a policy.
-  const currentPolicy = canonicalizeJsaJobPolicy(company.jsaJobPolicy, company.jsaAllowAcknowledge);
-
   // Contact management state
   const [emergencyContacts, setEmergencyContacts] = useState<{ label: string; phone: string }[]>(
     company.emergencyContacts || []
@@ -124,43 +112,6 @@ export function JsaCard({ company, onSave, canEdit }: Props) {
     } catch (err) {
       console.error('Failed to save jsaMode:', err);
       setError('Could not save the JSA mode — it was not applied. Please try again.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // Per-job requirement — writes the explicit policy. jsaAllowAcknowledge
-  // is left untouched: it still governs the per-shift shortcut, and the
-  // apps always let an explicit jsaJobPolicy win for per-job behavior, so
-  // the hidden legacy value can never contradict this choice.
-  const setJobPolicy = async (policy: JsaJobPolicy) => {
-    if (!canEdit) return;
-    if (policy === currentPolicy && company.jsaJobPolicy === policy) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await updateCompanyFields(company.id, { jsaJobPolicy: policy });
-      onSave();
-    } catch (err) {
-      console.error('Failed to save jsaJobPolicy:', err);
-      setError('Could not save the per-job requirement — it was not applied. Please try again.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // Allow Acknowledge toggle — PER-SHIFT ONLY: whether the first-close
-  // shift gate offers the Acknowledged shortcut next to Read JSA.
-  const setAllowAcknowledge = async (next: boolean) => {
-    if (!canEdit) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await updateCompanyFields(company.id, { jsaAllowAcknowledge: next });
-      onSave();
-    } catch (err) {
-      console.error('Failed to save jsaAllowAcknowledge:', err);
-      setError('Could not save that setting — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -785,67 +736,11 @@ export function JsaCard({ company, onSave, canEdit }: Props) {
           </button>
         ))}
 
-        {/* Per-job requirement — the ONE control for per-job behavior.
-            Acknowledge and Read are distinct choices; the legacy shortcut
-            checkbox never renders here, so no two controls can conflict. */}
-        {currentMode === 'per_job' && (
-          <div className="mt-3 pt-3 border-t border-gray-700/50 space-y-2">
-            <div className="text-sm text-white font-medium">Per-job requirement</div>
-            <div className="text-xs text-gray-500 mb-1">
-              How each job’s JSA requirement is satisfied. Every choice records the driver’s action
-              (<code className="text-[10px] bg-gray-700 px-1 rounded">acknowledgedMethod</code>: <span className="text-amber-400">acknowledged</span> vs <span className="text-emerald-400">read</span>).
-            </div>
-            {JSA_JOB_POLICIES.map((policy) => (
-              <button
-                key={policy.value}
-                onClick={() => setJobPolicy(policy.value)}
-                disabled={saving || !canEdit}
-                className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                  currentPolicy === policy.value
-                    ? 'border-red-500/50 bg-red-900/20'
-                    : 'border-gray-700 hover:border-gray-500'
-                } ${saving ? 'opacity-50' : ''}`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                    currentPolicy === policy.value ? 'border-red-400' : 'border-gray-600'
-                  }`}>
-                    {currentPolicy === policy.value && <div className="w-2 h-2 rounded-full bg-red-400" />}
-                  </div>
-                  <div>
-                    <div className={`text-sm font-medium ${
-                      currentPolicy === policy.value ? 'text-red-400' : 'text-white'
-                    }`}>{policy.label}</div>
-                    <div className="text-gray-500 text-xs">{policy.desc}</div>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
+        {currentMode !== 'off' && <div className="mt-3 pt-3 border-t border-gray-700/50 text-sm text-gray-400">
+          The first job requires a full read and signature. Later required acknowledgements include a View JSA link.
+          Crossing midnight keeps the same shift context. No separate JSA visit is needed to close a job or end the shift.
+        </div>}
 
-        {/* Allow Acknowledge toggle — PER SHIFT ONLY: the first-close shift
-            gate's shortcut. Per-job behavior is governed by the radio above. */}
-        {currentMode === 'per_shift' && (
-          <div className="mt-3 pt-3 border-t border-gray-700/50">
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={allowAcknowledge}
-                onChange={(e) => setAllowAcknowledge(e.target.checked)}
-                disabled={saving || !canEdit}
-                className="mt-0.5 w-4 h-4 accent-red-500 disabled:opacity-50"
-              />
-              <div className="flex-1">
-                <div className="text-sm text-white font-medium">Allow Acknowledge shortcut</div>
-                <div className="text-xs text-gray-500 mt-0.5">
-                  When ON, the driver can tap <span className="text-gray-300">Acknowledged</span> at the shift’s first job close instead of opening the JSA app. Each record is audited (<code className="text-[10px] bg-gray-700 px-1 rounded">acknowledgedMethod</code>: <span className="text-amber-400">acknowledged</span> vs <span className="text-emerald-400">read</span>).
-                  When OFF, only <span className="text-gray-300">Read JSA</span> satisfies the shift’s JSA.
-                </div>
-              </div>
-            </label>
-          </div>
-        )}
       </div>
 
       {/* Section B: JSA Contacts */}

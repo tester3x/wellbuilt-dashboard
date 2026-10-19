@@ -1,4 +1,4 @@
-/** Required-job JSA evidence is scoped to a company workday, never a HOS shift. */
+/** Required-job evidence shares a persistent JSA shift context; dates are display metadata. */
 import { WELLBUILT_APP_JSA } from "@tester3x/wellbuilt-contracts";
 import { decideAppEntitlementAuthorization } from "../sso/appEntitlementAuthorization";
 import type { ResolveResult } from "../security/operational/shiftAuthority";
@@ -16,6 +16,7 @@ import {
 export interface JobDayDeps {
   sso: Pick<SsoDeps, "getDriver" | "getCompanyContract" | "getPlan">;
   shift?(driverId: string, companyId: string): Promise<ResolveResult>;
+  workPeriod?(p:AuthPrincipal,day:string,shift:ResolveResult):Promise<{id:string;originDate:string;shiftId:string|null}>;
   nowMs(): number;
   company(id: string): Promise<Record<string, unknown>>;
   records(
@@ -62,7 +63,7 @@ export function hasJobDayRead(
       r.companyId === p.companyId &&
       r.driverId === p.driverId &&
       r.binding.shiftState === "independent" &&
-      (periodId ? r.binding.associatedPeriodId === periodId : r.binding.policyDay === day) &&
+      (periodId ? (r.binding.jsaPeriodId || r.binding.associatedPeriodId) === periodId : r.binding.policyDay === day) &&
       r.state === "completed" &&
       (r.action === "read_and_acknowledged" ||
         (!combined && r.action === "read_completed")),
@@ -131,26 +132,24 @@ export async function resolveJobDayPolicy(
   const mode =
     raw === "per_load" || raw === "per_location" ? "per_job" : String(raw);
   const zone = String(cfg.timeZone || cfg.timezone || "America/Chicago");
-  const day = frozenDay || companyJsaDay(deps.nowMs(), zone);
+  const currentDay=companyJsaDay(deps.nowMs(),zone);
+  let day = frozenDay || currentDay;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day))
     throw new JsaReceiptError("failed-precondition", "malformed", "policy_day");
-  let associatedPeriodId: string | undefined;
-  if (deps.shift) {
-    try {
-      const observed = await deps.shift(p.driverId, p.companyId);
-      if (observed.state === "open") associatedPeriodId = observed.periodId;
-    } catch {
-      /* Shift association is optional; auth and JSA policy were already verified. */
-    }
-  }
-  const scopedPeriod=mode==='per_shift'?associatedPeriodId:undefined;
-  const rows=(await deps.records(p.companyId,p.driverId,day,scopedPeriod)).filter(r=>r.companyId===p.companyId&&r.driverId===p.driverId&&r.binding.shiftState==='independent'&&(scopedPeriod?r.binding.associatedPeriodId===scopedPeriod:r.binding.policyDay===day));
-  const hasRead=hasJobDayRead(rows,p,day,style==='read_and_acknowledge',scopedPeriod);
-  const requirementKey=scopedPeriod ? `shift:${scopedPeriod}` : day;
+  let observed:ResolveResult={state:'unverifiable',reason:'authority_absent'};
+  if(!deps.workPeriod&&deps.shift)try{observed=await deps.shift(p.driverId,p.companyId);}catch{/* JSA does not require clock-in. */}
+  const context=deps.workPeriod?await deps.workPeriod(p,currentDay,observed):null;
+  const associatedPeriodId=context?context.shiftId||undefined:observed.state==='open'?observed.periodId:undefined;
+  const scopedPeriod=context?.id||associatedPeriodId;
+  if(context)day=context.originDate;
+  const rows=(await deps.records(p.companyId,p.driverId,day,scopedPeriod)).filter(r=>r.companyId===p.companyId&&r.driverId===p.driverId&&r.binding.shiftState==='independent'&&(scopedPeriod?(r.binding.jsaPeriodId||r.binding.associatedPeriodId)===scopedPeriod:r.binding.policyDay===day));
+  const hasRead=hasJobDayRead(rows,p,day,true,scopedPeriod);
+  const requirementKey=context?`jsa:${context.id}`:scopedPeriod?`shift:${scopedPeriod}`:day;
   return {
     requirementKey,
     binding: {
       ...(associatedPeriodId ? { associatedPeriodId } : {}),
+      ...(context ? {jsaPeriodId:context.id} : {}),
       shiftState: "independent",
       policyDay: day,
       requiresActiveShift: false,
@@ -160,9 +159,9 @@ export async function resolveJobDayPolicy(
       jsaEnabled: true,
       requiresActiveShift: false,
       allowRead: true,
-      allowAcknowledge: style === "acknowledge" && hasRead,
+      allowAcknowledge: hasRead,
       minimumIntent:
-        style === "read_and_acknowledge" ? "read_and_acknowledge" : "read",
+        context || style === "read_and_acknowledge" ? "read_and_acknowledge" : "read",
     },
     hasRead,
     style,

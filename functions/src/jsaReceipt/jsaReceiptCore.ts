@@ -39,9 +39,10 @@ export type JsaShiftState = 'open' | 'none' | 'independent';
 
 export interface JsaAuthorityBinding {
   shiftState: JsaShiftState;
-  /** Company-local workday; never a shift or HOS period. */
+  /** Original display date. Never roll an active JSA context at midnight. */
   policyDay?: string;
-  /** Optional real shift observed at registration, never required for completion. */
+  jsaPeriodId?: string;
+  /** Real HOS shift association, optional; JSA does not start HOS. */
   associatedPeriodId?: string;
   periodId?: string;
   originLocalDate?: string;
@@ -313,7 +314,7 @@ export function decideActionSatisfies(
 }
 
 export function bindingsEqual(a: JsaAuthorityBinding, b: JsaAuthorityBinding): boolean {
-  return (a.policyDay || '') === (b.policyDay || '') && a.shiftState === b.shiftState
+  return (a.jsaPeriodId || '') === (b.jsaPeriodId || '') && (a.policyDay || '') === (b.policyDay || '') && a.shiftState === b.shiftState
     && (a.periodId || '') === (b.periodId || '')
     && (a.originLocalDate || '') === (b.originLocalDate || '')
     && a.requiresActiveShift === b.requiresActiveShift
@@ -609,9 +610,10 @@ export interface ConsumeView {
   jobRef: string;
   groupRef: string | null;
   shiftState: JsaShiftState;
-  /** Company-local workday; never a shift or HOS period. */
+  /** Original display date. Never roll an active JSA context at midnight. */
   policyDay?: string;
-  /** Optional real shift observed at registration, never required for completion. */
+  jsaPeriodId?: string;
+  /** Real HOS shift association, optional; JSA does not start HOS. */
   associatedPeriodId?: string;
   periodId?: string;
   originLocalDate?: string;
@@ -652,6 +654,7 @@ export function decideConsume(input: {
     jobRef: input.existing.jobRef,
     groupRef: input.existing.groupRef,
     shiftState: input.existing.binding.shiftState,
+    ...(input.existing.binding.jsaPeriodId ? {jsaPeriodId:input.existing.binding.jsaPeriodId} : {}),
     ...(input.existing.binding.policyDay ? { policyDay: input.existing.binding.policyDay } : {}),
     ...(input.existing.binding.periodId ? { periodId: input.existing.binding.periodId } : {}),
     ...(input.existing.binding.originLocalDate
@@ -689,6 +692,7 @@ export function fromStored(v: unknown): JsaGovernedRecord | null {
   const binding = o.binding as JsaAuthorityBinding | undefined;
   if (!binding || (binding.shiftState !== 'open' && binding.shiftState !== 'none' && binding.shiftState !== 'independent')) return null;
   if (binding.shiftState === 'independent' && (!/^\d{4}-\d{2}-\d{2}$/.test(binding.policyDay || '') || binding.periodId || binding.requiresActiveShift !== false)) return null;
+  if(binding.jsaPeriodId!==undefined&&!/^[a-f0-9]{48}$/.test(binding.jsaPeriodId))return null;
   if (o.state !== 'pending' && o.state !== 'completed' && o.state !== 'expired') return null;
   return {
     requestId: o.requestId,

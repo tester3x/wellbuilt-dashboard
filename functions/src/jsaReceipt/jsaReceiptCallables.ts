@@ -5,6 +5,7 @@ import {JSA_JOB_ACK_COLLECTION} from '@tester3x/wellbuilt-contracts';
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { createHash, randomBytes } from 'crypto';
+import {resolveJsaWorkPeriod} from './jsaWorkPeriodStore';
 import { checkRateLimit } from '../security/rateLimit';
 import { decideResolve } from '../security/operational/shiftAuthority.js';
 import { shiftAuthorityPath, type ShiftAuthorityRecord } from '../security/operational/shiftAuthority.js';
@@ -320,8 +321,9 @@ export const jsaAcknowledgeJob = httpsV2.onCall(OPTIONS, async (request) => {
 function jobDayDeps():JobDayDeps {
  const db=admin.firestore();return {shift:(d,c)=>buildReceiptDeps().resolveShift(d,c),sso:buildSsoDeps(),nowMs:()=>Date.now(),
   company:async id=>(await db.collection('companies').doc(id).get()).data()||{},
+  workPeriod:(p,day)=>resolveJsaWorkPeriod(p.companyId,p.driverId,day),
   records:async(company,driver,day,period)=>{
-   const snap=await db.collection('jsa_governed_requests').where('companyId','==',company).where('driverId','==',driver).where(period?'binding.associatedPeriodId':'binding.policyDay','==',period||day).get();
+   const snap=await db.collection('jsa_governed_requests').where('companyId','==',company).where('driverId','==',driver).where(period?'binding.jsaPeriodId':'binding.policyDay','==',period||day).get();
    return snap.docs.map(d=>fromStored(d.data())).filter((r):r is NonNullable<typeof r>=>!!r);
   }};
 }
@@ -329,7 +331,12 @@ async function ownedJob(p:ReturnType<typeof jobDayPrincipal>,jobRef:string,allow
  const invoice=await buildReceiptDeps().readInvoice(jobRef);
  if(!invoice.exists&&allowMissing)return false;
  const fields=decideInvoiceJobFields({expectedCompanyId:p.companyId,expectedDriverId:p.driverId,invoice:{exists:invoice.exists,...invoice.data}});
- if(!fields.ok)throw new JsaReceiptError('permission-denied','not_owner','job');return true;
+ if(!fields.ok)throw new JsaReceiptError('permission-denied','not_owner','job');return invoice.data!;
+}
+function jobStopSnapshot(job:Record<string,unknown>|false){
+ if(!job)return null;
+ const text=(v:unknown)=>typeof v==='string'?v.slice(0,300):'';
+ return {wellName:text(job.wellName),operator:text(job.operator),jobType:text(job.commodityType||job.jobType),dropOff:text(job.hauledTo||job.disposalName||job.dropOff)};
 }
 function jobDayRequest(data:unknown):{jobRef:string} {
  const d=data as Record<string,unknown>;
@@ -346,7 +353,7 @@ export const jsaRegisterJobReadRequest=httpsV2.onCall(OPTIONS,async request=>{
    const p=jobDayPrincipal(authOf(request)),old=await deps.readRequest!(parsed.value.requestId);
    if(old&&old.companyId===p.companyId&&old.driverId===p.driverId&&old.binding.shiftState==='independent'){
     const current=await resolveJobDayPolicy(jobDayDeps(),p);
-    if(old.binding.policyDay!==current.binding.policyDay && !(current.mode==='per_shift' && current.binding.associatedPeriodId && old.binding.associatedPeriodId===current.binding.associatedPeriodId))throw new JsaReceiptError('failed-precondition','expired','workday_changed');
+    if(old.binding.jsaPeriodId!==current.binding.jsaPeriodId || old.binding.policyDay!==current.binding.policyDay)throw new JsaReceiptError('failed-precondition','expired','workday_changed');
    }
   }
   const result=await handleRegister({...deps,registerJobDay:true},authOf(request),request.data);
@@ -373,31 +380,32 @@ export const jsaResolveJobReadEvidence=httpsV2.onCall(OPTIONS,async request=>{
    const db=admin.firestore();
    const reads=await db.collection('jsa_governed_requests').where('companyId','==',p.companyId).where('driverId','==',p.driverId).where('jobRef','==',jobRef).where('state','==','completed').limit(20).get();
    const acknowledgements=await db.collection(JSA_JOB_ACK_COLLECTION).where('companyId','==',p.companyId).where('driverId','==',p.driverId).where('jobRef','==',jobRef).limit(20).get();
-   const linkedCoverage=(await db.doc('jsa_job_read_coverage/'+createHash('sha256').update(JSON.stringify([p.companyId,p.driverId,jobRef])).digest('hex')).get()).data();
+   const coverageRows=await db.collection('jsa_job_read_coverage').where('companyId','==',p.companyId).where('driverId','==',p.driverId).where('jobRef','==',jobRef).limit(100).get();
+   const linkedCoverage=coverageRows.docs.map(d=>d.data()).find(r=>r.method==='scope_read');
    const historical=jobExists&&hasHistoricalJobCoverage(p,jobRef,reads.docs.map(d=>fromStored(d.data())).filter((r):r is NonNullable<typeof r>=>!!r),acknowledgements.docs.map(d=>d.data()),linkedCoverage||null);
    return {protocolVersion:1,policy: {mode:scope.mode},historicalJobSatisfied:historical};
   }
 
   const rows=scope.rows;
-  const ack=(await admin.firestore().doc(jobDayAckPath(p.companyId,p.driverId,jobRef,day)).get()).data();
-  const full=rows.some(r=>r.jobRef===jobRef&&r.state==='completed'&&(r.action==='read_and_acknowledged'||scope.style!=='read_and_acknowledge'&&r.action==='read_completed'));
+  const ack=(await admin.firestore().doc(jobDayAckPath(p.companyId,p.driverId,jobRef,scope.requirementKey)).get()).data();
+  const full=rows.some(r=>r.jobRef===jobRef&&r.state==='completed'&&(r.action==='read_and_acknowledged'||!scope.binding.jsaPeriodId&&scope.style!=='read_and_acknowledge'&&r.action==='read_completed'));
   const ackOk=scope.policy.allowAcknowledge&&ack?.companyId===p.companyId&&ack?.driverId===p.driverId&&ack?.jobRef===jobRef&&ack?.policyDay===day&&ack?.method==='acknowledged';
-  return {protocolVersion:1,policyDay:day,requirementKey:scope.requirementKey,hasRead:scope.hasRead,jobSatisfied:jobExists&&(full||ackOk),policy:{mode:scope.mode,allowAcknowledge:scope.style==='acknowledge',intent:scope.style==='read_and_acknowledge'?'read_and_acknowledge':'read'}};
+  return {protocolVersion:1,policyDay:day,requirementKey:scope.requirementKey,readJobRef:rows.find(r=>r.state==='completed'&&r.action==='read_and_acknowledged')?.jobRef||null,hasRead:scope.hasRead,jobSatisfied:jobExists&&(full||ackOk),policy:{mode:scope.mode,allowAcknowledge:true,intent:'read_and_acknowledge'}};
  }catch(e){throw toHttps(e);}
 });
 export const jsaAcknowledgeJobDay=httpsV2.onCall(OPTIONS,async request=>{
  if(!request.auth?.uid)throw new httpsV2.HttpsError('unauthenticated','not_authorized');
  await limited(request.auth.uid,'jsa_ack_job_day');
  try{
-  const {jobRef}=jobDayRequest(request.data),p=jobDayPrincipal(authOf(request));await ownedJob(p,jobRef);
+  const {jobRef}=jobDayRequest(request.data),p=jobDayPrincipal(authOf(request)),job=await ownedJob(p,jobRef);
   const scope=await resolveJobDayPolicy(jobDayDeps(),p);
   if(!scope.policy.allowAcknowledge)throw new JsaReceiptError('failed-precondition','no_qualifying_read','full_read_required');
-  const day=scope.binding.policyDay!,ref=admin.firestore().doc(jobDayAckPath(p.companyId,p.driverId,jobRef,day));
+  const day=scope.binding.policyDay!,ref=admin.firestore().doc(jobDayAckPath(p.companyId,p.driverId,jobRef,scope.requirementKey));
   const state=await admin.firestore().runTransaction(async tx=>{
    const old=(await tx.get(ref)).data();
    if(old){if(old.companyId!==p.companyId||old.driverId!==p.driverId||old.jobRef!==jobRef||old.policyDay!==day||old.method!=='acknowledged')throw new JsaReceiptError('failed-precondition','binding_mismatch','ack');return 'already_recorded';}
-   const firstRead=scope.rows.filter(r=>r.state==='completed'&&(r.action==='read_and_acknowledged'||scope.style!=='read_and_acknowledge'&&r.action==='read_completed')).sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0)||a.requestId.localeCompare(b.requestId))[0];
-   tx.create(ref,{fullReadId:firstRead?.requestId||null,schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,policyDay:day,periodId:scope.binding.associatedPeriodId||null,method:'acknowledged',recordedAtMs:Date.now()});return 'recorded';
+   const firstRead=scope.rows.filter(r=>r.state==='completed'&&(r.action==='read_and_acknowledged'||!scope.binding.jsaPeriodId&&scope.style!=='read_and_acknowledge'&&r.action==='read_completed')).sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0)||a.requestId.localeCompare(b.requestId))[0];
+   tx.create(ref,{job:jobStopSnapshot(job),jsaNumber:scope.mode==='per_job'?'JSA-'+ref.id.toUpperCase():'JSA-'+String(firstRead?.requestId||''),requirementKey:scope.requirementKey,fullReadId:firstRead?.requestId||null,schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,policyDay:day,periodId:scope.binding.associatedPeriodId||null,method:'acknowledged',recordedAtMs:Date.now()});return 'recorded';
   });return {protocolVersion:1,state,policyDay:day};
  }catch(e){throw toHttps(e);}
 });
@@ -408,13 +416,13 @@ export const jsaRecordJobReadCoverage=httpsV2.onCall(OPTIONS,async request=>{
  if(!request.auth?.uid)throw new httpsV2.HttpsError('unauthenticated','not_authorized');
  await limited(request.auth.uid,'jsa_scope_read_coverage');
  try{
-  const {jobRef}=jobDayRequest(request.data),p=jobDayPrincipal(authOf(request));await ownedJob(p,jobRef);
+  const {jobRef}=jobDayRequest(request.data),p=jobDayPrincipal(authOf(request)),job=await ownedJob(p,jobRef);
   const scope=await resolveJobDayPolicy(jobDayDeps(),p);
   if(scope.mode!=='per_shift'||!scope.hasRead)throw new JsaReceiptError('failed-precondition','no_qualifying_read','scope_read_required');
-  const first=scope.rows.filter(r=>r.companyId===p.companyId&&r.driverId===p.driverId&&r.state==='completed'&&(r.action==='read_and_acknowledged'||scope.style!=='read_and_acknowledge'&&r.action==='read_completed')).sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0))[0];
+  const first=scope.rows.filter(r=>r.companyId===p.companyId&&r.driverId===p.driverId&&r.state==='completed'&&(r.action==='read_and_acknowledged'||!scope.binding.jsaPeriodId&&scope.style!=='read_and_acknowledge'&&r.action==='read_completed')).sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0))[0];
   if(!first)throw new JsaReceiptError('failed-precondition','no_qualifying_read','scope_read_required');
-  const recordId=createHash('sha256').update(JSON.stringify([p.companyId,p.driverId,jobRef])).digest('hex'),ref=admin.firestore().doc('jsa_job_read_coverage/'+recordId);
-  await admin.firestore().runTransaction(async tx=>{const prior=(await tx.get(ref)).data();if(prior){if(prior.companyId!==p.companyId||prior.driverId!==p.driverId||prior.jobRef!==jobRef||prior.method!=='scope_read')throw new JsaReceiptError('failed-precondition','binding_mismatch','coverage');return;}tx.create(ref,{schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,method:'scope_read',fullReadId:first.requestId,requirementKey:scope.requirementKey,policyDay:scope.binding.policyDay,periodId:scope.binding.associatedPeriodId||null,recordedAtMs:Date.now()});});
+  const recordId=createHash('sha256').update(JSON.stringify([p.companyId,p.driverId,jobRef,scope.requirementKey])).digest('hex'),ref=admin.firestore().doc('jsa_job_read_coverage/'+recordId);
+  await admin.firestore().runTransaction(async tx=>{const prior=(await tx.get(ref)).data();if(prior){if(prior.companyId!==p.companyId||prior.driverId!==p.driverId||prior.jobRef!==jobRef||prior.method!=='scope_read')throw new JsaReceiptError('failed-precondition','binding_mismatch','coverage');return;}tx.create(ref,{job:jobStopSnapshot(job),schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,method:'scope_read',fullReadId:first.requestId,requirementKey:scope.requirementKey,policyDay:scope.binding.policyDay,periodId:scope.binding.associatedPeriodId||null,recordedAtMs:Date.now()});});
   return {protocolVersion:1,state:'recorded',recordId};
  }catch(e){throw toHttps(e);}
 });

@@ -9,6 +9,7 @@ export class StandaloneError extends Error {
   constructor(public code: 'unauthenticated'|'permission-denied'|'invalid-argument'|'not-found'|'already-exists',message:string){super(message);}
 }
 export interface StandaloneStore {
+  workPeriod?(companyId:string,driverId:string):Promise<{id:string;shiftId:string|null}>;
   readCatalog?(companyId:string):Promise<Awaited<ReturnType<typeof readJsaTaskCatalog>>>;
   readRecord?(path:string):Promise<Record<string,unknown>|null>;
   readTemplate?(path:string):Promise<Record<string,unknown>|null>;
@@ -139,7 +140,8 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
      if(stepIds.size!==Object.keys(a.value.snapshot.stepAcks).length||JSON.stringify(extra.assessmentSteps).length>100000)bad();
    }
    const content={snapshot:a.value.snapshot,job:{activity,wells,...extra}};
-   authored={...content,submittedRequestHash:submittedHash,contentHash:hash(JSON.stringify(content)),id,companyId:p.companyId,driverId:p.driverId,workflow:'standalone',shiftId:null,state:'open',signedAtMs:now};
+   const context=store.workPeriod?await store.workPeriod(p.companyId,p.driverId):null;
+   authored={...(context?{jsaPeriodId:context.id,jsaNumber:'JSA-'+id.toUpperCase()}:{}),...content,submittedRequestHash:submittedHash,contentHash:hash(JSON.stringify(content)),id,companyId:p.companyId,driverId:p.driverId,workflow:'standalone',shiftId:context?.shiftId||null,state:'open',signedAtMs:now};
  }
  const record=await store.transaction(`${path}/${id}`,old=>{
    if(old){checkOwner(old);if(submittedHash&&matchesSavedRequest(old))return null;}

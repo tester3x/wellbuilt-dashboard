@@ -19,14 +19,14 @@ export async function readSavedJobJsa(deps:SavedJobDeps,auth:{uid?:string|null;c
   const [reads,acks,coverage]=await Promise.all(['jsa_governed_requests','jsa_job_acknowledgments','jsa_job_read_coverage'].map(c=>deps.list(c,p.companyId,p.driverId)));
   if([reads,acks,coverage].some(rows=>rows.length>2000||rows.some(r=>!owned(r))))throw Error('scope_or_size');
   const completed=reads.filter(r=>r.state==='completed'&&['read_completed','read_and_acknowledged'].includes(r.action)&&Number.isFinite(r.completedAtMs));
-  const ack=acks.filter(r=>r.jobRef===b.jobRef&&r.method==='acknowledged'&&Number.isFinite(r.recordedAtMs)).sort((a,b)=>a.recordedAtMs-b.recordedAtMs||String(a.id).localeCompare(String(b.id)))[0];
-  const linked=coverage.find(r=>r.jobRef===b.jobRef&&r.method==='scope_read'&&r.fullReadId);
-  const inAckScope=(r:Row)=>r.completedAtMs<=ack.recordedAtMs&&(ack.policyDay?r.binding?.policyDay===ack.policyDay:!!ack.periodId&&(r.binding?.periodId===ack.periodId||r.binding?.associatedPeriodId===ack.periodId));
+  const ack=acks.filter(r=>r.jobRef===b.jobRef&&r.method==='acknowledged'&&Number.isFinite(r.recordedAtMs)).sort((a,b)=>b.recordedAtMs-a.recordedAtMs||String(a.id).localeCompare(String(b.id)))[0];
+  const linked=coverage.filter(r=>r.jobRef===b.jobRef&&r.method==='scope_read'&&r.fullReadId).sort((a,b)=>b.recordedAtMs-a.recordedAtMs)[0];
+  const inAckScope=(r:Row)=>r.completedAtMs<=ack.recordedAtMs&&(ack.fullReadId?r.requestId===ack.fullReadId:ack.policyDay?r.binding?.policyDay===ack.policyDay:!!ack.periodId&&(r.binding?.periodId===ack.periodId||r.binding?.associatedPeriodId===ack.periodId));
   const direct=completed.filter(r=>r.jobRef===b.jobRef).sort((a,b)=>a.completedAtMs-b.completedAtMs)[0];
   const read=ack?completed.filter(r=>inAckScope(r)&&(!ack.fullReadId||r.requestId===ack.fullReadId)).sort((a,b)=>a.completedAtMs-b.completedAtMs||String(a.requestId).localeCompare(String(b.requestId)))[0]
     :linked?completed.find(r=>r.requestId===linked.fullReadId&&r.completedAtMs<=linked.recordedAtMs):direct;
   const acknowledgement=ack?{recordedAt:new Date(ack.recordedAtMs).toISOString(),method:'acknowledged'}:null;
-  const base={protocolVersion:1,jobRef:b.jobRef,companyId:p.companyId,driverId:p.driverId,wellName:String(invoice.wellName||''),acknowledgement};
+  const base={jsaNumber:ack?.jsaNumber||(read?'JSA-'+String(read.requestId):null),protocolVersion:1,jobRef:b.jobRef,companyId:p.companyId,driverId:p.driverId,wellName:String(invoice.wellName||''),acknowledgement};
   if(!read)return {...base,fullRead:null};
   const artifact=await deps.artifact(read.requestId);
   if(!artifact||!owned(artifact)||artifact.requestId!==read.requestId||artifact.jobRef!==read.jobRef||artifact.action!==read.action)return {...base,fullRead:null};
