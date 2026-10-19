@@ -10,9 +10,14 @@ export const jsaGetSavedJob = https.onCall({timeoutSeconds:30,memory:'256MiB',en
   try{return await readSavedJobJsa({
     async invoice(id){const d=await db.collection('invoices').doc(id).get();return d.exists?d.data()!:null;},
     async artifact(id){const d=await db.collection('jsa_governed_artifacts').doc(id).get();return d.exists?d.data()!:null;},
-    async list(collection,company,driver){
+    async request(id){
+      if(typeof id!=='string'||!/^[A-Za-z0-9_-]{1,160}$/.test(id))throw Error('scope_or_size');
+      const d=await db.collection('jsa_governed_requests').doc(id).get();return d.exists?d.data()!:null;
+    },
+    async list(collection,company,driver,jobRef){
       const rows:Record<string,unknown>[]=[];let cursor:admin.firestore.QueryDocumentSnapshot|undefined;
       do{let q=db.collection(collection).where('companyId','==',company).where('driverId','==',driver).orderBy(admin.firestore.FieldPath.documentId()).limit(100);
+        if(jobRef)q=q.where('jobRef','==',jobRef);
         if(cursor)q=q.startAfter(cursor);const page=await q.get();rows.push(...page.docs.map(d=>({...d.data(),id:d.id})));if(rows.length>2000)throw Error('scope_or_size');cursor=page.size===100?page.docs[page.size-1]:undefined;
       }while(cursor);return rows;
     },

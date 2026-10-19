@@ -4,7 +4,8 @@ import {parseArtifactInput} from './jsaArtifactCore';
 type Row = Record<string, any>;
 export type SavedJobDeps = {
   invoice(id:string):Promise<Row|null>;
-  list(collection:string,company:string,driver:string):Promise<Row[]>;
+  list(collection:string,company:string,driver:string,jobRef?:string):Promise<Row[]>;
+  request?(id:string):Promise<Row|null>;
   artifact(id:string):Promise<Row|null>;
 };
 /** Historical read only: no current-shift or current-policy requirement. */
@@ -16,11 +17,16 @@ export async function readSavedJobJsa(deps:SavedJobDeps,auth:{uid?:string|null;c
   const invoice=await deps.invoice(b.jobRef);
   if(!invoice||!decideInvoiceJobFields({expectedCompanyId:p.companyId,expectedDriverId:p.driverId,invoice:{...invoice,exists:true}}).ok)throw Error('not_authorized');
   const owned=(r:Row)=>r.companyId===p.companyId&&r.driverId===p.driverId;
-  const [reads,acks,coverage]=await Promise.all(['jsa_governed_requests','jsa_job_acknowledgments','jsa_job_read_coverage'].map(c=>deps.list(c,p.companyId,p.driverId)));
-  if([reads,acks,coverage].some(rows=>rows.length>2000||rows.some(r=>!owned(r))))throw Error('scope_or_size');
-  const completed=reads.filter(r=>r.state==='completed'&&['read_completed','read_and_acknowledged'].includes(r.action)&&Number.isFinite(r.completedAtMs));
+  const [acks,coverage]=await Promise.all(['jsa_job_acknowledgments','jsa_job_read_coverage'].map(c=>deps.list(c,p.companyId,p.driverId,b.jobRef)));
+  if([acks,coverage].some(rows=>rows.length>2000||rows.some(r=>!owned(r))))throw Error('scope_or_size');
   const ack=acks.filter(r=>r.jobRef===b.jobRef&&r.method==='acknowledged'&&Number.isFinite(r.recordedAtMs)).sort((a,b)=>b.recordedAtMs-a.recordedAtMs||String(a.id).localeCompare(String(b.id)))[0];
   const linked=coverage.filter(r=>r.jobRef===b.jobRef&&r.method==='scope_read'&&r.fullReadId).sort((a,b)=>b.recordedAtMs-a.recordedAtMs)[0];
+  const fullReadId=ack?.fullReadId||(!ack&&linked?.fullReadId);
+  const reads:Row[]=fullReadId&&deps.request
+    ? [await deps.request(fullReadId)].filter((r):r is Row=>!!r)
+    : await deps.list('jsa_governed_requests',p.companyId,p.driverId,!ack&&!linked?b.jobRef:undefined);
+  if(reads.length>2000||reads.some(r=>!owned(r)))throw Error('scope_or_size');
+  const completed=reads.filter(r=>r.state==='completed'&&['read_completed','read_and_acknowledged'].includes(r.action)&&Number.isFinite(r.completedAtMs));
   const inAckScope=(r:Row)=>r.completedAtMs<=ack.recordedAtMs&&(ack.fullReadId?r.requestId===ack.fullReadId:ack.policyDay?r.binding?.policyDay===ack.policyDay:!!ack.periodId&&(r.binding?.periodId===ack.periodId||r.binding?.associatedPeriodId===ack.periodId));
   const direct=completed.filter(r=>r.jobRef===b.jobRef).sort((a,b)=>a.completedAtMs-b.completedAtMs)[0];
   const read=ack?completed.filter(r=>inAckScope(r)&&(!ack.fullReadId||r.requestId===ack.fullReadId)).sort((a,b)=>a.completedAtMs-b.completedAtMs||String(a.requestId).localeCompare(String(b.requestId)))[0]

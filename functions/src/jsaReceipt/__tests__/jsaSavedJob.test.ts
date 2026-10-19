@@ -36,3 +36,14 @@ test('unscoped acknowledgements and foreign adapter rows fail closed',async()=>{
  const out=await readSavedJobJsa(deps({list:async c=>c==='jsa_governed_requests'?[{...read,binding:{}}]:c==='jsa_job_acknowledgments'?[{...ack,periodId:null}]:[]}),auth,body);expect(out.fullRead).toBeNull();
  await expect(readSavedJobJsa(deps({list:async()=>[{...read,driverId:'foreign'}]}),auth,body)).rejects.toThrow('scope_or_size');
 });
+
+test('explicit references use one exact request lookup and job-scoped lists',async()=>{
+ const list=jest.fn(async(c:string,_company:string,_driver:string,jobRef?:string)=>{
+  expect(jobRef).toBe('job');return c==='jsa_job_acknowledgments'?[{...ack,fullReadId:id}]:[];
+ });
+ const request=jest.fn(async()=>read);
+ const out=await readSavedJobJsa(deps({list,request}),auth,body);
+ expect(out.fullRead?.requestId).toBe(id);expect(request).toHaveBeenCalledWith(id);
+ expect(list).toHaveBeenCalledTimes(2);
+ await expect(readSavedJobJsa(deps({list,request:async()=>({...read,driverId:'other'})}),auth,body)).rejects.toThrow('scope_or_size');
+});
