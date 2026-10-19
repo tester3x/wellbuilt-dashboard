@@ -1,0 +1,7 @@
+# Read-only JSA home state - 2026-10-19
+
+New callable jsaHomeState, input only protocolVersion1 and operation status/read. Requires verified JSA driver audience, canonical active driver/company and matching token company. Reads explicit driver_shift_authority. Unknown authority refuses; off shift yields New without consulting old local/history rows. On-shift queries scope to owned open JSA contexts and exact shift, validating the first completed read against its signed artifact or an open owned standalone record. Finalized contexts/closed Sept22/foreign rows cannot create Resume. Response status omits signed content; read allows only signed document projection, never receipt handles, actor metadata or auth material. It never claims/ends HOS or creates/finalizes a JSA period.
+
+Frontend uses a single-flight owner-bound provider, shares its result between landing/footer/welcome, and rechecks current server state on Resume. New does not require shift sign-in and does not bypass required-job policy. No change to prior Suite summary callable or existing read/ack endpoints.
+
+Validation: Functions compilation and28 tests across home-state and shift-summary suites passed. Cases cover off-shift stale history, current open signed read, no JSA, unavailable authority, finalized contexts, other owner, missing artifact, pre-shift standalone attachment, closed Sept22 and rejected client identity/scope/operation. No production records altered. Deployment verification will be appended below. No Hosting/rules/index release or APK build included.

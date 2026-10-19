@@ -4099,6 +4099,7 @@ export {
 export { jsaStandalone } from './jsaReceipt/jsaStandaloneCallable';
 export { jsaWeeklyForms } from './jsaReceipt/jsaWeeklyFormsCallable';
 export { jsaShiftSummary } from './jsaReceipt/jsaShiftSummaryCallable';
+export { jsaHomeState } from './jsaReceipt/jsaHomeStateCallable';
 export { jsaGetSavedJob } from './jsaReceipt/jsaSavedJobCallable';
 export { jsaManageTemplate } from './jsaReceipt/jsaTemplateManagementCallable';
 
