@@ -29,10 +29,11 @@ const {chromium}=require('playwright');
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const browser=await chromium.launch({headless:true});
  try{
-  const page=await browser.newPage();page.on('pageerror',error=>console.error('Browser error:',error.message));await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>window.calls?.length===1);
+  const page=await browser.newPage();await page.clock.install();page.on('pageerror',error=>console.error('Browser error:',error.message));await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>window.calls?.length===1);
   const refresh=page.getByRole('button',{name:'Refresh',exact:true});
   assert.equal(await page.getByRole('button',{name:'Refreshing...',exact:true}).isDisabled(),true);
   await page.evaluate(()=>window.ok(0));await refresh.waitFor();assert.equal(await refresh.isEnabled(),true);
+  await page.clock.fastForward(120000);assert.equal(await page.evaluate(()=>window.calls.length),1,'Idle inbox must not poll');
   await refresh.click();await page.waitForFunction(()=>window.calls.length===2);assert.equal(await page.getByRole('button',{name:'Refreshing...',exact:true}).getAttribute('aria-busy'),'true');
   await page.getByRole('button',{name:'Refreshing...',exact:true}).press('Enter');assert.equal(await page.evaluate(()=>window.calls.length),2);
   await page.evaluate(()=>window.bad(1));await page.getByRole('alert').filter({hasText:'Fixture network timeout'}).waitFor();assert.equal(await refresh.isEnabled(),true);
@@ -40,6 +41,6 @@ const {chromium}=require('playwright');
   await refresh.click();await page.waitForFunction(()=>window.calls.length===4);await page.evaluate(()=>window.show('B'));await page.waitForFunction(()=>window.calls.length===5);
   await page.evaluate(()=>window.ok(4,'Fixture B'));await page.getByRole('heading',{name:'Fixture B / Fixture'}).waitFor();
   await page.evaluate(()=>window.ok(3,'Fixture A'));assert.equal(await page.getByRole('heading',{name:'Fixture A / Fixture'}).count(),0);
-  console.log('Watchdog Refresh browser checks passed: click, immediate busy feedback, repeated-click suppression, failure/retry, checked timestamp, and company-switch isolation.');
+  console.log('Watchdog Refresh browser checks passed: no idle polling over two minutes, click, immediate busy feedback, repeated-click suppression, failure/retry, checked timestamp, and company-switch isolation.');
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1});
