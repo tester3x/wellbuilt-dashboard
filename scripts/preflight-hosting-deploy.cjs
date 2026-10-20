@@ -94,6 +94,16 @@ try {
   fatal(`Clean build failed: ${err.message}`);
 }
 
+// A default-off Watchdog export was accidentally republished from an older lane.
+// Check the built route as well as source-based navigation tests.
+const watchdogPage = path.join('out', 'watchdog', 'index.html');
+if (process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW !== 'disabled') {
+  if (!fs.existsSync(watchdogPage) || fs.readFileSync(watchdogPage, 'utf8').includes('Watchdog reviews are not enabled.')) {
+    fatal('Fresh Watchdog route is disabled or missing. Refusing to hide the released review inbox.');
+  }
+  console.log('Watchdog exported route availability: PASSED');
+}
+
 // 5. Mechanical Guardrail Tests Execution
 console.log('\n--- Running Mandatory Pre-Deploy Test Suites on Fresh Build ---');
 
