@@ -188,3 +188,18 @@ test('unchanged confirmation completes after processor consumes no-op, without a
 });
 test('owned processor rejection is review rather than queued and never resubmitted',async()=>{const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());const id=first.result.packetId;const packet=database.get('packets/incoming/'+id);database.delete('packets/incoming/'+id);database.set('packets/rejected/'+id,{packetId:id,packet,reason:'STALE_PULL_TIME'});const r=await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity});expect(r.result).toMatchObject({status:'review',needsReview:true,packetId:id});expect(r.result.issues[0]).toContain('STALE_PULL_TIME');expect(database.has('packets/incoming/'+id)).toBe(false);});
 test('pumper multi-well top-only list is ignored without packets or review',async()=>{const body=observation();body.chat=body.chat.slice(0,body.chat.indexOf('Kahuna 5'))+"Kahuna 5 8'1\nGunslinger 3 7'2\nGunslinger 5 6'3";const before=database.size;const r=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(r.result).toMatchObject({status:'ignored',reason:'pumper_gauge_list'});expect(database.size).toBe(before);});
+
+
+test('explicit fixed driver default reaches intake without re-estimating a gauge-only post',async()=>{
+ const policy=documents.get('watchdog_v2_config/laptop');
+ policy.channels.group.driverDefaultBbls={Driver:185};
+ policy.channels.group.driverDefaultModes={Driver:'fixed_load'};
+ policy.channels.group.driverCapacities={Driver:185};
+ const body={...observation(),chat:observation().chat.replace('Top 12.5\nBottom 11.125\n165 bbl','Top 12-6\nBottom 11-0')};
+ const result=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ expect(result.result.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+result.result.packetId);
+ expect(packet.bblsTaken).toBe(185);
+ expect(packet.bottomLevelFeet).toBe(11);
+ expect(packet.watchdogProvenance.barrels).toMatchObject({source:'default',needsReview:false,status:'provisional',selectedBbls:185});
+});

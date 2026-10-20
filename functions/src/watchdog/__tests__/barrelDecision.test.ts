@@ -1,4 +1,4 @@
-import {decideBarrels,reportedTrackingBottom,isProvisionalPull} from '../barrelDecision';
+import {decideBarrels,reportedTrackingBottom,isProvisionalPull,fixedDriverDefault} from '../barrelDecision';
 const base={written:null,fallback:185,top:12,bottom:10,bank:60,rateMinutesPerFoot:120,isDown:false,rateMeasuredAt:'2026-10-07T10:00:00Z',measuredAt:'2026-10-07T12:00:00Z',maxLoadBbls:185};
 test('math detects a partial load instead of always assigning driver capacity',()=>{expect(decideBarrels(base)).toMatchObject({bbls:130,provisional:true,needsReview:true,source:'estimated'});});
 test('written barrels override model; smaller well and driver limits bound estimates',()=>{
@@ -21,3 +21,19 @@ test('only scoped provisional watchdog pulls can use reported bottom for trackin
 test('small rounding over a configured load ceiling stays provisional without mandatory review',()=>{expect(decideBarrels({...base,top:11.25,bottom:8.75,bank:67.2,rateMinutesPerFoot:0,driverCapacity:165})).toMatchObject({bbls:165,provisional:true,needsReview:false});expect(decideBarrels({...base,top:12,bottom:8,rateMinutesPerFoot:0,driverCapacity:165})).toMatchObject({needsReview:true});});
 
 test('assumed inflow above a known full-load drop does not demand review',()=>{expect(decideBarrels({...base,top:11,bottom:8.5,bank:67.2,rateMinutesPerFoot:114,driverCapacity:165})).toMatchObject({bbls:165,provisional:true,needsReview:false});expect(decideBarrels({...base,top:11,bottom:8,bank:67.2,rateMinutesPerFoot:114,driverCapacity:165})).toMatchObject({needsReview:true});});
+
+
+test('operator fixed driver default overrides estimates but never written barrels',()=>{
+ expect(decideBarrels({...base,fixedDefaultBbls:185})).toMatchObject({bbls:185,source:'default',provisional:true,needsReview:false,issues:[]});
+ expect(decideBarrels({...base,fixedDefaultBbls:185,written:140})).toMatchObject({bbls:140,source:'written',provisional:false});
+ expect(decideBarrels({...base,fixedDefaultBbls:185,wellLimit:150})).toMatchObject({bbls:150,needsReview:true});
+ expect(decideBarrels({...base,fixedDefaultBbls:185,bottom:null})).toBeNull();
+});
+test('capacity and an ordinary parser fallback do not enable fixed loads for other drivers',()=>{
+ const channel={driverDefaultBbls:{Known:185,Other:165},driverCapacities:{Known:185},driverDefaultModes:{Known:'fixed_load'}};
+ expect(fixedDriverDefault(channel,undefined,'Known')).toBe(185);
+ expect(fixedDriverDefault(channel,undefined,'Other')).toBeNull();
+ expect(fixedDriverDefault(channel,undefined,'Unknown')).toBeNull();
+ expect(fixedDriverDefault({...channel,driverDefaultBbls:{Known:NaN}},undefined,'Known')).toBeNull();
+ expect(decideBarrels({...base,driverCapacity:185})).toMatchObject({bbls:130,source:'estimated',needsReview:true});
+});
