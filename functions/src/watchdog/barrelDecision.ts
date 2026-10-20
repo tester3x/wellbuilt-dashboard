@@ -16,7 +16,7 @@ export function decideBarrels(input:{written:number|null;fallback:number|null;to
 export function isProvisionalPull(packet:any):boolean {
  const provenance=packet?.watchdogProvenance;
  return packet?.source==='whatsapp_watchdog'&&provenance?.principalId==='laptop-watchdog-v2'&&
-  (provenance?.barrels?.status==='provisional'||(!provenance?.barrels?.status&&['estimated','default'].includes(provenance?.barrelSource))); 
+  (provenance?.timeEstimate?.status==='estimated'||provenance?.barrels?.status==='provisional'||(!provenance?.barrels?.status&&['estimated','default'].includes(provenance?.barrelSource)));
 }
 export function reportedTrackingBottom(packet:any,topInches:number):number|null {
  const bottom=Number(packet?.watchdogProvenance?.reportedBottomFeet)*12;

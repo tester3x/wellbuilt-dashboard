@@ -29,3 +29,5 @@ test('trusted written loads keep measured bottom; legacy estimates remain exclud
  expect(reportedTrackingBottom({...p,watchdogProvenance:{...p.watchdogProvenance,barrelSource:'written'}},138)).toBe(108);
  expect(reportedTrackingBottom({...p,watchdogProvenance:{...p.watchdogProvenance,reportedBottomFeet:-1}},138)).toBeNull();
 });
+
+test('estimated timestamps remain excluded from AFR even with confirmed barrels',()=>{expect(isProvisionalPull({source:'whatsapp_watchdog',watchdogProvenance:{principalId:'laptop-watchdog-v2',barrels:{status:'confirmed'},timeEstimate:{status:'estimated'}}})).toBe(true);});
