@@ -1,3 +1,4 @@
+import {jsaNumber} from './jsaNumber';
 /**
  * Governed JSA request/receipt — pure decision core.
  *
@@ -58,6 +59,7 @@ export interface JsaRequestMeta {
 }
 
 export interface JsaGovernedRecord {
+  jsaNumber?: string;
   requestId: string;
   jobRef: string;
   groupRef: string | null;
@@ -421,6 +423,7 @@ export function decideComplete(input: {
     state: 'completed',
     action: input.action,
     completedAtMs: input.nowMs,
+    jsaNumber: jsaNumber('JSA-'+input.existing.requestId,input.nowMs,input.existing.jsaNumber),
   };
   return { ok: true, value: { record, write: 'complete' } };
 }
@@ -707,6 +710,7 @@ export function fromStored(v: unknown): JsaGovernedRecord | null {
     receiptHandle: typeof o.receiptHandle === 'string' ? o.receiptHandle : '',
     createdAtMs: Number(o.createdAtMs) || 0,
     expiresAtMs: Number(o.expiresAtMs) || 0,
+    ...(typeof o.jsaNumber==='string'?{jsaNumber:o.jsaNumber}:{}),
     completedAtMs: typeof o.completedAtMs === 'number' ? o.completedAtMs : null,
     wbtConsumedAtMs: typeof o.wbtConsumedAtMs === 'number' ? o.wbtConsumedAtMs : null,
   };

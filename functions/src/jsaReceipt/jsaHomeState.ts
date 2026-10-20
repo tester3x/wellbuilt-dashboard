@@ -1,3 +1,4 @@
+import {jsaNumber} from './jsaNumber';
 import {decideInvoiceJobFields} from './jsaReceiptCore';
 import {parseArtifactInput} from './jsaArtifactCore';
 type Row=Record<string,any>;
@@ -29,7 +30,7 @@ export async function readJsaHomeState(deps:HomeDeps,owner:{companyId:string;dri
   const r=reads[0],a=await deps.artifact(r.requestId);
   const parsed=a&&parseArtifactInput({requestId:r.requestId,snapshot:a.snapshot});
   if(!a||!owned(a)||a.requestId!==r.requestId||a.jobRef!==r.jobRef||a.action!==r.action||!parsed?.ok)throw Error('record_unavailable');
-  const active={kind:'governed',id:r.requestId,jsaNumber:'JSA-'+r.requestId};
+  const active={kind:'governed',id:r.requestId,jsaNumber:jsaNumber('JSA-'+r.requestId,r.completedAtMs,r.jsaNumber)};
   if(b.operation!=='read')return {...base,action:'resume',active};
   const [job,companyName,acks,coverage]=await Promise.all([
     deps.job?deps.job(r.jobRef):Promise.resolve(null),deps.companyName?deps.companyName():Promise.resolve(''),
@@ -49,6 +50,6 @@ export async function readJsaHomeState(deps:HomeDeps,owner:{companyId:string;dri
  const open=standalone.filter(r=>r.state==='open'&&(r.jsaPeriodId?ids.includes(r.jsaPeriodId):r.shiftId===shift.periodId)).sort((a,b)=>a.signedAtMs-b.signedAtMs||String(a.id).localeCompare(String(b.id)))[0];
  if(!open)return {...base,action:'new',active:null};
  const parsed=parseArtifactInput({requestId:'A'.repeat(43),snapshot:open.snapshot});if(!parsed.ok)throw Error('record_unavailable');
- const active={kind:'standalone',id:open.id,jsaNumber:open.jsaNumber||null};
+ const active={kind:'standalone',id:open.id,jsaNumber:jsaNumber('JSA-'+String(open.id).toUpperCase(),open.signedAtMs,open.jsaNumber)};
  return {...base,action:'resume',active,...(b.operation==='read'?{record:{...parsed.value.snapshot,id:open.id,jsaNumber:active.jsaNumber,driverName:parsed.value.snapshot.printedName,date:parsed.value.snapshot.formDate||'',timestamp:new Date(open.signedAtMs).toISOString(),signatureImage:'data:image/png;base64,'+parsed.value.snapshot.signature.data,jobActivityName:open.job?.activity||'',wells:open.job?.wells||[],additions:open.additions||[],state:'open',workflow:'standalone'}}:{})};
 }

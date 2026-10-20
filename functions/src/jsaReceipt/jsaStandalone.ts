@@ -1,3 +1,4 @@
+import {jsaNumber} from './jsaNumber';
 import { WELLBUILT_APP_JSA } from '@tester3x/wellbuilt-contracts';
 import { createHash } from 'crypto';
 import { parseAuthPrincipal, requireAudience, JSA_APP_JSA } from './jsaReceiptCore';
@@ -57,11 +58,12 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
    const catalog=await catalogFor(store,p.companyId);
    return {...catalog,companyId:p.companyId,driverId:p.driverId};
  }
+ const numbered=(r:Record<string,unknown>)=>({...r,jsaNumber:Number.isFinite(r.signedAtMs)?jsaNumber('JSA-'+String(r.id).toUpperCase(),Number(r.signedAtMs),r.jsaNumber):null});
  const path=`jsa_standalone_companies/${hash(p.companyId)}/drivers/${hash(p.driverId)}/records`;
  if(op==='list'){
    const after=raw.after===undefined?null:text(raw.after,43,true);
    if(after&&!/^[A-Za-z0-9_-]{43}$/.test(after))bad();
-   return {records:await store.list(path,after)};
+   return {records:(await store.list(path,after)).map(numbered)};
  }
  const id=text(raw.recordId,43,true);
  if(!/^[A-Za-z0-9_-]{43}$/.test(id)||!['create','get','close','append'].includes(String(op)))bad();
@@ -79,7 +81,7 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
  // Authentication, membership and entitlement have still been checked above.
  if(submittedHash&&store.readRecord){
    const saved=await store.readRecord(`${path}/${id}`);
-   if(saved){checkOwner(saved);if(matchesSavedRequest(saved))return {record:saved};}
+   if(saved){checkOwner(saved);if(matchesSavedRequest(saved))return {record:numbered(saved)};}
  }
  let addition:Record<string,unknown>|null=null;
  if(op==='append'){
@@ -141,7 +143,7 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
    }
    const content={snapshot:a.value.snapshot,job:{activity,wells,...extra}};
    const context=store.workPeriod?await store.workPeriod(p.companyId,p.driverId):null;
-   authored={...(context?{jsaPeriodId:context.id,jsaNumber:'JSA-'+id.toUpperCase()}:{}),...content,submittedRequestHash:submittedHash,contentHash:hash(JSON.stringify(content)),id,companyId:p.companyId,driverId:p.driverId,workflow:'standalone',shiftId:context?.shiftId||null,state:'open',signedAtMs:now};
+   authored={jsaNumber:jsaNumber('JSA-'+id.toUpperCase(),now),...(context?{jsaPeriodId:context.id}:{}),...content,submittedRequestHash:submittedHash,contentHash:hash(JSON.stringify(content)),id,companyId:p.companyId,driverId:p.driverId,workflow:'standalone',shiftId:context?.shiftId||null,state:'open',signedAtMs:now};
  }
  const record=await store.transaction(`${path}/${id}`,old=>{
    if(old){checkOwner(old);if(submittedHash&&matchesSavedRequest(old))return null;}
@@ -172,6 +174,6 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
    }
    return op==='close'&&old.state!=='closed'?{...old,state:'closed',closedAtMs:now}:null;
  });
- return {record};
+ return {record:numbered(record)};
 }
 

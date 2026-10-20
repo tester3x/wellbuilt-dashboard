@@ -1,3 +1,4 @@
+import {jsaNumber} from './jsaNumber';
 import { parseAuthPrincipal, requireAudience, JSA_APP_JSA } from './jsaReceiptCore';
 import { JSA_JOB_ACK_METHOD } from '@tester3x/wellbuilt-contracts';
 
@@ -26,23 +27,23 @@ export async function readWeeklyJsaForms(deps: WeeklyJsaDeps, auth: {uid?:string
     if(r.state!=='completed'||!inside(r.completedAtMs)||!['read_completed','read_and_acknowledged','acknowledged'].includes(r.action))continue;
     const artifact = await deps.artifact(r.requestId);
     if (!artifact || !owned(artifact) || artifact.requestId!==r.requestId || artifact.jobRef!==r.jobRef || artifact.action!==r.action || !artifact.snapshot?.signature?.data) { missing.push(`${dateOf(r.completedAtMs)}: signed artifact unavailable for ${r.requestId}`);continue; }
-    records.push({id:r.requestId,kind:r.action==='acknowledged'?'jsa_ack':'jsa_read',date:dateOf(r.completedAtMs),completedAt:new Date(r.completedAtMs).toISOString(),shiftId:r.binding?.periodId||r.binding?.associatedPeriodId||null,jobRef:r.jobRef,record:{...artifact.snapshot,id:r.requestId,driverName:artifact.snapshot.printedName,timestamp:new Date(r.completedAtMs).toISOString(),date:dateOf(r.completedAtMs),signatureImage:'data:image/png;base64,'+artifact.snapshot.signature.data},source:'governed'});
+    records.push({id:r.requestId,kind:r.action==='acknowledged'?'jsa_ack':'jsa_read',date:dateOf(r.completedAtMs),completedAt:new Date(r.completedAtMs).toISOString(),shiftId:r.binding?.periodId||r.binding?.associatedPeriodId||null,jobRef:r.jobRef,record:{...artifact.snapshot,jsaNumber:jsaNumber('JSA-'+r.requestId,r.completedAtMs,r.jsaNumber),id:r.requestId,driverName:artifact.snapshot.printedName,timestamp:new Date(r.completedAtMs).toISOString(),date:dateOf(r.completedAtMs),signatureImage:'data:image/png;base64,'+artifact.snapshot.signature.data},source:'governed'});
   }
   for (const r of batches[1]) {
     const ms = Date.parse(r.timestamp);
     if (!inside(ms)||!r.signatureImage||!r.signature||!r.id||r.governedRequestRef)continue;
     // Only signed document content is exported; credentials and device metadata never leave this API.
     const keys = ['id','driverName','driverLegalName','truckNumber','jobActivityName','date','timestamp','signature','signatureImage','notes','pusher','otherInfo','wells','locations','locationAcks','ppeSelected','ppeOtherItems','prepared','stepsAcknowledged','stepAcks','assessmentSteps','assessmentTemplates','assessmentPpeItems','assessmentPreparedItems','operator','additions','locationLayout'];
-    const record:Row={};for(const k of keys)if(r[k]!==undefined)record[k]=r[k];
+    const record:Row={jsaNumber:jsaNumber('JSA-'+String(r.id).toUpperCase(),ms,r.jsaNumber)};for(const k of keys)if(r[k]!==undefined)record[k]=r[k];
     records.push({id:r.id,kind:'jsa_read',date:dateOf(ms),completedAt:new Date(ms).toISOString(),shiftId:r.shiftId||null,jobRef:r.jobRef||null,record,source:'signed_document'});
   }
   for (const r of batches[2]) if(inside(r.recordedAtMs)&&r.method===JSA_JOB_ACK_METHOD&&r.jobRef&&(r.periodId||r.policyDay)) {
     const firstRead=batches[0].filter(read=>read.state==='completed'&&['read_completed','read_and_acknowledged'].includes(read.action)&&(r.fullReadId?read.requestId===r.fullReadId:r.policyDay?read.binding?.shiftState==='independent'&&read.binding?.policyDay===r.policyDay:read.binding?.periodId===r.periodId)&&typeof read.completedAtMs==='number'&&read.completedAtMs<=r.recordedAtMs).sort((a,b)=>a.completedAtMs-b.completedAtMs||String(a.requestId).localeCompare(String(b.requestId)))[0];
     if(!firstRead)missing.push(`${dateOf(r.recordedAtMs)}: first full JSA reference unavailable for acknowledgement ${r.id}`);
-    records.push({id:r.id,kind:'jsa_ack',date:dateOf(r.recordedAtMs),completedAt:new Date(r.recordedAtMs).toISOString(),shiftId:r.periodId||null,jobRef:r.jobRef,fullReadId:firstRead?.requestId||null,record:{jsaNumber:r.jsaNumber||null,job:r.job||null,method:r.method,recordedAtMs:r.recordedAtMs,originLocalDate:r.originLocalDate||null,policyDay:r.policyDay||null},source:'job_acknowledgment'});
+    records.push({id:r.id,kind:'jsa_ack',date:dateOf(r.recordedAtMs),completedAt:new Date(r.recordedAtMs).toISOString(),shiftId:r.periodId||null,jobRef:r.jobRef,fullReadId:firstRead?.requestId||null,record:{jsaNumber:firstRead?jsaNumber(r.jsaNumber||'JSA-'+firstRead.requestId,!r.jsaNumber||r.jsaNumber==='JSA-'+firstRead.requestId?firstRead.completedAtMs:r.recordedAtMs,r.jsaNumber):null,job:r.job||null,method:r.method,recordedAtMs:r.recordedAtMs,originLocalDate:r.originLocalDate||null,policyDay:r.policyDay||null},source:'job_acknowledgment'});
   }
   for (const r of batches[3]) if(inside(r.signedAtMs)&&r.snapshot?.signature?.data)
-    records.push({id:r.id,kind:'jsa_read',date:dateOf(r.signedAtMs),completedAt:new Date(r.signedAtMs).toISOString(),shiftId:null,jobRef:null,record:{snapshot:r.snapshot,job:r.job,additions:r.additions||[],signedAtMs:r.signedAtMs,id:r.id},source:'standalone'});
+    records.push({id:r.id,kind:'jsa_read',date:dateOf(r.signedAtMs),completedAt:new Date(r.signedAtMs).toISOString(),shiftId:null,jobRef:null,record:{jsaNumber:jsaNumber('JSA-'+String(r.id).toUpperCase(),r.signedAtMs,r.jsaNumber),snapshot:r.snapshot,job:r.job,additions:r.additions||[],signedAtMs:r.signedAtMs,id:r.id},source:'standalone'});
   const out={schemaVersion:1,driverId:p.driverId,companyId:p.companyId,startDate:b.startDate,endDate:b.endDate,timezone:b.timezone,records,missing};
   if(Buffer.byteLength(JSON.stringify(out))>10_000_000)throw new Error('too_large');
   return out;

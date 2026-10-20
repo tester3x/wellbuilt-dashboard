@@ -1,3 +1,4 @@
+import {jsaNumber} from './jsaNumber';
 import {parseAuthPrincipal, requireAudience, decideInvoiceJobFields} from './jsaReceiptCore';
 import {parseArtifactInput} from './jsaArtifactCore';
 
@@ -33,7 +34,7 @@ export async function readSavedJobJsa(deps:SavedJobDeps,auth:{uid?:string|null;c
   const read=ack?completed.filter(r=>inAckScope(r)&&(!ack.fullReadId||r.requestId===ack.fullReadId)).sort((a,b)=>a.completedAtMs-b.completedAtMs||String(a.requestId).localeCompare(String(b.requestId)))[0]
     :linked?completed.find(r=>r.requestId===linked.fullReadId&&r.completedAtMs<=linked.recordedAtMs):direct;
   const acknowledgement=ack?{recordedAt:new Date(ack.recordedAtMs).toISOString(),method:'acknowledged'}:null;
-  const base={coveredJobs:[] as Row[],jsaNumber:ack?.jsaNumber||(read?'JSA-'+String(read.requestId):null),protocolVersion:1,jobRef:b.jobRef,companyId:p.companyId,driverId:p.driverId,wellName:String(invoice.wellName||''),acknowledgement};
+  const base={coveredJobs:[] as Row[],jsaNumber:read?jsaNumber(ack?.jsaNumber?.startsWith('JSA-')?ack.jsaNumber:'JSA-'+String(read.requestId),ack?.jsaNumber&&ack.jsaNumber!=='JSA-'+String(read.requestId)?ack.recordedAtMs:read.completedAtMs,ack?.jsaNumber||read.jsaNumber):null,protocolVersion:1,jobRef:b.jobRef,companyId:p.companyId,driverId:p.driverId,wellName:String(invoice.wellName||''),acknowledgement};
   if(!read)return {...base,fullRead:null};
   const artifact=await deps.artifact(read.requestId);
   if(!artifact||!owned(artifact)||artifact.requestId!==read.requestId||artifact.jobRef!==read.jobRef||artifact.action!==read.action)return {...base,fullRead:null};

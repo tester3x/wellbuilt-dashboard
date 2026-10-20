@@ -249,6 +249,7 @@ export async function handleComplete(
         state: out.record.state,
         action: out.record.action,
         completedAtMs: out.record.completedAtMs,
+        jsaNumber: out.record.jsaNumber,
       });
     }
     deps.log('jsa.receipt.complete', { write: out.write, action: body.action });
