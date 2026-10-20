@@ -9,3 +9,10 @@ Historical correction receipts can finalize against a completed non-latest edit 
 Validation: eleven focused barrel/historical receipt cases pass; one new intake integration case passes. Broader parser/Watchdog run had82 pass and six failing intake assertions; the same six failures reproduced on the unchanged HEAD intake source (feet/inch and older receipt fixture assumptions). They are not represented as passing or repaired by this change. TypeScript build passes. Operational before/after records and review authorization remain private outside Git.
 
 Pending at checkpoint: scoped deployment of ingestWatchdogPullV2 and getWatchdogPullReceiptV2 only, enable the specifically authorized fixed default in live config, verify pending historical receipts clear, and verify all original corrected packet IDs remain in WB M with no duplicate pulls.
+
+
+## Deployment and operational verification
+
+Deployed source20377a24 on2026-10-20: ingestWatchdogPullV2 revision ingestwatchdogpullv2-00034-dil and getWatchdogPullReceiptV2 revision getwatchdogpullreceiptv2-00008-dac, both ACTIVE. Only those two Functions were deployed. No Hosting, rules, other Functions or app builds.
+
+Enabled the explicitly authorized driver's185BBL fixed default/capacity in live route config; other driver modes remain unchanged. Four existing provisional pulls were corrected through the normal audited review command path and canonical edit processor. All four retained their original packet IDs, reported gauge levels and observation times. Final canonical receipts are complete,185BBL, no review/correction pending; their Dashboard mirror commands are applied and statuses complete. The final company review query returned zero pending reviews at18:19UTC. No new pull packets or WhatsApp messages were created. Private before/after audit and deployment proof retained outside Git.
