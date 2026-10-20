@@ -6143,10 +6143,10 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                     <span className="text-cyan-400/60 text-xs truncate">→ {job.disposal}</span>
                   )}
                   <span className="flex-1" />
-                  <span className="text-gray-300 text-xs flex-shrink-0">{completedStamp}</span>
                   <span className={`text-gray-600 text-xs transition-transform ${isExpanded ? 'rotate-180' : ''}`}>▾</span>
                 </div>
-                <div className="flex items-center gap-3 mt-1.5 ml-8 text-xs text-gray-500">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 ml-8 text-xs text-gray-500">
+                  {completedStamp && <span className="font-medium text-gray-200">{completedStamp}</span>}
                   <span>{driverName}</span>
                   {(job.totalBBL || 0) > 0 && <span className="text-blue-400">{job.totalBBL} BBL</span>}
                   {loads > 1 && <span>{loads} load{loads !== 1 ? 's' : ''}</span>}
