@@ -7,3 +7,5 @@ Combined reports for distinct known wells with only the multi-well timing issue 
 Earlier rows carry timeEstimate metadata with method, sample count, interval and anchor. Local transport forwards that metadata; backend validates it and marks such observations provisional for AFR even when barrels are later confirmed. Raw original post/levels remain unchanged. Barrels continue through existing provisional calibrated estimate/capacity logic.
 
 Pure estimator tests passed (sender isolation, unknown names, averaging, midnight). Source checked against private current post/history:108 minutes,20 samples. No raw posts or customer records committed. Runtime installation and intake receipt verification pending.
+
+Runtime b53a69c6 installed on HP and capture verified Connected/unpaused. Backend fb28e9e6 deployed; live receipt check confirms two combined reports/four completed provisional loads, estimated earlier timestamps, original bottoms and zero AFR contribution. Local/cloud review counts both zero. Full deployment/verification handoff is on processor branch codex/watchdog-rejection-isolation-20261018 at31a9394a. No APK or Hosting build.
