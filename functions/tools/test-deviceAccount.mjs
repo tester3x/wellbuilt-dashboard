@@ -1,6 +1,6 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {createHash,randomBytes} from 'node:crypto';
 import {issueDeviceAccount,exchangeDeviceAccount,revokeDeviceAccount,refreshDeviceAccount} from '../lib/platform/deviceAccount.js';
-const auth={uid:'u',claims:{kind:'driver',driverId:'d',companyId:'c'}};
+const auth={uid:'u',claims:{kind:'driver',driverId:'d',companyId:'c',auth_time:100}};
 function world(){const rows=new Map();let now=100000;let active=true,disabled=false,validAfterMs=0;
  const deps={nowMs:()=>now,randomBytes,base64Url:b=>Buffer.from(b).toString('base64url'),sha256Hex:s=>createHash('sha256').update(s).digest('hex'),expiresAtTimestamp:ms=>ms,
   getDriver:async()=>({driverId:'d',companyId:'c',active,displayName:'Driver',legalName:'Legal'}),getAuthStatus:async()=>({disabled,validAfterMs}),
@@ -47,4 +47,11 @@ test('JSA exchange binds the actual server shift, and never fabricates a missing
  await assert.rejects(exchangeDeviceAccount(w.deps,{version:1,credential:i.credential,app:'jsa'}));
  w.deps.getShiftAuthority=async()=>({driverId:'d',companyId:'c',initialized:true,openPeriodId:null,originLocalDate:null});
  assert.equal((await exchangeDeviceAccount(w.deps,{version:1,credential:i.credential,app:'jsa'})).jsaBinding.shiftState,'none');
+});
+
+test('an ID token authenticated before revocation cannot issue a fresh device grant later',async()=>{
+ const w=world();w.revokeAuth();w.advance(2000);
+ await assert.rejects(issueDeviceAccount(w.deps,auth,{version:1}));assert.equal(w.rows.size,0);
+ const fresh={...auth,claims:{...auth.claims,auth_time:102}};
+ assert.ok((await issueDeviceAccount(w.deps,fresh,{version:1})).access.grantId);
 });

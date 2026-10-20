@@ -17,9 +17,9 @@ function request(raw:unknown,fields:string[]):Record<string,unknown> {
  return raw as Record<string,unknown>;
 }
 const secret=(v:unknown):v is string=>typeof v==='string'&&/^[A-Za-z0-9_-]{43}$/.test(v);
-async function snapshot(deps:DeviceAccountDeps,owner:{uid:string;driverId:string;companyId:string},establishedAtMs:number,grantId:string){
+async function snapshot(deps:DeviceAccountDeps,owner:{uid:string;driverId:string;companyId:string},establishedAtMs:number,grantId:string,authTimeMs?:number){
  const [driver,status,company]=await Promise.all([deps.getDriver(owner.driverId),deps.getAuthStatus(owner.uid),deps.getCompanyContract(owner.companyId)]);
- if(!driver?.active||driver.companyId!==owner.companyId||status.disabled||status.validAfterMs>establishedAtMs)fail('permission-denied','account_unavailable');
+ if(!driver?.active||driver.companyId!==owner.companyId||status.disabled||status.validAfterMs>establishedAtMs||(authTimeMs!==undefined&&status.validAfterMs>authTimeMs))fail('permission-denied','account_unavailable');
  const plan=company.contract?await deps.getPlan(company.contract.planId):null;
  const allowedApps=DEVICE_APPS.filter(app=>{
   const d=decideAppEntitlementAuthorization({app:resolveWellbuiltAppKey(keys[app]),contractState:company.state,contract:company.contract,plan,shift:null});
@@ -32,10 +32,11 @@ async function snapshot(deps:DeviceAccountDeps,owner:{uid:string;driverId:string
 export async function issueDeviceAccount(deps:DeviceAccountDeps,auth:SsoAuthContext,raw:unknown){
  request(raw,['version']);
  const c=auth.claims;
+ if(typeof c.auth_time!=='number'||!Number.isFinite(c.auth_time)||c.auth_time<=0)fail('unauthenticated','driver_required');
  if(!auth.uid||c.kind!=='driver'||typeof c.driverId!=='string'||!c.driverId||typeof c.companyId!=='string'||!c.companyId)fail('unauthenticated','driver_required');
  const owner={uid:auth.uid,driverId:c.driverId,companyId:c.companyId};
  const credential=deps.base64Url(deps.randomBytes(32)),grantId=deps.sha256Hex(credential),establishedAtMs=deps.nowMs();
- const access=await snapshot(deps,owner,establishedAtMs,grantId);
+ const access=await snapshot(deps,owner,establishedAtMs,grantId,c.auth_time*1000);
  const expiresAtMs=establishedAtMs+90*86400000;
  await deps.runTransaction(async tx=>tx.create('platform_device_accounts/'+grantId,{version:1,...owner,establishedAtMs,expiresAtMs,expiresAt:deps.expiresAtTimestamp(expiresAtMs),revoked:false}));
  return {credential,access};
