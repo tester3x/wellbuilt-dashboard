@@ -4143,3 +4143,5 @@ export { dispatchDemoViewerJob } from './liveDemo/dispatch';
 export { demoWellPullPlan } from './liveDemo/wellPlan';
 
 export {jsaFinalizeShiftContext} from './jsaReceipt/jsaWorkPeriodLifecycle';
+
+export {platformIssueDeviceAccount,platformExchangeDeviceAccount,platformRevokeDeviceAccount} from './platform/deviceAccountCallables';
