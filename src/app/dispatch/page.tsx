@@ -6111,8 +6111,9 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
           const completed = toDate(job.completedAt);
           const accepted = toDate((job as any).acceptedAt) || toDate(job.assignedAt);
           const assigned = toDate(job.assignedAt);
-          const timeStr = completed ? completed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-          const dateStr = completed ? completed.toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+          const completedStamp = completed ? completed.toLocaleString([], {
+            month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+          }) : '';
           const driverName = getDriverFullName(job);
           const loads = job.loadsCompleted || job.loadCount || 1;
           const isExpanded = expandedJobId === job.id;
@@ -6142,14 +6143,13 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                     <span className="text-cyan-400/60 text-xs truncate">→ {job.disposal}</span>
                   )}
                   <span className="flex-1" />
-                  <span className="text-gray-500 text-xs flex-shrink-0">{timeStr}</span>
+                  <span className="text-gray-300 text-xs flex-shrink-0">{completedStamp}</span>
                   <span className={`text-gray-600 text-xs transition-transform ${isExpanded ? 'rotate-180' : ''}`}>▾</span>
                 </div>
                 <div className="flex items-center gap-3 mt-1.5 ml-8 text-xs text-gray-500">
                   <span>{driverName}</span>
                   {(job.totalBBL || 0) > 0 && <span className="text-blue-400">{job.totalBBL} BBL</span>}
                   {loads > 1 && <span>{loads} load{loads !== 1 ? 's' : ''}</span>}
-                  {dateStr && <span>{dateStr}</span>}
                   {(job.invoiceNumber || job.ticketNumber) && <span className="text-cyan-400/50">#{job.invoiceNumber || job.ticketNumber}</span>}
                   {job.source === 'driver' && (
                     <span className="px-1.5 py-0.5 bg-gray-700 text-gray-400 rounded text-[10px]">Driver Started</span>
