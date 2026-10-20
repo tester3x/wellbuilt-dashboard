@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {createHash,randomBytes} from 'node:crypto';
-import {issueDeviceAccount,exchangeDeviceAccount,revokeDeviceAccount} from '../lib/platform/deviceAccount.js';
+import {issueDeviceAccount,exchangeDeviceAccount,revokeDeviceAccount,refreshDeviceAccount} from '../lib/platform/deviceAccount.js';
 const auth={uid:'u',claims:{kind:'driver',driverId:'d',companyId:'c'}};
 function world(){const rows=new Map();let now=100000;let active=true,disabled=false,validAfterMs=0;
  const deps={nowMs:()=>now,randomBytes,base64Url:b=>Buffer.from(b).toString('base64url'),sha256Hex:s=>createHash('sha256').update(s).digest('hex'),expiresAtTimestamp:ms=>ms,
@@ -24,3 +24,27 @@ for(const cause of ['disable','move','revokeAuth','expire','deviceLogout'])test(
  await assert.rejects(exchangeDeviceAccount(w.deps,{version:1,credential:i.credential,app:'equipment'}));});
 test('another uid cannot revoke a device grant',async()=>{const w=world(),i=await issueDeviceAccount(w.deps,auth,{version:1});
  await assert.rejects(revokeDeviceAccount(w.deps,{uid:'other',claims:{}},{version:1,grantId:i.access.grantId}));});
+
+test('refresh returns current access without issuing another grant or token',async()=>{
+ const w=world(),i=await issueDeviceAccount(w.deps,auth,{version:1});w.advance(300000);
+ const refreshed=await refreshDeviceAccount(w.deps,auth,{version:1,grantId:i.access.grantId});
+ assert.equal(refreshed.access.grantId,i.access.grantId);assert.ok(refreshed.access.checkedAtMs>i.access.checkedAtMs);assert.equal(w.rows.size,1);assert.equal(refreshed.customToken,undefined);
+ await assert.rejects(refreshDeviceAccount(w.deps,{...auth,uid:'another'},{version:1,grantId:i.access.grantId}));
+ w.disable();await assert.rejects(refreshDeviceAccount(w.deps,auth,{version:1,grantId:i.access.grantId}));
+});
+test('native logout capability can revoke after the SDK session was cleared',async()=>{
+ const w=world(),i=await issueDeviceAccount(w.deps,auth,{version:1});
+ await assert.rejects(revokeDeviceAccount(w.deps,{uid:null,claims:{}},{version:1,grantId:i.access.grantId,credential:'x'.repeat(43)}));
+ await revokeDeviceAccount(w.deps,{uid:null,claims:{}},{version:1,grantId:i.access.grantId,credential:i.credential});
+ await assert.rejects(exchangeDeviceAccount(w.deps,{version:1,credential:i.credential,app:'equipment'}));
+});
+test('JSA exchange binds the actual server shift, and never fabricates a missing shift',async()=>{
+ const w=world(),i=await issueDeviceAccount(w.deps,auth,{version:1});
+ w.deps.getShiftAuthority=async()=>({driverId:'d',companyId:'c',initialized:true,openPeriodId:'2026-10-19_090000',originLocalDate:'2026-10-19'});
+ const result=await exchangeDeviceAccount(w.deps,{version:1,credential:i.credential,app:'jsa'});
+ assert.equal(result.jsaBinding.periodId,'2026-10-19_090000');
+ w.deps.getShiftAuthority=async()=>null;
+ await assert.rejects(exchangeDeviceAccount(w.deps,{version:1,credential:i.credential,app:'jsa'}));
+ w.deps.getShiftAuthority=async()=>({driverId:'d',companyId:'c',initialized:true,openPeriodId:null,originLocalDate:null});
+ assert.equal((await exchangeDeviceAccount(w.deps,{version:1,credential:i.credential,app:'jsa'})).jsaBinding.shiftState,'none');
+});

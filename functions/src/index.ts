@@ -4144,4 +4144,4 @@ export { demoWellPullPlan } from './liveDemo/wellPlan';
 
 export {jsaFinalizeShiftContext} from './jsaReceipt/jsaWorkPeriodLifecycle';
 
-export {platformIssueDeviceAccount,platformExchangeDeviceAccount,platformRevokeDeviceAccount} from './platform/deviceAccountCallables';
+export {platformIssueDeviceAccount,platformExchangeDeviceAccount,platformRevokeDeviceAccount,platformRefreshDeviceAccount} from './platform/deviceAccountCallables';

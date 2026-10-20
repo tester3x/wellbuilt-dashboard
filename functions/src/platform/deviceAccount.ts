@@ -68,3 +68,11 @@ export async function revokeDeviceAccount(deps:DeviceAccountDeps,auth:SsoAuthCon
   if(!credentialMatches&&(!auth.uid||row.data?.uid!==auth.uid))fail('permission-denied','account_mismatch');tx.update(path,{revoked:true});});
  return {ok:true};
 }
+
+export async function refreshDeviceAccount(deps:DeviceAccountDeps,auth:SsoAuthContext,raw:unknown){
+ const r=request(raw,['version','grantId']);
+ if(!auth.uid||typeof r.grantId!=='string'||!/^[a-f0-9]{64}$/.test(r.grantId))fail('unauthenticated','account_required');
+ const row=await deps.runTransaction(async tx=>{const found=await tx.get('platform_device_accounts/'+r.grantId);return found.exists?found.data:null;});
+ if(!row||row.uid!==auth.uid||auth.claims.driverId!==row.driverId||auth.claims.companyId!==row.companyId||row.revoked!==false||typeof row.establishedAtMs!=='number'||typeof row.expiresAtMs!=='number'||deps.nowMs()>=row.expiresAtMs)fail('permission-denied','device_account_unavailable');
+ return {access:await snapshot(deps,{uid:row.uid as string,driverId:row.driverId as string,companyId:row.companyId as string},row.establishedAtMs,r.grantId)};
+}
