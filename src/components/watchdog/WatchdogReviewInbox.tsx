@@ -41,8 +41,7 @@ export function WatchdogReviewInbox({companyId,load=loadReviews}:{companyId:stri
  },[companyId,load]);
  useEffect(()=>{
   mounted.current=true;generation.current++;inFlight.current=null;setRows([]);setUpdated('');void refresh();
-  const timer=setInterval(()=>void refresh(),15000);
-  return()=>{mounted.current=false;generation.current++;clearInterval(timer);};
+  return()=>{mounted.current=false;generation.current++;};
  },[refresh]);
  return <>
   <div className="flex items-center justify-between gap-3"><h1 className="text-2xl font-bold">Watchdog reviews ({rows.length})</h1>
@@ -50,7 +49,7 @@ export function WatchdogReviewInbox({companyId,load=loadReviews}:{companyId:stri
     <span aria-hidden="true" className={refreshing?'inline-block animate-spin':''}>&#8635;</span>{refreshing?'Refreshing...':'Refresh'}
    </button>
   </div>
-  <p>Review decisions are applied by the watchdog laptop when online.</p>
+  <p>Refresh to check for new reviews. Review decisions are applied by the watchdog laptop when online.</p>
   <p role="status" aria-live="polite">{refreshing?'Checking for reviews...':updated?`Last checked: ${updated}`:'Reviews have not loaded yet.'}</p>
   {error&&<p role="alert" className="text-red-300">{error}</p>}
   {!refreshing&&!error&&!rows.length&&<p>No pulls waiting for review.</p>}
