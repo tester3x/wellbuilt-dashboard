@@ -1,13 +1,16 @@
 /** Keep linked Service Work tickets together in their work sequence.
  * The input is already sorted by physical priority; unrelated jobs retain that order.
+ * Current work stays above queued split siblings, even when a later ticket is active.
  */
 export function orderSplitTicketChains<T extends {
   jobType: string;
   splitGroupId?: string;
   splitSequence?: number;
-}>(jobs: readonly T[]): T[] {
+}>(jobs: readonly T[], isCurrent: (job: T) => boolean = () => false): T[] {
+  const current = new Set(jobs.filter(isCurrent));
+  const waiting = jobs.filter(job => !current.has(job));
   const chains = new Map<string, T[]>();
-  for (const job of jobs) {
+  for (const job of waiting) {
     if (job.jobType !== 'service' || !job.splitGroupId) continue;
     const chain = chains.get(job.splitGroupId) || [];
     chain.push(job);
@@ -15,8 +18,8 @@ export function orderSplitTicketChains<T extends {
   }
 
   const emitted = new Set<string>();
-  const ordered: T[] = [];
-  for (const job of jobs) {
+  const ordered: T[] = [...current];
+  for (const job of waiting) {
     const groupId = job.jobType === 'service' ? job.splitGroupId : undefined;
     if (!groupId || (chains.get(groupId)?.length || 0) < 2) {
       ordered.push(job);

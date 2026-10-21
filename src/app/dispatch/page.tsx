@@ -5165,7 +5165,6 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
         {job.jobType === 'pw' && job.flowRate && <span>Flow at dispatch: <span className="text-gray-200">{job.flowRate}</span></span>}
         {job.jobType === 'service' && job.serviceType && <span>Service: <span className="text-gray-200">{job.serviceType}</span></span>}
         {job.jobType === 'service' && job.onsiteBy && <span>Be on site by: <span className="text-gray-200">{job.onsiteBy.replace('T', ' ')}</span></span>}
-        {job.driverDest && <span>Heading to: <span className="text-gray-200">{job.driverDest}</span></span>}
       </div>
 
       {/* Status and actions stay inside the same job boundary as the details. */}
@@ -5392,7 +5391,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     map.forEach((jobs, key) => {
       const rankById = new Map(jobs.map(jb => [jb.id, rankOf(jb)]));
       const physicalOrder = [...jobs].sort((a, b) => comparePhysicalJobs(rankById.get(a.id)!, rankById.get(b.id)!));
-      const ordered = orderSplitTicketChains(physicalOrder);
+      const ordered = orderSplitTicketChains(physicalOrder, job => rankById.get(job.id)!.inProgress);
       map.set(key, ordered);
     });
     return new Map(
