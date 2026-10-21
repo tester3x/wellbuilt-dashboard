@@ -26,6 +26,7 @@ export const AUTH_ROUTES = [
   '/safety',
   '/safety/spills/detail',
   '/settings',
+  '/sync-alerts',
   '/tickets',
   '/well',
   '/watchdog',

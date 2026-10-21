@@ -1,4 +1,5 @@
 'use client';
+import { useDashboardViewState } from '@/lib/useDashboardViewState';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -81,7 +82,7 @@ export default function BillingPage() {
   const canEditBilling = hasCapability(user, 'editBilling', userCompany);
 
   // Sub-tab
-  const [activeTab, setActiveTab] = useState<SubTab>('receivables');
+  const [activeTab, setActiveTab] = useDashboardViewState<SubTab>('section', 'receivables', ['receivables', 'fuel', 'export']);
 
   // Shared state
   const [companies, setCompanies] = useState<Map<string, CompanyConfig>>(new Map());

@@ -1,4 +1,5 @@
 'use client';
+import { useDashboardViewState } from '@/lib/useDashboardViewState';
 
 import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
@@ -305,12 +306,12 @@ export default function PayrollPage() {
 
   // State
   const [payPeriods] = useState<PayPeriod[]>(() => getPayPeriods());
-  const [selectedPeriodIdx, setSelectedPeriodIdx] = useState(0);
+  const [selectedPeriodIdx, setSelectedPeriodIdx] = useDashboardViewState<number>('periodIndex', 0, payPeriods.map((_, i) => i));
   const [timesheets, setTimesheets] = useState<DriverTimesheetSummary[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useDashboardViewState<string>('search', '');
 
   // Deductions state
   const [deductions, setDeductions] = useState<Deduction[]>([]);

@@ -224,6 +224,10 @@ export async function runHeaderNavigationGuardrails() {
       }),
     },
     '@/lib/tabs': tabsModule,
+    '@/lib/dashboardReturnState': {
+      rememberedTabHref: (_uid, _company, _tab, fallback) => fallback,
+      rememberTabHref: () => {},
+    },
     '@/lib/auth': {
       getRoleLabel: () => 'Admin',
       hasCapability: () => true,

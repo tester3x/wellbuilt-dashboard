@@ -12,6 +12,7 @@ import { NotificationBell } from './NotificationBell';
 import { ChatIcon } from './chat/ChatIcon';
 import { ChatSidebar } from './chat/ChatSidebar';
 import { getFirebaseDatabase } from '@/lib/firebase';
+import { rememberedTabHref, rememberTabHref } from '@/lib/dashboardReturnState';
 
 export function AppHeader() {
   const { user, userCompany, signOut, operatingCompanyId, selectOperatingCompany } = useAuth();
@@ -28,6 +29,10 @@ export function AppHeader() {
     return () => { cancelled = true; };
   }, [user]);
   const [chatUnread, setChatUnread] = useState(0);
+  const [returnLinks, setReturnLinks] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setReturnLinks(user ? Object.fromEntries(TABS.map(tab => [tab.id, rememberedTabHref(user.uid, operatingCompanyId, tab.id, tab.href)])) : {});
+  }, [user?.uid, operatingCompanyId, pathname]);
 
   // Real-time listener: pending driver count → drives Admin button pulse
   // This is independent of the notification bell. Bell = awareness, pulse = persistent reminder.
@@ -179,7 +184,13 @@ export function AppHeader() {
               return (
                 <Link
                   key={tab.id}
-                  href={tab.href}
+                  href={returnLinks[tab.id] || tab.href}
+                  onClick={event => {
+                    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    rememberTabHref(user.uid, operatingCompanyId);
+                    const href = rememberedTabHref(user.uid, operatingCompanyId, tab.id, tab.href);
+                    event.preventDefault(); router.push(href);
+                  }}
                   className={`relative whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors border-b-2 ${
                     isActive
                       ? 'border-blue-500 text-white'

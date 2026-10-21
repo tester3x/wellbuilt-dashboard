@@ -2,7 +2,7 @@
   "capturedAt": "2026-10-15",
   "project": "wellbuilt-sync",
   "source": "firebase functions:list",
-  "count": 212,
+  "count": 214,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -34,6 +34,7 @@
     "adminListCompanyOnboardingRequests",
     "adminListPendingRegistrations",
     "adminListPlans",
+    "adminListSyncAlerts",
     "adminPreviewCompanyEffectiveCapabilities",
     "adminPreviewEstimationHold",
     "adminRejectDriverRegistration",
@@ -70,8 +71,8 @@
     "dispatchDemoViewerJob",
     "driverChangeOwnPasscode",
     "eQuipmentAssignments",
-    "eQuipmentDocuments",
     "eQuipmentDVIR",
+    "eQuipmentDocuments",
     "eQuipmentEquipment",
     "equipmentShop",
     "exchangeEquipmentAppSession",
@@ -133,8 +134,8 @@
     "liveDemoPhoneFrame",
     "liveDemoSnapshot",
     "logUnmatched",
-    "materializerDriftHeartbeat",
     "materializeTransferredTicket",
+    "materializerDriftHeartbeat",
     "onDispatchCreate",
     "onDispatchUpdate",
     "onProjectWrite",
@@ -161,6 +162,7 @@
     "registerDriverDvirPostTrip",
     "registerStandaloneDriver",
     "removeSplitLeg",
+    "reportDriverSyncAlert",
     "requestCompanyOnboarding",
     "requestDriverRegistration",
     "requestStorageUploadPath",
@@ -216,5 +218,7 @@
     "watchdogStrandedPackets",
     "weeklyDieselPriceFetch",
     "writeDiagnosticLog"
-  ]
+  ],
+  "officeSyncVerifiedAt": "2026-10-21T22:18:00Z",
+  "officeSyncVerification": "Named Cloud Functions v2 metadata ACTIVE, deployed source downloaded and anonymous requests rejected"
 }

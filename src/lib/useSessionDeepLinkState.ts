@@ -55,6 +55,8 @@ export function useSessionDeepLinkState<T>(
   const [value, setValue] = useState<T>(fallback);
   const [restored, setRestored] = useState(false);
   const keyRef = useRef<string | null>(null);
+  const scopeRef = useRef(scope); scopeRef.current = scope;
+  const valueKeyRef = useRef<string | null>(null);
 
   const ready = scopeReady(scope) && isRestorableSlot(slot);
   const key = ready ? buildDeepLinkStateKey(scope, slot) : null;
@@ -63,10 +65,12 @@ export function useSessionDeepLinkState<T>(
   // Restore whenever the scoped key changes (login, company switch, route change).
   useEffect(() => {
     if (!key) {
+      valueKeyRef.current = null;
       setRestored(false);
       return;
     }
     const parsed = parseState<T>(readSession(key), scope, slot);
+    valueKeyRef.current = key;
     if (parsed != null) setValue(parsed);
     else setValue(fallback);
     setRestored(true);
@@ -76,17 +80,21 @@ export function useSessionDeepLinkState<T>(
 
   const set = useCallback(
     (next: T | ((prev: T) => T)) => {
+      const expected = key;
       setValue((prev) => {
-        const resolved = typeof next === 'function' ? (next as (p: T) => T)(prev) : next;
+        if (keyRef.current !== expected) return prev;
+        const before = valueKeyRef.current === expected ? prev : fallback;
+        const resolved = typeof next === 'function' ? (next as (p: T) => T)(before) : next;
         const k = keyRef.current;
-        if (k) writeSession(k, serializeState(scope, slot, resolved, Date.now()));
+        if (k) writeSession(k, serializeState(scopeRef.current, slot, resolved, Date.now()));
+        valueKeyRef.current = k;
         return resolved;
       });
     },
-    // scope/slot captured via keyRef + closure; stable enough for callers.
+    // Retain the callback's owner key so late work cannot mutate another scope.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [slot],
+    [slot, key],
   );
 
-  return [value, set, restored];
+  return [valueKeyRef.current === key ? value : fallback, set, restored && valueKeyRef.current === key];
 }

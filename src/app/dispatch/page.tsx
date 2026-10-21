@@ -24,7 +24,6 @@ import { buildSearchWellStatus, rankWellSearchRows } from '@/lib/wellSearchPrese
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
 import { combinedLocationResults, dropoffSourcesForBuilderOperator, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
 import { heavyWaterWellResults } from '@/lib/heavyWaterWellSearch';
-import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
@@ -305,11 +304,6 @@ function DispatchPageInner() {
   const viewedCompanyId = resolveViewedCompanyId(user?.companyId, operatingCompanyId, isPlatformAdmin(user));
   const router = useRouter();
   const dispatchPathname = usePathname();
-  // Restore scroll position across refresh (session-scoped; restores after data lays out).
-  useScrollRestore(
-    { uid: user?.uid ?? null, companyId: user?.companyId || userCompany?.id || null, pathname: dispatchPathname },
-    { elementSelector: '[data-dashboard-scroll="dispatch"]', ready: !loading && !!user },
-  );
 
   // Capability gate for ALL dispatch mutations. The Dispatch tab is visible to
   // any role with `viewDispatch` (e.g. `viewer`), but only `createDispatch`
@@ -569,7 +563,7 @@ function DispatchPageInner() {
   }, []);
   const [workspaceTab, setWorkspaceTab] = useState<'build' | 'queue' | 'jobs'>(() => {
     const tab = readInitialParam('tab');
-    return tab === 'jobs' || tab === 'completed' || tab === 'projects' ? 'jobs'
+    return tab === 'jobs' || tab === 'completed' || tab === 'cancelled' || tab === 'projects' ? 'jobs'
       : tab === 'queue' ? 'queue' : 'build';
   });
   const [demoTourTarget, setDemoTourTarget] = useState<string | null>(null);
@@ -629,7 +623,10 @@ function DispatchPageInner() {
 
   // Right panel tab
   const searchParams = useSearchParams();
-  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'cancelled' | 'projects'>('jobs');
+  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'cancelled' | 'projects'>(() => {
+    const tab = readInitialParam('tab');
+    return tab === 'completed' || tab === 'cancelled' || tab === 'projects' ? tab : 'jobs';
+  });
   const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
 
   // Handle URL params from notification deep links (e.g., ?tab=completed&highlight=abc123)
@@ -730,9 +727,10 @@ function DispatchPageInner() {
     setOrDel('view', queueView, 'needs-pull');
     setOrDel('route', routeFilter, 'all');
     setOrDel('q', search.trim(), '');
+    setOrDel('tab', workspaceTab === 'jobs' ? rightPanelTab : workspaceTab === 'queue' ? 'queue' : 'build', 'build');
     const qs = params.toString();
     window.history.replaceState(window.history.state, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
-  }, [queueView, routeFilter, search, loading, user]);
+  }, [queueView, routeFilter, search, workspaceTab, rightPanelTab, loading, user]);
 
   // Z Fold recovery — track stacked (Fold/narrow/short) vs desktop-split layout.
   useEffect(() => {
@@ -3918,7 +3916,7 @@ function DispatchPageInner() {
                 </div>
               )}
 
-              <div id="dispatch-queue-body" className="dispatch-queue-body">
+              <div id="dispatch-queue-body" data-dashboard-scroll="dispatch-queue" className="dispatch-queue-body">
               {/* Scrollable well table */}
               <div className="overflow-x-auto">
                 {dataLoading ? (
@@ -4270,7 +4268,7 @@ function DispatchPageInner() {
                 </div>
               )}
               {/* Scrollable content (owns internal scroll in the CP2 desktop grid) */}
-              <div className="dispatch-jobs-body p-3">
+              <div data-dashboard-scroll="dispatch-jobs" className="dispatch-jobs-body p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
                     dispatches={dispatches.filter(isActiveDispatchCard)}
@@ -5272,11 +5270,11 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   // Expanded driver groups persist across refresh — session-scoped by uid+companyId+
   // pathname, keyed by the canonical group id the Active Jobs render groups on
   // (dispatchDriverGroupKey — canonical driverId), never a display name or list index.
-  const { user: expandedUser } = useAuth();
+  const { user: expandedUser, operatingCompanyId: expandedCompany } = useAuth();
   const expandedPathname = usePathname();
   const expandedScope = useMemo(
-    () => ({ uid: expandedUser?.uid ?? null, companyId: expandedUser?.companyId ?? null, pathname: expandedPathname }),
-    [expandedUser?.uid, expandedUser?.companyId, expandedPathname],
+    () => ({ uid: expandedUser?.uid ?? null, companyId: expandedCompany || expandedUser?.companyId || '@platform', pathname: expandedPathname }),
+    [expandedUser?.uid, expandedUser?.companyId, expandedCompany, expandedPathname],
   );
   const [expandedList, setExpandedList] = useSessionDeepLinkState<string[]>(
     expandedScope,
