@@ -108,6 +108,14 @@ if (process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW !== 'disabled') {
 console.log('\n--- Running Mandatory Pre-Deploy Test Suites on Fresh Build ---');
 
 try {
+  console.log('Executing: node tools/test-approved-dashboard-restorations.cjs ...');
+  execSync('node tools/test-approved-dashboard-restorations.cjs', { stdio: 'inherit' });
+  console.log('✓ Approved Demo Media and Completed Dates: PASSED');
+} catch (err) {
+  fatal('Approved Dashboard restoration verification FAILED. Deployment aborted.');
+}
+
+try {
   console.log('Executing: node tools/test-watchdog-refresh.cjs ...');
   execSync('node tools/test-watchdog-refresh.cjs', { stdio: 'inherit' });
   console.log('✓ Watchdog Manual Refresh (no idle polling): PASSED');
