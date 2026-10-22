@@ -98,6 +98,14 @@ try {
 console.log('\n--- Running Mandatory Pre-Deploy Test Suites on Fresh Build ---');
 
 try {
+  console.log('Executing: node tools/test-watchdog-refresh.cjs ...');
+  execSync('node tools/test-watchdog-refresh.cjs', { stdio: 'inherit' });
+  console.log('✓ Watchdog Manual Refresh (no idle polling): PASSED');
+} catch (err) {
+  fatal('Watchdog manual refresh verification FAILED. Deployment aborted.');
+}
+
+try {
   console.log('Executing: node tools/test-header-navigation-guardrails.mjs ...');
   execSync('node tools/test-header-navigation-guardrails.mjs', { stdio: 'inherit' });
   console.log('✓ Header & Navigation Guardrails: PASSED');
