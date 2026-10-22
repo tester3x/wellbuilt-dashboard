@@ -15,4 +15,10 @@ was also reachable; its omission was the classification rule, not proof of an ou
 Ten classification regression cases pass and Functions compiles. Scope is only
 scheduledWellCatalogRefresh and triggerWellCatalogRefresh; no Hosting, rule, auth,
 account or unrelated function deployment is authorized by this checkpoint.
-Live deployment identity and verification are appended after deployment.
+Deployed from 3be852dc on October21,2026. Both functions are ACTIVE:
+scheduledwellcatalogrefresh-00004-giq and triggerwellcatalogrefresh-00004-wif.
+Downloaded deployed source matches the checkpoint's refresh and classifier files.
+Comparing service configuration before/after found only the expected revision
+change for each; runtime/service settings were preserved. No full-catalog write
+run was triggered as a test. Targeted official catalog repair and the user's
+missing split-leg repair were separately scoped and audited with private backups.
