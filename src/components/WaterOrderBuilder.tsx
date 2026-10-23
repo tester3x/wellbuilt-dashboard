@@ -2,13 +2,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   collection,
-  doc,
   onSnapshot,
   query,
-  runTransaction,
   where,
 } from "firebase/firestore";
-import { getFirestoreDb } from "@/lib/firebase";
+import { getFirestoreDb, getFirebaseFunctions } from "@/lib/firebase";
+import { httpsCallable } from "firebase/functions";
 import { loadWellsForOperator, loadDisposals, searchWellsByName, type NdicWell } from "@/lib/firestoreWells";
 import { BuilderAutocomplete } from "@/components/BuilderAutocomplete";
 import { WaterOrderPlanReview } from "@/components/WaterOrderPlanReview";
@@ -92,14 +91,6 @@ const display = (at: string) =>
     hour: "numeric",
     minute: "2-digit",
   });
-const canonical = (v: unknown): string =>
-  JSON.stringify(v, (_key, value) =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(
-          Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
-        )
-      : value,
-  );
 const id = () => "water_" + crypto.randomUUID();
 const field =
   "min-w-0 w-full rounded border border-gray-600 bg-gray-900 px-2 py-1.5 text-sm text-white";
@@ -243,6 +234,7 @@ export function WaterOrderBuilder({
   const scopeDrivers = drivers.filter((d) =>
     d.companyId ? d.companyId === companyId : companyId === "liquid-gold",
   );
+  const visibleSources=scopeWells.filter(w=>`${w.wellName} ${w.operator||''}`.toLowerCase().includes(sourceSearch.trim().toLowerCase()));
   const requireScope = () => {
     if (
       !alive.current ||
@@ -445,42 +437,13 @@ export function WaterOrderBuilder({
           records,
           sent: [],
         }),
-      ),
-      ref = doc(getFirestoreDb(), "projects", orderId);
+      );
     if(new TextEncoder().encode(JSON.stringify(value)).length>900000)
       throw Error('This order is too large to save safely. Split it into smaller orders.');
-    const result = await runTransaction(getFirestoreDb(), async (tx) => {
-      const snap = await tx.get(ref);
-      requireScope();
-      if (snap.exists()) {
-        const existing = snap.data().waterOrder as Saved;
-        if (
-          snap.data().companyId !== companyId ||
-          !existing ||
-          canonical(existing.plan) !== canonical(plan)
-        )
-          throw Error("Saved order changed; reopen it before dispatch");
-        return { ...existing, id: orderId };
-      }
-      tx.set(ref, {
-        name: `Water Order · ${draft.name.trim()}`,
-        companyId,
-        createdBy: userId,
-        createdAt: new Date().toISOString(),
-        startDate: plan.createdAt.slice(0, 10),
-        projectedEndDate: plan.deadline.slice(0, 10),
-        wellNames: [...new Set(plan.trips.map((t) => t.wellName))],
-        operatorName: [...new Set(plan.sources.map((s) => s.operator))].join(
-          "; ",
-        ),
-        jobType: "pw",
-        status: "active",
-        driverSchedule: {},
-        notes: draft.notes,
-        waterOrder: value,
-      });
-      return value;
-    });
+    const response=await httpsCallable(getFirebaseFunctions(),'staffWriteWaterOrder')({op:'save',orderId,companyId,value});
+    requireScope();
+    const result=(response.data as {order:Saved}).order;
+    if(result?.id!==orderId||result?.companyId!==companyId)throw Error('Order confirmation did not match this company');
     if (alive.current) setSaved(result);
     return result;
   }
@@ -526,21 +489,10 @@ export function WaterOrderBuilder({
         if (result.dispatchId !== trip.id)
           throw Error("Dispatch identity changed");
         requireScope();
-        await runTransaction(getFirestoreDb(), async (tx) => {
-          const ref = doc(getFirestoreDb(), "projects", order.id),
-            snap = await tx.get(ref);
-          requireScope();
-          if (
-            snap.data()?.companyId !== companyId ||
-            snap.data()?.waterOrder?.id !== order.id
-          )
-            throw Error("Order ownership changed");
-          tx.update(ref, {
-            "waterOrder.sent": [
-              ...new Set([...(snap.data()!.waterOrder.sent || []), trip.id]),
-            ],
-          });
-        });
+        const response=await httpsCallable(getFirebaseFunctions(),'staffWriteWaterOrder')({op:'acknowledge',orderId:order.id,companyId,dispatchId:trip.id});
+        requireScope();
+        const confirmed=(response.data as {order:Saved}).order;
+        if(confirmed?.id!==order.id||confirmed.companyId!==companyId||!confirmed.sent?.includes(trip.id))throw Error('Server has not confirmed this order job');
         sent++;
         if(alive.current)setSaved(current=>current?.id===order.id?{...current,sent:[...new Set([...current.sent,trip.id])]}:current);
         if (!linked[trip.id])
@@ -620,7 +572,7 @@ export function WaterOrderBuilder({
       </div>
       <fieldset
         disabled={busy || !!saved || !canWrite}
-        className="space-y-3 disabled:opacity-75"
+        className="min-w-0 space-y-3 disabled:opacity-75"
       >
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs">
@@ -820,8 +772,13 @@ export function WaterOrderBuilder({
           </summary>
           <input type="search" aria-label="Search source wells" className={`${field} mt-2`} placeholder="Search source or operator" value={sourceSearch} onChange={e=>setSourceSearch(e.target.value)}/>
           <p className="text-xs text-gray-400">{scopeWells.filter(w=>!draft.excluded.includes(w.wellName)).length} of {scopeWells.length} allowed. Planning excludes sources without verified tank data.</p>
+          <div className="flex flex-wrap gap-3 py-2 text-xs">
+            <button type="button" disabled={!visibleSources.length} className="text-cyan-300 underline disabled:opacity-40" onClick={()=>update({excluded:scopeWells.filter(w=>!visibleSources.some(v=>v.wellName===w.wellName)).map(w=>w.wellName)})}>Use only shown sources</button>
+            <button type="button" disabled={!visibleSources.length} className="text-cyan-300 underline disabled:opacity-40" onClick={()=>update({excluded:draft.excluded.filter(name=>!visibleSources.some(w=>w.wellName===name))})}>Allow shown sources</button>
+            <button type="button" disabled={!visibleSources.length} className="text-gray-300 underline disabled:opacity-40" onClick={()=>update({excluded:[...new Set([...draft.excluded,...visibleSources.map(w=>w.wellName)])]})}>Exclude shown sources</button>
+          </div>
           <div className="max-h-52 overflow-auto mt-2 space-y-1">
-            {scopeWells.filter(w=>`${w.wellName} ${w.operator||''}`.toLowerCase().includes(sourceSearch.trim().toLowerCase())).map((w) => (
+            {visibleSources.map((w) => (
               <div className="flex items-center gap-2 text-xs" key={w.wellName}>
                 <input
                   aria-label={`Use ${w.wellName}`}
@@ -857,6 +814,7 @@ export function WaterOrderBuilder({
                 />
               </div>
             ))}
+            {!visibleSources.length&&<p className="text-xs text-gray-400">No sources match this search.</p>}
           </div>
         </details>
         <label className="block text-xs">
