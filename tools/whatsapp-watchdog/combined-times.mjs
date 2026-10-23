@@ -2,7 +2,7 @@ const issue='Multiple wells in one message; confirm individual pull times';
 /** Estimate only same-sender/channel combined reports; never infer across a shift-sized gap. */
 export function combinedPullTimes(message,data){
  const rows=message.rows||[],anchor=Date.parse(message.postedAt);
- if(!message.senderId||message.deleted||message.edited||!Number.isFinite(anchor)||rows.length<2||rows.length>5||new Set(rows.map(r=>r.wellName)).size!==rows.length||rows.some(r=>!r.wellName||!r.issues?.includes(issue)||r.issues.some(i=>![issue,'Missing barrels'].includes(i))||Date.parse(r.dateTimeUTC)!==anchor))return null;
+ if(!message.senderId||message.deleted||message.edited||!Number.isFinite(anchor)||rows.length<2||rows.length>5||rows.some(r=>!r.wellName||!r.issues?.includes(issue)||r.issues.some(i=>![issue,'Missing barrels'].includes(i))||Date.parse(r.dateTimeUTC)!==anchor))return null;
  const posts=Object.values(data.messages||{}).filter(p=>p.channel===message.channel&&p.senderId===message.senderId&&!p.deleted&&!p.edited&&p.rows?.length===1).flatMap(p=>p.rows.filter(r=>{
   const d=data.deliveries?.[r.id];return d?.status==='complete'&&!d.needsReview&&!r.timeEstimate&&Date.parse(r.dateTimeUTC)<anchor;
  })).sort((a,b)=>Date.parse(a.dateTimeUTC)-Date.parse(b.dateTimeUTC));
