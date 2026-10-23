@@ -74,3 +74,12 @@ while the browser profile stays in place. Inherited browser lifecycle methods
 are unchanged. A dependency-free regression proves logout preserves profile
 contents, does not manufacture authentication, and retains initialization hooks.
 The server also passes Node's syntax check. Runtime verification follows below.
+
+Runtime checkpoint bdb4a9d5 was pushed and fast-forwarded on the HP. Its regression
+also passed on HP Node 22. The hidden scheduled task restarted the receiver with
+the persistent queue unchanged. At 2026-10-23T06:07:11.900Z the local API reported
+Scan QR, paused, transport Ready, eight channels and no review flags. Browser
+inspection independently confirmed UNPAIRED and a normal QR login page. The
+previous relink therefore did not survive the crash; the owner needs to scan the
+fresh QR before automatic receiving can be verified. No profile/queue cleanup or
+hypothetical load was performed by this repair.
