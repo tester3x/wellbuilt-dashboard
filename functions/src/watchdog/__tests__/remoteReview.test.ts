@@ -3,7 +3,8 @@ const ref=(key:string)=>({key,get:async()=>({exists:records.has(key),data:()=>re
 jest.mock('firebase-functions/v2/https',()=>({onCall:(_opts:any,fn:any)=>fn,onRequest:(_opts:any,fn:any)=>fn,HttpsError:class extends Error{constructor(public code:string,message:string){super(message);}}}));
 jest.mock('firebase-admin',()=>({firestore:()=>({doc:ref,collection:(path:string)=>({doc:(id:string)=>ref(path+'/'+id),where:()=>({limit:()=>({get:async()=>({size:0,docs:[]})})})}),runTransaction:async(fn:any)=>fn({get:(r:any)=>r.get(),update:(r:any,v:any)=>records.set(r.key,{...records.get(r.key),...v}),create:(r:any,v:any)=>records.set(r.key,v)})})}));
 jest.mock('../../security/trustedStaffAuthority',()=>({requireTrustedCompanyCapability:jest.fn(async(uid:string,cap:string)=>{if(uid==='staff'&&cap==='viewDispatch')return {companyId:'liquid-gold'};if(uid==='manager')return {companyId:'liquid-gold'};throw Error('permission-denied');})}));
-import {listWatchdogReviews,decideWatchdogReview,resolveWatchdogRejectedReview} from '../remoteReview';
+jest.mock('../intake',()=>({authenticate:jest.fn(async()=>{})}));
+import {listWatchdogReviews,decideWatchdogReview,resolveWatchdogRejectedReview,syncWatchdogReviewV2} from '../remoteReview';
 const id='a'.repeat(64),revision='b'.repeat(64);
 beforeEach(()=>{records.clear();records.set('watchdog_review_inbox/liquid-gold/items/'+id,{companyId:'liquid-gold',rowId:'r',status:'review',revision,editable:true,row:{wellName:'Kahuna 5',tankLevelFeet:12,bottomLevelFeet:10,bblsTaken:165,issues:[]}});});
 const decision=(extra:any={})=>({auth:{uid:'manager',token:{}},data:{companyId:'liquid-gold',id,revision,decision:'exclude',reason:'Already entered',...extra}});
@@ -16,4 +17,14 @@ test('direct rejected recovery requires signed-in company write authority',async
  await expect((resolveWatchdogRejectedReview as any)({data:{companyId:'liquid-gold'}})).rejects.toThrow('Sign in');
  await expect((resolveWatchdogRejectedReview as any)({...decision(),auth:{uid:'staff',token:{}}})).rejects.toThrow('permission-denied');
  await expect((resolveWatchdogRejectedReview as any)({...decision(),data:{...decision().data,companyId:'other'}})).rejects.toThrow('scope');
+});
+
+test('a stale HP review snapshot cannot reopen a server-resolved observation',async()=>{
+ const key=require('crypto').createHash('sha256').update('r').digest('hex');
+ const receipt={identity:'owned',packetId:'packet',status:'complete'};
+ records.set('watchdog_review_inbox/liquid-gold/items/'+key,{status:'complete',recoveryResult:receipt});
+ records.set('watchdog_v2_config/laptop',{enabled:true,channels:{group:{wells:['Kahuna 5']}}});
+ let result:any;const response:any={json:(value:any)=>result=value,status:()=>response};
+ await (syncWatchdogReviewV2 as any)({body:{rowId:'r',revision,channel:'group',status:'review',body:'Original',issues:['STALE_PULL_TIME'],row:{wellName:'Kahuna 5'}}},response);
+ expect(result).toEqual({ok:true,command:null,receipt});expect(records.get('watchdog_review_inbox/liquid-gold/items/'+key).status).toBe('complete');
 });

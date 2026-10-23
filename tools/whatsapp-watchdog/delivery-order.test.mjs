@@ -34,3 +34,13 @@ test('failed intake retains the older observation and never sends its newer sibl
   await t.tick(false);assert.deepEqual(sent,['older']);assert.equal(Object.keys(new Queue(dir).data.messages).length,2);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+import {RemoteReviews} from './remote-review.mjs';
+test('office reconciliation clears a hold only after a matching server receipt',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'watchdog-resolution-receipt-'));
+ try{
+  const q=new Queue(dir);q.ingest({id:'p',channel:'g',chat:header(Date.now(),'Driver','Kahuna 5\nTop 12\n165 bbl')});const row=Object.values(q.data.messages)[0].rows[0];q.data.deliveries={[row.id]:{status:'review',identity:'owned',packetId:'original',needsReview:true}};q.save();
+  let correct=false;const t={secret:'synthetic',busy:false,request:async()=>({receipt:{status:'complete',identity:correct?'owned':'foreign',packetId:'original'}})};
+  const r=new RemoteReviews(q,t);await r.tick([]);assert.equal(q.data.deliveries[row.id].status,'review');assert.match(r.error,/Invalid reconciliation receipt/);
+  correct=true;await r.tick([]);assert.equal(new Queue(dir).data.deliveries[row.id].status,'complete');
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});

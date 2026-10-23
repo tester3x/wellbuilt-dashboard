@@ -16,6 +16,7 @@ import {dismissReview} from './dismiss-review.mjs';
 import {createProfileAuth,closeRestoredReceiverTabs} from './profile-auth.mjs';
 import {ReceiverRecovery} from './recovery.mjs';
 import {collectReceiver} from './receiver-history.mjs';
+import {finishSyncedLogin} from './receiver-ready.mjs';
 const require=createRequire(import.meta.url);
 const {splitChat,parsePullChat,chatTimestamp}=require('../../functions/lib/imports/pullParser.js');
 const root=path.dirname(fileURLToPath(import.meta.url));
@@ -38,7 +39,7 @@ const codexTimer=setInterval(()=>{if(client&&state==='Connected')void codexBridg
 let polling=false,lastReceiverCheck='',receiverMode='Starting',receiverGroups=[];
 async function pollReceiver(){
  transport.channelOptions=Object.fromEntries(channels.map(c=>[c.id,c.options]));
- if(polling||!client||!['Syncing WhatsApp','Connected'].includes(state))return;
+ if(polling||!client?.pupPage||!['Connecting','Syncing WhatsApp','Connected'].includes(state))return;
  const pollClient=client;polling=true;
  try{
  const activeClient=client;
@@ -67,14 +68,14 @@ function respond(res,code,value,type='application/json'){res.writeHead(code,{'Co
 async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;if(await commands.receive({id:m.id._serialized||m.id.id,channel:channelId,body:m.body,timestamp:m.timestamp,fromMe:m.fromMe,senderId:m.id?.participant?._serialized||m.author||null,deleted},(id,body)=>client.sendMessage(id,body),{state,paused,transportStatus:transport.status}))return;if(paused)return;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId:m.id?.participant?._serialized||m.author||null});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
  client=new Client({userAgent:false,authStrategy:createProfileAuth(LocalAuth,{dataPath:path.join(directory,'session')},()=>console.log('[receiver-auth] WhatsApp logged out; preserving live browser profile for QR relinking.')),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
- const current=client;state='Connecting';error='';
+ const current=client;let authenticated=false;state='Connecting';error='';
  // Startup stages contain no messages or credentials; distinguish a browser
  // launch stall from authentication or WhatsApp injection when recovering.
  for(const [target,method,label] of [[client.authStrategy,'beforeBrowserInitialized','profile'],[client.authStrategy,'afterBrowserInitialized','browser'],[client,'initWebVersionCache','web-cache'],[client,'inject','injection']]){
-  const original=target[method];target[method]=async function(...args){console.log('[receiver-startup] '+label+' start');const result=await original.apply(this,args);if(label==='browser')await closeRestoredReceiverTabs(current);console.log('[receiver-startup] '+label+' ready');return result;};
+  const original=target[method];target[method]=async function(...args){console.log('[receiver-startup] '+label+' start');const result=await original.apply(this,args);if(label==='browser')await closeRestoredReceiverTabs(current);if(label==='injection'&&!authenticated)await current.pupPage.evaluate(finishSyncedLogin);console.log('[receiver-startup] '+label+' ready');return result;};
  }
  client.on('qr',async code=>{const value=await QRCode.toDataURL(code);if(client!==current)return;qr=value;state='Scan QR';});
- client.on('authenticated',()=>{if(client!==current)return;state='Syncing WhatsApp';setTimeout(()=>{if(client===current&&state==='Syncing WhatsApp')error='Signed in, but the WhatsApp receiver has not finished starting. Live capture is unavailable.';},60000).unref();});
+ client.on('authenticated',()=>{if(client!==current)return;authenticated=true;state='Syncing WhatsApp';setTimeout(()=>{if(client===current&&state==='Syncing WhatsApp')error='Signed in, but the WhatsApp receiver has not finished starting. Live capture is unavailable.';},60000).unref();});
  client.on('ready',()=>{if(client!==current)return;qr='';state='Connected';paused=!control.watching;void loadGroups().catch(e=>{error=e.message;});});
  client.on('auth_failure',()=>{if(client!==current)return;state='Authentication failed';error='Relink WhatsApp using QR.';});
  client.on('disconnected',reason=>{if(client!==current)return;state=reason==='LOGOUT'?'Authentication failed':'Disconnected';error=reason==='LOGOUT'?'WhatsApp revoked this link. Scan QR to relink.':'';qr='';});

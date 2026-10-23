@@ -52,3 +52,8 @@ test('missing group and failed history never return an advanced checkpoint', asy
     assert.equal(window.__wellBuiltHistory.group,undefined);
   } finally {delete globalThis.window;}
 });
+import {finishSyncedLogin} from './receiver-ready.mjs';
+test('already-synced login finishes the SDK callback once, while unpaired sessions never do',async()=>{
+ let calls=0;globalThis.window={AuthStore:{AppState:{state:'UNPAIRED'}},require:()=>({Socket:{state:'CONNECTED',hasSynced:true}}),onAppStateHasSyncedEvent:async()=>calls++};
+ try{assert.equal(await finishSyncedLogin(),false);window.AuthStore.AppState.state='CONNECTED';assert.equal(await finishSyncedLogin(),true);assert.equal(await finishSyncedLogin(),false);assert.equal(calls,1);}finally{delete globalThis.window;}
+});
