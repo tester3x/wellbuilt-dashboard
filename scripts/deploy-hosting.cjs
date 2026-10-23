@@ -24,7 +24,7 @@ async function deploy() {
   const state = checkRelease();
   // The Firebase predeploy hook does the clean build and all required checks.
   execFileSync(process.platform === 'win32' ? 'firebase.cmd' : 'firebase',
-    ['deploy', '--only', 'hosting', '--project', 'wellbuilt-sync', '--non-interactive', '-m', `Dashboard source ${state.source}`],
+    ['deploy', '--only', 'hosting', '--project', 'wellbuilt-sync', '--non-interactive', '-m', `Dashboard-source-${state.source}`],
     { stdio: 'inherit', shell: process.platform === 'win32' });
 }
 async function finalize() {
