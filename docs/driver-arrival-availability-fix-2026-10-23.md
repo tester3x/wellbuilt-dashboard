@@ -32,7 +32,16 @@ future/stale authentication evidence, sign-out ordering, staff scope, no status
 polling, status failure fallback, selectable unknown rows, and responsive layout.
 
 A private read-only comparison against actual pre-dispatch work evidence and
-live road travel changed the affected driver's Gabriel 1 and Gabriel 4 results
-from unavailable to an estimated 17 minutes. No dispatch, invoice, shift, driver
+live road travel restored the affected driver's withheld arrival estimate for
+the reported pickup and the next requested pickup. No dispatch, invoice, shift, driver
 profile or job record was written by this investigation. Raw records, driver
 identities, coordinates, keys and screenshots remain outside Git.
+
+Released runtime source: `983c2ae4cb895063661182acf47e92ced024a3b9`.
+Mandatory preflight passed: 463 library tests passed, zero failed, one existing
+skip; retained header, navigation, dispatch, manual Watchdog refresh, health,
+review recovery, demo/media and completed-date checks passed. All 362 live
+Hosting artifacts byte-match the build and the approved checkpoint advanced
+through the normal postdeploy hook. The account signal callable is ACTIVE from
+backend source `85b0ddb2`; signed-out requests return 401. No phone build or
+database/Firestore/Storage rules deployment was performed.
