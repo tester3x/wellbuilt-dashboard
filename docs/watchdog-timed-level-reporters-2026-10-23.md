@@ -83,3 +83,21 @@ inspection independently confirmed UNPAIRED and a normal QR login page. The
 previous relink therefore did not survive the crash; the owner needs to scan the
 fresh QR before automatic receiving can be verified. No profile/queue cleanup or
 hypothetical load was performed by this repair.
+
+## Automatic receiver and delivery verified after QR relink
+
+After the owner scanned the fresh QR, the API reported Connected. Monitoring was
+resumed through its normal authenticated local API. All eight configured chats
+appeared in receiver diagnostics, and successive receiver timestamps advanced.
+A real new load posted while disconnected was captured automatically on catch-up,
+sent through signed intake and acknowledged complete. A transient fetch failure
+retried without removing pending delivery. Both that new load and the recovered
+gauge received complete receipts. Independent RTDB reads proved canonical packet
+completion and the new load's lastPull/current gauge in WB M. No synthetic load
+or manual resubmission was used for this end-to-end test.
+
+At 2026-10-23T06:21:19.758Z: Connected, paused=false, last receiver check
+06:21:17.757Z, transport Ready, 493 complete receipts, no queued/incomplete
+receipts, no review inbox items and no review flags. Worker source is bdb4a9d5;
+subsequent commits document verification only. Automatic watching and delivery
+are now verified, superseding the earlier awaiting-QR checkpoint.
