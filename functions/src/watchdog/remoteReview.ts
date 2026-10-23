@@ -9,13 +9,14 @@ import {resolveRejectedReview} from './rejectedResolution';
 import {applyReviewCorrections} from './reviewCorrections';
 const root='watchdog_review_inbox';
 const sha=(value:string)=>createHash('sha256').update(value).digest('hex');
-async function authorize(request:any,write=false){
+export async function authorizeWatchdogOffice(request:any,write=false){
  if(!request.auth)throw new https.HttpsError('unauthenticated','Sign in required');
  const companyId=request.data?.companyId;if(typeof companyId!=='string'||!/^[a-zA-Z0-9_-]{1,64}$/.test(companyId))throw new https.HttpsError('invalid-argument','Select a company');
  const record=await admin.firestore().doc('platform_admins/'+request.auth.uid).get();
  if(!authorizeAdminCall(request.auth,record.data()).ok){const scope=await requireTrustedCompanyCapability(request.auth.uid,write?'manageWells':'viewDispatch');if(scope.companyId!==companyId)throw new https.HttpsError('permission-denied','Company scope mismatch');}
  return companyId;
 }
+const authorize=authorizeWatchdogOffice;
 export const syncWatchdogReviewV2=https.onRequest({region:'us-central1',timeoutSeconds:60,secrets:['WATCHDOG_HMAC_KEY_V1']},async(req,res)=>{try{
  await authenticate(req,'syncWatchdogReviewV2');const b=req.body;
  if(!b||typeof b.rowId!=='string'||b.rowId.length>200||typeof b.revision!=='string'||!/^[a-f0-9]{64}$/.test(b.revision)||typeof b.channel!=='string'||!['review','complete','duplicate','excluded','queued','archived','before_activation','incomplete'].includes(b.status)||typeof b.body!=='string'||b.body.length>6000||!Array.isArray(b.issues)||b.issues.length>30||b.issues.some((x:any)=>typeof x!=='string'||x.length>500))throw Error('invalid_review_snapshot');

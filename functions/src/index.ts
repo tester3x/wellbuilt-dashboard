@@ -4088,5 +4088,6 @@ export { ingestWatchdogPullV2, getWatchdogPullReceiptV2, stopWatchdogWellV2, get
 export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';
 
 export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview,resolveWatchdogRejectedReview} from './watchdog/remoteReview';
+export {getWatchdogAgentHealth,requestWatchdogRecovery,syncWatchdogAgentV2} from './watchdog/remoteAgent';
 
 export {reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from './watchdog/intake';
