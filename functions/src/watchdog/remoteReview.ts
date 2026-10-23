@@ -5,6 +5,7 @@ import {authenticate} from './intake';
 import {authorizeAdminCall} from '../admin/authority';
 import {requireTrustedCompanyCapability} from '../security/trustedStaffAuthority';
 import {chatTimestamp} from '../imports/pullParser';
+import {resolveRejectedReview} from './rejectedResolution';
 import {applyReviewCorrections} from './reviewCorrections';
 const root='watchdog_review_inbox';
 const sha=(value:string)=>createHash('sha256').update(value).digest('hex');
@@ -21,7 +22,7 @@ export const syncWatchdogReviewV2=https.onRequest({region:'us-central1',timeoutS
  const policy=(await admin.firestore().doc('watchdog_v2_config/laptop').get()).data();if(!policy?.enabled||!policy.channels?.[b.channel])throw Error('channel_not_allowed');
  if(!b.row||typeof b.row.wellName!=='string'||!policy.channels[b.channel].wells?.includes(b.row.wellName))throw Error('well_not_allowed');
  const ref=admin.firestore().doc(root+'/liquid-gold/items/'+sha(b.rowId));
- const result=await admin.firestore().runTransaction(async tx=>{const snap=await tx.get(ref),old=snap.data();const fields={companyId:'liquid-gold',principalId:'laptop-watchdog-v2',rowId:b.rowId,revision:b.revision,channel:b.channel,groupName:typeof b.groupName==='string'?b.groupName.slice(0,200):'',body:b.body,author:typeof b.author==='string'?b.author.slice(0,200):'',postedAt:b.postedAt||'',row:b.row,issues:b.issues,status:b.status,editable:b.editable===true,updatedAt:Date.now()};
+ const result=await admin.firestore().runTransaction(async tx=>{const snap=await tx.get(ref),old=snap.data();if(old?.recoveryResult)return {command:null,receipt:old.recoveryResult};const fields={companyId:'liquid-gold',principalId:'laptop-watchdog-v2',rowId:b.rowId,revision:b.revision,channel:b.channel,groupName:typeof b.groupName==='string'?b.groupName.slice(0,200):'',body:b.body,author:typeof b.author==='string'?b.author.slice(0,200):'',postedAt:b.postedAt||'',row:b.row,issues:b.issues,status:b.status,editable:b.editable===true,updatedAt:Date.now()};
  if(!old||old.revision!==b.revision||old.status!==b.status)tx.set(ref,fields,{merge:true});
  const command=old?.command?.state==='pending'&&old.command.revision===b.revision&&b.status==='review'?old.command:null;
  if(b.result&&old?.command?.id===b.result.id){tx.update(ref,{'command.state':b.result.ok?'applied':'failed','command.error':typeof b.result.error==='string'?b.result.error.slice(0,300):'','command.appliedAt':Date.now()});return {command:null};}
@@ -34,3 +35,9 @@ export const decideWatchdogReview=https.onCall({region:'us-central1'},async requ
  let dateTimeUTC=b.dateTimeUTC;if(b.decision==='confirm'){if(typeof b.timeCentral!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(b.timeCentral))throw new https.HttpsError('invalid-argument','Choose measurement time');const [date,time]=b.timeCentral.split('T'),[y,m,d]=date.split('-');dateTimeUTC=chatTimestamp(m+'/'+d+'/'+y,time);}
  const review=b.decision==='confirm'?{confirmed:true,dateTimeUTC,reason:b.reason.trim(),tankLevelFeet:b.tankLevelFeet,bottomLevelFeet:b.bottomLevelFeet,bblsTaken:b.bblsTaken,actorUid:request.auth!.uid}:null;if(review)applyReviewCorrections(item.row,review);
  const command={id:sha(b.id+':'+Date.now()+':'+request.auth!.uid),state:'pending',revision:b.revision,decision:b.decision,review,reason:b.reason.trim(),actorUid:request.auth!.uid,requestedAt:Date.now()};tx.update(ref,{command});tx.create(admin.firestore().collection('watchdog_review_audit').doc(command.id),{companyId,rowId:item.rowId,...command});return {ok:true};});});
+
+export const resolveWatchdogRejectedReview=https.onCall({region:'us-central1',timeoutSeconds:120,memory:'512MiB'},async request=>{
+ const companyId=await authorize(request,true);
+ try{return await resolveRejectedReview({...request.data,companyId},request.auth!.uid);}
+ catch(error){throw new https.HttpsError('failed-precondition',String((error as Error).message).slice(0,300));}
+});
