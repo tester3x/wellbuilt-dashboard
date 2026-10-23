@@ -53,3 +53,24 @@ and no stop on battery. A full Windows reboot was not performed: the real worker
 crash/restart, saved-session reopening and tab network outage were tested instead.
 As before, Windows user sign-in and a valid WhatsApp link are required; a genuine
 WhatsApp device unlink cannot be recovered without an owner QR scan.
+
+## Full reboot uncovered an additional startup failure
+
+The owner authorized a real Windows restart. Windows installed updates, rebooted
+and automatically ran the existing logon task. The worker launched but its HTTP
+API remained unresponsive. It had BelowNormal process priority (base priority 6),
+threads ready to run, very little accumulated CPU time, and a heavily trimmed
+working set. The 4-GB HP had approximately 240 MB free. The owner approved
+removing Discord and OneDrive auto-start; their exact Run entries were backed up
+privately and removed, and current instances closed. No application data was
+removed. Both live Watchdog processes and the future task priority were changed
+to Normal without calling Connect or Resume.
+
+The supervisor now assigns Normal worker priority and polls a minimal loopback
+health endpoint. After a three-minute cold-start grace, three consecutive failed
+checks replace a worker that is alive but unresponsive; an offline WhatsApp
+connection with a responsive HTTP loop is not killed. Tests execute the actual
+PowerShell script and prove unresponsive-worker replacement and healthy-worker
+retention, as well as the previous restart/duplicate protection checks. All 31
+Node regressions still pass. This closes the earlier blind spot where only an
+exited process could be recovered. A follow-up boot must verify the complete path.

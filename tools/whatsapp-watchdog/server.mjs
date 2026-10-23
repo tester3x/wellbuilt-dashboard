@@ -98,6 +98,7 @@ const recoveryTimer=setInterval(()=>void recovery.tick().catch(e=>{error='Reconn
 const server=http.createServer(async(req,res)=>{try{
  if(!['127.0.0.1:8791','localhost:8791'].includes(req.headers.host))return respond(res,403,{error:'Invalid host'});
  const url=new URL(req.url,'http://127.0.0.1:8791');
+ if(req.method==='GET'&&url.pathname==='/health')return respond(res,200,{ok:true});
  if(req.method==='GET'&&url.pathname==='/')return respond(res,200,readFileSync(path.join(root,'index.html'),'utf8'),'text/html');
  if(req.method==='GET'&&url.pathname==='/app.js')return respond(res,200,readFileSync(path.join(root,'app.js'),'utf8').replace('__TOKEN__',token),'text/javascript');
  if(req.method==='GET'&&url.pathname==='/style.css')return respond(res,200,readFileSync(path.join(root,'style.css'),'utf8'),'text/css');

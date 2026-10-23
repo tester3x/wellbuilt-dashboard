@@ -15,6 +15,7 @@ if($task.State -eq 'Running'){Stop-ScheduledTask -TaskName $taskName}
 # Retain the existing interactive user/logon trigger and all unrelated settings.
 $settings=$task.Settings
 $settings.StartWhenAvailable=$true
+$settings.Priority=4
 $settings.ExecutionTimeLimit='PT0S'
 $settings.RestartCount=999
 $settings.RestartInterval='PT1M'

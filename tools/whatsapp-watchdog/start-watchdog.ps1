@@ -1,4 +1,4 @@
-param([int]$Port=8791,[switch]$Once)
+param([int]$Port=8791,[switch]$Once,[int]$HealthyBootGraceSeconds=180)
 $ErrorActionPreference='Stop'
 $env:WBC_CHROME_PATH='C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 $env:WBC_WATCHDOG_DATA=Join-Path $env:LOCALAPPDATA 'WellBuilt\WhatsAppWatchdog'
@@ -27,7 +27,27 @@ if($alreadyListening){Write-StartupPhase 'existing receiver owns reconnect and s
 while($true){
  Write-StartupPhase 'launching receiver'
  $node=Start-Process -FilePath 'C:\Program Files\nodejs\node.exe' -ArgumentList 'server.mjs' -WorkingDirectory 'C:\dev\WellBuiltWatchdog\tools\whatsapp-watchdog' -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $env:WBC_WATCHDOG_DATA 'server.stdout.log') -RedirectStandardError (Join-Path $env:WBC_WATCHDOG_DATA 'server.stderr.log')
+ $node.PriorityClass='Normal'
  Write-StartupPhase ('receiver process '+$node.Id)
+ $started=Get-Date
+ $failedHealthChecks=0
+ while(-not $node.HasExited){
+  Start-Sleep -Seconds 15
+  $node.Refresh()
+  if($node.HasExited){break}
+  try {
+   $health=Invoke-WebRequest ('http://127.0.0.1:'+$Port+'/health') -UseBasicParsing -TimeoutSec 10
+   if($health.StatusCode -ne 200){throw 'Receiver health rejected'}
+   $failedHealthChecks=0
+  } catch {
+   if(((Get-Date)-$started).TotalSeconds -ge $HealthyBootGraceSeconds){$failedHealthChecks++}
+   if($failedHealthChecks -ge 3){
+    Write-StartupPhase 'receiver HTTP unresponsive; replacing worker'
+    Stop-Process -Id $node.Id -Force
+    break
+   }
+  }
+ }
  $node.WaitForExit()
  Write-StartupPhase ('receiver exited '+$node.ExitCode+'; restarting')
  # A crashed Node process can leave its own Chromium child holding the profile.
