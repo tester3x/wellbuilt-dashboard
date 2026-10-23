@@ -23,6 +23,12 @@ Validation on the laptop: Functions TypeScript build passes; all 51 Watchdog
 tests pass; the new Functions handler test passes (other intake cases explicitly
 not selected). Existing unrelated intake fixture failures are outside this test.
 
+HP verification at source `546afb61`: all 51 Watchdog tests pass, and the new
+actual-handler Functions test also passes. Live status at 13:39:19 UTC remains
+Connected, unpaused, transport Ready, eight watched channels, zero pending
+deliveries, zero reviews and no remote review error. The live worker was not
+restarted for these isolated tests.
+
 No customer loads, live levels, or WhatsApp posts are created or modified.
 These are regression/integration fixtures, not a live cloud end-to-end load test.
 Only tests, the test command and this audit note change; no runtime deployment,
