@@ -4146,3 +4146,5 @@ export {jsaFinalizeShiftContext} from './jsaReceipt/jsaWorkPeriodLifecycle';
 
 export {platformIssueDeviceAccount,platformExchangeDeviceAccount,platformRevokeDeviceAccount,platformRefreshDeviceAccount} from './platform/deviceAccountCallables';
 export { reportDriverSyncAlert, adminListSyncAlerts } from './security/officeSyncAlerts';
+
+export {jsaOfflineShift} from './jsaReceipt/jsaOfflineCallable';

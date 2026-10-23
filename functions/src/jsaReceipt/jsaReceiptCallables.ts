@@ -321,7 +321,7 @@ export const jsaAcknowledgeJob = httpsV2.onCall(OPTIONS, async (request) => {
 
 // New job-day clients use a distinct registration endpoint. Legacy shift requests
 // keep their existing records and validators; completion discovers stored scope.
-function jobDayDeps():JobDayDeps {
+export function jobDayDeps():JobDayDeps {
  const db=admin.firestore();return {shift:(d,c)=>buildReceiptDeps().resolveShift(d,c),sso:buildSsoDeps(),nowMs:()=>Date.now(),
   company:async id=>(await db.collection('companies').doc(id).get()).data()||{},
   workPeriod:(p,day)=>resolveJsaWorkPeriod(p.companyId,p.driverId,day),
