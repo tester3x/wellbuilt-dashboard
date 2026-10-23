@@ -13,6 +13,7 @@ import {OverlordCommands} from './commands.mjs';
 import {ReviewAlerts} from './alerts.mjs';
 import {RemoteReviews} from './remote-review.mjs';
 import {dismissReview} from './dismiss-review.mjs';
+import {createProfileAuth} from './profile-auth.mjs';
 const require=createRequire(import.meta.url);
 const {splitChat,parsePullChat,chatTimestamp}=require('../../functions/lib/imports/pullParser.js');
 const root=path.dirname(fileURLToPath(import.meta.url));
@@ -66,7 +67,7 @@ function status(){return {reviewCorrectionsEnabled:true,remoteReviewError:remote
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;if(await commands.receive({id:m.id._serialized||m.id.id,channel:channelId,body:m.body,timestamp:m.timestamp,fromMe:m.fromMe,senderId:m.id?.participant?._serialized||m.author||null,deleted},(id,body)=>client.sendMessage(id,body),{state,paused,transportStatus:transport.status}))return;if(paused)return;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId:m.id?.participant?._serialized||m.author||null});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
- client=new Client({userAgent:false,authStrategy:new LocalAuth({dataPath:path.join(directory,'session')}),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
+ client=new Client({userAgent:false,authStrategy:createProfileAuth(LocalAuth,{dataPath:path.join(directory,'session')},()=>console.log('[receiver-auth] WhatsApp logged out; preserving live browser profile for QR relinking.')),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
  state='Connecting';error='';
  // Startup stages contain no messages or credentials; distinguish a browser
  // launch stall from authentication or WhatsApp injection when recovering.

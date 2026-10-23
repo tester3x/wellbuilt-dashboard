@@ -62,3 +62,15 @@ This is **not yet an automatic-delivery pass**: WhatsApp watching must be verifi
 connected and unpaused after relinking. A direct submission of the already-captured
 gauge does not establish receiver health. HP sleep was considered but ruled out:
 the owner confirmed it awake, and the machine does not support Modern Standby.
+
+## Relink crash repair
+
+Checking the owner's relink attempt found the receiver process had terminated:
+LocalAuth.logout tried deleting Chromium's open profile and rejected on Windows
+Crashpad's locked file. Its asynchronous navigation callback did not catch that
+rejection. The receiver now overrides only that destructive local cleanup:
+WhatsApp still revokes/validates authentication and provides its normal QR flow,
+while the browser profile stays in place. Inherited browser lifecycle methods
+are unchanged. A dependency-free regression proves logout preserves profile
+contents, does not manufacture authentication, and retains initialization hooks.
+The server also passes Node's syntax check. Runtime verification follows below.
