@@ -2,6 +2,7 @@ const fs=require('fs'),os=require('os'),path=require('path'),cp=require('child_p
 const {chromium}=require('playwright');
 (async()=>{
  const root=process.cwd(),dir=fs.mkdtempSync(path.join(os.tmpdir(),'watchdog-health-'));
+ assert.match(fs.readFileSync(path.join(root,'src/app/watchdog/page.tsx'),'utf8'),/<WatchdogHealthPanel companyId=\{operatingCompanyId\}/,'Live Watchdog route must include remote health controls');
  const component=path.join(root,'src/components/watchdog/WatchdogHealthPanel.tsx').replaceAll('\\','/');
  fs.writeFileSync(path.join(dir,'stub.js'),'export const httpsCallable=()=>{throw Error("Unexpected Firebase request")};export const getFirebaseFunctions=()=>null;');
  fs.writeFileSync(path.join(dir,'entry.jsx'),`
