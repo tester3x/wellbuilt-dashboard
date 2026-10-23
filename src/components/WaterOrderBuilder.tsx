@@ -12,6 +12,8 @@ import { getFirestoreDb } from "@/lib/firebase";
 import { loadWellsForOperator } from "@/lib/firestoreWells";
 import { assignmentIdentityForDriver } from "@/lib/dispatchWriterIdentity";
 import type { DriverIdentity } from "@/lib/dispatchDriverIdentity";
+import type { ShiftDotView } from "@/lib/shiftDotCore";
+import {WaterOrderDriverPicker} from "@/components/WaterOrderDriverPicker";
 import type { WellResponse } from "@/lib/wellPoolCore";
 import {
   estimateCycleMinutes,
@@ -122,6 +124,7 @@ export function WaterOrderBuilder({
   ready,
   canWrite,
   createDispatch,
+  shiftForDriver,
 }: {
   companyId?: string;
   userId: string;
@@ -130,6 +133,7 @@ export function WaterOrderBuilder({
   jobs: Job[];
   ready: boolean;
   canWrite: boolean;
+  shiftForDriver?: (driver:DriverIdentity)=>ShiftDotView;
   createDispatch: (
     record: Record<string, unknown>,
     options: { actionId: string; actionScope: string; unitId: string },
@@ -784,24 +788,7 @@ export function WaterOrderBuilder({
             />
           </label>
         </div>
-        <div className="flex flex-wrap gap-3">
-          {scopeDrivers.map((driver) => (
-            <label className="text-xs flex gap-1 items-center" key={driver.key}>
-              <input
-                type="checkbox"
-                checked={draft.truckKeys.includes(driver.key)}
-                onChange={(e) =>
-                  update({
-                    truckKeys: e.target.checked
-                      ? [...draft.truckKeys, driver.key]
-                      : draft.truckKeys.filter((k) => k !== driver.key),
-                  })
-                }
-              />
-              {driver.legalName || driver.displayName || "Driver"}
-            </label>
-          ))}
-        </div>
+        <WaterOrderDriverPicker drivers={scopeDrivers} selectedKeys={draft.truckKeys} onChange={truckKeys=>update({truckKeys})} shiftForDriver={shiftForDriver} disabled={busy||!!saved||!canWrite}/>
         <details>
           <summary className="text-xs cursor-pointer">
             Eligible source wells Â· choose sources allowed for this order

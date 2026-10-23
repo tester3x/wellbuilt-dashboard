@@ -2929,7 +2929,7 @@ function DispatchPageInner() {
               )}
 
               {/* ── PW Tab ── */}
-              {builderTab === 'water' && <WaterOrderBuilder key={`${viewedCompanyId}:${user?.uid||''}`} companyId={viewedCompanyId} userId={user?.uid||''} wells={wells} drivers={drivers} jobs={dispatches} ready={!dataLoading&&!driversLoading&&dispatchesLoaded&&!statusUnavailable&&!readErrors.wells&&!readErrors.dispatches} canWrite={canCreateDispatch} createDispatch={staffCreateDispatch}/>}
+              {builderTab === 'water' && <WaterOrderBuilder key={`${viewedCompanyId}:${user?.uid||''}`} companyId={viewedCompanyId} userId={user?.uid||''} wells={wells} drivers={drivers} jobs={dispatches} shiftForDriver={driverShiftDot} ready={!dataLoading&&!driversLoading&&dispatchesLoaded&&!statusUnavailable&&!readErrors.wells&&!readErrors.dispatches} canWrite={canCreateDispatch} createDispatch={staffCreateDispatch}/>}
               {builderTab === 'pw' && (
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
