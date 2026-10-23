@@ -27,3 +27,10 @@ compact 35-driver summary, internal scrolling, native checkbox use, keyboard
 closing, protected names and no horizontal overflow at 320/344/768/1280 pixels.
 The regression and route integration checks are part of mandatory Hosting
 preflight. No customer order, invoice, shift or driver record is modified.
+
+Deployed Hosting source 894ed5a73a58cda9691af9b38a4f9fe82c653826 through the
+canonical guarded deployment on October 23. Fresh production build, TypeScript
+and mandatory preflight checks passed, including the 42-driver browser test.
+Postdeploy verified all 362 live exported artifacts against the build and
+advanced the shared approved checkpoint to that source. No APK, backend or
+security rules deployment was needed.
