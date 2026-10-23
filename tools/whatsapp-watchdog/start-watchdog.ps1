@@ -54,7 +54,7 @@ while($true){
  # Match both the parent PID and our exact data directory; never touch user Edge.
  $profile=Join-Path $env:WBC_WATCHDOG_DATA 'session\session'
  $browsers=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($node.Id)" | Where-Object {($_.Name -eq 'msedge.exe' -or $_.Name -eq 'chrome.exe') -and $_.CommandLine -and $_.CommandLine.Contains($profile) -and $_.CommandLine.Contains('--user-data-dir')})
- foreach($browser in $browsers){& taskkill.exe /PID $browser.ProcessId /T /F | Out-Null}
+ foreach($browser in $browsers){try{& taskkill.exe /PID $browser.ProcessId /T /F 2>$null | Out-Null}catch{Write-StartupPhase 'browser cleanup raced with exit; continuing recovery'}}
  if($Once){break}
  Start-Sleep -Seconds 10
 }

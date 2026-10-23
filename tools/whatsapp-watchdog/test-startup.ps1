@@ -36,6 +36,10 @@ try {
  function Start-Sleep {if($global:watchdogHealthyChecks -gt 0){$global:watchdogHungFake.HasExited=$true}}
  & (Join-Path $PSScriptRoot 'start-watchdog.ps1') -Port 1 -Once -HealthyBootGraceSeconds 0
  if($global:watchdogHealthStops -ne 1 -or $global:watchdogHealthyChecks -ne 1){throw 'Healthy worker must not be terminated'}
+ function Get-CimInstance {return [pscustomobject]@{Name='msedge.exe';ProcessId=999998;CommandLine=('--user-data-dir='+$env:WBC_WATCHDOG_DATA+'\session\session')}}
+ function taskkill.exe {throw 'fixture browser already exited'}
+ $global:watchdogHungFake.HasExited=$true
+ & (Join-Path $PSScriptRoot 'start-watchdog.ps1') -Port 1 -Once
  $listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0)
  $listener.Start()
  try {
