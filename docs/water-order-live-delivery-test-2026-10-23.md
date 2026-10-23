@@ -35,10 +35,22 @@ an unsigned invocation returns HTTP 401. No rules or account grants changed.
 Real browser retry saved the two-load test order and sent its first 40-BBL job
 through staffWriteDispatch. A server-side read independently verified the sole
 recipient's canonical test identity, test source/destination, project binding and
-the confirmed sent ID. The second job remains uncreated while the first is
-pending. Device-level receipt, decline, second release and cleanup remain pending
-the connected S24's unlock. The phone's lock screen was verified; no attempt was
-made to bypass it. This is not yet a completed app-delivery test.
+the confirmed sent ID. The second job remained uncreated while the first was
+pending. After the owner unlocked the S24, both jobs were verified inside the
+installed WB T Job Drawer: AddedTest pickup, Test Well drop-off, WB Test Customer,
+40-BBL instructions and separate scheduled times. The first job was declined in
+WB T; the server recorded that decline and Dashboard then made the second load
+eligible. Dispatch released the second job, which arrived separately in WB T.
+That job was also declined in WB T with an explicit test-only reason.
+
+Final live checks passed: exactly two dispatch documents, one canonical test
+recipient, both terminal/declined, both IDs server-acknowledged in the order,
+zero invoices and no extra dispatch after pressing Dispatch again. WB T returned
+to its home screen without a Job Drawer badge. The test project was soft-cancelled
+with verification metadata through a narrowly scoped administrative transaction;
+all test records remain available for audit. No physical haul, shift, inspection
+or signature was created. No real driver received work. This completes the live
+Dashboard-to-WB T delivery test, not a simulated physical job-completion test.
 
 Private order IDs, phone evidence and logs are stored outside Git. The browser
 regression now also explicitly rejects direct project transaction/write calls in
