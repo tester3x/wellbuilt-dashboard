@@ -74,6 +74,13 @@ export const upsertDriverInvoice = httpsV2.onCall(
     await admin.firestore().runTransaction(async tx => {
       const ex = await tx.get(ref);
       const prev = ex.exists ? ex.data() || {} : {};
+      if (prev.dispatchSplitGroupId && prev.dispatchId) {
+        if (inv.dispatchId !== undefined && inv.dispatchId !== prev.dispatchId) {
+          throw new httpsV2.HttpsError('failed-precondition', 'split_invoice_identity_conflict');
+        }
+        inv.dispatchId = prev.dispatchId;
+        if (inv.status === undefined) inv.status = prev.status;
+      }
       if (ex.exists) {
         const owner =
           prev.driverId === driver.driverId ||
@@ -110,6 +117,11 @@ export const upsertDriverInvoice = httpsV2.onCall(
           // Shared read/write serializes closes of different invoices too.
           await tx.get(ledgerRef);
           const records = await tx.get(col.where('dispatchSplitGroupId', '==', group));
+          if (dispatch.id === anchors[0].id && ['closed', 'complete', 'completed'].includes(String(prev.status)) &&
+              Number(merged.totalBBL) !== Number(prev.totalBBL) && records.docs.some(row =>
+                row.data().dispatchId !== dispatch.id && ['closed', 'complete', 'completed'].includes(String(row.data().status)))) {
+            throw new httpsV2.HttpsError('failed-precondition', 'split_pickup_locked_after_delivery');
+          }
           const budget = evaluateSplitLoadBudget(anchors[0].id, [
             ...records.docs.filter(row => row.id !== ref.id).map(row => ({ id: row.id, data: row.data() })),
             { id: ref.id, data: { ...merged, dispatchSplitSequence: job.splitSequence } },
@@ -117,6 +129,13 @@ export const upsertDriverInvoice = httpsV2.onCall(
           if (!budget.ok) throw new httpsV2.HttpsError('failed-precondition', budget.reason);
           inv.dispatchSplitGroupId = group;
           inv.dispatchSplitSequence = job.splitSequence;
+          const originWell = String(anchors[0].data().ndicWellName || anchors[0].data().wellName || '');
+          inv.splitLoadOriginWellName = originWell;
+          inv.splitPickupDispatchId = anchors[0].id;
+          if (Number(job.splitSequence) >= 2 && String(job.destinationType || '').toLowerCase() === 'swd') {
+            inv.wellName = originWell;
+            inv.pickupWellName = originWell;
+          }
           tx.set(ledgerRef, { companyId: driver.companyId, driverId: driver.driverId,
             pickupDispatchId: anchors[0].id, pickupBbls: budget.pickup,
             usedBbls: budget.used, remainingBbls: budget.remaining, updatedAt: FieldValue.serverTimestamp() });

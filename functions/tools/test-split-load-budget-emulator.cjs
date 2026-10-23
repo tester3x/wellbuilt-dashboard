@@ -36,6 +36,17 @@ const close = (id, amount, extra = {}) => upsertDriverInvoice.run({ data: {
   assert.equal((await db.doc(`invoices/inv-${loser}`).get()).data().dispatchSplitGroupId, group, 'server derives family');
   await assert.rejects(close(loser, 31), /split_pickup_exceeded/);
   assert.equal((await db.doc(`invoices/inv-${loser}`).get()).data().totalBBL, 30, 'failed edit preserves confirmed amount');
+  await assert.rejects(close('A', 100), /split_pickup_locked_after_delivery/, 'cannot manufacture more supply after delivery');
+  await assert.rejects(close(loser, 30, { dispatchId: 'regular' }), /split_invoice_identity_conflict/, 'cannot detach a recorded delivery from its pickup');
+  for (const [id, seq] of [['A2', 1], ['B2', 2], ['C2', 3]]) {
+    await db.doc(`dispatches/${id}`).set({ companyId, driverId, splitGroupId: 'recovery-family', splitSequence: seq,
+      wellName: seq === 1 ? 'Original Pickup' : 'Previous work site',
+      ...(seq === 3 ? { parentDispatchId: 'B2', status: 'pending', destinationType: 'swd', splitParentUsedBbls: 0, bbls: 70 } : {}) });
+  }
+  await close('A2', 70); await close('B2', 35);
+  assert.equal((await db.doc('dispatches/C2').get()).data().bbls, 35, 'server stores actual carried remainder for restart');
+  await close('C2', 35, { wellName: 'Previous work site' });
+  assert.equal((await db.doc('invoices/inv-C2').get()).data().wellName, 'Original Pickup', 'close preserves pickup source despite stale client');
   await db.doc('dispatches/foreign').set({ companyId: 'other-company', driverId, splitGroupId: 'foreign-group', splitSequence: 1 });
   await assert.rejects(close('foreign', 70), /another driver or company/);
   await db.doc('dispatches/regular').set({ companyId, driverId });
