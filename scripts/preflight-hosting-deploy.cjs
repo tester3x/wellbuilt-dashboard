@@ -135,6 +135,7 @@ try {
   console.log('Executing: node tools/test-watchdog-refresh.cjs ...');
   execSync('node tools/test-watchdog-refresh.cjs', { stdio: 'inherit' });
   execSync('node tools/test-watchdog-rejected-recovery.cjs', { stdio: 'inherit' });
+  execSync('node tools/test-watchdog-health.cjs', { stdio: 'inherit' });
   console.log('✓ Watchdog Manual Refresh (no idle polling): PASSED');
 } catch (err) {
   fatal('Watchdog manual refresh verification FAILED. Deployment aborted.');
