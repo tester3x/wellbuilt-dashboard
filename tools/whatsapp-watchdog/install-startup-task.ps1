@@ -12,6 +12,14 @@ $command='$ErrorActionPreference=''Stop''; & '''+$startup.Replace("'","''")+''' 
 $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
 $action=New-ScheduledTaskAction -Execute ($env:SystemRoot+'\System32\WindowsPowerShell\v1.0\powershell.exe') -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand '+$encoded) -WorkingDirectory $DataDirectory
 if($task.State -eq 'Running'){Stop-ScheduledTask -TaskName $taskName}
-Set-ScheduledTask -TaskName $taskName -Action $action | Out-Null
+# Retain the existing interactive user/logon trigger and all unrelated settings.
+$settings=$task.Settings
+$settings.StartWhenAvailable=$true
+$settings.ExecutionTimeLimit='PT0S'
+$settings.RestartCount=999
+$settings.RestartInterval='PT1M'
+$settings.DisallowStartIfOnBatteries=$false
+$settings.StopIfGoingOnBatteries=$false
+Set-ScheduledTask -TaskName $taskName -Action $action -Settings $settings | Out-Null
 Start-ScheduledTask -TaskName $taskName
-Write-Output 'Updated only the existing task action; preserved principal, settings, triggers, queue and linked session.'
+Write-Output 'Updated only the existing task action; enabled unlimited runtime and restart recovery; preserved principal, triggers, queue and linked session.'

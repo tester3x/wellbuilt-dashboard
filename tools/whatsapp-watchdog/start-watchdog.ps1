@@ -1,10 +1,10 @@
-param([int]$Port=8791)
+param([int]$Port=8791,[switch]$Once)
 $ErrorActionPreference='Stop'
 $env:WBC_CHROME_PATH='C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 $env:WBC_WATCHDOG_DATA=Join-Path $env:LOCALAPPDATA 'WellBuilt\WhatsAppWatchdog'
 if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'queue.json')){$env:WBC_WATCHDOG_DATA=$PSScriptRoot}
 function Write-StartupPhase($phase){Add-Content -LiteralPath (Join-Path $env:WBC_WATCHDOG_DATA 'startup-status.log') -Value ((Get-Date).ToUniversalTime().ToString('o')+' '+$phase)}
-trap { Write-StartupPhase ('failed: '+$_.Exception.Message); throw }
+trap { Write-StartupPhase ('failed: '+$_.Exception.Message); throw $_ }
 Write-StartupPhase 'starting'
 if (-not (Test-Path -LiteralPath (Join-Path $env:WBC_WATCHDOG_DATA 'codex-bridge.json'))) {
 $codexPackage=Get-AppxPackage '*Codex*' | Select-Object -First 1
@@ -21,26 +21,20 @@ try {
 } catch {
  # No existing listener: launch the receiver below.
 } finally { $existingReceiver.Dispose() }
-$node=$null
-if(-not $alreadyListening){
+if($alreadyListening){Write-StartupPhase 'existing receiver owns reconnect and saved monitoring intent';exit 0}
+# Keep supervising after the first successful connection. A Node crash must not
+# exhaust Task Scheduler's three-retry allowance and leave watching stopped.
+while($true){
  Write-StartupPhase 'launching receiver'
  $node=Start-Process -FilePath 'C:\Program Files\nodejs\node.exe' -ArgumentList 'server.mjs' -WorkingDirectory 'C:\dev\WellBuiltWatchdog\tools\whatsapp-watchdog' -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $env:WBC_WATCHDOG_DATA 'server.stdout.log') -RedirectStandardError (Join-Path $env:WBC_WATCHDOG_DATA 'server.stderr.log')
  Write-StartupPhase ('receiver process '+$node.Id)
-}
-$b='http://127.0.0.1:'+$Port
-while(!$node -or !$node.HasExited){
- try{
-  $source=(Invoke-WebRequest ($b+'/app.js') -UseBasicParsing -TimeoutSec 15).Content
-  $token=[regex]::Match($source,"let token='([^']+)'").Groups[1].Value
-  $headers=@{'x-watchdog-token'=$token}
-  $s=Invoke-RestMethod ($b+'/status') -Headers $headers -TimeoutSec 15
-  if($s.state -eq 'Stopped'){Invoke-RestMethod ($b+'/connect') -Method Post -Headers $headers -TimeoutSec 30 | Out-Null}
-  elseif($s.state -eq 'Connected'){if($s.paused){Invoke-RestMethod ($b+'/resume') -Method Post -Headers $headers -TimeoutSec 30 | Out-Null};Write-StartupPhase 'watching';break}
- }catch{}
+ $node.WaitForExit()
+ Write-StartupPhase ('receiver exited '+$node.ExitCode+'; restarting')
+ # A crashed Node process can leave its own Chromium child holding the profile.
+ # Match both the parent PID and our exact data directory; never touch user Edge.
+ $profile=Join-Path $env:WBC_WATCHDOG_DATA 'session\session'
+ $browsers=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($node.Id)" | Where-Object {($_.Name -eq 'msedge.exe' -or $_.Name -eq 'chrome.exe') -and $_.CommandLine -and $_.CommandLine.Contains($profile) -and $_.CommandLine.Contains('--user-data-dir')})
+ foreach($browser in $browsers){& taskkill.exe /PID $browser.ProcessId /T /F | Out-Null}
+ if($Once){break}
  Start-Sleep -Seconds 10
- if($node){$node.Refresh()}
 }
-if($node){$node.WaitForExit();exit $node.ExitCode}
-
-
-
