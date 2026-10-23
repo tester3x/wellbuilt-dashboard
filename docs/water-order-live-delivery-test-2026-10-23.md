@@ -27,4 +27,19 @@ It verifies the builder itself has no sideways scrolling at four widths.
 Live order testing is restricted to an existing dedicated test driver and test
 locations, with every production source excluded. Test jobs are declined after
 verification; no shift, inspection, JSA, invoice or measured water pull is created.
-Final deployment and actual device-delivery results are recorded after testing.
+Dashboard source 16c89f7b98a60ce9691eb49df7b9d5739d9d5de4 deployed successfully;
+all 362 exported artifacts byte-matched live after mandatory preflight.
+The named callable is ACTIVE at revision staffwritewaterorder-00001-pak;
+an unsigned invocation returns HTTP 401. No rules or account grants changed.
+
+Real browser retry saved the two-load test order and sent its first 40-BBL job
+through staffWriteDispatch. A server-side read independently verified the sole
+recipient's canonical test identity, test source/destination, project binding and
+the confirmed sent ID. The second job remains uncreated while the first is
+pending. Device-level receipt, decline, second release and cleanup remain pending
+the connected S24's unlock. The phone's lock screen was verified; no attempt was
+made to bypass it. This is not yet a completed app-delivery test.
+
+Private order IDs, phone evidence and logs are stored outside Git. The browser
+regression now also explicitly rejects direct project transaction/write calls in
+WaterOrderBuilder, preventing a return to the rules-denied save path.

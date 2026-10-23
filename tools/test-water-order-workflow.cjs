@@ -3,6 +3,9 @@ const fs=require('fs'),os=require('os'),path=require('path'),cp=require('child_p
 const {chromium}=require('playwright');
 (async()=>{
  const root=process.cwd(),dir=fs.mkdtempSync(path.join(os.tmpdir(),'water-order-workflow-'));
+ const source=fs.readFileSync('src/components/WaterOrderBuilder.tsx','utf8');
+ assert.doesNotMatch(source,/\b(runTransaction|setDoc|updateDoc)\b/,'Project writes must remain server-only');
+ assert.match(source,/staffWriteWaterOrder/,'Save and acknowledgements require the governed callable');
  const mock=path.join(dir,'cloud.js');
  fs.writeFileSync(mock,`
  export const state={projects:{},jobs:{},calls:[],listeners:[],failOnce:true,reads:0,hold:false};window.cloud=state;
