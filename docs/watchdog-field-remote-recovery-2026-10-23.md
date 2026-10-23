@@ -52,3 +52,28 @@ https://tailscale.com/docs/how-to/run-unattended
 https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse
 
 No database, Firestore or Storage rules deployment is part of this work.
+
+## Verification and staged release
+
+The three Functions deployed from `0a04c70a` and are ACTIVE. Live signed-out
+requests to the office callables return 401. A real signed request with an
+unconfigured agent ID returns agent_not_allowed; no fake HP heartbeat was
+created. Cloud deployment proof was captured at 14:45:33 UTC.
+
+All 55 Watchdog Node tests pass, as do the five new backend command/health
+tests and the existing office-authority review tests. PowerShell fixtures cover
+worker crash recovery, exact-worker restart/refusal of unrelated processes,
+and the home installer using real Git repositories and a relative bundle path.
+The installer fixture proves fast-forward installation, untracked preservation
+and refusal to install over tracked local modifications.
+
+Dashboard source `7f897e5751423da8e2ea0c4fa099a2baa1da6e5c` is live; mandatory
+preflight passed (460 library tests passed, one existing skip), and all 362 live
+artifacts byte-match the certified build. The approved release checkpoint was
+advanced by the normal postdeploy hook.
+
+The credential-free home package is prepared under
+`C:/dev/output/watchdog-field-recovery-20261023`. Its README pins the exact bundled
+checkpoint and installation command. HP installation, real heartbeat/action
+verification, Tailscale sign-in and hotspot/reboot checks remain for home, where
+the HP can first be reached. Neither helper nor Tailscale is claimed installed.
