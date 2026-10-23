@@ -8,9 +8,48 @@ jest.mock('firebase-admin',()=>({
  database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),set:async(value:any)=>{database.set(key,value);},update:async(values:any)=>{const data=database.get(key)||{};for(const [path,value]of Object.entries(values)){const parts=path.split('/');let parent=data;for(const name of parts.slice(0,-1))parent=parent[name]??={};parent[parts[parts.length-1]]=value;}database.set(key,data);},orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
 }));
 import {ingestWatchdogPullV2,getWatchdogPullReceiptV2,stopWatchdogWellV2,getWatchdogWellLifecycleV2,reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from '../intake';
+import {evaluateIncomingPull} from '../../packetGuards';
 async function call(endpoint:any,name:string,body:any,tampered=false){const rawBody=Buffer.from(JSON.stringify(body)),timestamp=String(Date.now()),nonce=randomBytes(16).toString('hex');const signature=createHmac('sha256','synthetic-only-key').update(`v1:${name}:POST:${timestamp}:${nonce}:${createHash('sha256').update(rawBody).digest('hex')}`).digest('hex');const req={method:'POST',body,rawBody,headers:{'x-watchdog-key-id':'V1','x-watchdog-timestamp':timestamp,'x-watchdog-nonce':nonce,'x-watchdog-signature':tampered?'0'.repeat(64):signature}};let code=200,result:any;const res={status:(n:number)=>{code=n;return res;},json:(v:any)=>{result=v;return res;}};await (endpoint as any)(req,res);return {code,result};}
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});database.set('packets/outgoing/response_existing',{wellName:'Kahuna 5',wellDown:false,currentLevel:'12',lastPullPacketId:'actual-pull',flowRate:'1:00:00'});});
 const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
+
+test('five-load catch-up real handlers retain pending receipts and deduplicate retries before and after commit',async()=>{
+ documents.get('watchdog_v2_config/laptop').enabledAt=0;
+ const bodies:any[]=[],ids:string[]=[],times:string[]=[];
+ let watermark:string|undefined;
+ for(let i=0;i<5;i++){
+  const date=new Date(Date.now()-(8-i)*3600000);
+  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(date).map(p=>[p.type,p.value]));
+  const body={chatId:'group',messageId:'isolated-backlog-'+i,rowIndex:0,chat:`[${parts.month}/${parts.day}/${parts.year}, ${parts.hour}:${parts.minute}:${parts.second}] Test Driver: Kahuna 5\nTop 12' 0"\nBottom 10' 0"\n${140+i} bbl`};
+  bodies.push(body);
+  const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+  expect(first.code).toBe(200);expect(first.result.status).toBe('queued');
+  const {identity,packetId}=first.result;ids.push(packetId);
+  // Lost intake response: retry the actual signed handler, not a receipt stub.
+  const retry=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+  expect(retry.result).toMatchObject({identity,packetId,status:'queued'});
+  expect([...database.keys()].filter(k=>k.startsWith('packets/incoming/'))).toHaveLength(1);
+  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity})).result.status).toBe('queued');
+  const packet=database.get('packets/incoming/'+packetId);
+  expect(evaluateIncomingPull({incomingDateTimeUTC:packet.dateTimeUTC,hasOutgoingResponse:!!watermark,watermarkDateTimeUTC:watermark,nowMs:Date.now()}).action).toBe('process');
+  // A partial processor write is not a successful delivery acknowledgment.
+  database.set('packets/processed/'+packetId,{...packet,tankAfterInches:packet.bottomLevelFeet*12});
+  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity})).result.status).toBe('incomplete');
+  database.set('packets/processed/'+packetId,{...packet,tankAfterInches:packet.bottomLevelFeet*12,canonicalProcessingComplete:true});
+  database.delete('packets/incoming/'+packetId);
+  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity})).result.status).toBe('complete');
+  watermark=packet.dateTimeUTC;times.push(packet.dateTimeUTC);
+ }
+ // Replay all original WhatsApp messages after every watermark has advanced.
+ for(const body of bodies.reverse()){
+  const replay=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+  expect(replay.code).toBe(200);expect(ids).toContain(replay.result.packetId);
+  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:replay.result.identity})).result.status).toBe('complete');
+ }
+ expect(new Set(ids).size).toBe(5);expect(times).toEqual([...times].sort());
+ expect([...database.keys()].filter(k=>k.startsWith('packets/processed/'))).toHaveLength(5);
+ expect([...database.keys()].filter(k=>k.startsWith('packets/incoming/')||k.startsWith('packets/rejected/'))).toHaveLength(0);
+});
 test('top-only requires an explicitly enabled canonical sender and keeps zero removal',async()=>{
  const body={...observation(),senderId:'123456789@lid',chat:observation().chat.replace('Top 12.5\nBottom 11.125\n165 bbl', '@ 6\u2032 5\u2033 off')};
  const {watchdogSenderKey}=require('../senderOwnership');const policy=documents.get('watchdog_v2_config/laptop');
