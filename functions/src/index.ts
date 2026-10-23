@@ -4089,5 +4089,6 @@ export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';
 
 export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview,resolveWatchdogRejectedReview} from './watchdog/remoteReview';
 export {getWatchdogAgentHealth,requestWatchdogRecovery,syncWatchdogAgentV2} from './watchdog/remoteAgent';
+export {staffGetDispatchDriverSignals} from './security/dispatchDriverSignals';
 
 export {reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from './watchdog/intake';
