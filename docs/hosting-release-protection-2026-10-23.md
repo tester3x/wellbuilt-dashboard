@@ -53,6 +53,14 @@ would require moving Hosting credentials into a restricted CI deployment identit
 and removing other deploy permissions; this change does not alter IAM or owners'
 access. Do not describe local tooling as an absolute provider-side lock.
 
+Validation: release-state tests passed, including execution of the actual
+postdeploy function with a simulated stale live artifact: it neither advanced the
+checkpoint nor unlocked the release. Matching bytes recorded proof, advanced the
+checkpoint, and then unlocked in that order. The library suite passed 460 tests
+with one existing skip; return-state, office preferences and manual Watchdog
+browser regressions also passed. No Hosting deploy was performed for this
+tooling-only change.
+
 Regression tests use an isolated local bare Git repository: accepted current
 source; rejected unpushed, old, divergent and dirty source; unreachable remote;
 lock contention and ownership; complete binary/text verification; byte mismatch;

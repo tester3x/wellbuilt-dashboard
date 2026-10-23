@@ -43,5 +43,5 @@ async function finalize() {
   releaseLock(state.lock);
   console.log(`Verified ${files.length} live artifacts; approved checkpoint advanced to ${state.source}.`);
 }
-module.exports = { verifyExport };
+module.exports = { verifyExport, finalize };
 if (require.main === module) (process.argv[2] === '--verify' ? finalize() : deploy()).catch(error => { console.error(error.message); process.exitCode = 1; });
