@@ -9,6 +9,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver, assertSameCompany } from '../requireDriverAuth';
 import { writeSecurityAudit } from '../audit';
 import { evaluateExistingDispatchDriverUpdate } from './dispatchPacketPin';
+import { evaluateSplitLoadBudget } from './splitLoadBudget';
 
 const MAX_JSON = 400_000;
 
@@ -68,11 +69,12 @@ export const upsertDriverInvoice = httpsV2.onCall(
     }
 
     const col = admin.firestore().collection('invoices');
-    if (invoiceId) {
-      const ref = col.doc(invoiceId);
-      const ex = await ref.get();
+    const ref = invoiceId ? col.doc(invoiceId) : col.doc();
+    invoiceId = ref.id;
+    await admin.firestore().runTransaction(async tx => {
+      const ex = await tx.get(ref);
+      const prev = ex.exists ? ex.data() || {} : {};
       if (ex.exists) {
-        const prev = ex.data() || {};
         const owner =
           prev.driverId === driver.driverId ||
           prev.driverHash === data.driverHash ||
@@ -88,16 +90,48 @@ export const upsertDriverInvoice = httpsV2.onCall(
         if (TERMINAL_STATUSES.has(prevStatus) && !TERMINAL_STATUSES.has(nextStatus)) {
           throw new httpsV2.HttpsError('failed-precondition', 'Cannot reopen terminal invoice');
         }
-        await ref.set(inv, { merge: data.merge !== false });
-      } else {
-        inv.createdAt = FieldValue.serverTimestamp();
-        await ref.set(inv);
       }
-    } else {
-      inv.createdAt = FieldValue.serverTimestamp();
-      const created = await col.add(inv);
-      invoiceId = created.id;
-    }
+      const merged = data.merge === false ? { ...inv } : { ...prev, ...inv };
+      if (['closed', 'complete', 'completed'].includes(String(merged.status || '').toLowerCase()) && merged.dispatchId) {
+        const dispatch = await tx.get(admin.firestore().collection('dispatches').doc(String(merged.dispatchId)));
+        const job = dispatch.data();
+        if (job?.splitGroupId) {
+          if (job.companyId !== driver.companyId || job.driverId !== driver.driverId) {
+            throw new httpsV2.HttpsError('permission-denied', 'Split belongs to another driver or company');
+          }
+          const group = String(job.splitGroupId);
+          const family = await tx.get(admin.firestore().collection('dispatches').where('splitGroupId', '==', group));
+          if (family.docs.some(row => row.data().companyId !== driver.companyId || row.data().driverId !== driver.driverId)) {
+            throw new httpsV2.HttpsError('failed-precondition', 'split_family_identity_conflict');
+          }
+          const anchors = family.docs.filter(row => row.data().splitSequence === 1);
+          if (anchors.length !== 1) throw new httpsV2.HttpsError('failed-precondition', 'split_anchor_missing');
+          const ledgerRef = admin.firestore().collection('split_load_ledgers').doc(group);
+          // Shared read/write serializes closes of different invoices too.
+          await tx.get(ledgerRef);
+          const records = await tx.get(col.where('dispatchSplitGroupId', '==', group));
+          const budget = evaluateSplitLoadBudget(anchors[0].id, [
+            ...records.docs.filter(row => row.id !== ref.id).map(row => ({ id: row.id, data: row.data() })),
+            { id: ref.id, data: { ...merged, dispatchSplitSequence: job.splitSequence } },
+          ]);
+          if (!budget.ok) throw new httpsV2.HttpsError('failed-precondition', budget.reason);
+          inv.dispatchSplitGroupId = group;
+          inv.dispatchSplitSequence = job.splitSequence;
+          tx.set(ledgerRef, { companyId: driver.companyId, driverId: driver.driverId,
+            pickupDispatchId: anchors[0].id, pickupBbls: budget.pickup,
+            usedBbls: budget.used, remainingBbls: budget.remaining, updatedAt: FieldValue.serverTimestamp() });
+          for (const child of family.docs) {
+            if (child.data().parentDispatchId === dispatch.id && child.data().status === 'pending' &&
+                typeof child.data().splitParentUsedBbls === 'number') {
+              tx.update(child.ref, { bbls: budget.remaining, splitParentUsedBbls: Number(merged.totalBBL),
+                updatedAt: FieldValue.serverTimestamp() });
+            }
+          }
+        }
+      }
+      if (!ex.exists) inv.createdAt = FieldValue.serverTimestamp();
+      tx.set(ref, inv, { merge: ex.exists && data.merge !== false });
+    });
 
     await writeSecurityAudit({
       action: 'upsertDriverInvoice',

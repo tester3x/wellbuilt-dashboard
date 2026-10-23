@@ -107,6 +107,15 @@ export const startPickupSplit = httpsV2.onCall(
       const timeline = Array.isArray(invoice.timeline) ? invoice.timeline as Array<Record<string, unknown>> : [];
       const departedPickup = stage === 'en_route_dropoff' || timeline.some(event => event.type === 'depart_site');
       if (departedPickup && pickupBbls !== undefined) throw new httpsV2.HttpsError('failed-precondition', 'pickup_bbls_locked_after_depart');
+      const actualPickup = departedPickup
+        ? Number((invoice.formSnapshot as Record<string, unknown> | undefined)?.bbls ?? invoice.totalBBL)
+        : Number(pickupBbls);
+      if (!departedPickup && (!Number.isFinite(actualPickup) || actualPickup <= 0)) throw new httpsV2.HttpsError('failed-precondition', 'pickup_bbls_required');
+      const plannedUsed = (first.plannedBbls || 0) + (remaining?.plannedBbls || 0);
+      // A departed pickup may still be uploading its form. Its eventual
+      // confirmed close establishes the server budget; never guess from a
+      // planned dispatch amount or reject conversion solely for sync lag.
+      if (Number.isFinite(actualPickup) && actualPickup > 0 && plannedUsed > actualPickup) throw new httpsV2.HttpsError('failed-precondition', 'planned_bbls_exceed_pickup');
       const total = remaining ? 3 : 2;
       const child = (stop: Stop, sequence: number) => ({
         driverId: parent.driverId, driverHash: parent.driverHash ?? parent.driverId,
@@ -114,6 +123,8 @@ export const startPickupSplit = httpsV2.onCall(
         companyId: parent.companyId, operator: parent.operator ?? null,
         wellName: stop.name, ndicWellName: '', disposal: stop.name,
         pickupWellName: first.name,
+        splitLoadOriginWellName: name(parent.ndicWellName) || name(parent.wellName),
+        splitPickupDispatchId: parsed.dispatchId,
         disposalLat: stop.latitude ?? null,
         disposalLng: stop.longitude ?? null,
         destinationType: stop.destinationType ?? null,

@@ -767,6 +767,7 @@ describe('F4 split-leg replay identity', () => {
     const result = await harness.run({
       // Thor is a valid dispatch stop even when it is not in monitored well_config.
       authorizedWells: [],
+      listSiblings: async () => [{ id: 'anchor', data: parentJob(rev) }, { id: 'parent-1', data: parent }],
       legSpec: { disposal: 'Kahuna 5', destinationType: 'well' },
     });
     expect(result.ok).toBe(true);
@@ -777,19 +778,22 @@ describe('F4 split-leg replay identity', () => {
     expect(child.splitPreviousStopName).toBe('Thor 1');
   });
 
-  it('records an SWD remainder haul from the current stop to the selected SWD', async () => {
+  it('records an SWD remainder haul from the original pickup while preserving the previous stop', async () => {
     const store = new MemoryStore();
     const rev = await publishRevision(store);
     const parent = parentJob(rev, { wellName: 'Thor 1', ndicWellName: '', disposal: 'Thor 1', splitSequence: 3 });
     const harness = io({ parent, store });
     const result = await harness.run({
       authorizedWells: ['Thor 1'],
+      listSiblings: async () => [{ id: 'anchor', data: parentJob(rev) }, { id: 'parent-1', data: parent }],
       legSpec: { disposal: 'Hydro Clear SWD', destinationType: 'swd', bbls: 10 },
     });
     expect(result.ok).toBe(true);
     const child = harness.creates[0].data;
-    expect(child.wellName).toBe('Thor 1');
-    expect(child.pickupWellName).toBe('Thor 1');
+    expect(child.wellName).toBe('Python');
+    expect(child.pickupWellName).toBe('Python');
+    expect(child.splitPreviousStopName).toBe('Thor 1');
+    expect(child.splitPickupDispatchId).toBe('anchor');
     expect(child.disposal).toBe('Hydro Clear SWD');
     expect(child.bbls).toBe(10);
   });
@@ -805,6 +809,32 @@ describe('F4 split-leg replay identity', () => {
     expect(harness.creates[0].data.disposal).toBe('Hydro Clear SWD');
   });
 
+  it('allocates used barrels once and creates a retry-safe remainder at the original pickup', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const parent = parentJob(rev, { wellName: 'Current work site', disposal: 'Current work site', splitSequence: 3 });
+    const harness = io({ parent, store });
+    const args = {
+      listSiblings: async () => [{ id: 'anchor', data: parentJob(rev) }, { id: 'parent-1', data: parent }],
+      listInvoices: async () => [
+        { id: 'a', data: { dispatchId: 'anchor', status: 'closed', totalBBL: 70 } },
+        { id: 'b', data: { dispatchId: 'previous-stop', status: 'closed', totalBBL: 20 } },
+      ],
+      legSpec: { disposal: 'SWD', destinationType: 'swd', usedBbls: 15, bbls: 35 },
+    };
+    expect((await harness.run(args)).ok).toBe(true);
+    expect(harness.creates[0].data).toMatchObject({ wellName: 'Python', bbls: 35,
+      splitPickupDispatchId: 'anchor', splitPickupBbls: 70, splitParentUsedBbls: 15,
+      parentDispatchId: 'parent-1', splitPreviousStopName: 'Current work site' });
+    expect(await harness.run(args)).toMatchObject({ ok: true, result: 'already_exists' });
+    expect(harness.creates).toHaveLength(1);
+    expect(await harness.run({ ...args, legSpec: { ...args.legSpec, usedBbls: 16 } })).toMatchObject({ ok: false, reason: 'conflict' });
+    const another = io({ parent, store });
+    expect(await another.run({ ...args, legSpec: { ...args.legSpec, usedBbls: 51 } })).toMatchObject({ ok: false });
+    expect(another.creates).toHaveLength(0);
+    expect(await another.run({ ...args, legSpec: { ...args.legSpec, bbls: 70 } })).toMatchObject({ ok: false, reason: 'split_remainder_mismatch' });
+  });
+
   it('appends another continuation while later planned splits already exist', async () => {
     const store = new MemoryStore();
     const rev = await publishRevision(store);
@@ -812,6 +842,7 @@ describe('F4 split-leg replay identity', () => {
     const harness = io({ parent, store });
     const result = await harness.run({
       listSiblings: async () => [
+        { id: 'anchor', data: parentJob(rev) },
         { id: 'parent-1', data: parent },
         { id: 'next-1', data: parentJob(rev, { splitSequence: 4, status: 'pending' }) },
       ],
