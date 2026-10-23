@@ -37,3 +37,14 @@ Validation:
   ordinary invoice close remains supported.
 - Mobile source companion: explicit used/remainder modal, required split/heavy
   pickup target, planned pickup prefill, conversion and final-stop caps.
+
+Live verification on October 23:
+- `addSplitLeg`: source `c7e8faff`, ACTIVE revision `addsplitleg-00010-dih`.
+- `startPickupSplit`: source `c7e8faff`, ACTIVE revision `startpickupsplit-00003-zen`.
+- `upsertDriverInvoice`: source `e490160c`, ACTIVE revision `upsertdriverinvoice-00009-qew`.
+- All three unauthenticated probes returned 401.
+
+The invoice follow-up prevents detaching an existing split invoice from its
+dispatch, locks the pickup quantity after deliveries, and stamps the original
+source on SWD invoice close/replay. The emulator also verified that closing B
+updates a pending field-added C with the actual remainder for restart recovery.
