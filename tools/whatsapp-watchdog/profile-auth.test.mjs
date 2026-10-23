@@ -3,7 +3,18 @@ import assert from 'node:assert/strict';
 import {mkdtempSync, writeFileSync, readFileSync, rmSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {createProfileAuth} from './profile-auth.mjs';
+import {createProfileAuth, closeRestoredReceiverTabs} from './profile-auth.mjs';
+
+test('startup closes only duplicate WhatsApp tabs in the receiver browser', async () => {
+  const closed=[];
+  const page=(url,id)=>({url:()=>url,close:async()=>closed.push(id)});
+  const main=page('https://web.whatsapp.com/','active');
+  await closeRestoredReceiverTabs({pupPage:main,pupBrowser:{pages:async()=>[
+    main,page('https://web.whatsapp.com/','restored'),page('https://example.com/','other'),
+    page('https://web.whatsapp.com.evil.example/','other-origin'),
+  ]}});
+  assert.deepEqual(closed,['restored']);
+});
 
 test('WhatsApp logout preserves the live profile without suppressing auth lifecycle', async () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), 'watchdog-profile-auth-'));

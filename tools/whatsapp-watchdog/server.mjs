@@ -13,7 +13,7 @@ import {OverlordCommands} from './commands.mjs';
 import {ReviewAlerts} from './alerts.mjs';
 import {RemoteReviews} from './remote-review.mjs';
 import {dismissReview} from './dismiss-review.mjs';
-import {createProfileAuth} from './profile-auth.mjs';
+import {createProfileAuth,closeRestoredReceiverTabs} from './profile-auth.mjs';
 import {ReceiverRecovery} from './recovery.mjs';
 import {collectReceiver} from './receiver-history.mjs';
 const require=createRequire(import.meta.url);
@@ -71,7 +71,7 @@ async function connect(){if(client)return;const {Client,LocalAuth}=require('what
  // Startup stages contain no messages or credentials; distinguish a browser
  // launch stall from authentication or WhatsApp injection when recovering.
  for(const [target,method,label] of [[client.authStrategy,'beforeBrowserInitialized','profile'],[client.authStrategy,'afterBrowserInitialized','browser'],[client,'initWebVersionCache','web-cache'],[client,'inject','injection']]){
-  const original=target[method];target[method]=async function(...args){console.log('[receiver-startup] '+label+' start');const result=await original.apply(this,args);console.log('[receiver-startup] '+label+' ready');return result;};
+  const original=target[method];target[method]=async function(...args){console.log('[receiver-startup] '+label+' start');const result=await original.apply(this,args);if(label==='browser')await closeRestoredReceiverTabs(current);console.log('[receiver-startup] '+label+' ready');return result;};
  }
  client.on('qr',async code=>{const value=await QRCode.toDataURL(code);if(client!==current)return;qr=value;state='Scan QR';});
  client.on('authenticated',()=>{if(client!==current)return;state='Syncing WhatsApp';setTimeout(()=>{if(client===current&&state==='Syncing WhatsApp')error='Signed in, but the WhatsApp receiver has not finished starting. Live capture is unavailable.';},60000).unref();});

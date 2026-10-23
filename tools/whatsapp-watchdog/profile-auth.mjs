@@ -9,3 +9,12 @@ export function createProfileAuth(LocalAuth, options, onLogout = () => {}) {
     }
   })(options);
 }
+
+// Chromium can restore an old WhatsApp tab as well as Puppeteer's active tab.
+// Both use the same linked-device session and block each other with "Use here".
+export async function closeRestoredReceiverTabs(client) {
+  for (const page of await client.pupBrowser.pages()) {
+    if (page === client.pupPage) continue;
+    if (page.url().startsWith('https://web.whatsapp.com/')) await page.close();
+  }
+}
