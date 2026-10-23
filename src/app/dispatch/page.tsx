@@ -694,7 +694,7 @@ function DispatchPageInner() {
     if (driverCanonicalIds.length === 0) { setShiftLoading(false); return; }
     let cancelled = false;
     const run = async () => {
-      const r = await resolveCompanyDriverShifts(driverCanonicalIds);
+      const r = await resolveCompanyDriverShifts(driverCanonicalIds,viewedCompanyId||undefined);
       if (cancelled) return;
       setShiftResults(r.resultsByDriverId);
       setShiftResolvedCompany(r.companyId);
@@ -704,7 +704,7 @@ function DispatchPageInner() {
     run();
     const timer = setInterval(run, 60000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [user, driversLoading, driverCanonicalIds]);
+  }, [user, driversLoading, driverCanonicalIds,viewedCompanyId]);
 
   const driverShiftDot = useCallback((d: { driverId?: string; key?: string; companyId?: string }) => shiftDotForDriver({
     canonicalDriverId: d.driverId || (typeof d.key === 'string' && d.key.includes('-') ? d.key : ''),
@@ -3031,6 +3031,7 @@ function DispatchPageInner() {
                       {assignTarget && selectedWells.size === 0 ? <div data-demo-builder-target="driver">
                         <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${assignTarget.ndicName || assignTarget.wellName}`}
                           picker="single" drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
+                          shiftForDriver={driverShiftDot}
                           targetName={assignTarget.ndicName || assignTarget.wellName} locations={arrivalLocations}
                           jobsComplete={dispatchesLoaded && !readErrors.dispatches}
                           selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash} />
@@ -3542,6 +3543,7 @@ function DispatchPageInner() {
                         </label>
                         {swWellName.trim() ? (
                           <DriverArrivalRecommendations picker="multiple" key={`${viewedCompanyId || ''}:${swWellName}`}
+                            shiftForDriver={driverShiftDot}
                             drivers={drivers} jobs={dispatches} companyId={viewedCompanyId} targetName={swWellName}
                             locations={arrivalLocations} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
                             selectedKeys={swDriverHashes}

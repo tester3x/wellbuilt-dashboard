@@ -9,6 +9,8 @@ import { buildArrivalHistory, arrivalPoint, recommendDriverArrivals,
   type ArrivalInvoice, type ArrivalJob, type ArrivalPoint, type ArrivalRecommendation, type ArrivalTravel } from '@/lib/driverArrivalRecommendations';
 
 import { createDriverRoadComparison } from '@/lib/driverRoadTimes';
+import {getDispatchDriverSignals,type DispatchAccountSignal} from '@/lib/dispatchDriverSignals';
+import type {ShiftDotView} from '@/lib/shiftDotCore';
 
 type Location = { well_name: string; latitude?: number; longitude?: number };
 export interface DriverArrivalRecommendationsProps {
@@ -17,6 +19,7 @@ export interface DriverArrivalRecommendationsProps {
   selectedKeys: ReadonlySet<string>; onSelect: (key: string) => void;
   picker?: 'single' | 'multiple';
   roadTime?: (from: ArrivalPoint, to: ArrivalPoint) => Promise<ArrivalTravel | null>;
+  shiftForDriver?: (driver:DriverIdentity)=>ShiftDotView;
 }
 const normalized = (s: string) => s.trim().toLowerCase();
 
@@ -44,6 +47,16 @@ export function DriverArrivalRecommendations(props: DriverArrivalRecommendations
   const running = useRef<{ scope: string; controller: AbortController } | null>(null);
   const [usage, setUsage] = useState<{ lookups: number; failures: number; configured: boolean } | null>(null);
   const [checkedScope, setCheckedScope] = useState('');
+  const [accountSignals,setAccountSignals]=useState<Record<string,DispatchAccountSignal>>({});
+  const [accountScope,setAccountScope]=useState('');
+  const driverIdsKey=JSON.stringify(drivers.map(d=>d.driverId).filter((id):id is string=>!!id).sort());
+  useEffect(()=>{
+    let alive=true;setAccountSignals({});setAccountScope('');
+    if(!expanded||!companyId)return;
+    getDispatchDriverSignals(companyId,JSON.parse(driverIdsKey)).then(signals=>{if(alive){setAccountSignals(signals);setAccountScope(scope+driverIdsKey);}}).catch(()=>{if(alive)setAccountScope(scope+driverIdsKey);});
+    return()=>{alive=false;};
+  },[expanded,companyId,scope,driverIdsKey]);
+  const accountsReady=accountScope===scope+driverIdsKey;
   useEffect(() => () => running.current?.controller.abort(), []);
   const refresh = () => { running.current?.controller.abort(); setRows([]); setUsage(null); setRetry(v => v + 1); };
   const locationIndex = useMemo(() => {
@@ -112,19 +125,20 @@ export function DriverArrivalRecommendations(props: DriverArrivalRecommendations
   const history = useMemo(() => buildArrivalHistory(combined, companyId || '', now), [combined, companyId, now]);
   // Snapshot once per explicit open/refresh. Live feed changes never trigger paid polling.
   useEffect(() => {
-    if (!expanded || !companyId || !historyReady || !openReady || !linksReady || running.current?.scope === scope) return;
+    if (!expanded || !companyId || !historyReady || !openReady || !linksReady || !accountsReady || running.current?.scope === scope) return;
     running.current?.controller.abort();
     const controller = new AbortController();
     running.current = { scope, controller };
     const checkedAt = Date.now(); setNow(checkedAt); setBusy(true); setRows([]);
     const comparison = createDriverRoadComparison({ signal: controller.signal });
     recommendDriverArrivals({ drivers, jobs, invoices: combined, companyId, target, nowMs: checkedAt,
-      jobsComplete: jobsComplete && !historyError && !openError, history: buildArrivalHistory(combined, companyId, checkedAt),
+      jobsComplete: jobsComplete && !openError, history: buildArrivalHistory(combined, companyId, checkedAt),
+      accountPresence:driver=>accountSignals[driver.driverId||'']?.state==='signed_out'?'logged_out':accountSignals[driver.driverId||'']?.state==='recently_active'?'logged_in':'unknown',
       locate: name => locationIndex.get(normalized(name)) || null, roadTime: roadTime || comparison.roadTime,
     }).then(result => {
       if (!controller.signal.aborted) { setRows(result); setUsage(comparison.usage()); setCheckedScope(scope); setBusy(false); }
     }).catch(() => { if (!controller.signal.aborted) setBusy(false); });
-  }, [expanded, companyId, historyReady, openReady, linksReady, drivers, jobs, combined, target, jobsComplete, historyError, openError, locationIndex, roadTime, scope]);
+  }, [expanded, companyId, historyReady, openReady, linksReady, accountsReady, accountSignals, drivers, jobs, combined, target, jobsComplete, historyError, openError, locationIndex, roadTime, scope]);
   const selectedNames = drivers.filter(d => props.selectedKeys.has(d.key)).map(operationalDriverName);
   const displayRows: ArrivalRecommendation[] = checkedScope === scope && rows.length ? rows : drivers.map(d => ({
     driverKey: d.key, arrivalMinutes: null, releaseMinutes: null, travelMinutes: null,
@@ -142,7 +156,7 @@ export function DriverArrivalRecommendations(props: DriverArrivalRecommendations
       {!!companyId && <p className="text-cyan-300">No shift start required. Recommendations use recent job/location evidence; missing data shows Arrival unknown.</p>}
       {!companyId && <p className="text-amber-300">Select a company to compare arrivals.</p>}
       {!!companyId && !target && <p className="text-amber-300">Pickup coordinates unavailable or ambiguous.</p>}
-      {(historyError || openError) && <p className="text-amber-300">Timing/job history unavailable. Arrival estimates withheld. <button type="button" className="underline" onClick={refresh}>Retry</button></p>}
+      {(historyError || openError) && <p className="text-amber-300">Some work history is unavailable. Drivers with missing evidence show Arrival unknown. <button type="button" className="underline" onClick={refresh}>Retry</button></p>}
       {!!companyId && (!historyReady || !openReady || busy) ? <p role="status" className="text-gray-400">Checking current work and travel estimates…</p> : null}
       {props.picker === 'single' && props.selectedKeys.size > 0 && <button type="button" className="text-cyan-400 underline" onClick={() => {
         props.onSelect(''); running.current?.controller.abort(); setExpanded(false);
@@ -152,11 +166,17 @@ export function DriverArrivalRecommendations(props: DriverArrivalRecommendations
           const driver = drivers.find(d => d.key === row.driverKey);
           if (!driver) return null;
           const selected = props.selectedKeys.has(row.driverKey);
+          const account=accountsReady?accountSignals[driver.driverId||'']:undefined;
+          const accountAge=account?.verifiedAt?Math.max(0,Math.floor((now-account.verifiedAt)/60000)):null;
+          const accountText=account?.state==='recently_active'?`Account active · verified ${accountAge}m ago`:account?.state==='signed_out'?'Account signed out · last recorded':accountsReady?'Account status unverified':'Checking account status…';
+          const shift=props.shiftForDriver?.(driver);
+          const workText=row.workState==='idle'?'No active job':row.workState==='busy'?'On a job':row.workState==='paused'?'Job paused':row.workState==='unknown'?'Work status needs review':'Checking work status…';
           return <div key={row.driverKey} className={`rounded border p-2 ${selected ? 'border-cyan-500 bg-cyan-950/20' : 'border-gray-700'}`}>
             <button type="button" className="flex w-full flex-wrap items-center justify-between gap-2 text-left text-white" onClick={() => { props.onSelect(row.driverKey); if (props.picker === 'single') { running.current?.controller.abort(); setExpanded(false); } }} aria-pressed={selected}>
               <span className="min-w-0 break-words">{row.arrivalMinutes !== null ? `${index + 1}. ` : ''}{operationalDriverName(driver)}</span>
               <span className="shrink-0 text-cyan-300">{row.arrivalMinutes === null ? 'Arrival unknown' : `~${row.arrivalMinutes}m · ${new Date(now + row.arrivalMinutes * 60000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`}{selected ? ' ✓' : ''}</span>
             </button>
+            <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-gray-300"><span>{accountText}</span><span title={shift?.title}>{shift?`${shift.symbol} ${shift.title}`:'Shift status unavailable'}</span><span>{workText}</span>{row.queueCount>0&&<span>{row.queueCount} queued</span>}</p>
             <ul className="mt-1 list-disc space-y-0.5 pl-4 text-gray-400">{row.reasons.map((reason, i) => <li key={i} className="break-words">{reason}</li>)}</ul>
             {row.queueCount > 0 && row.arrivalMinutes === null && <p className="mt-1 text-amber-300">{row.queueCount} queued assignment{row.queueCount === 1 ? '' : 's'}</p>}
           </div>;
