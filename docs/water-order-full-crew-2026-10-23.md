@@ -51,4 +51,12 @@ Validation uses synthetic data only:
 
 The interrupted implementation was preserved in WIP checkpoint 0c632765 while
 an urgent monitoring configuration request was handled. This document describes
-the completed implementation; deployment proof is recorded after verification.
+the completed implementation.
+
+Deployed source: df626981dc6fc24c4f6fba927340d3f3c4d596a4 on October 23, 2026.
+The guarded fresh production build and all mandatory preflight checks passed:
+468 library tests (467 passed, one existing skip, no failures), both Water Orders
+browser regressions and the retained Dashboard suites. Postdeploy verified all
+362 live artifacts byte-for-byte before advancing the shared approved source.
+No APK or backend deployment was needed. A synthetic full-crew screenshot was
+also visually inspected outside the repository; no customer data was captured.
