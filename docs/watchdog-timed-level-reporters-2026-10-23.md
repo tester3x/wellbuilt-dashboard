@@ -44,11 +44,21 @@ loopback listener with a bounded socket operation, anchors an installed script t
 its adjacent persistent queue, and connects/resumes an existing stopped receiver.
 A regression executes the actual script with a fixture listener and mocked APIs,
 proving connect/resume without duplicate process launch or repeated discovery.
-The task wrapper uses noninteractive PowerShell and captures startup errors;
+The task action uses hidden, noninteractive PowerShell with encoded arguments and
+captures startup errors; the temporary CMD wrapper was removed because it could
+open a visible terminal. `install-startup-task.ps1` reproduces the hidden action;
 task principal/triggers and the original task XML are preserved. Browser startup
 stages log only phase names, without message content or credentials.
 
-These startup changes are a **recovery checkpoint, not yet an automatic-delivery
-pass**: the scheduled desktop process has stalled, and WhatsApp watching must be
-verified connected and unpaused before the task is called complete. A direct
-submission of the already-captured gauge does not establish receiver health.
+Further inspection found WhatsApp's download/continue interstitial, not a loaded
+chat receiver. The dependency's default Chrome 101/macOS user-agent override was
+removed (`userAgent:false`) so the installed browser supplies its real identity.
+The actual browser then displayed the normal QR login and the receiver reached
+**Scan QR** at 2026-10-23T05:55:30.311Z. WhatsApp reports the session unpaired;
+the owner was asked to relink from the phone. The profile was not deleted or
+replaced. Why that saved session is unpaired is not proven.
+
+This is **not yet an automatic-delivery pass**: WhatsApp watching must be verified
+connected and unpaused after relinking. A direct submission of the already-captured
+gauge does not establish receiver health. HP sleep was considered but ruled out:
+the owner confirmed it awake, and the machine does not support Modern Standby.
