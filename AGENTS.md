@@ -32,6 +32,21 @@ Report each separately; never conflate them:
 - Record the **exact source commit** with every build and every deployment.
 
 ## 5. Release discipline (Hosting)
+- Use `npm run deploy:hosting`. Preflight must freshly fetch and include
+  `origin/release/dashboard-approved-base`, and HEAD must exactly match its pushed
+  release branch. Missing/unreachable origin or a stale/divergent branch blocks
+  deployment. Merge the shared checkpoint; never reset away local work.
+- Firebase's Hosting postdeploy hook verifies every exported file against live
+  bytes before advancing the shared checkpoint with a normal fast-forward push.
+  A mismatch or checkpoint race is a failed release requiring investigation,
+  even if Firebase uploaded successfully. Do not bypass hooks or manually advance
+  the checkpoint to make a failing deployment pass.
+- Preflight acquires a shared remote Hosting lock after its tests, preventing
+  overlapping compliant deployments. Failed uploads/verification deliberately
+  retain the lock. Investigate the live release and recorded lock owner before
+  clearing an abandoned lock; never delete another running release's lock.
+- Add a meaningful retained-behavior regression to the mandatory preflight when
+  fixing a release regression. Ancestry alone does not detect later reverts.
 - Deploy only through a canonical `release/dashboard-*` branch and the certified
   preflight (`scripts/preflight-hosting-deploy.cjs`): canonical branch + clean tree
   + descends from the proven UI baseline (`576fb63b`) + fresh build + guardrails.

@@ -46,6 +46,7 @@
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
+import { ndicCatalogDestination } from './ndicCatalogClassification';
 
 // Ultimate fallback recipient, only used if no admin users resolve and no env
 // var is set — so a refresh notification is never silently dropped.
@@ -55,7 +56,7 @@ const TZ = 'America/Chicago';
 const NDIC_SOURCE = {
   state: 'ND',
   label: 'NDIC DMR ArcGIS REST API',
-  url: 'https://gis.dmr.nd.gov/dmrpublicservices/rest/services/OilGasPublicMapDataVectorTiles/Wells/FeatureServer/0/query',
+  url: 'https://gis.dmr.nd.gov/dmrpublicservices/rest/services/All_Wells/MapServer/0/query',
   metaDoc: 'lastSyncND',
   page: 1000,
 };
@@ -234,9 +235,10 @@ export async function runNdicRefresh(
   };
 
   // Classification keeps the three collections disjoint by well_type and
-  // reproduces the original snapshot. SWD/WI (active) → disposals; OG → wells
-  // (A) / wells_inactive (IA); any other well_type or status is skipped +
-  // counted (not guessed). The earlier status-only rule wrote SWD/WI into
+  // SWD/WI (active) → disposals; OG → wells (A) / wells_inactive (IA).
+  // NDIC's Confidential status/type remains unchanged in wells: these are
+  // legitimate service-work destinations before production information is public.
+  // Other types/statuses are skipped and counted, never guessed. The earlier status-only rule wrote SWD/WI into
   // `wells`; this restores the split. Existing mis-filed docs are not removed
   // here (upsert-only, no deletes) — that cleanup is a separate approved step.
   const DISPOSAL_TYPES = new Set(['SWD', 'WI']);
@@ -255,13 +257,12 @@ export async function runNdicRefresh(
 
       let coll: 'wells' | 'wells_inactive' | 'disposals';
       let existingMap: Map<string, any>;
-      if (DISPOSAL_TYPES.has(wt)) {
-        if (status === 'A') { coll = 'disposals'; existingMap = existingDisposals; }
-        else { skipStatus(); continue; }
-      } else if (wt === 'OG') {
-        if (status === 'A') { coll = 'wells'; existingMap = existingWells; }
-        else if (status === 'IA') { coll = 'wells_inactive'; existingMap = existingInactive; }
-        else { skipStatus(); continue; }
+      const destination = ndicCatalogDestination(status, wt);
+      if (destination) {
+        coll = destination;
+        existingMap = destination === 'wells' ? existingWells : destination === 'wells_inactive' ? existingInactive : existingDisposals;
+      } else if (DISPOSAL_TYPES.has(wt) || wt === 'OG') {
+        skipStatus(); continue;
       } else {
         stats.skippedOtherType++;
         const k = wt || '(blank)';
