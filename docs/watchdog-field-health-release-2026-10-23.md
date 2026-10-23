@@ -20,3 +20,11 @@ The Playwright health regression covers no idle polling, initial installation
 state, authorized versus view-only controls, scoped requests, pending-command
 locking and stale company responses. It is retained in mandatory Hosting
 preflight alongside the existing manual-refresh and rejected-load recovery tests.
+
+Released source: `7f897e5751423da8e2ea0c4fa099a2baa1da6e5c`. Mandatory preflight
+passed, including 460 library tests with one existing skip, retained demo and
+completed-date behavior, dispatch, navigation and Watchdog checks. All 362 live
+artifacts byte-match the build; the normal postdeploy hook advanced the shared
+approved checkpoint. Backend source `0a04c70a` is deployed and its three new
+Functions are ACTIVE. HP installation remains pending; no heartbeat was invented
+to make the page appear online.
