@@ -68,6 +68,11 @@ async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;if(
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
  client=new Client({authStrategy:new LocalAuth({dataPath:path.join(directory,'session')}),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
  state='Connecting';error='';
+ // Startup stages contain no messages or credentials; distinguish a browser
+ // launch stall from authentication or WhatsApp injection when recovering.
+ for(const [target,method,label] of [[client.authStrategy,'beforeBrowserInitialized','profile'],[client.authStrategy,'afterBrowserInitialized','browser'],[client,'initWebVersionCache','web-cache'],[client,'inject','injection']]){
+  const original=target[method];target[method]=async function(...args){console.log('[receiver-startup] '+label+' start');const result=await original.apply(this,args);console.log('[receiver-startup] '+label+' ready');return result;};
+ }
  client.on('qr',async code=>{qr=await QRCode.toDataURL(code);state='Scan QR';});
  client.on('authenticated',()=>{state='Syncing WhatsApp';setTimeout(()=>{if(state==='Syncing WhatsApp')error='Signed in, but the WhatsApp receiver has not finished starting. Live capture is unavailable.';},60000).unref();});
  client.on('ready',async()=>{qr='';state='Connected';await loadGroups();});
