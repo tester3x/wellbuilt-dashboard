@@ -24,7 +24,7 @@ singleton.listen(8792,'127.0.0.1',async()=>{
  }
  const agent=new RecoveryAgent({directory,sync:body=>transport.request('syncWatchdogAgentV2',body),health:async()=>{try{return healthSummary(await local('/status'));}catch{return healthSummary(null);}},execute:async action=>{
   if(action==='restart_worker'){
-   await promisify(execFile)('powershell.exe',['-NoProfile','-NonInteractive','-File',path.join(root,'restart-watchdog-worker.ps1')],{windowsHide:true,timeout:45000});return;
+   await promisify(execFile)('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(root,'restart-watchdog-worker.ps1')],{windowsHide:true,timeout:45000});return;
   }
   const routes={refresh:'/refresh-groups',reconnect:'/connect',retry_pending:'/retry-pending',resume:'/resume'};
   await local(routes[action],'POST');
