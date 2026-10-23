@@ -37,7 +37,7 @@ export function WatchdogHealthPanel({companyId,load=loadHealth,send=sendRecovery
   {data&&!data.installed?<p>Remote helper is ready to install on the HP. No heartbeat has been received yet.</p>:data&&<>
    <p className={data.stale?'text-yellow-300':'text-green-400'}>{data.stale?'HP helper has not checked in recently.':'HP helper is online.'} Last heartbeat: {data.seenAt?new Date(data.seenAt).toLocaleString():'None'}.</p>
    {health&&<><p>Watchdog: {health.workerReachable?health.state:'Worker unavailable'}{health.paused?' · Paused':''}{receiverStale?' · Receiver check is overdue':''}</p>
-    <p>{health.channels} watched chats · {health.pending} pending updates · {health.reviews} reviews</p>
+    {health.workerReachable?<p>{health.channels} watched chats · {health.pending} pending updates · {health.reviews} reviews</p>:<p>Queue counts are unavailable until the worker responds.</p>}
     <p>Delivery: {health.transportStatus}</p>
     {health.lastReceiverCheck&&<p>Last WhatsApp check: {new Date(health.lastReceiverCheck).toLocaleString()}</p>}
     {health.error&&<p className="text-yellow-300">{health.error}</p>}
