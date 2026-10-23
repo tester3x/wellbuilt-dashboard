@@ -196,6 +196,7 @@
     "staffResolveCompanyDriverShifts",
     "staffWriteDispatch",
     "staffWriteDriverAssignment",
+    "staffWriteWaterOrder",
     "staffWriteWellConfig",
     "startPickupSplit",
     "stopWatchdogWellV2",
