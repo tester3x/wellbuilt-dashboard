@@ -27,6 +27,11 @@ function fatal(msg) {
 }
 
 console.log('\n>>> Starting WellBuilt Hosting Deploy-Time Gatekeeper Preflight <<<\n');
+let releaseState;
+try {
+  releaseState = require('./hosting-release-state.cjs').checkRelease();
+  console.log(`Fresh remote approved checkpoint included: ${releaseState.floor}`);
+} catch (error) { fatal(error.message); }
 
 // 1. Branch Canonicality Gate
 const currentBranch = run('git rev-parse --abbrev-ref HEAD');
@@ -77,6 +82,11 @@ console.log('\n--- Purging Stale Build Artifacts & Compiling Fresh Build ---');
 try {
   const outDir = path.resolve('out');
   const nextDir = path.resolve('.next');
+  for (const dir of [outDir, nextDir]) {
+    if (path.dirname(dir) !== process.cwd() || (fs.existsSync(dir) && fs.lstatSync(dir).isSymbolicLink())) {
+      throw Error('Unsafe build cleanup target: ' + dir);
+    }
+  }
   if (fs.existsSync(outDir)) {
     fs.rmSync(outDir, { recursive: true, force: true });
   }
@@ -106,6 +116,12 @@ if (process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW !== 'disabled') {
 
 // 5. Mechanical Guardrail Tests Execution
 console.log('\n--- Running Mandatory Pre-Deploy Test Suites on Fresh Build ---');
+try {
+  for (const test of ['tools/test-dashboardReturnState.cjs', 'tools/test-officeAlertPreferences.cjs', 'tools/test-driver-arrival-panel.mjs', 'tools/test-hosting-release-state.cjs']) {
+    execSync(`node ${test}`, { stdio: 'inherit' });
+  }
+  execSync('npx tsx --test src/lib/__tests__/*.test.ts', { stdio: 'inherit' });
+} catch (error) { fatal('Required retained-fix or release-state checks failed.'); }
 
 try {
   console.log('Executing: node tools/test-approved-dashboard-restorations.cjs ...');
@@ -166,3 +182,6 @@ try {
 console.log('\n================================================================');
 console.log('✅ [ALL PREFLIGHT SAFETY GATES PASSED] Hosting Release Certified.');
 console.log('================================================================\n');
+fs.mkdirSync('.firebase', { recursive: true });
+releaseState.lock = require('./hosting-release-state.cjs').acquireLock(releaseState.source);
+fs.writeFileSync('.firebase/hosting-preflight.json', JSON.stringify(releaseState));
