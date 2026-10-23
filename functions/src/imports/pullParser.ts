@@ -134,10 +134,10 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       let inlineTime = '';
       // A well-name suffix such as '. On' is pump status, not a gauge line.
       // Strip only that exact leading annotation; keep arbitrary prose held.
-      const gaugeBody=segment.body.replace(/^\s*[.,:]?\s*on\s*(?:\r?\n|$)/i,'\n').replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
+      const gaugeBody=segment.body.replace(/^\s*[.,:]?\s*on\s*(?:\r?\n|$)/i,'\n').replace(/^\s*levels?\s*[:=]?\s*(?=\d)/i,'').replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
       const rawLines=gaugeBody.split('\n').map(line=>line.trim()).filter(Boolean);
       const lines = gaugeBody.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
-        const suffix = /\s+(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
+        const suffix = /(?:\s+@?\s*|@)(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
         const prefix = suffix ? line.slice(0,suffix.index).trim().replace(/^(?:top|bottom|t|b)\s*[:=.\-]?\s*/i,'').replace(/\.(?!\d)$/,'') : '';
         if (suffix && clock(suffix[1]) && (/[ap]/i.test(suffix[1]) || parseFeet(prefix)!==null)) { inlineTime = suffix[1]; line = line.slice(0, suffix.index).trim(); }
         return line.replace(/^(?:top|bottom|t|b)\s*[:=.\-]?\s*(?=\d)/i, '').replace(/\.(?!\d)$/, '').trim();

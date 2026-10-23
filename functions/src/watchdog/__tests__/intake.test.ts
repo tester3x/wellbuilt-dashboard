@@ -28,6 +28,20 @@ test('top-only requires an explicitly enabled canonical sender and keeps zero re
  database.set('packets/processed/'+response.result.packetId,{...packet,tankAfterInches:77,canonicalProcessingComplete:true});
  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:response.result.identity})).result.status).toBe('complete');
 });
+test('explicit channel reporter records a timed gauge without a driver account or invented load',async()=>{
+ const original=observation();const time=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit',hour12:true}).format(new Date());
+ const body={...original,senderId:'123456789@lid',chat:original.chat.replace('Top 12.5\nBottom 11.125\n165 bbl',`levels 5-6 @${time}\nAdditional field note`)};
+ const {watchdogSenderKey}=require('../senderOwnership');const key=watchdogSenderKey(body.senderId);
+ expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body)).result.status).toBe('ignored');
+ documents.get('watchdog_v2_config/laptop').channels.group.timedLevelReporters={[key]:{enabled:true,startAt:new Date(Date.now()-3600000).toISOString()}};
+ const response=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ expect(response.result.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+response.result.packetId);
+ expect(packet).toMatchObject({bblsTaken:0,tankLevelFeet:5.5,bottomLevelFeet:5.5,driverId:null,driverName:null});
+ expect(packet.watchdogProvenance).toMatchObject({observationKind:'top_only',measurementTimeSource:'stated',timedLevelReporter:{senderKey:key}});
+ expect(packet.watchdogProvenance.ownershipSource).toBeUndefined();expect(packet.wellDown).toBeUndefined();
+ expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,chat:body.chat.replace(` @${time}`,'')})).result.status).toBe('ignored');
+});
 test('admin multiwell top-only batch is ignored without creating pulls or timing reviews',async()=>{
  const wells=['Matilda 2','Renn 1','Blackdog','Bootleg 4','Ironbank 5','Coopers'];
  documents.get('watchdog_v2_config/laptop').channels.group.wells=wells;
@@ -203,3 +217,4 @@ test('explicit fixed driver default reaches intake without re-estimating a gauge
  expect(packet.bottomLevelFeet).toBe(11);
  expect(packet.watchdogProvenance.barrels).toMatchObject({source:'default',needsReview:false,status:'provisional',selectedBbls:185});
 });
+

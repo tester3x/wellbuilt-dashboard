@@ -1,4 +1,5 @@
 import {corroborateInferredLevels} from './inferredLevels';
+import {isTimedLevelReporter} from './timedLevelReporter';
 import {historicalReviewCommitted} from './historicalReview';
 import {matchExistingAppPull} from './existingAppPull';
 import {applyReviewCorrections,normalizeReviewReason} from './reviewCorrections';
@@ -39,13 +40,14 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const rows=parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined,driverDefaultBbls:channel.driverDefaultBbls||{}});
  let row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
  const senderKey=body.senderId===undefined?null:watchdogSenderKey(body.senderId);
+ const timedLevelReporter=isTimedLevelReporter(channel,senderKey,row);
  // Pumper rounds listing many gauges are not driver load observations.
  if(rows.length>=3&&rows.every(candidate=>candidate.levelOnly===true)){res.json({ok:true,status:'ignored',reason:'pumper_gauge_list'});return;}
 
  if(row.levelOnly){
   const candidate=senderKey?policy.senderBindings?.[senderKey]:null;
   const start=policy.topOnlyDriverStarts?.[candidate?.driverId];
-  if(candidate?.enabled!==true||typeof start!=='string'||!Number.isFinite(Date.parse(start))||Date.parse(row.postedAt)<Date.parse(start)){
+  if(!timedLevelReporter&&(candidate?.enabled!==true||typeof start!=='string'||!Number.isFinite(Date.parse(start))||Date.parse(row.postedAt)<Date.parse(start))){
    res.json({ok:true,status:'ignored',reason:'top_only_sender_not_enabled'});return;
   }
  }
@@ -65,7 +67,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const profile=binding?(await db.ref('drivers/profiles/'+binding.driverId).once('value')).val():null;
  const owner=resolveWatchdogOwner(binding,profile,mapped.wellName,configs[mapped.wellName]);
  if(row.levelOnly){
-  if(!owner)throw Error('top_only_owner_required');
+  if(!owner&&!timedLevelReporter)throw Error('top_only_owner_required');
   if(row.bblsTaken!==0||row.bottomLevelFeet!==null)throw Error('invalid_top_only_measurement');
   row={...row,issues:row.issues.filter(issue=>issue!=='Confirm measurement time for top-only reading')};
  }
@@ -116,6 +118,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const stamp=new Date(row.dateTimeUTC).toISOString().replace(/[-:]/g,'').slice(0,15).replace('T','_');
  const packetId=stamp+'_'+mapped.wellName.replace(/\s+/g,'')+'_'+identity.slice(0,6);
  const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,dateTime:watchdogDisplayTime(row.dateTimeUTC),timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:owner?.driverId??null,driverName:owner?.driverName??null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,...(row.levelOnly?{observationKind:'top_only',measurementTimeSource:review?'reviewed':row.measurementTimeSource}:{}),...(barrels?{barrels}:{}),...(row.inferredSeparator?{parserInference:{kind:'separator_dot',historicallyCorroborated:!review,manuallyReviewed:!!review}}:{}),...(owner?{senderKey,ownerDriverId:owner.driverId,ownershipSource:'verified_sender_binding'}:{}),reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(estimate?{barrelEstimate:estimate,barrelSource}:{}),...(review?{review:{originalTime,originalMeasurements,correctedMeasurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken},...(review.actorUid?{actorUid:review.actorUid}:{}),correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
+ if(timedLevelReporter)Object.assign(packet.watchdogProvenance,{timedLevelReporter:{senderKey,scope:'configured_channel',measurementTimeSource:'stated',author:row.author}});
  const flowDiagnostic=diagnosticFlowWindow(history[mapped.wellName],{...packet,tankTopInches:Number(row.tankLevelFeet)*12,tankAfterInches:Number(checked.afterFeet)*12},6);
  Object.assign(packet.watchdogProvenance,{flowDiagnostic:{...flowDiagnostic,mode:'shadow',minimumRecoveryInches:6}});
  const payloadDigest=digest(packet);
