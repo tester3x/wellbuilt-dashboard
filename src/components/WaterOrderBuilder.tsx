@@ -141,6 +141,8 @@ export function WaterOrderBuilder({
     [orderJobsReady, setOrderJobsReady] = useState(false);
   const alive = useRef(true),
     running = useRef(false);
+  const authority=useRef({companyId,userId,canWrite});
+  authority.current={companyId,userId,canWrite};
   const [sourceSearch,setSourceSearch]=useState(''),[destinationRows,setDestinationRows]=useState<NdicWell[]>([]),
     [destinationState,setDestinationState]=useState(''),[dispatchProgress,setDispatchProgress]=useState('');
   const [fleetSearch,setFleetSearch]=useState('');
@@ -246,7 +248,7 @@ export function WaterOrderBuilder({
       !alive.current ||
       !companyId ||
       companyId === "__no_company_access__" ||
-      !canWrite
+      !canWrite || !authority.current.canWrite || authority.current.companyId!==companyId || authority.current.userId!==userId
     )
       throw Error("Choose a company with dispatch permission");
   };
