@@ -9,7 +9,7 @@ export interface SyncAlertReport {
   operationId: string; kind: string; resourceId: string; state: 'open' | 'resolved';
   reason: 'rejected_update' | 'repeated_delivery_failure'; attempts: number; createdAtMs: number;
 }
-const KINDS = new Set(['invoiceCreate', 'invoiceStart', 'invoiceClose', 'dispatchCreate', 'dispatchAccept', 'dispatchResolve', 'dispatchStage', 'dispatchComplete', 'jsaStampLocations', 'jsaJobCoverage', 'ticket_submit', 'ticket_update', 'wb_pull', 'wb_edit', 'timeline_sync', 'phone_split', 'photo_upload', 'photo_metadata', 'photo_validation']);
+const KINDS = new Set(['invoiceCreate', 'invoiceStart', 'invoiceClose', 'dispatchCreate', 'dispatchAccept', 'dispatchResolve', 'dispatchStage', 'dispatchComplete', 'jsaStampLocations', 'jsaJobCoverage', 'jsaOfflineEvidence', 'ticket_submit', 'ticket_update', 'wb_pull', 'wb_edit', 'timeline_sync', 'phone_split', 'photo_upload', 'photo_metadata', 'photo_validation']);
 export function parseSyncAlertReport(raw: unknown, now: number): SyncAlertReport {
   const x = raw as SyncAlertReport;
   const keys = ['operationId', 'kind', 'resourceId', 'state', 'reason', 'attempts', 'createdAtMs'];
@@ -37,11 +37,11 @@ export const reportDriverSyncAlert = onCall({ timeoutSeconds: 20, enforceAppChec
   const claims = request.auth?.token;
   if (!request.auth?.uid || claims?.kind !== 'driver' || typeof claims.driverId !== 'string') throw new HttpsError('unauthenticated', 'driver_required');
   const owner = await loadCanonicalDriverAuthority(claims.driverId, productionCanonicalDriverReaders());
-  if (!owner?.active || owner.companyId !== claims.companyId || (claims.app !== undefined && claims.app !== 'wbt')) throw new HttpsError('permission-denied', 'driver_scope_changed');
+  if (!owner?.active || owner.companyId !== claims.companyId || (claims.app != null && claims.app !== 'wbt')) throw new HttpsError('permission-denied', 'driver_scope_changed');
   const now = Date.now(), report = parseSyncAlertReport(request.data, now);
   const db = admin.firestore();
   // Client text never establishes resource ownership or routes the incident.
-  const collection = report.kind.startsWith('dispatch') ? 'dispatches' : report.kind.startsWith('invoice') ? 'invoices' : null;
+  const collection = report.kind.startsWith('dispatch') ? 'dispatches' : (report.kind.startsWith('invoice') || report.kind === 'jsaOfflineEvidence') ? 'invoices' : null;
   if (collection) {
     const resource = await db.collection(collection).doc(report.resourceId).get();
     if (resource.exists && (resource.data()?.companyId !== owner.companyId || resource.data()?.driverId !== owner.driverId)) throw new HttpsError('permission-denied', 'foreign_resource');

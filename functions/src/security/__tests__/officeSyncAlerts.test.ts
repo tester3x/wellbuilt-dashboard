@@ -78,3 +78,18 @@ test('staff reads are server-company-scoped, capability-checked, and reject clie
   expect(filters).toContainEqual(['status', '==', 'open']);
   expect(requireTrustedCompanyCapability).toHaveBeenCalledWith('staff', 'manageDrivers');
 });
+
+
+test('offline JSA failures reach the office through a shared session and enforce invoice ownership', async () => {
+  const shared = request() as any;
+  shared.auth.token.app = null;
+  shared.data = { ...report, kind: 'jsaOfflineEvidence', reason: 'rejected_update', attempts: 1 };
+  await (reportDriverSyncAlert as any)(shared);
+  expect(writes).toHaveLength(1);
+  expect([...documents.values()][0]).toMatchObject({ kind: 'jsaOfflineEvidence', driverId: 'driver1', companyId: 'company1' });
+  resource = { companyId: 'other', driverId: 'someone-else' };
+  await expect((reportDriverSyncAlert as any)(shared)).rejects.toThrow('foreign_resource');
+  shared.auth.token.app = 'etc';
+  await expect((reportDriverSyncAlert as any)(shared)).rejects.toThrow('driver_scope_changed');
+  expect(writes).toHaveLength(1);
+});
