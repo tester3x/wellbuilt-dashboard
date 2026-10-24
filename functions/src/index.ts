@@ -1,4 +1,5 @@
 import {calculateInventoryProduction} from './inventoryProduction';
+import {previousPullBottomInches} from './previousPullLevel';
 import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecision';
 import {calculateOvernightProductionSample, overnightReadingProof, recordedBottomFeet} from './overnightProduction';
 import { resolveTankBblPerFoot } from './tankCalibration';
@@ -1125,6 +1126,12 @@ export const processIncomingPull = functionsV1.database
     if (incomingHasAuthoritativeWellDown) {
       const targetConfigKey = configSnap.key || wellName;
       await db.ref(`well_config/${targetConfigKey}/isDown`).set(nextIsDown);
+    }
+
+    // Display levels truncate fractional inches; use the linked measurement for AFR.
+    if (typeof prevResponse?.lastPullPacketId === 'string') {
+      const previousSourcePacket = (await db.ref('packets/processed/' + prevResponse.lastPullPacketId).once('value')).val();
+      prevTankAfterInches = previousPullBottomInches(previousSourcePacket, prevTankAfterInches);
     }
 
     // Calculate all fields
