@@ -24,17 +24,26 @@ export async function collectReceiver({ids, checkpoints, now}) {
     const add = list => { for (const m of list) if (m.id?._serialized || m.id?.id) all.set(m.id._serialized || m.id.id, m); };
     add(chat.msgs.getModelsArray()); add(received.filter(m => m.id?.remote?._serialized === id));
     if (now - (window.__wellBuiltHistory[id] || 0) > 30) {
+      const loader=window.require('WAWebChatLoadMessages');
+      // Chat caches can have ancient group notices plus the newest post, with
+      // an unsynced hole between. Only a fresh page walk proves coverage.
+      if(typeof loader.loadRecentMsgs==='function')await loader.loadRecentMsgs({chat});
+      let pageOldest=Infinity;
       for (let page = 0; page < 100; page++) {
-        const oldest = Math.min(...[...all.values()].map(m => Number(m.t)).filter(Number.isFinite));
-        if (oldest <= since) { window.__wellBuiltHistory[id] = now; break; }
+        if (pageOldest <= since) { window.__wellBuiltHistory[id] = now; break; }
         const previous = all.size;
         let timer, loaded;
         try { loaded = await Promise.race([
-          window.require('WAWebChatLoadMessages').loadEarlierMsgs({chat}),
+          loader.loadEarlierMsgs({chat}),
           new Promise((_, reject) => { timer = setTimeout(() => reject(Error('WhatsApp history timed out')), 15000); }),
         ]); } finally { clearTimeout(timer); }
         add(Array.isArray(loaded) ? loaded : []); add(chat.msgs.getModelsArray());
-        if (all.size === previous) { window.__wellBuiltHistory[id] = now; break; }
+        if(!Array.isArray(loaded))throw Error('WhatsApp history page unavailable');
+        if(!loaded.length){window.__wellBuiltHistory[id]=now;break;}
+        const times=loaded.filter(m=>typeof m.body==='string'&&m.body.trim()&&!m.isNotification)
+          .map(m=>Number(m.t)).filter(Number.isFinite);
+        pageOldest=Math.min(pageOldest,...times);
+        if(all.size===previous&&pageOldest>since)throw Error('WhatsApp history did not advance; checkpoint preserved');
       }
       if (window.__wellBuiltHistory[id] !== now) throw Error('WhatsApp history exceeds catch-up batch; retrying without advancing checkpoint');
     }

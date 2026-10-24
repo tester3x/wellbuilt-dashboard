@@ -70,6 +70,32 @@ test('missing group and failed history never return an advanced checkpoint', asy
     assert.equal(window.__wellBuiltHistory.group,undefined);
   } finally {delete globalThis.window;}
 });
+
+test('an ancient cached group notice cannot hide a missing recent page',async()=>{
+ const now=200000,make=t=>({id:{id:'m'+t,remote:{_serialized:'group'}},t,body:'load'});
+ const cached=[{...make(1),body:'group created',isNotification:true},make(now-5)];
+ const late=make(now-6*3600);let calls=0;
+ const chat={id:{server:'g.us',_serialized:'group'},msgs:{getModelsArray:()=>cached}};
+ globalThis.window={AuthStore:{AppState:{state:'CONNECTED'}},require(name){
+  if(name==='WAWebCollections')return {Chat:{getModelsArray:()=>[chat]},Msg:{getModelsArray:()=>[],on(){}}};
+  return {async loadEarlierMsgs(){calls++;return calls===1?[late]:[];}};
+ }};
+ try{const result=await collectReceiver({ids:['group'],checkpoints:{group:now-4},now});
+  assert.equal(calls,2);assert.equal(result.messages.filter(m=>m.id===late.id.id).length,1);
+ }finally{delete globalThis.window;}
+});
+
+test('a repeated unadvanced page cannot certify an unseen history gap',async()=>{
+ const now=200000,m={id:{id:'same'},t:now-5,body:'load'};
+ const chat={id:{server:'g.us',_serialized:'group'},msgs:{getModelsArray:()=>[m]}};
+ globalThis.window={AuthStore:{AppState:{state:'CONNECTED'}},require(name){
+  if(name==='WAWebCollections')return {Chat:{getModelsArray:()=>[chat]},Msg:{getModelsArray:()=>[],on(){}}};
+  return {async loadEarlierMsgs(){return [m];}};
+ }};
+ try{await assert.rejects(collectReceiver({ids:['group'],checkpoints:{group:now-4},now}),/did not advance/);
+  assert.equal(window.__wellBuiltHistory.group,undefined);
+ }finally{delete globalThis.window;}
+});
 import {finishSyncedLogin} from './receiver-ready.mjs';
 test('already-synced login finishes the SDK callback once, while unpaired sessions never do',async()=>{
  let calls=0;globalThis.window={AuthStore:{AppState:{state:'UNPAIRED'}},require:()=>({Socket:{state:'CONNECTED',hasSynced:true}}),onAppStateHasSyncedEvent:async()=>calls++};
