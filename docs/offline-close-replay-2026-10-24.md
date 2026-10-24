@@ -39,3 +39,12 @@ The driver cannot submit or broaden this proof. Ownership, operator, one BBL,
 closed status, software-only notes, exact fixture set, no inspection, no real
 shift activity and audit preservation still apply. Thirteen cleanup tests and
 Functions build pass; deployed baseline source was verified before this change.
+
+Deployed only cancelAuthorizedSoftwareTestShift from a30303de; ACTIVE revision
+cancelauthorizedsoftwaretestshift-00002-xad, deployed source archive byte-verified.
+Using Suite96's dedicated authorized-software-test screen, the operator-pinned
+four-fixture session cancelled successfully. Server authority has no open
+period, daily currentShiftId is empty, cancellation audit preserves the original
+start and fixtures, and no DVIR exists. Suite confirmed "Test cancelled and HOS
+ended" and returned to Suite home. The initial ordinary cancellation attempt
+was correctly refused by the HOS guard and did not mutate the shift.
