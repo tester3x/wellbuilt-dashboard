@@ -40,4 +40,9 @@ history response exposed a coverage-check incompatibility. The receiver now
 accepts that response only after a fresh request and explicit no-earlier-history,
 loaded-context, no-loading and no-repair flags. Missing/ambiguous responses still
 fail closed and preserve checkpoints. Six additional cases pass; all 82 worker
-checks pass. HP installation and live catch-up verification pending.
+checks pass. HP source was fast-forwarded after verifying tracked files were clean;
+its 14 focused recovery checks pass. The existing supervisor restarted the worker
+with its saved session. Live readback is Connected/Ready, unpaused, error-free,
+with fresh matching checkpoints for all nine watched groups and no pending
+deliveries. The sole review is a new uncalibrated pad observation, retained intact.
+No WhatsApp message or QR relink was required for this recovery.
