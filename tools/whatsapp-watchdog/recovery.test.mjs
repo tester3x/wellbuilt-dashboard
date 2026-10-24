@@ -37,11 +37,29 @@ test('catch-up pages past 100 messages to durable checkpoint, then repeats after
   const f=fixture([Array.from({length:150},(_,i)=>1900-i),[1300]]);
   try {
     const result=await collectReceiver({ids:['group'],checkpoints:{group:1950},now:2000});
-    assert.equal(f.calls,2);assert.equal(result.messages.length,151);assert.equal(result.covered.group,2000);
+    assert.ok(f.calls>=2);assert.equal(result.messages.length,152);assert.equal(result.covered.group,2000);
     window.__wellBuiltHistory.group=1900;
     await collectReceiver({ids:['group'],checkpoints:{group:2000},now:2100});
     assert.equal(window.__wellBuiltHistory.group,2100);
   } finally {delete globalThis.window;}
+});
+
+test('late WhatsApp sync behind a healthy polling watermark is reconciled by original message ID', async()=>{
+ const now=200000, id='late-post', channel='group';
+ const late={id:{id,remote:{_serialized:channel},participant:'test-sender@lid'},t:now-6*3600,body:'Test well\n10-0\n8-9\n185'};
+ const current={id:{id:'current',remote:{_serialized:channel}},t:now-5,body:'latest'};
+ const chat={id:{server:'g.us',_serialized:channel},msgs:{getModelsArray:()=>[current]}};
+ globalThis.window={AuthStore:{AppState:{state:'CONNECTED'}},require(name){
+  if(name==='WAWebCollections')return {Chat:{getModelsArray:()=>[chat]},Msg:{getModelsArray:()=>[late],on(){}}};
+  return {async loadEarlierMsgs(){return [];}};
+ }};
+ try{
+  const first=await collectReceiver({ids:[channel],checkpoints:{[channel]:now-4},now});
+  const found=first.messages.filter(m=>m.id===id);assert.equal(found.length,1);
+  assert.equal(found[0].senderId,'test-sender@lid');assert.equal(found[0].timestamp,late.t);
+  const replay=await collectReceiver({ids:[channel],checkpoints:{[channel]:now},now:now+5});
+  assert.equal(replay.messages.filter(m=>m.id===id).length,1);
+ }finally{delete globalThis.window;}
 });
 
 test('missing group and failed history never return an advanced checkpoint', async () => {

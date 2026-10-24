@@ -15,7 +15,11 @@ export async function collectReceiver({ids, checkpoints, now}) {
   window.__wellBuiltHistory ??= {};
   for (const chat of selected) {
     const id = chat.id._serialized;
-    const since = (checkpoints[id] || now - 86400) - 600;
+    // A successful poll is not proof that WhatsApp has synced every older post.
+    // Reconcile a full day as well as any longer durable outage. Message IDs and
+    // server receipts make this replay idempotent; a late-synced post must not
+    // become invisible just because the polling watermark already passed it.
+    const since = Math.min(checkpoints[id] || now - 86400, now - 86400) - 600;
     const all = new Map();
     const add = list => { for (const m of list) if (m.id?._serialized || m.id?.id) all.set(m.id._serialized || m.id.id, m); };
     add(chat.msgs.getModelsArray()); add(received.filter(m => m.id?.remote?._serialized === id));
