@@ -41,9 +41,15 @@ export function mergeInvoicePhotoEvidence(existing: unknown, incoming: unknown):
   const positions=new Map<string,number>();
   for (const raw of [...(Array.isArray(existing)?existing:[]),...(Array.isArray(incoming)?incoming:[])]) {
     const p=clean(raw);if(!p)continue;
-    const id=typeof p==='object' && typeof p.photoId==='string' && p.photoId ? p.photoId : null;
+    const legacy=typeof p==='string'?p:p.uri || p.remoteUrl || p.gsUri || p.storagePath;
+    const id=typeof p==='object' && typeof p.photoId==='string' && p.photoId ? `id:${p.photoId}`
+      : typeof legacy==='string' && legacy ? `legacy:${legacy}` : null;
     const prior=id ? positions.get(id) : undefined;
-    if(prior!==undefined) result[prior]=merge(result[prior] as Photo,p as Photo);
+    if(prior!==undefined) {
+      const previous=result[prior];
+      result[prior]=typeof previous==='object' && typeof p==='object' ? merge(previous,p)
+        : typeof p==='object'?p:previous;
+    }
     else {if(id)positions.set(id,result.length);result.push(p);}
   }
   // Firestore rejects undefined nested fields; JSON data contains no sentinels here.

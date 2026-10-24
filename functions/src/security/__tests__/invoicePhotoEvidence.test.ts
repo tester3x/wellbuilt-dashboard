@@ -14,3 +14,5 @@ test.each([true,false])('actual invoice handler preserves uploaded evidence duri
 test('omitted photos and empty stale arrays preserve other evidence',()=>{expect(mergeInvoicePhotoEvidence([confirmed],[])).toEqual([confirmed]);expect(mergeInvoicePhotoEvidence([confirmed],null)).toEqual([confirmed]);});
 test('private device paths are excluded and independent photo identities remain separate',()=>{const out=mergeInvoicePhotoEvidence([confirmed],[{...pending,photoId:'q',localUri:'file://private',uri:'file://private'}]);expect(out).toHaveLength(2);expect(JSON.stringify(out)).not.toContain('file://');});
 test('newer settled verdict advances while a pending verdict cannot regress it',()=>{const newer={...confirmed,compliance:{status:'fail',validatedAt:'2026-01-02T12:00:00Z'}};expect((mergeInvoicePhotoEvidence([confirmed],[newer,pending])[0] as any).compliance.status).toBe('fail');});
+
+test('legacy remote references do not multiply under replay',()=>{expect(mergeInvoicePhotoEvidence(['https://example.test/photo'],['https://example.test/photo'])).toEqual(['https://example.test/photo']);});
