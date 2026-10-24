@@ -17,4 +17,27 @@ The result reports the count of estimated interior observations.
 Forty-one focused estimator, actual-entry-point, refresh and overnight tests pass,
 including intermediate-time invariance, estimated endpoints, timing bounds,
 unconfirmed amounts, two-point balance and delete/rebuild behavior. No app build
-is required. Exact live replay, scoped deployment and projection refresh pending.
+is required.
+
+## Live verification
+
+Checkpoint 7658c8d1 compiles against exact downloaded live source. Actual deployed
+AFR entry-point replays use existing canonical observations and match conservation;
+previously corrected reference wells remain unchanged. Scoped source overlays
+change only the estimator's source, compiled module and map in the incoming,
+delete, edit and edit-outbox handlers. Full deployed archives match their overlays
+byte-for-byte, with runtime, trigger and IAM preserved.
+
+The two affected current projections were refreshed using the same deployed
+helper. Readback verifies corrected AFR and independent ON. Entire original
+histories, gauges, timestamps, ownership and down state are unchanged. All tank
+configuration fields are identical; only derived rate/forecast fields change.
+Private immutable before-images, completion evidence and exact customer values
+remain outside Git.
+
+During the final receiver health check, a new/exhausted group's undefined native
+history response exposed a coverage-check incompatibility. The receiver now
+accepts that response only after a fresh request and explicit no-earlier-history,
+loaded-context, no-loading and no-repair flags. Missing/ambiguous responses still
+fail closed and preserve checkpoints. Six additional cases pass; all 82 worker
+checks pass. HP installation and live catch-up verification pending.

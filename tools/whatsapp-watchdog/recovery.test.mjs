@@ -96,6 +96,27 @@ test('a repeated unadvanced page cannot certify an unseen history gap',async()=>
   assert.equal(window.__wellBuiltHistory.group,undefined);
  }finally{delete globalThis.window;}
 });
+
+for(const [name,state,allowed] of [
+ ['explicit exhausted group',{noEarlierMsgs:true,contextLoaded:true},true],
+ ['native model exhausted group',{__x_noEarlierMsgs:true,__x_contextLoaded:true},true],
+ ['missing end flag',{contextLoaded:true},false],
+ ['still syncing context',{noEarlierMsgs:true,contextLoaded:false},false],
+ ['repairing history',{noEarlierMsgs:true,contextLoaded:true,isRepairingMsgHistory:true},false],
+ ['recent page still loading',{noEarlierMsgs:true,contextLoaded:true,isLoadingRecentMsgs:true},false],
+])test(name+' handles an undefined history response without skipping an unseen gap',async()=>{
+ const now=200000,m={id:{id:'new-group-load'},t:now-5,body:'test load'};let calls=0;
+ const chat={id:{server:'g.us',_serialized:'group'},msgs:{getModelsArray:()=>[m],msgLoadState:state}};
+ globalThis.window={AuthStore:{AppState:{state:'CONNECTED'}},require(name){
+  if(name==='WAWebCollections')return {Chat:{getModelsArray:()=>[chat]},Msg:{getModelsArray:()=>[],on(){}}};
+  return {async loadEarlierMsgs(){calls++;return undefined;}};
+ }};
+ try{
+  if(allowed){const result=await collectReceiver({ids:['group'],checkpoints:{group:now-4},now});assert.equal(result.covered.group,now);assert.equal(result.messages.length,1);}
+  else{await assert.rejects(collectReceiver({ids:['group'],checkpoints:{group:now-4},now}),/page unavailable/);assert.equal(window.__wellBuiltHistory.group,undefined);}
+  assert.equal(calls,1);
+ }finally{delete globalThis.window;}
+});
 import {finishSyncedLogin} from './receiver-ready.mjs';
 test('already-synced login finishes the SDK callback once, while unpaired sessions never do',async()=>{
  let calls=0;globalThis.window={AuthStore:{AppState:{state:'UNPAIRED'}},require:()=>({Socket:{state:'CONNECTED',hasSynced:true}}),onAppStateHasSyncedEvent:async()=>calls++};

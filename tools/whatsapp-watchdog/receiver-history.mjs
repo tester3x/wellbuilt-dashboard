@@ -38,7 +38,17 @@ export async function collectReceiver({ids, checkpoints, now}) {
           new Promise((_, reject) => { timer = setTimeout(() => reject(Error('WhatsApp history timed out')), 15000); }),
         ]); } finally { clearTimeout(timer); }
         add(Array.isArray(loaded) ? loaded : []); add(chat.msgs.getModelsArray());
-        if(!Array.isArray(loaded))throw Error('WhatsApp history page unavailable');
+        if(!Array.isArray(loaded)){
+          // A newly created/exhausted group can return undefined, rather than
+          // [], after the fresh page request. Require WhatsApp's explicit end
+          // state; an old cached notice or a missing response alone is no proof.
+          const state=chat.msgs.msgLoadState,read=key=>state?.[key]??state?.['__x_'+key];
+          if(loaded==null&&read('noEarlierMsgs')===true&&read('contextLoaded')===true&&
+            !read('isLoadingEarlierMsgs')&&!read('isLoadingRecentMsgs')&&!read('isRepairingMsgHistory')){
+            window.__wellBuiltHistory[id]=now;break;
+          }
+          throw Error('WhatsApp history page unavailable');
+        }
         if(!loaded.length){window.__wellBuiltHistory[id]=now;break;}
         const times=loaded.filter(m=>typeof m.body==='string'&&m.body.trim()&&!m.isNotification)
           .map(m=>Number(m.t)).filter(Number.isFinite);
