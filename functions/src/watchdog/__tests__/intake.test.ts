@@ -13,6 +13,42 @@ async function call(endpoint:any,name:string,body:any,tampered=false){const rawB
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});database.set('packets/outgoing/response_existing',{wellName:'Kahuna 5',wellDown:false,currentLevel:'12',lastPullPacketId:'actual-pull',flowRate:'1:00:00'});});
 const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
 
+test('confirmed fixed-load intake preserves actual reported bottom and ordinary defaults remain provisional',async()=>{
+ const c=documents.get('watchdog_v2_config/laptop').channels.group;
+ c.driverDefaultBbls={'123456789@lid':165};c.driverDefaultModes={'123456789@lid':'confirmed_fixed_load'};
+ const body={...observation(),senderId:'123456789@lid',chat:observation().chat.replace(/Top[\s\S]*$/,'Top 12\u2032 0\u2033\nBottom 10\u2032 0\u2033')};
+ const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ expect(answer.result.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+answer.result.packetId);
+ expect(packet).toMatchObject({bblsTaken:165,bottomLevelFeet:10,watchdogProvenance:{barrels:{status:'confirmed',source:'owner_fixed_load'}}});
+ database.delete('packets/incoming/'+answer.result.packetId);
+ c.driverDefaultModes['123456789@lid']='fixed_load';
+ const ordinary=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,messageId:'legacy'});
+ expect(database.get('packets/incoming/'+ordinary.result.packetId).watchdogProvenance.barrels.status).toBe('provisional');
+});
+
+test('office may confirm a routine provisional load without changing its measurements or estimated time',async()=>{
+ const c=documents.get('watchdog_v2_config/laptop').channels.group;
+ c.driverDefaultBbls={Driver:165};c.driverDefaultModes={Driver:'fixed_load'};
+ const body={...observation(),chat:observation().chat.replace(/Top[\s\S]*$/,'Top 12\u2032 0\u2033\nBottom 10\u2032 0\u2033')};
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body),packet=database.get('packets/incoming/'+first.result.packetId);
+ expect(packet.watchdogProvenance.barrels.needsReview).toBe(false);
+ const path='packets/processed/'+first.result.packetId;
+ const timeEstimate={status:'estimated',reason:'separate timing uncertainty'};
+ database.set(path,{...packet,watchdogProvenance:{...packet.watchdogProvenance,timeEstimate},tankAfterInches:120,canonicalProcessingComplete:true});
+ database.delete('packets/incoming/'+first.result.packetId);
+ database.set('well_config/Kahuna 5',database.get('well_config')['Kahuna 5']);
+ const review={confirmed:true,dateTimeUTC:packet.dateTimeUTC,tankLevelFeet:12,bottomLevelFeet:10,bblsTaken:165,reason:'Owner confirmed fixed load quantity'};
+ const answer=await call(reviewWatchdogDeliveredPullV2,'reviewWatchdogDeliveredPullV2',{identity:first.result.identity,decision:'confirm',review});
+ expect(answer.result.status).toBe('queued');
+ const event=documents.get('watchdog_v2_deliveries/'+first.result.identity).pendingReview.eventId;
+ database.delete('packets/incoming/'+event);
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity})).result.status).toBe('complete');
+ expect(database.get(path).watchdogProvenance.barrels.status).toBe('confirmed');
+ expect(database.get(path).watchdogProvenance.timeEstimate).toEqual(timeEstimate);
+ expect(database.get(path).dateTimeUTC).toBe(packet.dateTimeUTC);
+});
+
 test('five-load catch-up real handlers retain pending receipts and deduplicate retries before and after commit',async()=>{
  documents.get('watchdog_v2_config/laptop').enabledAt=0;
  const bodies:any[]=[],ids:string[]=[],times:string[]=[];

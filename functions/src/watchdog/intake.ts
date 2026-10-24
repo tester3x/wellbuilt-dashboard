@@ -7,7 +7,7 @@ import {applyReviewCorrections,normalizeReviewReason} from './reviewCorrections'
 import {diagnosticFlowWindow} from '../flowWindows';
 import {possibleAggregateOverlap} from './aggregateOverlap';
 import {watchdogSenderKey,resolveWatchdogOwner} from './senderOwnership';
-import {decideBarrels,fixedDriverDefault} from './barrelDecision';
+import {decideBarrels,fixedDriverDefault,fixedDriverDefaultConfirmed} from './barrelDecision';
 import * as https from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import {createHash} from 'crypto';
@@ -84,11 +84,12 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const earlyAppMatch=matchExistingAppPull({...row,wellName:mapped.wellName,bblsTaken:writtenBarrels},history[mapped.wellName],owner?.driverId??null,mapped.bank,writtenBarrels!==null);
  if(earlyAppMatch.status==='matched'){res.json({ok:true,status:'duplicate',alreadyRecorded:true,matchedPacketId:earlyAppMatch.packetIds[0],matchedDateTimeUTC:earlyAppMatch.dateTimeUTC,issues:['Already recorded through the app; original gauge time preserved']});return;}
  const driverCapacity=channel.driverCapacities?.[body.senderId]??channel.driverCapacities?.[row.author];
- const decision=decideBarrels({written:review?.bblsTaken??noDefault?.bblsTaken??null,fallback:row.bblsTaken,top:row.tankLevelFeet,bottom:row.bottomLevelFeet,bank:mapped.bank,rateMinutesPerFoot:Number(status?.calculated?.flowRateMinutes),isDown:status?.isDown!==false,rateMeasuredAt:status?.calculated?.flowRateMeasuredAtUTC||status?.lastPull?.dateTimeUTC||'',measuredAt:row.dateTimeUTC,maxLoadBbls:channel.maxLoadBbls,driverCapacity,wellLimit:channel.wellLoadLimits?.[mapped.wellName],fixedDefaultBbls:fixedDriverDefault(channel,body.senderId,row.author)});
+ const decision=decideBarrels({written:review?.bblsTaken??noDefault?.bblsTaken??null,fallback:row.bblsTaken,top:row.tankLevelFeet,bottom:row.bottomLevelFeet,bank:mapped.bank,rateMinutesPerFoot:Number(status?.calculated?.flowRateMinutes),isDown:status?.isDown!==false,rateMeasuredAt:status?.calculated?.flowRateMeasuredAtUTC||status?.lastPull?.dateTimeUTC||'',measuredAt:row.dateTimeUTC,maxLoadBbls:channel.maxLoadBbls,driverCapacity,wellLimit:channel.wellLoadLimits?.[mapped.wellName],fixedDefaultBbls:fixedDriverDefault(channel,body.senderId,row.author),fixedDefaultConfirmed:fixedDriverDefaultConfirmed(channel,body.senderId,row.author)});
  if(!decision){res.json({ok:true,status:'review',issues:['Missing barrels and valid bottom; cannot estimate safely']});return;}
  row={...row,bblsTaken:decision.bbls,issues:row.issues.filter(issue=>issue!=='Missing barrels')};
  const checked=reviewPulls([row],configs,history,{},new Set())[0];
- if(decision.provisional&&row.bottomLevelFeet!==null){
+ const confirmedFixed=decision.source==='default'&&!decision.provisional&&fixedDriverDefaultConfirmed(channel,body.senderId,row.author);
+ if((decision.provisional||confirmedFixed)&&row.bottomLevelFeet!==null){
   checked.afterFeet=row.bottomLevelFeet;
   checked.issues=checked.issues.filter(issue=>issue!=='Load exceeds water below the reported top');
   if(checked.status!=='duplicate')checked.status=checked.issues.length?'review':'ready';
@@ -102,7 +103,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
   checked.afterFeet=reported;
  }
  const estimate=decision.estimate,barrelSource=decision.source;
- const barrels=decision.provisional?{status:'provisional',source:barrelSource,needsReview:decision.needsReview,issues:decision.issues,limit:decision.limit,selectedBbls:decision.bbls}:null;
+ const barrels=decision.provisional?{status:'provisional',source:barrelSource,needsReview:decision.needsReview,issues:decision.issues,limit:decision.limit,selectedBbls:decision.bbls}:confirmedFixed?{status:'confirmed',source:'owner_fixed_load',needsReview:false,issues:[],limit:decision.limit,selectedBbls:decision.bbls,confirmedAt:Date.now()}:null;
 
  if(review&&checked.status==='review'){
    checked.issues=checked.issues.filter(issue=>issue!=='Possible existing pull within 30 minutes; check time and barrels, then confirm or exclude');
@@ -181,7 +182,7 @@ export const reviewWatchdogDeliveredPullV2=https.onRequest(options,async(req,res
  if(!b||Object.keys(b).some(k=>!['identity','decision','review'].includes(k))||typeof b.identity!=='string'||!/^[a-f0-9]{64}$/.test(b.identity)||!['confirm','exclude'].includes(b.decision))throw Error('invalid_review_request');
  const policy=(await admin.firestore().doc('watchdog_v2_config/laptop').get()).data(),ref=admin.firestore().collection(root).doc(b.identity),entry=(await ref.get()).data();
  if(!policy?.enabled||!entry||entry.principalId!=='laptop-watchdog-v2'||!Object.values(policy.channels||{}).some((c:any)=>c.wells?.includes(entry.wellName)))throw Error('receipt_not_owned');
- if(!entry.barrels?.needsReview)throw Error('review_not_available');
+ if(!entry.barrels?.needsReview&&entry.barrels?.status!=='provisional')throw Error('review_not_available');
  const packet=(await admin.database().ref('packets/processed/'+entry.packetId).once('value')).val();
  if(!packet?.canonicalProcessingComplete||packet.watchdogProvenance?.observationDigest!==b.identity)throw Error('pull_not_complete');
  const original={id:'review',wellName:entry.wellName,postedAt:entry.dateTimeUTC,dateTimeUTC:packet.dateTimeUTC,tankLevelFeet:packet.tankLevelFeet,bottomLevelFeet:entry.reportedBottomFeet??entry.bottom,bblsTaken:packet.bblsTaken,author:'',source:'',issues:[],excluded:false};
@@ -197,7 +198,7 @@ export const reviewWatchdogDeliveredPullV2=https.onRequest(options,async(req,res
  const eventId='watchdog_review_'+digest([b.identity,corrected,review.reason]).slice(0,32);
  const normalized={...review,tankLevelFeet:corrected.tankLevelFeet,bottomLevelFeet:corrected.bottomLevelFeet,bblsTaken:corrected.bblsTaken,dateTimeUTC:corrected.dateTimeUTC};
  const pendingReview={eventId,review:normalized,requestedAt:Date.now()};
- await admin.firestore().runTransaction(async tx=>{const current=(await tx.get(ref)).data();if(!current?.barrels?.needsReview||(current.pendingReview&&current.pendingReview.eventId!==eventId))throw Error('review_changed');tx.set(ref,{...current,pendingReview});});
+ await admin.firestore().runTransaction(async tx=>{const current=(await tx.get(ref)).data();if((!current?.barrels?.needsReview&&current?.barrels?.status!=='provisional')||(current.pendingReview&&current.pendingReview.eventId!==eventId))throw Error('review_changed');tx.set(ref,{...current,pendingReview});});
  const edit={requestType:'edit',packetId:entry.packetId,originalPacketId:entry.packetId,editEventId:eventId,wellName:entry.wellName,tankLevelFeet:corrected.tankLevelFeet,bottomLevelFeet:corrected.bottomLevelFeet,bblsTaken:corrected.bblsTaken,dateTimeUTC:corrected.dateTimeUTC,dateTime:watchdogDisplayTime(corrected.dateTimeUTC),source:'dashboard',companyId:'liquid-gold',wellDownIsAuthoritative:false,reason:review.reason};
  await admin.database().ref('packets/incoming/'+eventId).transaction(current=>current||edit);
  res.json({ok:true,status:'queued',identity:b.identity,packetId:entry.packetId,needsReview:true,correctionPending:true,measurements:corrected,barrelSource:entry.barrelSource});
