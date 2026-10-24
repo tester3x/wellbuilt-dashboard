@@ -24,13 +24,13 @@ const auth={uid:'test-driver-uid',token:{kind:'driver',app:'wbt',...owner}};
 const commit=(event,override=auth)=>jsaOfflineShift.run({auth:override,data:{version:1,operation:'commit',event}});
 const event=(id,jobRef,kind,details={})=>({version:1,id:id.repeat(43),grantId,jobRef,operator:jobRef==='job-b'?'Operator B':'Operator A',occurredAtMs:now-1000,kind,...details});
 (async()=>{
- await db.doc('companies/test-company').set({jsaMode:'per_job',assignedOperators:['Operator A'],requirePhotos:true});
+ await db.doc('companies/test-company').set({jsaMode:'per_job',assignedOperators:['Operator A'],requirePhotos:true,invoicingMode:'ticket_only',liveDispatchSync:true,splitTimeAllocation:'manual',adminUsers:['private-staff']});
  await db.doc('photo_requirements/operatora').set({enabled:true,version:2,requirements:[{id:'hose',label:'Hose connected',phase:'pickup',requiredCount:1}]});
  const prepare=()=>jsaOfflineShift.run({auth,data:{version:1,operation:'prepare'}});
  const prepared=await prepare();assert.equal(prepared.version,1);assert.deepEqual(prepared.grant.operators,['Operator A','Operator B']);
  assert.equal(prepared.grant.mode,'per_job');assert.equal(prepared.grant.assessments.length,1);assert(prepared.grant.assessments[0].steps.length>0);
  assert.equal(prepared.grant.photoRequirements.operatora.requirements[0].id,'hose');assert.equal(prepared.grant.photoRequirements.operatorb.status,'not_configured');
- assert.equal(prepared.grant.jobSettings.requirePhotos,true);assert.equal((await db.doc('jsa_offline_grants/'+prepared.grant.id).get()).get('shiftId'),preparationPeriod.shiftId);
+ assert.equal(prepared.grant.jobSettings.requirePhotos,true);assert.equal(prepared.grant.jobSettings.invoicingMode,'ticket_only');assert.equal(prepared.grant.jobSettings.liveDispatchSync,true);assert.equal(prepared.grant.jobSettings.splitTimeAllocation,'manual');assert.equal(prepared.grant.jobSettings.adminUsers,undefined);assert.equal((await db.doc('jsa_offline_grants/'+prepared.grant.id).get()).get('shiftId'),preparationPeriod.shiftId);
  preparationOpen=false;await assert.rejects(prepare(),/start_shift_before_preparing/);preparationOpen=true;
  await db.doc('companies/test-company').update({jsaMode:'off'});const noJsa=await prepare();assert.equal(noJsa.grant.mode,'off');assert.deepEqual(noJsa.grant.assessments,[]);
  console.log('Compiled prepare: all assigned operators, real default content, configured/absent photo rules, durable matching shift and ended-shift refusal passed.');

@@ -51,7 +51,7 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
    photoRequirements[slug]=!spec?{cacheSchema:1,status:'not_configured',spec:null}:{customerId:slug,version:typeof spec.version==='number'?spec.version:0,enabled:spec.enabled!==false,
     requirements:(Array.isArray(spec.requirements)?spec.requirements:[]).filter((r:any)=>r&&typeof r.id==='string').map((r:any)=>Object.fromEntries(['id','label','description','threshold','requiredCount','phase','appliesTo','active','sampleUrl'].filter(k=>r[k]!==undefined).map(k=>[k,r[k]])))};
   }));
-  const settingsKeys=['requirePhotos','minPhotoCount','aiPhotoAdvisoryMode','jsaMode','jsaJobPolicy','jsaAllowAcknowledge','customJobTypes','assignedOperators'];
+  const settingsKeys=['requirePhotos','minPhotoCount','aiPhotoAdvisoryMode','jsaMode','jsaJobPolicy','jsaAllowAcknowledge','customJobTypes','assignedOperators','name','shortCode','invoiceBook','splitTickets','invoicingMode','invoiceConsolidation','splitTimeAllocation','cancelledNumberHandling','midnightCutoff','allowedWells','allowedDisposals','transferRequiresApproval','liveDispatchSync','activePackages','invoicePrefix','ticketPrefix','rateSheet'];
   const jobSettings={id:p.companyId,companyId:p.companyId,...Object.fromEntries(settingsKeys.filter(k=>cfg[k]!==undefined).map(k=>[k,cfg[k]]))};
   const id=randomBytes(32).toString('hex'),issuedAtMs=Date.now();
   const first=scope?.rows.filter(r=>r.state==='completed'&&r.action==='read_and_acknowledged').sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0))[0];
