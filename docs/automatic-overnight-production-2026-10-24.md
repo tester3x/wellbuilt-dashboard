@@ -19,6 +19,11 @@ classify wells by production rate or route. Existing policies are unchanged.
 
 Validation: 48 backend checks pass, including 2 PM first pulls in all three rate
 models, later pulls, late earlier records, edited/deleted first endpoints,
-continuous-haul suppression, DST and estimated clocks. Scoped live-source
-compilation/deployment and final readback are pending. No new Mobile build is
-required; build 101 already consumes the estimated-clock metadata.
+continuous-haul suppression, DST and estimated clocks. Four exact live-source
+trees compile. Source `733520c7` is deployed to `processIncomingPull` version 104,
+`processDeleteRequest` version 90, `processEditRequest` version 95 and
+`reconcilePendingEditOutbox` revision `00012-lit`. Runtime settings, triggers and
+IAM are preserved. Downloaded source archives byte-match the scoped overlays.
+Final readback retains the estimated-clock ON value and the continuous-hauling
+AFR-only exception. Watchdog remains Connected/Ready on all nine watched groups.
+No new Mobile build is required; build 101 already consumes the metadata.
