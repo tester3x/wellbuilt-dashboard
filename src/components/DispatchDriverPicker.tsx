@@ -33,12 +33,17 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
   const [search, setSearch] = useState('');
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const groups: { shift: PlannedShift | 'unassigned'; title: string; color: string }[] = [
+  const [showOffDuty, setShowOffDuty] = useState(false);
+  const groups: { shift: 'day' | 'night' | 'unassigned' | 'offDuty'; title: string; color: string }[] = [
     { shift: 'day', title: 'Day shift', color: 'border-amber-600/40 bg-amber-950/20 text-amber-300' },
     { shift: 'night', title: 'Night shift', color: 'border-blue-600/40 bg-blue-950/20 text-blue-300' },
-    { shift: 'off', title: 'Off', color: 'border-gray-700 bg-gray-900/60 text-gray-400' },
-    { shift: 'unassigned', title: 'Unassigned', color: 'border-gray-700 bg-gray-900/60 text-gray-400' },
+    { shift: 'unassigned', title: 'No D/N plan', color: 'border-gray-700 bg-gray-900/60 text-gray-400' },
+    { shift: 'offDuty', title: 'Off duty', color: 'border-gray-700 bg-gray-900/60 text-gray-400' },
   ];
+  const plannedGroup = (driver: PickerDriver) => {
+    const shift = driver.shiftPlan?.[shiftDate];
+    return shift === 'day' || shift === 'night' ? shift : 'unassigned';
+  };
 
   async function setShift(driver: PickerDriver, shift: PlannedShift) {
     if (savingKey || readOnlyShifts || driver.shiftPlan?.[shiftDate] === shift) return;
@@ -52,6 +57,7 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
   return <div className="flex min-h-0 flex-col rounded border border-gray-700 bg-gray-900/70 text-xs">
     <div className="flex flex-wrap items-center gap-2 border-b border-gray-700 p-2">
       <label className="text-gray-400">Shift date <input type="date" value={shiftDate} onChange={e => onShiftDateChange(e.target.value)} className="ml-1 rounded border border-gray-600 bg-gray-800 px-1 py-1 text-white" /></label>
+      <span className="text-gray-500" title="The colored dot reflects the driver's actual shift, independently of the D/N plan">Dot = on/off now · D/N = planned shift</span>
       <div className="ml-auto flex gap-1" aria-label="Show shifts">
         {(['day', 'night', 'both'] as const).map(value => <button key={value} type="button" onClick={() => setFilter(value)} aria-pressed={filter === value}
           className={`rounded px-2 py-1 capitalize ${filter === value ? 'bg-cyan-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>{value}</button>)}
@@ -61,7 +67,8 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
       <input type="search" aria-label="Search drivers" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search drivers"
         className="min-w-0 flex-1 rounded border border-gray-600 bg-gray-800 px-2 py-1 text-white" />
       <button type="button" disabled={disabledSelection} onClick={() => {
-        const visible = drivers.filter(driver => (filter === 'both' || driver.shiftPlan?.[shiftDate] === filter) &&
+        const visible = drivers.filter(driver => (filter === 'both' || plannedGroup(driver) === filter) &&
+          (showOffDuty || shiftDot(driver).title !== 'Off shift') &&
           `${driver.displayName} ${driver.legalName || ''} ${driver.loginAlias || ''}`.toLowerCase().includes(search.trim().toLowerCase()));
         onSelectMany([...new Set([...selectedKeys, ...visible.map(driver => driver.key)])]);
       }} className="rounded bg-cyan-900 px-2 py-1 text-cyan-200 disabled:opacity-40">Select shown</button>
@@ -71,14 +78,18 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
     </div>}
     {error && <div role="alert" className="px-2 py-1 text-red-300">{error}</div>}
     <div className="max-h-[min(38vh,360px)] min-h-0 overflow-y-auto" aria-label="Driver list">
-      {groups.filter(group => filter === 'both' || group.shift === filter).map(group => {
-        const rows = drivers.filter(driver => (driver.shiftPlan?.[shiftDate] || 'unassigned') === group.shift &&
+      {groups.map(group => {
+        const rows = drivers.filter(driver => (filter === 'both' || plannedGroup(driver) === filter) &&
+            (group.shift === 'offDuty' ? shiftDot(driver).title === 'Off shift' : shiftDot(driver).title !== 'Off shift' && plannedGroup(driver) === group.shift) &&
             `${driver.displayName} ${driver.legalName || ''} ${driver.loginAlias || ''}`.toLowerCase().includes(search.trim().toLowerCase()))
           .sort((a, b) => (a.legalName || a.displayName).localeCompare(b.legalName || b.displayName));
         if (!rows.length) return null;
         return <div key={group.shift} className={`border-b last:border-b-0 ${group.color}`}>
-          <div className="px-2 py-1 font-bold uppercase tracking-wide">{group.title} ({rows.length})</div>
-          {rows.map(driver => {
+          {group.shift === 'offDuty'
+            ? <button type="button" onClick={() => setShowOffDuty(value => !value)} aria-expanded={showOffDuty}
+                className="w-full px-2 py-1 text-left font-bold uppercase tracking-wide hover:text-white">{showOffDuty ? '▾' : '▸'} {group.title} ({rows.length})</button>
+            : <div className="px-2 py-1 font-bold uppercase tracking-wide">{group.title} ({rows.length})</div>}
+          {(group.shift !== 'offDuty' || showOffDuty) && rows.map(driver => {
             const current = driver.shiftPlan?.[shiftDate];
             const dot = shiftDot(driver);
             return <div key={driver.key} className={`flex items-center gap-2 border-t border-gray-700/60 px-2 py-1.5 text-gray-100 ${selectedKeys.has(driver.key) ? 'bg-cyan-950/30' : ''}`}>
@@ -99,9 +110,6 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
                   aria-label={`Set ${driver.legalName || driver.displayName} to night shift on ${shiftDate}`} aria-pressed={current === 'night'}
                   className={`rounded px-1.5 py-0.5 font-bold ${current === 'night' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}>N</button>
               </div>
-              <button type="button" onClick={() => setShift(driver, 'off')} disabled={!!savingKey || readOnlyShifts}
-                aria-label={`Mark ${driver.legalName || driver.displayName} off on ${shiftDate}`}
-                className={`shrink-0 rounded px-1 py-0.5 ${current === 'off' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-white'}`}>Off</button>
             </div>;
           })}
         </div>;
