@@ -28,3 +28,15 @@ test('inventory mode refreshes edit/deletion projections without rewriting origi
  expect(m.listening.size).toBe(0);
  expect(m.changes.some(c=>!c.path||c.path.startsWith('packets/processed'))).toBe(false);
 });
+
+test.each([['overnight','720'],['afr',null]])('inventory refresh retains independent ON for %s mode',async(mode,expected)=>{
+ // 6 PM previous Central day -> 6 AM first current-day reading: 3 ft recovery.
+ const records=Object.fromEntries([0,12,18].map((h,i)=>['p'+i,{...p('p'+i,h+24,108,72),tankLevelFeet:9,bblsTaken:185}]));
+ const last=records.p2;
+ const m=mock({'well_config/Example':{productionRateMode:'inventory_balance',overnightProductionMode:mode,bblPerFoot:120},
+ 'packets/processed':records,'packets/outgoing':{response:{lastPullPacketId:'p2'}},
+ 'packets/outgoing/response':{lastPullPacketId:'p2',lastPullDateTimeUTC:last.dateTimeUTC,overnightBblsDay:'old'},
+ 'wells/Example/status':{lastPull:{packetId:'p2'},calculated:{}}});
+ await refreshFlowWindow(m.db,'Example');
+ expect(m.values.get('packets/outgoing/response').overnightBblsDay).toBe(expected);
+});
