@@ -1,9 +1,11 @@
 # Automatic ON across rate models
 
-The shared calculation selects the last observation on the previous Central
-calendar date and the first on the next date, including afternoon first pulls.
-There is no morning cutoff or fixed overnight clock range. Later same-day pulls
-do not move that first endpoint. Missing dates do not become an overnight span.
+The shared calculation selects the last observation on the prior observed Central
+calendar date and the first on the next observed date, including afternoon first
+pulls and gaps with days without pulls. There is no morning cutoff or fixed
+overnight clock range. Later same-day pulls do not move that first endpoint.
+The initially imposed consecutive-date condition was corrected; see
+`multi-day-on-production-2026-10-24.md` for the normalization and restoration.
 
 ON is now independent of AFR model selection. Ordinary, rolling-flow and
 inventory-balance wells recalculate ON after normal intake, late arrivals,

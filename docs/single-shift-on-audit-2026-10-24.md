@@ -1,5 +1,10 @@
 # Existing ON projection audit
 
+Correction: the consecutive-date requirement used in this initial audit was too
+strict for slow wells. The resulting withdrawals are superseded by recalculation
+across the full observed gap; see `multi-day-on-production-2026-10-24.md`. The
+initial audit and preserved original measurements remain available privately.
+
 Audited every configured production well with an outgoing projection and no
 explicit AFR-only policy, excluding demo/test routes. Compared canonical history
 boundaries, recorded bottoms, calibrated bank size and actual elapsed Central

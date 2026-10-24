@@ -111,7 +111,22 @@ describe('estimated overnight endpoint times remain distinct from quantity uncer
   expect(overnightReadingProof({...packet,watchdogProvenance:{...packet.watchdogProvenance,timeEstimate:{...packet.watchdogProvenance.timeEstimate,sampleCount:0}}})).toEqual({provisional:true,estimatedTime:false});
   expect(sample([{...previous,wellDown:true},first()],67.2,first().timestamp).bblsDay).toBe(0);
  });
- test('a gap that skips a Central date is not called overnight',()=>{
-  expect(sample([{...previous,timestamp:previous.timestamp-86400000},first()],67.2,first().timestamp).bblsDay).toBe(0);
+ test('a skipped calendar date retains the estimated clock and uses the complete elapsed gap',()=>{
+  const earlier={...previous,timestamp:previous.timestamp-86400000};
+  const expected=Math.round((12-3.5)*67.2*86400000/(first().timestamp-earlier.timestamp));
+  expect(sample([earlier,first()],67.2,first().timestamp)).toEqual({bblsDay:expected,estimatedTime:true});
+ });
+});
+
+describe('slow-well recovery normalized across days without pulls',()=>{
+ test.each([12,18,24,25,36,48,51.5,72,123])('300 BBL recovered over %s hours is normalized to 24 hours',hours=>{
+  const previous=reading('2026-10-20T22:00:00Z',8,5,165);
+  const first={...reading('2026-10-21T22:00:00Z',10,7,165),timestamp:previous.timestamp+hours*3600000};
+  expect(sample([previous,first],60,first.timestamp)).toEqual({bblsDay:Math.round(300*24/hours),estimatedTime:false});
+ });
+ test('later same-day pulls do not replace the first pull following a multi-day gap',()=>{
+  const previous=reading('2026-10-20T22:00:00Z',8,5,165);
+  const first=reading('2026-10-23T19:00:00Z',10,7,165),later=reading('2026-10-23T22:00:00Z',12,9,165);
+  expect(sample([later,previous,first],60,later.timestamp)).toEqual({bblsDay:Math.round(300*24/69),estimatedTime:false});
  });
 });

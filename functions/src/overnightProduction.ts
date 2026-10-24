@@ -44,8 +44,9 @@ export function recordedBottomFeet(packet: Record<string, any>): number | null |
   return undefined;
 }
 
-/** Last reading of the previous Central day to first reading of the current
- * Central day. AFR remains a separate smoothed estimate. */
+/** Last reading on the prior observed Central date to the first reading on the
+ * current date. Slow wells may have no pulls for days: normalize the full gap
+ * to 24 hours rather than requiring adjacent dates. AFR remains independent. */
 export function calculateOvernightProductionSample(
   readings: HistoricalProductionReading[], bblPerFoot: number, at: number,
   mode: 'overnight' | 'afr' = 'overnight',
@@ -66,8 +67,6 @@ export function calculateOvernightProductionSample(
   }
   if (!first || !previous || first.wellDown || previous.wellDown ||
       (first.provisional&&!first.estimatedTime) || (previous.provisional&&!previous.estimatedTime)) return none;
-  const yesterday=new Date(Date.parse(today+'T12:00:00Z')-86400000).toISOString().slice(0,10);
-  if(date.format(previous.timestamp)!==yesterday)return none;
   if (!(first.tankLevelFeet > 0) || !(previous.tankLevelFeet > 0)) return none;
   const bottom = previous.bottomLevelFeet === undefined
     ? Math.max(previous.tankLevelFeet - previous.bblsTaken / bblPerFoot, 0)
