@@ -4148,3 +4148,4 @@ export {platformIssueDeviceAccount,platformExchangeDeviceAccount,platformRevokeD
 export { reportDriverSyncAlert, adminListSyncAlerts } from './security/officeSyncAlerts';
 
 export {jsaOfflineShift} from './jsaReceipt/jsaOfflineCallable';
+export {getDriverDeliverySnapshot} from './security/driverDeliverySnapshot';
