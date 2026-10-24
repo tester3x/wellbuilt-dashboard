@@ -44,3 +44,19 @@ test('office reconciliation clears a hold only after a matching server receipt',
   correct=true;await r.tick([]);assert.equal(new Queue(dir).data.deliveries[row.id].status,'complete');
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('one confirmed original, an eight-second same-sender repeat in review, and a different driver still sends',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'watchdog-repeat-'));
+ try{
+  const q=new Queue(dir),base=Date.now()-600000;
+  for(const [id,offset,sender]of [['original',0,'sender-a'],['repeat',8000,'sender-a'],['other-driver',9000,'sender-b']])
+   q.ingest({id,channel:'g',senderId:sender,chat:header(base+offset,sender,'Kahuna 5\nTop 10\nBottom 8\n185 bbl')});
+  const t=new Transport(q);t.secret='synthetic';t.config={enabled:true,enabledAt:0};t.lastLifecycleCheck=Date.now();const sent=[];
+  t.request=async(endpoint,body)=>{if(endpoint==='ingestWatchdogPullV2'){sent.push(body.messageId);return {ok:true,status:'queued',identity:body.messageId,packetId:body.messageId};}
+   return {ok:true,status:'complete',identity:body.identity,packetId:body.identity};};
+  await t.tick(false);assert.deepEqual(sent,['original','other-driver']);
+  const review=q.reviewInbox();assert.equal(review.length,1);assert.equal(review[0].post.id,'repeat');
+  assert.match(q.data.deliveries[review[0].row.id].issues[0],/duplicate/);
+  await t.tick(false);assert.deepEqual(sent,['original','other-driver']);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
