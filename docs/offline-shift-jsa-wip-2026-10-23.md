@@ -21,3 +21,14 @@ Functions TypeScript build pass. Only `reportDriverSyncAlert` was deployed,
 verified ACTIVE at `reportdriversyncalert-00002-xuf`; downloaded deployed handler
 bytes match the compiled checkpoint. Unsigned invocation returns 401. Routine
 retry thresholds and permanent resolution tombstones are unchanged.
+
+## Workflow settings companion
+
+Source614571d4 freezes current invoicing, dispatch sync, split allocation and
+other needed job workflow settings in newly prepared shift grants. Existing
+immutable grants stay unchanged. The compiled callable's isolated Firestore
+emulator test verifies those settings and excludes staff administration fields;
+concurrent receipts, owner isolation and historical occurrence-time checks pass.
+Only jsaOfflineShift was deployed, ACTIVE at jsaofflineshift-00002-hek. Downloaded
+deployed handler bytes match the compiled source. No rules, Hosting, or composed
+Start endpoint was deployed.
