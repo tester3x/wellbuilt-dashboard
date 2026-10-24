@@ -1,8 +1,10 @@
 # Estimated endpoint clocks in overnight production
 
-ON uses the previous Central calendar day's last observation and the next day's
-first observation, with actual elapsed time and the recorded prior bottom. There
-is no morning cutoff. Missing calendar days do not become an overnight sample.
+ON uses the prior observed Central date's last observation and the next observed
+date's first observation, with actual elapsed time and the recorded prior bottom. There
+is no morning cutoff. Days without pulls are included in the elapsed gap; the
+initial consecutive-date restriction was corrected in
+`multi-day-on-production-2026-10-24.md`.
 Continuous-hauling AFR mode continues to suppress a separate ON value.
 
 A bounded, authenticated back-to-back timestamp estimate can now supply an ON
