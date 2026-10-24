@@ -4076,3 +4076,5 @@ export {staffGetDispatchDriverSignals} from './security/dispatchDriverSignals';
 export {staffWriteWaterOrder} from './security/staffWriteWaterOrder';
 
 export {reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from './watchdog/intake';
+export { getWbmTankInfo, saveWbmTankInfo } from './security/operational/tankInfoCallables';
+export { staffWritePrimaryRouteAssignment, staffGetPrimaryRouteAssignments } from './security/operational/staffWritePrimaryRouteAssignment';
