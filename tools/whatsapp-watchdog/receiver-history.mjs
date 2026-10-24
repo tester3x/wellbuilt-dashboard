@@ -31,7 +31,7 @@ export async function collectReceiver({ids, checkpoints, now}) {
       let pageOldest=Infinity;
       for (let page = 0; page < 100; page++) {
         if (pageOldest <= since) { window.__wellBuiltHistory[id] = now; break; }
-        const previous = all.size;
+        const previousOldest=pageOldest;
         let timer, loaded;
         try { loaded = await Promise.race([
           loader.loadEarlierMsgs({chat}),
@@ -43,7 +43,7 @@ export async function collectReceiver({ids, checkpoints, now}) {
         const times=loaded.filter(m=>typeof m.body==='string'&&m.body.trim()&&!m.isNotification)
           .map(m=>Number(m.t)).filter(Number.isFinite);
         pageOldest=Math.min(pageOldest,...times);
-        if(all.size===previous&&pageOldest>since)throw Error('WhatsApp history did not advance; checkpoint preserved');
+        if(page>0&&pageOldest>=previousOldest&&pageOldest>since)throw Error('WhatsApp history did not advance; checkpoint preserved');
       }
       if (window.__wellBuiltHistory[id] !== now) throw Error('WhatsApp history exceeds catch-up batch; retrying without advancing checkpoint');
     }
