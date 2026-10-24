@@ -6,7 +6,7 @@ export const operatorKey=(v:string)=>v.trim().toUpperCase().replace(/[^A-Z0-9]/g
 export type OfflineAssessment={name:string;steps:any[];ppeItems:any[];preparedItems:any[];contentHash:string;packageId:string|null;tasks:string[]};
 export type OfflineGrant={version:1;id:string;companyId:string;driverId:string;issuedAtMs:number;expiresAtMs:number;
  shiftId:string;binding:any;requirementKey:string;policyDay:string;mode:'off'|'per_job'|'per_shift';allowAcknowledge:boolean;
- jobSettings?:Record<string,unknown>;photoRequirements?:Record<string,any>;operators:string[];assessments:OfflineAssessment[];fullReadId:string|null};
+ jobSettings?:Record<string,unknown>;photoRequirements?:Record<string,any>;executionProfiles?:unknown[];operators:string[];assessments:OfflineAssessment[];fullReadId:string|null};
 export type OfflineEvent={version:1;id:string;grantId:string;jobRef:string;operator:string;occurredAtMs:number;
  kind:'read'|'acknowledged'|'scope_read'|'off';fullReadId?:string;assessmentHash?:string;snapshot?:unknown};
 

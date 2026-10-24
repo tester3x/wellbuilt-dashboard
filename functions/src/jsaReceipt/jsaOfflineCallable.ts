@@ -12,6 +12,7 @@ import {offlineHash,validateOfflineEvent,type OfflineGrant,type OfflineEvent,typ
 import {jsaNumber} from './jsaNumber';
 import {checkRateLimit} from '../security/rateLimit';
 import {projectOfflineLocations} from './jsaOfflineLocations';
+import {readPreparedExecutionProfiles} from './preparedExecutionProfiles';
 
 /** New endpoint: does not replace or repackage the live composed Start callable. */
 export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enforceAppCheck:false},async request=>{
@@ -54,12 +55,13 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
   }));
   const settingsKeys=['requirePhotos','minPhotoCount','aiPhotoAdvisoryMode','jsaMode','jsaJobPolicy','jsaAllowAcknowledge','customJobTypes','assignedOperators','name','shortCode','invoiceBook','splitTickets','invoicingMode','invoiceConsolidation','splitTimeAllocation','cancelledNumberHandling','midnightCutoff','allowedWells','allowedDisposals','transferRequiresApproval','liveDispatchSync','activePackages','invoicePrefix','ticketPrefix','rateSheet'];
   const jobSettings={id:p.companyId,companyId:p.companyId,...Object.fromEntries(settingsKeys.filter(k=>cfg[k]!==undefined).map(k=>[k,cfg[k]]))};
+  const executionProfiles=await readPreparedExecutionProfiles(db,p.companyId);
   const id=randomBytes(32).toString('hex'),issuedAtMs=Date.now();
   const first=scope?.rows.filter(r=>r.state==='completed'&&r.action==='read_and_acknowledged').sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0))[0];
   const grant:OfflineGrant={version:1,id,companyId:p.companyId,driverId:p.driverId,issuedAtMs,expiresAtMs:issuedAtMs+72*3600000,
    shiftId:context.shiftId,binding:scope?.binding||{shiftState:'independent',jsaPeriodId:context.id,associatedPeriodId:context.shiftId,policyDay:context.originDate,jsaEnabled:false,requiresActiveShift:false},
    requirementKey:scope?.requirementKey||'jsa:'+context.id,policyDay:context.originDate,mode:(scope?.mode||'off') as OfflineGrant['mode'],
-   allowAcknowledge:scope?.style==='acknowledge'&&cfg.jsaAllowAcknowledge!==false,jobSettings,photoRequirements,operators,assessments,fullReadId:first?.requestId||null};
+   allowAcknowledge:scope?.style==='acknowledge'&&cfg.jsaAllowAcknowledge!==false,jobSettings,photoRequirements,executionProfiles,operators,assessments,fullReadId:first?.requestId||null};
   if(JSON.stringify(grant).length>430000)throw new https.HttpsError('failed-precondition','assessment_bundle_too_large');
   await db.doc('jsa_offline_grants/'+id).create(grant);
   return {version:1,grant};
