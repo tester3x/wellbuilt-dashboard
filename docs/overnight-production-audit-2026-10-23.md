@@ -54,3 +54,26 @@ Mobile withdrawal fix is separately committed in codex/wbm-stale-level-20261005;
 19 focused tests pass. Mobile100 is building from2d6219e. ZFold still has99 until
 package/signer verification and S24 smoke checks complete. No device private data
 was extracted; observed well selection and ON toggle were restored afterward.
+
+## Live server verification
+
+Exact-source overlays are deployed ACTIVE: processIncomingPull version98 and
+processDeleteRequest version84. Every downloaded live source archive byte matches
+its prepared overlay. Runtime, trigger, service configuration and IAM compare
+unchanged with the pre-deploy snapshots. The two archives were byte-identical in
+the affected source/compiled index before the patch; no whole-branch deployment
+was performed. Source checkpoint3f5b8f49 identifies the new helper and wrapper.
+
+User confirmed the day1-final/day2-first interpretation and emphasized that
+factor-of-two differences must be investigated. Continuous-hauling fallback was
+configured explicitly for the user-identified well. A recent owned-company audit
+covered33 non-test current statuses; seven ON projections changed through ETag
+conditional writes, with fresh last-pull identity checks and calibration guards.
+Subsequent read-back proved every non-ON outgoing field unchanged. The continuous
+setting was the only configuration field changed. An immutable private before
+snapshot and result ledger preserve the correction evidence. A v2 revision token
+was published for normal client refresh. No historical readings/loads, AFR,
+production-log counts, dispatches, tickets, HOS or shifts were rewritten.
+
+Mobile100 remains in progress. Device cache withdrawal acceptance and the final
+installation are still pending; server deployment does not update old binaries.
