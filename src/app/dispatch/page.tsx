@@ -9,6 +9,7 @@ import { isActiveDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
 import { WaterOrderBuilder } from '@/components/WaterOrderBuilder';
 import { DispatchDriverPicker, type PlannedShift } from '@/components/DispatchDriverPicker';
+import { DriverArrivalRecommendations } from '@/components/DriverArrivalRecommendations';
 import { staffWriteDriverRoster } from '@/lib/staffWriteDriverRoster';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
@@ -473,6 +474,8 @@ function DispatchPageInner() {
   const [assignTarget, setAssignTarget] = useState<WellResponse | null>(null);
   const [assignWellSearch, setAssignWellSearch] = useState('');
   const [assignDriverHash, setAssignDriverHash] = useState('');
+  const [suggestedPwDriverKey, setSuggestedPwDriverKey] = useState<string | null>(null);
+  useEffect(() => setSuggestedPwDriverKey(null), [assignTarget?.wellName, viewedCompanyId]);
   const [assignNotes, setAssignNotes] = useState('');
   const [assignDisposal, setAssignDisposal] = useState('');
   const [assignDisposalWell, setAssignDisposalWell] = useState<NdicWell | null>(null);
@@ -2931,7 +2934,7 @@ function DispatchPageInner() {
                 ready={!dataLoading && !driversLoading && dispatchesLoaded && !statusUnavailable && !readErrors.wells && !readErrors.dispatches}
                 canWrite={canCreateDispatch} createDispatch={staffCreateDispatch} />}
               {builderTab === 'pw' && (
-                <div className="flex-1 flex flex-col min-h-0">
+                <div className="flex flex-col min-h-0">
                   <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
                   {isDemoCompany && (
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded border border-cyan-700/60 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-100">
@@ -2988,7 +2991,7 @@ function DispatchPageInner() {
                       )}
                     </div>
                     {/* Every checked well keeps its own live queue details and load count. */}
-                    <div className="bg-gray-900 rounded px-2 py-1.5 min-h-[44px] max-h-[min(42vh,420px)] overflow-y-auto overscroll-contain">
+                    <div className="bg-gray-900 rounded px-2 py-1.5 min-h-[44px] max-h-[min(30vh,260px)] overflow-y-auto">
                       {(() => {
                         const chosen = selectedWells.size > 0
                           ? Array.from(selectedWells, ([name, loads]) => ({ name, loads }))
@@ -3022,17 +3025,24 @@ function DispatchPageInner() {
                     </div>
                   </div>
                   {/* Bottom: Driver, Disposal, Loads+Notes, Dispatch */}
-                  <div className="flex-1 flex flex-col gap-2">
+                  <div className="flex flex-col gap-2">
                     {/* Driver */}
-                    <div className="flex-1 flex flex-col">
+                    <div className="flex flex-col">
                       <label className="block text-xs text-gray-400 mb-1">Driver</label>
-                      <div data-demo-builder-target="driver" className="flex-1 flex flex-col min-h-0">
+                      <div data-demo-builder-target="driver" className="flex flex-col min-h-0">
                         <DispatchDriverPicker drivers={drivers} selection="single"
                           selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash}
+                          suggestedKey={suggestedPwDriverKey}
                           shiftDate={builderShiftDate} onShiftDateChange={setBuilderShiftDate}
                           onShiftChange={updateDriverShiftPlan} shiftDot={driverShiftDot}
                           readOnlyShifts={user?.role === 'demo_viewer'} />
                       </div>
+                      {assignTarget && <DriverArrivalRecommendations
+                        drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
+                        targetName={assignTarget.ndicName || assignTarget.wellName}
+                        locations={locationCatalog} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
+                        selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])}
+                        onSelect={setAssignDriverHash} onSuggestedDriverChange={setSuggestedPwDriverKey} picker="single" />}
                     </div>
                     {/* Disposal */}
                     <div className="relative" data-demo-builder-target="disposal">
