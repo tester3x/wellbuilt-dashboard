@@ -1,6 +1,6 @@
 import {calculateInventoryProduction} from './inventoryProduction';
 import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecision';
-import {calculateOvernightProduction, recordedBottomFeet} from './overnightProduction';
+import {calculateOvernightProductionSample, overnightReadingProof, recordedBottomFeet} from './overnightProduction';
 import { resolveTankBblPerFoot } from './tankCalibration';
 import {refreshFlowWindow} from './refreshFlowWindow';
 import {effectiveFlow} from './effectiveFlow';
@@ -443,6 +443,7 @@ interface OutgoingResponse {
   originalPacketId?: string;
   windowBblsDay?: string | null;
   overnightBblsDay?: string | null;
+  overnightEstimatedTime?: boolean;
   lastPullDriverId?: string | null;
   lastPullDriverName?: string | null;
   lastPullPacketId?: string | null;
@@ -536,6 +537,7 @@ interface HistoricalPull {
   bblsTaken: number;
   wellDown: boolean;
   provisional?: boolean;
+  estimatedTime?: boolean;
   bottomLevelFeet?: number | null;
 }
 
@@ -594,7 +596,7 @@ async function getHistoricalPulls(wellName: string, limit: number = 50): Promise
         tankLevelFeet: parseFloat(packet.tankLevelFeet) || 0,
         bblsTaken: parseFloat(packet.bblsTaken) || 0,
         wellDown: packet.wellDown === true || packet.wellDown === 'true',
-        provisional: isProvisionalPull(packet),
+        ...overnightReadingProof(packet),
         bottomLevelFeet: recordedBottomFeet(packet),
       });
     }
@@ -694,11 +696,6 @@ function calculateWindowBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot
   if (avgFlowRateDays <= 0) return 0;
 
   return Math.round((1 / avgFlowRateDays) * bblPerFoot);
-}
-
-/** Previous Central day's final reading to today's first reading. */
-function calculateOvernightBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot: number, pullTimestamp: number, mode?: string): number {
-  return calculateOvernightProduction(historicalPulls, bblPerFoot, pullTimestamp, mode === 'afr' ? 'afr' : 'overnight');
 }
 
 /**
@@ -1219,13 +1216,14 @@ export const processIncomingPull = functionsV1.database
       tankLevelFeet: parseFloat(String(data.tankLevelFeet)) || 0,
       bblsTaken: parseFloat(String(data.bblsTaken)) || 0,
       wellDown: data.wellDown === true || data.wellDown === ('true' as any),
-      provisional: isProvisionalPull(data),
+      ...overnightReadingProof(data),
       bottomLevelFeet: tankAfterInches / 12,
     });
     historicalPulls.sort((a, b) => a.timestamp - b.timestamp);
 
     const windowBblsDay = windowed ? 0 : calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
-    const overnightBblsDay = windowed ? 0 : calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs, config.overnightProductionMode);
+    const overnightSample = calculateOvernightProductionSample(historicalPulls, bblPerFoot, pullTimeMs, config.overnightProductionMode === 'afr' ? 'afr' : 'overnight');
+    const overnightBblsDay = windowed ? 0 : overnightSample.bblsDay;
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);
 
     // Recovery Needed
@@ -1317,6 +1315,7 @@ export const processIncomingPull = functionsV1.database
       timestampUTC: timestamp.toISOString(),
       windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
       overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+      overnightEstimatedTime: overnightBblsDay > 0 && overnightSample.estimatedTime,
     };
 
     // Write to outgoing/ (delete old responses for this well first)
@@ -2122,7 +2121,8 @@ export const processDeleteRequest = functionsV1.database
           const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
           const historicalPulls = await getHistoricalPulls(wellName, 500);
           const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
-          const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs, config.overnightProductionMode);
+          const overnightSample = calculateOvernightProductionSample(historicalPulls, bblPerFoot, latestTimeMs, config.overnightProductionMode === 'afr' ? 'afr' : 'overnight');
+          const overnightBblsDay = overnightSample.bblsDay;
 
           const tankAfterInches = latestPacket.tankAfterInches || 0;
           const pullHeightInches = (pullBbls / bblPerFoot) * 12;
@@ -2184,6 +2184,7 @@ export const processDeleteRequest = functionsV1.database
             isDeleteRebuild: true,
             windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
             overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+            overnightEstimatedTime: overnightBblsDay > 0 && overnightSample.estimatedTime,
             companyId: outgoingCompanyId(config),
           });
 

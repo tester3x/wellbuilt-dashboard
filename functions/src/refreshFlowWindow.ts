@@ -2,8 +2,7 @@ import {effectiveFlow} from './effectiveFlow';
 import {calculateInventoryProduction} from './inventoryProduction';
 import {resolveTankBblPerFoot} from './tankCalibration';
 import {canonicalHistory} from './imports/pullImportModel';
-import {calculateOvernightProduction,recordedBottomFeet} from './overnightProduction';
-import {isProvisionalPull} from './watchdog/barrelDecision';
+import {calculateOvernightProductionSample,overnightReadingProof,recordedBottomFeet} from './overnightProduction';
 const display=(days:number)=>{const s=Math.round(days*86400);return `${Math.floor(s/3600)}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;};
 /** RTDB transactions may first receive null when a server process has no cache.
  * Keep a value listener until the guarded transaction finishes, otherwise a
@@ -29,17 +28,18 @@ export async function refreshFlowWindow(db:any,wellName:string):Promise<void>{
  if(!last)return;
  // An inventory AFR and the overnight observation are different intervals.
  // Refresh both from their own evidence; only continuous-hauling mode suppresses ON.
- const overnight=inventoryMode?calculateOvernightProduction(canonicalHistory(history).map(p=>({
+ const overnightSample=inventoryMode?calculateOvernightProductionSample(canonicalHistory(history).map(p=>({
  timestamp:Date.parse(p.dateTimeUTC||''),tankLevelFeet:Number(p.tankLevelFeet),bblsTaken:Number(p.bblsTaken),
- bottomLevelFeet:recordedBottomFeet(p),provisional:isProvisionalPull(p),
+ bottomLevelFeet:recordedBottomFeet(p),...overnightReadingProof(p),
  wellDown:p.noLevel||p.wellDown===true||p.wellDown==='true'||p.flowIntervalBarrier===true,
- })),resolveTankBblPerFoot(cfg),Date.parse(last.dateTimeUTC),cfg.overnightProductionMode==='afr'?'afr':'overnight'):0;
+ })),resolveTankBblPerFoot(cfg),Date.parse(last.dateTimeUTC),cfg.overnightProductionMode==='afr'?'afr':'overnight'):{bblsDay:0,estimatedTime:false};
+ const overnight=overnightSample.bblsDay;
  const rate=display(flow.averageDays),bank=Number(cfg.bblPerFoot)||20*(cfg.tanks||cfg.numTanks||1);
  const needed=Math.max(0,(Number(cfg.bottomLevel??cfg.allowedBottom??1)+Number(cfg.pullBbls||140)/bank)*12-Number(last.tankAfterInches));
  const waitDays=needed/12*flow.averageDays,next=new Date(Date.parse(last.dateTimeUTC)+waitDays*86400000).toISOString(),bbl=Math.round(bank/flow.averageDays);
  const outgoing=(await db.ref('packets/outgoing').orderByChild('wellName').equalTo(wellName).once('value')).val()||{};
  for(const [key,value] of Object.entries(outgoing)){const p=value as any;if(p.lastPullPacketId!==last.packetId)continue;
- await guardedTransaction(db.ref('packets/outgoing/'+key),(current:any)=>current?.lastPullPacketId===last.packetId&&current.lastPullDateTimeUTC===last.dateTimeUTC?{...current,flowRate:rate,bbls24hrs:String(bbl),windowBblsDay:null,overnightBblsDay:overnight>0?String(overnight):null,nextPullTimeUTC:next,nextPullTime:new Intl.DateTimeFormat('en-US',{timeZone:current.timezone||'America/Chicago',dateStyle:'short',timeStyle:'short'}).format(new Date(next)),timeTillPull:current.wellDown?'Down':display(waitDays).split(':').slice(0,2).join(':'),isEdit:true,timestamp:new Date().toISOString(),timestampUTC:new Date().toISOString()}:undefined);
+ await guardedTransaction(db.ref('packets/outgoing/'+key),(current:any)=>current?.lastPullPacketId===last.packetId&&current.lastPullDateTimeUTC===last.dateTimeUTC?{...current,flowRate:rate,bbls24hrs:String(bbl),windowBblsDay:null,overnightBblsDay:overnight>0?String(overnight):null,overnightEstimatedTime:overnight>0&&overnightSample.estimatedTime,nextPullTimeUTC:next,nextPullTime:new Intl.DateTimeFormat('en-US',{timeZone:current.timezone||'America/Chicago',dateStyle:'short',timeStyle:'short'}).format(new Date(next)),timeTillPull:current.wellDown?'Down':display(waitDays).split(':').slice(0,2).join(':'),isEdit:true,timestamp:new Date().toISOString(),timestampUTC:new Date().toISOString()}:undefined);
  }
  await guardedTransaction(db.ref('wells/'+wellName+'/status'),(status:any)=>status?.lastPull?.packetId===last.packetId?{...status,calculated:{...status.calculated,flowRate:rate,flowRateMinutes:Math.round(flow.averageDays*144000)/100,bbls24hrs:bbl,nextPullTimeUTC:next,nextPullTime:new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',dateStyle:'short',timeStyle:'short'}).format(new Date(next)),timeTillPull:status.isDown?'Down':display(waitDays).split(':').slice(0,2).join(':')}}:undefined);
  await db.ref('well_config/'+wellName).update({avgFlowRate:rate,avgFlowRateMinutes:Math.round(flow.averageDays*144000)/100});

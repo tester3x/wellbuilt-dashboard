@@ -1,4 +1,4 @@
-import {calculateOvernightProduction as rate, recordedBottomFeet} from '../overnightProduction';
+import {calculateOvernightProduction as rate, calculateOvernightProductionSample as sample, overnightReadingProof, recordedBottomFeet} from '../overnightProduction';
 import {readFileSync} from 'fs';
 import {join} from 'path';
 import {runInNewContext} from 'vm';
@@ -80,11 +80,38 @@ describe('overnight production uses actual bottom and Central civil day', () => 
     const chain:any={orderByChild:()=>chain,equalTo:()=>chain,once:async()=>({val:()=>packets})};
     const loader=runInNewContext(transpileModule(source.slice(begin,end),{compilerOptions:{target:ScriptTarget.ES2020}}).outputText+';getHistoricalPulls',{
       db:{ref:()=>chain},parsePacketTimestamp:(p:any)=>Date.parse(p.dateTimeUTC),
-      recordedBottomFeet,isProvisionalPull:()=>false,console,
+      recordedBottomFeet,overnightReadingProof,console,
     });
     const history=await loader('Test Well');
     expect(history).toHaveLength(2);
     expect(history[0].bottomLevelFeet).toBe(7);
     expect(rate(history,60,Date.parse(packets.first.dateTimeUTC))).toBe(480);
   });
+});
+
+describe('estimated overnight endpoint times remain distinct from quantity uncertainty',()=>{
+ const previous=reading('2026-10-22T22:41:07Z',6,3.5,165);
+ const packet:any={source:'whatsapp_watchdog',dateTimeUTC:'2026-10-23T19:57:46Z',watchdogProvenance:{principalId:'laptop-watchdog-v2',reportedBottomFeet:9.5,barrels:{status:'confirmed'},timeEstimate:{status:'estimated',method:'back_to_back_average',sampleCount:20,intervalMinutes:106,anchorPostedAt:'2026-10-23T21:43:46Z'}}};
+ const first=()=>({...reading(packet.dateTimeUTC,12,9.5,165),...overnightReadingProof(packet)});
+ test('last prior day to first next day publishes the estimate and marks its time',()=>{
+  expect(sample([previous,first()],67.21492853654452,first().timestamp)).toEqual({bblsDay:644,estimatedTime:true});
+  const later=reading('2026-10-23T21:43:46Z',9.75,7.25,165);
+  expect(sample([previous,first(),later],67.21492853654452,later.timestamp)).toEqual({bblsDay:644,estimatedTime:true});
+ });
+ test('continuous-haul AFR mode remains suppressed with estimated endpoints',()=>{
+  expect(sample([previous,first()],67.2,first().timestamp,'afr')).toEqual({bblsDay:0,estimatedTime:false});
+ });
+ test('uncertain quantity, invalid time proof and down endpoints still cannot publish',()=>{
+  for(const changed of [
+   {...packet,watchdogProvenance:{...packet.watchdogProvenance,barrels:{status:'provisional'}}},
+   {...packet,watchdogProvenance:{...packet.watchdogProvenance,timeEstimate:{...packet.watchdogProvenance.timeEstimate,sampleCount:0}}},
+   {...packet,source:'other'},
+  ])expect(sample([previous,{...first(),...overnightReadingProof(changed),provisional:true}],67.2,first().timestamp).bblsDay).toBe(0);
+  expect(overnightReadingProof({...packet,watchdogProvenance:{...packet.watchdogProvenance,barrels:{status:'provisional'}}}).provisional).toBe(true);
+  expect(overnightReadingProof({...packet,watchdogProvenance:{...packet.watchdogProvenance,timeEstimate:{...packet.watchdogProvenance.timeEstimate,sampleCount:0}}})).toEqual({provisional:true,estimatedTime:false});
+  expect(sample([{...previous,wellDown:true},first()],67.2,first().timestamp).bblsDay).toBe(0);
+ });
+ test('a gap that skips a Central date is not called overnight',()=>{
+  expect(sample([{...previous,timestamp:previous.timestamp-86400000},first()],67.2,first().timestamp).bblsDay).toBe(0);
+ });
 });

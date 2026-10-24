@@ -1,9 +1,24 @@
+import {isProvisionalPull} from './watchdog/barrelDecision';
+
+/** Separate uncertain clock time from uncertain quantity. Only bounded,
+ * authenticated back-to-back estimates can supply an estimated ON endpoint. */
+export function overnightReadingProof(packet:Record<string,any>):{provisional:boolean;estimatedTime:boolean} {
+  const proof=packet.watchdogProvenance,e=proof?.timeEstimate;
+  const time=Date.parse(packet.dateTimeUTC||''),anchor=Date.parse(e?.anchorPostedAt||'');
+  const estimatedTime=packet.source==='whatsapp_watchdog'&&proof?.principalId==='laptop-watchdog-v2'&&
+    e?.status==='estimated'&&e.method==='back_to_back_average'&&Number.isInteger(e.sampleCount)&&e.sampleCount>=3&&e.sampleCount<=20&&
+    Number.isInteger(e.intervalMinutes)&&e.intervalMinutes>=15&&e.intervalMinutes<=240&&Number.isFinite(time)&&Number.isFinite(anchor)&&time<anchor&&anchor-time<=4*e.intervalMinutes*60000;
+  const quantityUnverified=isProvisionalPull(estimatedTime?{...packet,watchdogProvenance:{...proof,timeEstimate:undefined}}:packet);
+  return {estimatedTime:estimatedTime&&!quantityUnverified,provisional:isProvisionalPull(packet)};
+}
+
 export interface HistoricalProductionReading {
   timestamp: number;
   tankLevelFeet: number;
   bblsTaken: number;
   wellDown?: boolean;
   provisional?: boolean;
+  estimatedTime?: boolean;
   /** undefined: legacy record without bottom; null: invalid recorded bottom. */
   bottomLevelFeet?: number | null;
 }
@@ -31,14 +46,15 @@ export function recordedBottomFeet(packet: Record<string, any>): number | null |
 
 /** Last reading of the previous Central day to first reading of the current
  * Central day. AFR remains a separate smoothed estimate. */
-export function calculateOvernightProduction(
+export function calculateOvernightProductionSample(
   readings: HistoricalProductionReading[], bblPerFoot: number, at: number,
   mode: 'overnight' | 'afr' = 'overnight',
-): number {
+): {bblsDay:number;estimatedTime:boolean} {
+  const none={bblsDay:0,estimatedTime:false};
   // Continuous hauling has no distinct overnight sample. Publishing no ON
   // estimate lets the app honestly use AFR without an ON label.
-  if (mode === 'afr') return 0;
-  if (!Number.isFinite(at) || !Number.isFinite(bblPerFoot) || bblPerFoot <= 0) return 0;
+  if (mode === 'afr') return none;
+  if (!Number.isFinite(at) || !Number.isFinite(bblPerFoot) || bblPerFoot <= 0) return none;
   const date = new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit'});
   const today = date.format(at);
   const ordered = readings.filter(r => Number.isFinite(r.timestamp) && r.timestamp <= at).slice().sort((a, b) => a.timestamp - b.timestamp);
@@ -48,14 +64,21 @@ export function calculateOvernightProduction(
     if (date.format(ordered[i].timestamp) === today) first = ordered[i];
     else { previous = ordered[i]; break; }
   }
-  if (!first || !previous || first.wellDown || previous.wellDown || first.provisional || previous.provisional) return 0;
-  if (!(first.tankLevelFeet > 0) || !(previous.tankLevelFeet > 0)) return 0;
+  if (!first || !previous || first.wellDown || previous.wellDown ||
+      (first.provisional&&!first.estimatedTime) || (previous.provisional&&!previous.estimatedTime)) return none;
+  const yesterday=new Date(Date.parse(today+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+  if(date.format(previous.timestamp)!==yesterday)return none;
+  if (!(first.tankLevelFeet > 0) || !(previous.tankLevelFeet > 0)) return none;
   const bottom = previous.bottomLevelFeet === undefined
     ? Math.max(previous.tankLevelFeet - previous.bblsTaken / bblPerFoot, 0)
     : previous.bottomLevelFeet;
-  if (bottom === null || !Number.isFinite(bottom) || bottom < 0 || bottom > previous.tankLevelFeet) return 0;
+  if (bottom === null || !Number.isFinite(bottom) || bottom < 0 || bottom > previous.tankLevelFeet) return none;
   const days = (first.timestamp - previous.timestamp) / 86400000;
   const recovery = first.tankLevelFeet - bottom;
-  if (!(days > 0) || !(recovery > 0)) return 0;
-  return Math.round(recovery * bblPerFoot / days);
+  if (!(days > 0) || !(recovery > 0)) return none;
+  return {bblsDay:Math.round(recovery * bblPerFoot / days),estimatedTime:!!(first.estimatedTime||previous.estimatedTime)};
+}
+
+export function calculateOvernightProduction(readings:HistoricalProductionReading[],bblPerFoot:number,at:number,mode:'overnight'|'afr'='overnight'):number {
+  return calculateOvernightProductionSample(readings,bblPerFoot,at,mode).bblsDay;
 }
