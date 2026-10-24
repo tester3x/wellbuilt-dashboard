@@ -11,12 +11,34 @@ async function guardedTransaction(ref:any,update:(current:any)=>any):Promise<voi
  const listener=()=>{};ref.on('value',listener);
  try{await ref.once('value');await ref.transaction(update);}finally{ref.off('value',listener);}
 }
+/** ON is independent of the chosen AFR estimator, including ordinary slow
+ * wells. Recompute after late arrivals, edits and deletions without rewriting
+ * their flow model, measurements or equipment/tank configuration. */
+async function refreshOvernightProjection(db:any,wellName:string,cfg:any,history:any):Promise<void>{
+ const canonical=canonicalHistory(history).filter(p=>(p.requestType||'pull')==='pull');
+ const last=canonical.filter(p=>(p.requestType||'pull')==='pull'&&Number.isFinite(Date.parse(p.dateTimeUTC||''))&&Date.parse(p.dateTimeUTC)<=Date.now())
+  .sort((a,b)=>Date.parse(b.dateTimeUTC)-Date.parse(a.dateTimeUTC))[0];
+ if(!last)return;
+ const sample=calculateOvernightProductionSample(canonical.map(p=>({
+  timestamp:Date.parse(p.dateTimeUTC||''),tankLevelFeet:Number(p.tankLevelFeet),bblsTaken:Number(p.bblsTaken),
+  bottomLevelFeet:recordedBottomFeet(p),...overnightReadingProof(p),
+  wellDown:p.noLevel||p.wellDown===true||p.wellDown==='true'||p.flowIntervalBarrier===true,
+ })),resolveTankBblPerFoot(cfg),Date.parse(last.dateTimeUTC),cfg.overnightProductionMode==='afr'?'afr':'overnight');
+ const value=sample.bblsDay>0?String(sample.bblsDay):null,estimated=sample.bblsDay>0&&sample.estimatedTime;
+ const outgoing=(await db.ref('packets/outgoing').orderByChild('wellName').equalTo(wellName).once('value')).val()||{};
+ for(const key of Object.keys(outgoing))await guardedTransaction(db.ref('packets/outgoing/'+key),(current:any)=>{
+  if(current?.lastPullPacketId!==last.packetId||current.lastPullDateTimeUTC!==last.dateTimeUTC)return undefined;
+  if((current.overnightBblsDay??null)===value&&(current.overnightEstimatedTime===true)===estimated)return undefined;
+  return {...current,overnightBblsDay:value,overnightEstimatedTime:estimated,isEdit:true,timestamp:new Date().toISOString(),timestampUTC:new Date().toISOString()};
+ });
+}
 /** Refresh only derived fields; original measurements, ownership and down state are preserved. */
 export async function refreshFlowWindow(db:any,wellName:string):Promise<void>{
  const cfg=(await db.ref('well_config/'+wellName).once('value')).val()||{};
  const inventoryMode=cfg.productionRateMode==='inventory_balance';
- if(!cfg.flowWindowMinimumRecoveryInches&&!inventoryMode)return;
  const history=(await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value')).val()||{};
+ await refreshOvernightProjection(db,wellName,cfg,history);
+ if(!cfg.flowWindowMinimumRecoveryInches&&!inventoryMode)return;
  const latestTime=Math.max(...Object.values(history).map((p:any)=>Date.parse(p.dateTimeUTC||'')).filter(t=>Number.isFinite(t)&&t<=Date.now()));
  const inventory=inventoryMode?calculateInventoryProduction(history,resolveTankBblPerFoot(cfg),latestTime):null;
  const flow=inventoryMode?{averageDays:inventory?.daysPerFoot||0,results:[]}:effectiveFlow(history,cfg);if(!flow)return;
@@ -28,11 +50,11 @@ export async function refreshFlowWindow(db:any,wellName:string):Promise<void>{
  if(!last)return;
  // An inventory AFR and the overnight observation are different intervals.
  // Refresh both from their own evidence; only continuous-hauling mode suppresses ON.
- const overnightSample=inventoryMode?calculateOvernightProductionSample(canonicalHistory(history).map(p=>({
+ const overnightSample=calculateOvernightProductionSample(canonicalHistory(history).map(p=>({
  timestamp:Date.parse(p.dateTimeUTC||''),tankLevelFeet:Number(p.tankLevelFeet),bblsTaken:Number(p.bblsTaken),
  bottomLevelFeet:recordedBottomFeet(p),...overnightReadingProof(p),
  wellDown:p.noLevel||p.wellDown===true||p.wellDown==='true'||p.flowIntervalBarrier===true,
- })),resolveTankBblPerFoot(cfg),Date.parse(last.dateTimeUTC),cfg.overnightProductionMode==='afr'?'afr':'overnight'):{bblsDay:0,estimatedTime:false};
+ })),resolveTankBblPerFoot(cfg),Date.parse(last.dateTimeUTC),cfg.overnightProductionMode==='afr'?'afr':'overnight');
  const overnight=overnightSample.bblsDay;
  const rate=display(flow.averageDays),bank=Number(cfg.bblPerFoot)||20*(cfg.tanks||cfg.numTanks||1);
  const needed=Math.max(0,(Number(cfg.bottomLevel??cfg.allowedBottom??1)+Number(cfg.pullBbls||140)/bank)*12-Number(last.tankAfterInches));

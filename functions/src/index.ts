@@ -1223,7 +1223,7 @@ export const processIncomingPull = functionsV1.database
 
     const windowBblsDay = windowed ? 0 : calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
     const overnightSample = calculateOvernightProductionSample(historicalPulls, bblPerFoot, pullTimeMs, config.overnightProductionMode === 'afr' ? 'afr' : 'overnight');
-    const overnightBblsDay = windowed ? 0 : overnightSample.bblsDay;
+    const overnightBblsDay = overnightSample.bblsDay;
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);
 
     // Recovery Needed

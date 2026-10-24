@@ -40,3 +40,40 @@ test.each([['overnight','720'],['afr',null]])('inventory refresh retains indepen
  await refreshFlowWindow(m.db,'Example');
  expect(m.values.get('packets/outgoing/response').overnightBblsDay).toBe(expected);
 });
+
+describe('ON refresh applies independently to every AFR model',()=>{
+ const records=()=>Object.fromEntries([
+  ['previous',23,72,42],['first',44,144,114],['later',46,117,87],
+ ].map(([id,h,top,bottom])=>[id,{...p(String(id),Number(h),Number(top),Number(bottom)),tankLevelFeet:Number(top)/12,bblsTaken:165}]));
+ const fixture=(extra:any={},rows=records())=>{
+  const last=rows.later;
+  return mock({'well_config/Example':{bblPerFoot:60,...extra},'packets/processed':rows,
+   'packets/outgoing':{response:{lastPullPacketId:'later'}},
+   'packets/outgoing/response':{lastPullPacketId:'later',lastPullDateTimeUTC:last.dateTimeUTC,flowRate:'keep AFR',bbls24hrs:'keep',overnightBblsDay:null,owner:'keep'},
+   'wells/Example/status':{lastPull:{packetId:'later'},current:{levelInches:87},calculated:{}}});
+ };
+ test.each([{}, {flowWindowMinimumRecoveryInches:6}, {productionRateMode:'inventory_balance'}])('first pull at 2 PM remains the endpoint after later pulls: %j',async cfg=>{
+  const m=fixture(cfg);await refreshFlowWindow(m.db,'Example');
+  expect(m.values.get('packets/outgoing/response')).toMatchObject({overnightBblsDay:'583',overnightEstimatedTime:false,owner:'keep'});
+ });
+ test('ordinary slow well recalculates corrected/deleted first pull without rewriting AFR or measurements',async()=>{
+  const rows=records(),m=fixture({},rows);const status=JSON.stringify(m.values.get('wells/Example/status')),history=JSON.stringify(rows);
+  await refreshFlowWindow(m.db,'Example');
+  expect(m.values.get('packets/outgoing/response')).toMatchObject({overnightBblsDay:'583',flowRate:'keep AFR',bbls24hrs:'keep'});
+  expect(JSON.stringify(rows)).toBe(history);expect(JSON.stringify(m.values.get('wells/Example/status'))).toBe(status);
+  rows.first={...rows.first,tankLevelFeet:11,tankTopInches:132};await refreshFlowWindow(m.db,'Example');
+  expect(m.values.get('packets/outgoing/response').overnightBblsDay).toBe('514');
+  delete rows.first;await refreshFlowWindow(m.db,'Example');
+  expect(m.values.get('packets/outgoing/response').overnightBblsDay).toBe('391');
+ });
+ test('late earlier observation replaces the first endpoint; it never selects a convenient later pull',async()=>{
+  const rows=records();delete rows.first;const m=fixture({},rows);await refreshFlowWindow(m.db,'Example');
+  expect(m.values.get('packets/outgoing/response').overnightBblsDay).toBe('391');
+  rows.first=records().first;await refreshFlowWindow(m.db,'Example');
+  expect(m.values.get('packets/outgoing/response').overnightBblsDay).toBe('583');
+ });
+ test('AFR-only mode withdraws stale ON on an ordinary well too',async()=>{
+  const m=fixture({overnightProductionMode:'afr'});m.values.get('packets/outgoing/response').overnightBblsDay='old';
+  await refreshFlowWindow(m.db,'Example');expect(m.values.get('packets/outgoing/response').overnightBblsDay).toBeNull();
+ });
+});
