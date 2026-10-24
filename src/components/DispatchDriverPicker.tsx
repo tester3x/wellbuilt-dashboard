@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useState } from 'react';
 
 export type PlannedShift = 'day' | 'night' | 'off';
 
@@ -31,7 +31,6 @@ interface Props {
 export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selection, shiftDate, onShiftDateChange, onShiftChange, shiftDot, readOnlyShifts, disabledSelection, onSelectMany, suggestedKey }: Props) {
   const [filter, setFilter] = useState<'both' | 'day' | 'night'>('both');
   const [search, setSearch] = useState('');
-  const pickerId = useId();
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState('');
   const groups: { shift: PlannedShift | 'unassigned'; title: string; color: string }[] = [
@@ -84,9 +83,10 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
             const dot = shiftDot(driver);
             return <div key={driver.key} className={`flex items-center gap-2 border-t border-gray-700/60 px-2 py-1.5 text-gray-100 ${selectedKeys.has(driver.key) ? 'bg-cyan-950/30' : ''}`}>
               <label className={`flex min-w-0 flex-1 items-center gap-2 py-1 ${disabledSelection ? 'cursor-not-allowed' : 'cursor-pointer hover:text-cyan-200'}`}>
-                <input type={selection === 'single' ? 'radio' : 'checkbox'} name={selection === 'single' ? pickerId : undefined}
+                <input type="checkbox"
                   aria-label={`Choose ${driver.legalName || driver.displayName} for job`}
-                  checked={selectedKeys.has(driver.key)} disabled={disabledSelection} onChange={() => onSelect(driver.key)} className="shrink-0" />
+                  checked={selectedKeys.has(driver.key)} disabled={disabledSelection}
+                  onChange={() => onSelect(selection === 'single' && selectedKeys.has(driver.key) ? '' : driver.key)} className="shrink-0" />
                 <span role="img" aria-label={dot.title} title={dot.title}>{dot.symbol}</span>
                 <span className="min-w-0 flex-1 truncate">{driver.legalName || driver.displayName}</span>
                 {suggestedKey === driver.key && <span className="shrink-0 rounded bg-cyan-900 px-1.5 py-0.5 text-cyan-100">Suggested</span>}
