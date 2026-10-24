@@ -1,4 +1,5 @@
 import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecision';
+import {calculateOvernightProduction, recordedBottomFeet} from './overnightProduction';
 import { resolveTankBblPerFoot } from './tankCalibration';
 import {refreshFlowWindow} from './refreshFlowWindow';
 import {effectiveFlow} from './effectiveFlow';
@@ -534,6 +535,7 @@ interface HistoricalPull {
   bblsTaken: number;
   wellDown: boolean;
   provisional?: boolean;
+  bottomLevelFeet?: number | null;
 }
 
 /**
@@ -592,6 +594,7 @@ async function getHistoricalPulls(wellName: string, limit: number = 50): Promise
         bblsTaken: parseFloat(packet.bblsTaken) || 0,
         wellDown: packet.wellDown === true || packet.wellDown === 'true',
         provisional: isProvisionalPull(packet),
+        bottomLevelFeet: recordedBottomFeet(packet),
       });
     }
 
@@ -692,44 +695,9 @@ function calculateWindowBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot
   return Math.round((1 / avgFlowRateDays) * bblPerFoot);
 }
 
-/**
- * Overnight/longest-gap bbls/day.
- * Finds the longest time gap between pulls in the current 6am window.
- */
-function calculateOvernightBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot: number, pullTimestamp: number): number {
-  if (!historicalPulls || historicalPulls.length < 2) return 0;
-
-  // Driver's manual method: most recent pull from any previous day → first pull today.
-  const todayDate = new Date(pullTimestamp).toISOString().slice(0, 10);
-
-  let firstPullToday: HistoricalPull | null = null;
-  let lastPullPrevDay: HistoricalPull | null = null;
-
-  // Pulls are chronological (oldest first). Walk backwards.
-  for (let i = historicalPulls.length - 1; i >= 0; i--) {
-    const pull = historicalPulls[i];
-    const pullDate = new Date(pull.timestamp).toISOString().slice(0, 10);
-
-    if (pullDate === todayDate) {
-      firstPullToday = pull; // Keeps overwriting — last one standing is earliest today
-    } else {
-      lastPullPrevDay = pull; // Most recent pull from a previous day
-      break;
-    }
-  }
-
-  if (!firstPullToday || !lastPullPrevDay) return 0;
-  if (firstPullToday.wellDown || lastPullPrevDay.wellDown || firstPullToday.provisional || lastPullPrevDay.provisional) return 0;
-
-  const timeDifDays = (firstPullToday.timestamp - lastPullPrevDay.timestamp) / (1000 * 60 * 60 * 24);
-  if (timeDifDays <= 0) return 0;
-
-  const prevBottomFeet = Math.max(lastPullPrevDay.tankLevelFeet - (lastPullPrevDay.bblsTaken / bblPerFoot), 0);
-  const recoveryFeet = firstPullToday.tankLevelFeet - prevBottomFeet;
-  if (recoveryFeet <= 0) return 0;
-
-  const flowRateDays = timeDifDays / recoveryFeet;
-  return Math.round((1 / flowRateDays) * bblPerFoot);
+/** Previous Central day's final reading to today's first reading. */
+function calculateOvernightBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot: number, pullTimestamp: number, mode?: string): number {
+  return calculateOvernightProduction(historicalPulls, bblPerFoot, pullTimestamp, mode === 'afr' ? 'afr' : 'overnight');
 }
 
 /**
@@ -1246,11 +1214,12 @@ export const processIncomingPull = functionsV1.database
       bblsTaken: parseFloat(String(data.bblsTaken)) || 0,
       wellDown: data.wellDown === true || data.wellDown === ('true' as any),
       provisional: isProvisionalPull(data),
+      bottomLevelFeet: tankAfterInches / 12,
     });
     historicalPulls.sort((a, b) => a.timestamp - b.timestamp);
 
     const windowBblsDay = windowed ? 0 : calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
-    const overnightBblsDay = windowed ? 0 : calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
+    const overnightBblsDay = windowed ? 0 : calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs, config.overnightProductionMode);
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);
 
     // Recovery Needed
@@ -2147,7 +2116,7 @@ export const processDeleteRequest = functionsV1.database
           const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
           const historicalPulls = await getHistoricalPulls(wellName, 500);
           const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
-          const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+          const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs, config.overnightProductionMode);
 
           const tankAfterInches = latestPacket.tankAfterInches || 0;
           const pullHeightInches = (pullBbls / bblPerFoot) * 12;
