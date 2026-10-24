@@ -4233,7 +4233,7 @@ function DispatchPageInner() {
                     onEditServiceWork={openEditSwModal} onReassignDeclined={openReassignModal}
                     onDismissDeclined={dismissDeclinedDispatch} activeJobsReady={false}
                     wells={wells} operatorWells={allOperatorWells} nowMs={asOfMs}
-                  /> : <div className="text-center text-gray-500 py-8">No cancelled, declined or dismissed jobs</div>
+                  /> : <div className="text-center text-gray-500 py-8">No cancelled or declined jobs awaiting dispatch review</div>
                 )}
                 {rightPanelTab === 'completed' && (
                   <CompletedJobsPanel
@@ -5392,7 +5392,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         <>
           <div className="flex items-center gap-2">
             <div className="h-px bg-red-600/30 flex-1" />
-            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Cancelled / Declined / Dismissed ({declinedJobs.length})</span>
+            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Needs dispatch decision ({declinedJobs.length})</span>
             <div className="h-px bg-red-600/30 flex-1" />
           </div>
           {declinedJobs.map(job => (
@@ -5447,7 +5447,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                         setDismissError(null);
                       }}
                       className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
-                      title="Accept decline and dismiss"
+                      title="Acknowledge this cancellation or decline without reassigning"
                     >Dismiss</button>
                     </>}
                   </div>
