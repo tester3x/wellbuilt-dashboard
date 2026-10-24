@@ -20,3 +20,8 @@ Functions TypeScript build passes. Before editing, both live function source
 archives matched this checkout's checkpoint baseline. Only jsaOfflineShift and
 getDriverDeliverySnapshot are intended for deployment. No Hosting or rules
 deployment is involved. Physical replacement APK testing is still pending.
+
+Deployed only those two Functions from source 5110d3ac. Both report ACTIVE:
+jsaofflineshift-00003-huf and getdriverdeliverysnapshot-00003-koh. Downloaded
+the deployed source archives and verified exact source matches for both
+handlers and the new projection module. No Dashboard Hosting or rules changed.
