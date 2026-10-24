@@ -77,3 +77,16 @@ production-log counts, dispatches, tickets, HOS or shifts were rewritten.
 
 Mobile100 remains in progress. Device cache withdrawal acceptance and the final
 installation are still pending; server deployment does not update old binaries.
+
+## Device candidate installed
+
+The focused backend suite now has15 passing cases, including a generic short-gap
+regression demonstrating a thousand-BBL/day reconstructed-bottom bias. Product
+source3f5b8f49 and the verified live overlays are unchanged by that test addition.
+Mobile100 source2d6219e completed, passed package/signer/ARM64/native-bridge
+verification and was installed preserving data on both phones. S24 cold startup
+retained valid estimates and existing access; actual withdrawal persistence has
+19 focused client tests. ZFold post-install screen testing was deferred while
+its user was active. No signed inspection, job, shift or HOS test was created.
+Final Firebase receiver health remained connected/Ready with eight channels,
+zero pending/review backlog and no reported error. Raw evidence stays private.
