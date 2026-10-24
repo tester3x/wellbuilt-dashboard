@@ -49,6 +49,23 @@ function trackingStore(
 }
 
 describe('staffWriteDriverRoster', () => {
+  it('saves a regular shift and days off on the same-company profile, never another tenant', async () => {
+    expect(parseStaffWriteDriverRoster({ op: 'setRegularSchedule', driverId: 'driver-1', usualShift: 'day', weeklyDaysOff: [0, 0] }))
+      .toMatchObject({ ok: false, reason: 'malformed_days_off' });
+    const parsed = parseStaffWriteDriverRoster({ op: 'setRegularSchedule', driverId: 'driver-1', usualShift: 'night', weeklyDaysOff: [6, 0] });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const { store, writes } = trackingStore();
+    store.getProfile = async () => ({ companyId: COMPANY });
+    expect(await runStaffWriteDriverRoster({ actingCompanyId: COMPANY, actorUid: UID, request: parsed, store }))
+      .toMatchObject({ ok: true, path: 'driver-1' });
+    expect(writes).toEqual([{ kind: 'updateProfile', driverId: 'driver-1', fields: { usualShift: 'night', weeklyDaysOff: [0, 6] } }]);
+    writes.length = 0;
+    store.getProfile = async () => ({ companyId: OTHER });
+    expect(await runStaffWriteDriverRoster({ actingCompanyId: COMPANY, actorUid: UID, request: parsed, store }))
+      .toMatchObject({ ok: false, reason: 'cross_company' });
+    expect(writes).toEqual([]);
+  });
   it('stores dated shift changes on the same-company driver profile and rejects forged dates or tenants', async () => {
     const badDate = parseStaffWriteDriverRoster({ op: 'setShiftPlan', driverId: 'driver-1', shiftDate: '2026-02-30', shift: 'night' });
     expect(badDate).toMatchObject({ ok: false, reason: 'malformed_shift_date' });

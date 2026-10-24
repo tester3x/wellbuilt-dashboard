@@ -32,6 +32,8 @@ export const APPROVED_ALLOWLIST = [
   'driverId',
   'migratedToDriverId',
   'shiftPlan',
+  'usualShift',
+  'weeklyDaysOff',
   'profile',
 ] as const;
 
@@ -62,6 +64,8 @@ export const CANONICAL_PROFILE_ALLOWLIST = [
   'mustUseSecureAuth',
   'schemaVersion',
   'shiftPlan',
+  'usualShift',
+  'weeklyDaysOff',
 ] as const;
 
 export const USER_ALLOWLIST = [

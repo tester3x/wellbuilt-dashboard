@@ -17,6 +17,7 @@ import { assignmentIdentityForDriver } from "@/lib/dispatchWriterIdentity";
 import type { DriverIdentity } from "@/lib/dispatchDriverIdentity";
 import type { ShiftDotView } from "@/lib/shiftDotCore";
 import { DispatchDriverPicker, type PickerDriver, type PlannedShift } from "@/components/DispatchDriverPicker";
+import { preDispatchBlocked } from "@/lib/driverWeeklySchedule";
 import type { WellResponse } from "@/lib/wellPoolCore";
 import {
   estimateCycleMinutes,
@@ -477,6 +478,13 @@ export function WaterOrderBuilder({
       for (const trip of trips) {
         if(alive.current)setDispatchProgress(`Sending job ${sent+1} of ${trips.length} · ${sent} confirmed`);
         requireScope();
+        const tripDriver = scopeDrivers.find(driver => driver.key === trip.driverKey);
+        if (!tripDriver) throw Error('A planned driver is no longer available');
+        const pickupDate = new Date(trip.pickupAt);
+        const localPickupDate = `${pickupDate.getFullYear()}-${String(pickupDate.getMonth() + 1).padStart(2, '0')}-${String(pickupDate.getDate()).padStart(2, '0')}`;
+        if (preDispatchBlocked(tripDriver, localPickupDate, shiftForDriver?.(tripDriver).title || 'Shift status unavailable')) {
+          throw Error(`${operationalDriverName(tripDriver)} has a regular or planned day off on ${localPickupDate}. Wait for the driver to clock on shift.`);
+        }
         const well = scopeWells.find((w) => w.wellName === trip.wellName);
         if (!well) throw Error("Source is no longer available");
         const source = waterSourceFromWell(

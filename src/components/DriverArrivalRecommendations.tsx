@@ -140,7 +140,7 @@ export function DriverArrivalRecommendations(props: DriverArrivalRecommendations
     {expanded && <div className="space-y-2 border-t border-cyan-900/60 p-3" onKeyDown={event => {
       if (event.key === 'Escape') { running.current?.controller.abort(); setExpanded(false); }
     }}>
-      <p className="break-words text-gray-300">To {targetName}. After current work; existing queued assignments are shown separately. All drivers remain selectable.</p>
+      <p className="break-words text-gray-300">To {targetName}. After current work; existing queued assignments are shown separately. Eligible drivers remain selectable.</p>
       {!!companyId && <p className="text-cyan-300">No shift start required. Recommendations use recent job/location evidence; missing data shows Arrival unknown.</p>}
       {!companyId && <p className="text-amber-300">Select a company to compare arrivals.</p>}
       {!!companyId && !target && <p className="text-amber-300">Pickup coordinates unavailable or ambiguous.</p>}

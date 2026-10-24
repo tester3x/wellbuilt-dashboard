@@ -112,6 +112,8 @@ export const adminGetDemoDriverRoster = httpsV2.onCall(
         legalName: String(profile.legalName || profile.displayName || ''),
         assignedRoutes: Array.isArray(profile.assignedRoutes) ? profile.assignedRoutes : [],
         shiftPlan: profile.shiftPlan && typeof profile.shiftPlan === 'object' ? profile.shiftPlan : {},
+        usualShift: profile.usualShift === 'day' || profile.usualShift === 'night' ? profile.usualShift : null,
+        weeklyDaysOff: Array.isArray(profile.weeklyDaysOff) ? profile.weeklyDaysOff : [],
         active: true,
         isDemo: true,
       }] as const;

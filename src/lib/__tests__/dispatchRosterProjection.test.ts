@@ -20,6 +20,16 @@ test('dated profile shift takes precedence over legacy roster shift for the same
   assert.deepEqual(roster[0].shiftPlan, { '2026-10-24': 'night', '2026-10-25': 'off' });
 });
 
+test('profile regular schedule is projected with the dated exceptions', () => {
+  const roster = projectDispatchDriverRoster({ profiles: {
+    [CANON_UUID_1]: { companyId: 'liquid-gold', displayName: 'Pat', usualShift: 'night', weeklyDaysOff: [0, 6],
+      shiftPlan: { '2026-10-25': 'day' } },
+  } }, 'liquid-gold');
+  assert.equal(roster[0].usualShift, 'night');
+  assert.deepEqual(roster[0].weeklyDaysOff, [0, 6]);
+  assert.deepEqual(roster[0].shiftPlan, { '2026-10-25': 'day' });
+});
+
 test('approved demo driver profiles join only the selected demo roster', () => {
   const demoCatalog = { profiles: {
     '2f6e6f75-b468-4239-9831-71faeb623acb': { companyId: 'wellbuilt-demo', displayName: 'AntigDemoDriver', legalName: 'Antig Demo Driver', active: true },

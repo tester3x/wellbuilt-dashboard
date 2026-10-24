@@ -19,6 +19,7 @@ export const ROSTER_OPS = Object.freeze([
   'setAppAdmin',
   'setTier',
   'setShiftPlan',
+  'setRegularSchedule',
 ] as const);
 
 export type RosterOp = (typeof ROSTER_OPS)[number];
@@ -41,6 +42,8 @@ export const ROSTER_REQUEST_KEYS = Object.freeze([
   'driverId',
   'shiftDate',
   'shift',
+  'usualShift',
+  'weeklyDaysOff',
 ] as const);
 
 export const ROSTER_FORBIDDEN_KEYS = Object.freeze([
@@ -88,6 +91,8 @@ export type RosterRequest = {
   driverId: string | null;
   shiftDate: string | null;
   shift: 'day' | 'night' | 'off' | null;
+  usualShift: 'day' | 'night' | null;
+  weeklyDaysOff: number[] | null;
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -166,6 +171,20 @@ export function parseStaffWriteDriverRoster(raw: unknown): StoreResult<RosterReq
   }
   const shift = raw.shift === 'day' || raw.shift === 'night' || raw.shift === 'off' ? raw.shift : null;
   if (raw.op === 'setShiftPlan' && !shift) return fail('malformed_shift', 'shift');
+  let usualShift: 'day' | 'night' | null = null;
+  let weeklyDaysOff: number[] | null = null;
+  if (raw.op === 'setRegularSchedule') {
+    if (raw.usualShift !== null && raw.usualShift !== 'day' && raw.usualShift !== 'night') {
+      return fail('malformed_usual_shift', 'usualShift');
+    }
+    if (!Array.isArray(raw.weeklyDaysOff) || raw.weeklyDaysOff.length > 7
+      || !Array.from(raw.weeklyDaysOff).every((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+      || new Set(raw.weeklyDaysOff).size !== raw.weeklyDaysOff.length) {
+      return fail('malformed_days_off', 'weeklyDaysOff');
+    }
+    usualShift = raw.usualShift;
+    weeklyDaysOff = [...(raw.weeklyDaysOff as number[])].sort((a, b) => a - b);
+  }
 
   return {
     ok: true,
@@ -186,6 +205,8 @@ export function parseStaffWriteDriverRoster(raw: unknown): StoreResult<RosterReq
     driverId: driverId.value,
     shiftDate,
     shift,
+    usualShift,
+    weeklyDaysOff,
   };
 }
 
@@ -225,6 +246,22 @@ export async function runStaffWriteDriverRoster(input: {
     if (!approved) return fail('not_found', 'approvedKey');
     if (approved.companyId !== companyId) return fail('cross_company', 'approvedKey');
     await input.store.updateApproved(path, { [`shiftPlan/${req.shiftDate}`]: req.shift });
+    return { ok: true, op: req.op, path };
+  }
+
+  if (req.op === 'setRegularSchedule') {
+    const profile = req.driverId && input.store.getProfile ? await input.store.getProfile(req.driverId) : null;
+    const fields = { usualShift: req.usualShift, weeklyDaysOff: req.weeklyDaysOff };
+    if (profile) {
+      if (profile.companyId !== companyId || !input.store.updateProfile) return fail('cross_company', 'driverId');
+      await input.store.updateProfile(req.driverId!, fields);
+      return { ok: true, op: req.op, path: req.driverId! };
+    }
+    if (!path) return fail('not_found', 'driverId');
+    const approved = await input.store.getApproved(path);
+    if (!approved) return fail('not_found', 'approvedKey');
+    if (approved.companyId !== companyId) return fail('cross_company', 'approvedKey');
+    await input.store.updateApproved(path, fields);
     return { ok: true, op: req.op, path };
   }
 

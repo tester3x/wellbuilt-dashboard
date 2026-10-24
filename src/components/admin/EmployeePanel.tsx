@@ -36,6 +36,7 @@ interface EmployeePanelProps<D, U> {
   /** Optional existing driver actions (routes / company / package modals). */
   onAssignRoutes?: (row: EmployeeRow<any, any>) => void;
   onAssignCompany?: (row: EmployeeRow<any, any>) => void;
+  onRegularSchedule?: (row: EmployeeRow<any, any>) => void;
   /**
    * Secure WellBuilt login (canonical identity + passcode) — resolved by the
    * parent's shared state resolver so this panel and the legacy list can
@@ -48,7 +49,7 @@ interface EmployeePanelProps<D, U> {
 
 export function EmployeePanel<D, U>({
   employees, isWbAdmin, scopeCompanyId,
-  onToggleMobile, onInvite, onSaveRoles, onAssignRoutes, onAssignCompany,
+  onToggleMobile, onInvite, onSaveRoles, onAssignRoutes, onAssignCompany, onRegularSchedule,
   secureLoginStateFor, onCreateSecureLogin,
 }: EmployeePanelProps<D, U>) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -264,6 +265,7 @@ export function EmployeePanel<D, U>({
                     {/* Existing driver actions */}
                     {row.driver && editable && (
                       <div className="flex flex-wrap gap-2 pt-1">
+                        {onRegularSchedule && <button onClick={() => onRegularSchedule(row)} className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-gray-200 text-xs rounded">Regular shift & days off</button>}
                         {onAssignRoutes && (
                           <button onClick={() => onAssignRoutes(row)} className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-gray-200 text-xs rounded">
                             Routes

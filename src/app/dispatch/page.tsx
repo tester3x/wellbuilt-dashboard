@@ -9,6 +9,7 @@ import { isActiveDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
 import { WaterOrderBuilder } from '@/components/WaterOrderBuilder';
 import { DispatchDriverPicker, type PlannedShift } from '@/components/DispatchDriverPicker';
+import { plannedDriverShift, preDispatchBlocked } from '@/lib/driverWeeklySchedule';
 import { DriverArrivalRecommendations } from '@/components/DriverArrivalRecommendations';
 import { staffWriteDriverRoster } from '@/lib/staffWriteDriverRoster';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
@@ -105,6 +106,8 @@ interface ApprovedDriver {
   phone?: string;        // From profile subpath (WB S settings)
   onShift?: boolean;     // Live shift status from driver_shifts
   shiftPlan?: Record<string, PlannedShift>;
+  usualShift?: 'day' | 'night';
+  weeklyDaysOff?: number[];
 }
 
 interface DispatchJob {
@@ -707,6 +710,15 @@ function DispatchPageInner() {
     loading: shiftLoading,
     error: shiftError,
   }), [shiftResults, shiftResolvedCompany, shiftLoading, shiftError]);
+  const preDispatchEligibleDrivers = useMemo(() => drivers.filter(driver =>
+    !preDispatchBlocked(driver, builderShiftDate, driverShiftDot(driver).title)),
+  [drivers, builderShiftDate, driverShiftDot]);
+
+  const assertCanPredispatch = (driver: ApprovedDriver, date = builderShiftDate) => {
+    if (preDispatchBlocked(driver, date, driverShiftDot(driver).title)) {
+      throw new Error(`${driver.legalName || driver.displayName} has a regular or planned day off on ${date}. Wait for the driver to clock on shift.`);
+    }
+  };
 
   async function updateDriverShiftPlan(driver: ApprovedDriver, date: string, shift: PlannedShift) {
     if (user?.role === 'demo_viewer') throw new Error('Demo viewers cannot edit shifts');
@@ -1620,6 +1632,7 @@ function DispatchPageInner() {
     try {
       const driver = drivers.find(d => d.key === assignDriverHash);
       if (!driver) throw new Error('Driver not found');
+      assertCanPredispatch(driver);
 
       const priority = getPriority(assignTarget);
       const firestore = getFirestoreDb();
@@ -1743,6 +1756,7 @@ function DispatchPageInner() {
       const firestore = getFirestoreDb();
       const selectedDrivers = drivers.filter(d => swDriverHashes.has(d.key));
       if (selectedDrivers.length === 0) throw new Error('No drivers found');
+      selectedDrivers.forEach(driver => assertCanPredispatch(driver));
       if (user?.role === 'demo_viewer') {
         const bbls = Number(swDemoBbls);
         if (!/^Demo Service Well [12]$/.test(swWellName.trim())
@@ -1945,8 +1959,13 @@ function DispatchPageInner() {
   async function createProject() {
     if (!guardCreateDispatch()) return;
     if (!newProjectName.trim()) return;
+    try { Array.from(newProjectDriverHashes).forEach(hash => {
+      const driver = drivers.find(row => row.key === hash);
+      if (driver) assertCanPredispatch(driver);
+    }); } catch (error) { setMessage(error instanceof Error ? error.message : 'Driver is off today'); return; }
     if (Array.from(newProjectDriverHashes).some(hash => {
-      const shift = drivers.find(driver => driver.key === hash)?.shiftPlan?.[builderShiftDate];
+      const driver = drivers.find(driver => driver.key === hash);
+      const shift = driver ? plannedDriverShift(driver, builderShiftDate) : null;
       return shift !== 'day' && shift !== 'night';
     })) {
       setMessage('Set each selected project driver to D or N for the shift date first.');
@@ -1965,7 +1984,8 @@ function DispatchPageInner() {
       const dayHashes: string[] = [];
       const nightHashes: string[] = [];
       for (const hash of newProjectDriverHashes) {
-        const shift = drivers.find(driver => driver.key === hash)?.shiftPlan?.[builderShiftDate];
+        const driver = drivers.find(driver => driver.key === hash);
+        const shift = driver ? plannedDriverShift(driver, builderShiftDate) : null;
         if (shift === 'day') dayHashes.push(hash);
         else nightHashes.push(hash);
       }
@@ -2182,6 +2202,7 @@ function DispatchPageInner() {
     if (!guardCreateDispatch() || !project.id || project.status !== 'active') throw new Error('Project is not active');
     const driver = drivers.find(d => d.key === draft.driverHash);
     if (!driver) throw new Error('Choose a project driver');
+    assertCanPredispatch(driver);
     const pickup = draft.pickup.trim();
     const dropoff = draft.dropoff.trim();
     if (!pickup) throw new Error('Choose a pickup for this load');
@@ -2453,6 +2474,7 @@ function DispatchPageInner() {
     try {
       const driver = drivers.find(d => d.key === assignDriverHash);
       if (!driver) throw new Error('Driver not found');
+      assertCanPredispatch(driver);
       const firestore = getFirestoreDb();
 
       const batchActionId = `multi_assign_${driver.key}_${selectedWells.size}`;
@@ -3038,7 +3060,7 @@ function DispatchPageInner() {
                           readOnlyShifts={user?.role === 'demo_viewer'} />
                       </div>
                       {assignTarget && <DriverArrivalRecommendations
-                        drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
+                        drivers={preDispatchEligibleDrivers} jobs={dispatches} companyId={viewedCompanyId}
                         targetName={assignTarget.ndicName || assignTarget.wellName}
                         locations={locationCatalog} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
                         selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])}

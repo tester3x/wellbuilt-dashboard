@@ -1,15 +1,15 @@
 'use client';
 
 import { useState } from 'react';
+import { plannedDriverShift, preDispatchBlocked, type DriverWeeklySchedule } from '@/lib/driverWeeklySchedule';
 
 export type PlannedShift = 'day' | 'night' | 'off';
 
-export interface PickerDriver {
+export interface PickerDriver extends DriverWeeklySchedule {
   key: string;
   displayName: string;
   legalName?: string;
   loginAlias?: string;
-  shiftPlan?: Record<string, PlannedShift>;
 }
 
 interface Props {
@@ -33,7 +33,6 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
   const [search, setSearch] = useState('');
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [showOffDuty, setShowOffDuty] = useState(false);
   const groups: { shift: 'day' | 'night' | 'unassigned' | 'offDuty'; title: string; color: string }[] = [
     { shift: 'day', title: 'Day shift', color: 'border-amber-600/40 bg-amber-950/20 text-amber-300' },
     { shift: 'night', title: 'Night shift', color: 'border-blue-600/40 bg-blue-950/20 text-blue-300' },
@@ -41,7 +40,7 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
     { shift: 'offDuty', title: 'Off duty', color: 'border-gray-700 bg-gray-900/60 text-gray-400' },
   ];
   const plannedGroup = (driver: PickerDriver) => {
-    const shift = driver.shiftPlan?.[shiftDate];
+    const shift = plannedDriverShift(driver, shiftDate);
     return shift === 'day' || shift === 'night' ? shift : 'unassigned';
   };
 
@@ -68,7 +67,7 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
         className="min-w-0 flex-1 rounded border border-gray-600 bg-gray-800 px-2 py-1 text-white" />
       <button type="button" disabled={disabledSelection} onClick={() => {
         const visible = drivers.filter(driver => (filter === 'both' || plannedGroup(driver) === filter) &&
-          (showOffDuty || shiftDot(driver).title !== 'Off shift') &&
+          !preDispatchBlocked(driver, shiftDate, shiftDot(driver).title) &&
           `${driver.displayName} ${driver.legalName || ''} ${driver.loginAlias || ''}`.toLowerCase().includes(search.trim().toLowerCase()));
         onSelectMany([...new Set([...selectedKeys, ...visible.map(driver => driver.key)])]);
       }} className="rounded bg-cyan-900 px-2 py-1 text-cyan-200 disabled:opacity-40">Select shown</button>
@@ -85,22 +84,22 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
           .sort((a, b) => (a.legalName || a.displayName).localeCompare(b.legalName || b.displayName));
         if (!rows.length) return null;
         return <div key={group.shift} className={`border-b last:border-b-0 ${group.color}`}>
-          {group.shift === 'offDuty'
-            ? <button type="button" onClick={() => setShowOffDuty(value => !value)} aria-expanded={showOffDuty}
-                className="w-full px-2 py-1 text-left font-bold uppercase tracking-wide hover:text-white">{showOffDuty ? '▾' : '▸'} {group.title} ({rows.length})</button>
-            : <div className="px-2 py-1 font-bold uppercase tracking-wide">{group.title} ({rows.length})</div>}
-          {(group.shift !== 'offDuty' || showOffDuty) && rows.map(driver => {
-            const current = driver.shiftPlan?.[shiftDate];
+          <div className="px-2 py-1 font-bold uppercase tracking-wide">{group.title} ({rows.length})</div>
+          {rows.map(driver => {
+            const current = plannedDriverShift(driver, shiftDate);
             const dot = shiftDot(driver);
+            const dayOffBlocked = preDispatchBlocked(driver, shiftDate, dot.title);
             return <div key={driver.key} className={`flex items-center gap-2 border-t border-gray-700/60 px-2 py-1.5 text-gray-100 ${selectedKeys.has(driver.key) ? 'bg-cyan-950/30' : ''}`}>
-              <label className={`flex min-w-0 flex-1 items-center gap-2 py-1 ${disabledSelection ? 'cursor-not-allowed' : 'cursor-pointer hover:text-cyan-200'}`}>
+              <label title={dayOffBlocked ? 'Regular or planned day off — wait until this driver clocks on shift' : undefined}
+                className={`flex min-w-0 flex-1 items-center gap-2 py-1 ${disabledSelection || dayOffBlocked ? 'cursor-not-allowed' : 'cursor-pointer hover:text-cyan-200'}`}>
                 <input type="checkbox"
                   aria-label={`Choose ${driver.legalName || driver.displayName} for job`}
-                  checked={selectedKeys.has(driver.key)} disabled={disabledSelection}
+                  checked={selectedKeys.has(driver.key)} disabled={disabledSelection || dayOffBlocked}
                   onChange={() => onSelect(selection === 'single' && selectedKeys.has(driver.key) ? '' : driver.key)} className="shrink-0" />
                 <span role="img" aria-label={dot.title} title={dot.title}>{dot.symbol}</span>
                 <span className="min-w-0 flex-1 truncate">{driver.legalName || driver.displayName}</span>
                 {suggestedKey === driver.key && <span className="shrink-0 rounded bg-cyan-900 px-1.5 py-0.5 text-cyan-100">Suggested</span>}
+                {dayOffBlocked && <span className="shrink-0 text-amber-300">Day off · wait for clock-in</span>}
               </label>
               <div className="flex shrink-0 items-center gap-0.5 rounded border border-gray-600 bg-gray-800 p-0.5" aria-label={`Planned shift for ${driver.legalName || driver.displayName}`}>
                 <button type="button" onClick={() => setShift(driver, 'day')} disabled={!!savingKey || readOnlyShifts}

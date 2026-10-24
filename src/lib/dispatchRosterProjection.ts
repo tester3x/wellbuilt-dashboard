@@ -30,6 +30,8 @@ export interface ProjectedDispatchDriver extends DriverIdentity {
   phone?: string;
   onShift?: boolean;
   shiftPlan?: Record<string, 'day' | 'night' | 'off'>;
+  usualShift?: 'day' | 'night';
+  weeklyDaysOff?: number[];
 }
 
 export type CatalogInput = {
@@ -48,6 +50,14 @@ function shiftPlan(v: unknown): Record<string, 'day' | 'night' | 'off'> {
   return Object.fromEntries(Object.entries(asRecord(v)).filter(([date, shift]) =>
     /^\d{4}-\d{2}-\d{2}$/.test(date) && (shift === 'day' || shift === 'night' || shift === 'off'),
   )) as Record<string, 'day' | 'night' | 'off'>;
+}
+
+function usualShift(v: unknown): 'day' | 'night' | undefined {
+  return v === 'day' || v === 'night' ? v : undefined;
+}
+
+function weeklyDaysOff(v: unknown): number[] {
+  return Array.isArray(v) ? [...new Set(v.filter((day): day is number => Number.isInteger(day) && day >= 0 && day <= 6))].sort() : [];
 }
 
 /** Flatten flat or legacy-nested approved rows. */
@@ -114,6 +124,8 @@ export function projectDispatchDriverRoster(
         : [],
       phone: t(row.phone) || t(asRecord(row.profile).phone) || '',
       shiftPlan: shiftPlan(row.shiftPlan),
+      usualShift: usualShift(row.usualShift),
+      weeklyDaysOff: weeklyDaysOff(row.weeklyDaysOff),
     };
 
     driverMap.set(primaryKey, driver);
@@ -148,6 +160,8 @@ export function projectDispatchDriverRoster(
       if (!existing.companyId && prof.companyId) existing.companyId = t(prof.companyId);
       if (!existing.companyName && prof.companyName) existing.companyName = t(prof.companyName);
       existing.shiftPlan = { ...existing.shiftPlan, ...shiftPlan(prof.shiftPlan) };
+      if (Object.prototype.hasOwnProperty.call(prof, 'usualShift')) existing.usualShift = usualShift(prof.usualShift);
+      existing.weeklyDaysOff = Array.isArray(prof.weeklyDaysOff) ? weeklyDaysOff(prof.weeklyDaysOff) : existing.weeklyDaysOff;
       continue;
     }
 
@@ -169,6 +183,8 @@ export function projectDispatchDriverRoster(
         : [],
       phone: t(prof.phone) || '',
       shiftPlan: shiftPlan(prof.shiftPlan),
+      usualShift: usualShift(prof.usualShift),
+      weeklyDaysOff: weeklyDaysOff(prof.weeklyDaysOff),
     };
 
     driverMap.set(profId, newDriver);

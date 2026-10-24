@@ -45,6 +45,8 @@ interface ApprovedDriver {
   assignedRoutes?: string[];   // WB-M well-scope routes (not WB-T job assignment)
   assignedWells?: string[];    // WB-M direct well permits (not WB-T job assignment)
   defaultPackageId?: string;   // default job package for shift start
+  usualShift?: 'day' | 'night';
+  weeklyDaysOff?: number[];
   // Dashboard account link — set by inviteEmployee Cloud Function when a
   // driver is promoted to a dashboard role.
   dashboardUid?: string;
@@ -72,6 +74,8 @@ interface CanonicalWbmDriver {
   assignedRoutes: string[] | null;
   assignedWells: string[] | null;
   assignmentRevision: number | null;
+  usualShift?: 'day' | 'night';
+  weeklyDaysOff?: number[];
 }
 
 /** Secure-credential presentation state shared by BOTH employee views. */
@@ -118,6 +122,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [search, setSearch] = useState('');
+  const [scheduleTarget, setScheduleTarget] = useState<{ driverId?: string; approvedKey?: string; nestedKey?: string; name: string; usualShift?: 'day' | 'night'; weeklyDaysOff?: number[] } | null>(null);
+  const [scheduleShift, setScheduleShift] = useState<'day' | 'night' | ''>('');
+  const [scheduleDaysOff, setScheduleDaysOff] = useState<number[]>([]);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
 
   // Assign customer modal
   const [showAssignModal, setShowAssignModal] = useState(false);
@@ -259,6 +267,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : null,
             assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : null,
             assignmentRevision: typeof val.assignmentRevision === 'number' ? val.assignmentRevision : null,
+            usualShift: val.usualShift === 'day' || val.usualShift === 'night' ? val.usualShift : undefined,
+            weeklyDaysOff: Array.isArray(val.weeklyDaysOff) ? val.weeklyDaysOff : [],
           });
         });
         canonical.sort((a, b) => a.displayName.localeCompare(b.displayName));
@@ -286,6 +296,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
               assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
               defaultPackageId: val.defaultPackageId || undefined,
+              usualShift: val.usualShift === 'day' || val.usualShift === 'night' ? val.usualShift : undefined,
+              weeklyDaysOff: Array.isArray(val.weeklyDaysOff) ? val.weeklyDaysOff : [],
               dashboardUid: val.dashboardUid || undefined,
               dashboardRole: val.dashboardRole || undefined,
               // Canonical linkage when the server stamped one (migration
@@ -333,6 +345,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
               assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
               driverId: typeof val.migratedToDriverId === 'string' ? val.migratedToDriverId : undefined,
+              usualShift: val.usualShift === 'day' || val.usualShift === 'night' ? val.usualShift : undefined,
+              weeklyDaysOff: Array.isArray(val.weeklyDaysOff) ? val.weeklyDaysOff : [],
               _legacy: true,
               _legacyDeviceId: legacyDeviceId,
             });
@@ -1091,6 +1105,33 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // For pending drivers, company admins see all pending (they'll approve into their company)
   const visiblePending = pendingDrivers;
 
+  const openRegularSchedule = (driver: ApprovedDriver | CanonicalWbmDriver) => {
+    const canonical = driver.driverId ? canonicalDrivers.find(row => row.driverId === driver.driverId) : undefined;
+    const current = canonical || driver;
+    setScheduleTarget({ driverId: driver.driverId, approvedKey: 'key' in driver ? driver.key : undefined,
+      nestedKey: '_legacyDeviceId' in driver ? driver._legacyDeviceId : undefined,
+      name: driver.displayName, usualShift: current.usualShift, weeklyDaysOff: current.weeklyDaysOff });
+    setScheduleShift(current.usualShift || '');
+    setScheduleDaysOff(current.weeklyDaysOff || []);
+  };
+
+  const saveRegularSchedule = async () => {
+    if (!scheduleTarget || scheduleSaving) return;
+    setScheduleSaving(true);
+    try {
+      await staffWriteDriverRoster({ op: 'setRegularSchedule', driverId: scheduleTarget.driverId || null,
+        approvedKey: scheduleTarget.approvedKey || null, nestedKey: scheduleTarget.nestedKey || null,
+        usualShift: scheduleShift || null, weeklyDaysOff: scheduleDaysOff });
+      setScheduleTarget(null);
+      await loadDrivers();
+      setMessage(`Regular schedule saved for ${scheduleTarget.name}.`);
+    } catch (error) {
+      setMessage(classifyRosterError(error));
+    } finally {
+      setScheduleSaving(false);
+    }
+  };
+
   // ── Render helpers ────────────────────────────────────────────────────
   // Extracted so the same driver row + dashboard user row JSX can be used
   // by both the flat (company-scoped) list and the grouped (WB admin) list
@@ -1240,6 +1281,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             >
               {driver.defaultPackageId ? `Pkg: ${availablePackages.find(p => p.id === driver.defaultPackageId)?.name || driver.defaultPackageId}` : 'Default Package'}
             </button>
+            <button onClick={() => openRegularSchedule(driver)} className="px-3 py-1 text-sm rounded bg-gray-600 hover:bg-gray-500 text-white">Regular shift & days off</button>
             {isWbAdmin && (
               <button
                 onClick={() => { setCompanyTarget(driver); setAssignCompanyId(driver.companyId || ''); setAssignCompanyName(driver.companyName || ''); setCompanyError(''); setShowCompanyModal(true); }}
@@ -1346,6 +1388,32 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       {message && (
         <div className="p-3 bg-blue-900 text-blue-200 rounded text-sm">{message}</div>
       )}
+      {scheduleTarget && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label={`Regular schedule for ${scheduleTarget.name}`}>
+        <div className="w-full max-w-md space-y-4 rounded border border-gray-600 bg-gray-800 p-5 text-white shadow-xl">
+          <h3 className="font-semibold">Regular schedule · {scheduleTarget.name}</h3>
+          <p className="text-xs text-gray-300">The live on/off shift dot comes from driver clock-in. Regular days off block pre-dispatch until the driver is on shift.</p>
+          <label className="block text-sm">Usual shift
+            <select value={scheduleShift} onChange={event => setScheduleShift(event.target.value as 'day' | 'night' | '')}
+              className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-white">
+              <option value="">No usual D/N shift</option><option value="day">Day</option><option value="night">Night</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend className="mb-2 text-sm">Regular days off</legend>
+            <div className="flex flex-wrap gap-2">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) =>
+                <label key={day} className="flex cursor-pointer items-center gap-1 rounded border border-gray-600 px-2 py-1 text-sm">
+                  <input type="checkbox" checked={scheduleDaysOff.includes(index)} onChange={() => setScheduleDaysOff(previous => previous.includes(index) ? previous.filter(value => value !== index) : [...previous, index].sort())} />
+                  {day}
+                </label>)}
+            </div>
+          </fieldset>
+          <div className="flex justify-end gap-2">
+            <button type="button" disabled={scheduleSaving} onClick={() => setScheduleTarget(null)} className="rounded bg-gray-600 px-3 py-1.5 text-sm">Cancel</button>
+            <button type="button" disabled={scheduleSaving} onClick={saveRegularSchedule} className="rounded bg-blue-600 px-3 py-1.5 text-sm disabled:opacity-50">{scheduleSaving ? 'Saving…' : 'Save schedule'}</button>
+          </div>
+        </div>
+      </div>}
 
       {/* ── Pending Registrations ── */}
       {pendingDrivers.length > 0 && (
@@ -1446,6 +1514,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    <button onClick={() => openRegularSchedule(d)} className="px-3 py-1 text-sm rounded bg-gray-600 hover:bg-gray-500 text-white">Regular shift & days off</button>
                     {isWbAdmin && d.active && d.companyId && (
                       <button
                         onClick={() => ensureCanonicalCompanyBinding(d)}
@@ -1497,6 +1566,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           setInviteResult(null);
         }}
         onSaveRoles={saveEmployeeRoles}
+        onRegularSchedule={(row) => { if (row.driver) openRegularSchedule(row.driver); }}
         onAssignRoutes={(row) => {
           const id = row.driver?.driverId?.trim();
           const canonical = id ? canonicalDrivers.find(c => c.driverId === id) : undefined;
