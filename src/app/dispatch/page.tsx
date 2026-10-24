@@ -5,7 +5,7 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
-import { isActiveDispatchCard } from '@/lib/dispatchActiveVisibility';
+import { isActiveDispatchCard, isCancelledDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
 import { WaterOrderBuilder } from '@/components/WaterOrderBuilder';
 import { DispatchDriverPicker, type PlannedShift } from '@/components/DispatchDriverPicker';
@@ -621,18 +621,20 @@ function DispatchPageInner() {
 
   // Right panel tab
   const searchParams = useSearchParams();
-  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'projects'>('jobs');
+  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'cancelled' | 'projects'>('jobs');
   const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
 
   // Handle URL params from notification deep links (e.g., ?tab=completed&highlight=abc123)
   useEffect(() => {
     const tab = searchParams.get('tab');
     const highlight = searchParams.get('highlight');
-    if (tab === 'jobs' || tab === 'completed' || tab === 'projects') setWorkspaceTab('jobs');
+    if (tab === 'jobs' || tab === 'completed' || tab === 'cancelled' || tab === 'projects') setWorkspaceTab('jobs');
     else if (tab === 'queue') setWorkspaceTab('queue');
     if (tab === 'completed') {
       setRightPanelTab('completed');
       if (highlight) setHighlightJobId(highlight);
+    } else if (tab === 'cancelled') {
+      setRightPanelTab('cancelled');
     } else if (tab === 'projects') {
       setRightPanelTab('projects');
     }
@@ -4108,7 +4110,7 @@ function DispatchPageInner() {
                   (including Reattach) wrap cleanly onto a second line instead of the
                   Reattach button being pushed off / hidden. */}
               <div className="flex flex-wrap items-center justify-between gap-y-1 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
-                <div className="flex items-center gap-1">
+                <div className="flex flex-wrap items-center gap-1">
                   <button
                     onClick={() => { setRightPanelTab('jobs'); setSelectedProject(null); }}
                     className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
@@ -4126,6 +4128,11 @@ function DispatchPageInner() {
                         }`}>{activeCount}</span>
                       ) : null;
                     })()}
+                  </button>
+                  <button onClick={() => setRightPanelTab('cancelled')}
+                    className={`px-3 py-1 rounded text-sm font-medium ${rightPanelTab === 'cancelled' ? 'bg-red-900 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}>
+                    Cancelled / Dismissed
+                    <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded bg-red-900/40 text-red-200">{dispatches.filter(isCancelledDispatchCard).length}</span>
                   </button>
                   <button
                     onClick={() => setRightPanelTab('completed')}
@@ -4217,6 +4224,16 @@ function DispatchPageInner() {
                     operatorWells={allOperatorWells}
                     nowMs={asOfMs}
                   />
+                )}
+                {rightPanelTab === 'cancelled' && (
+                  dispatches.some(isCancelledDispatchCard) ? <ActiveDispatchPanel
+                    key="cancelled-history"
+                    dispatches={dispatches.filter(isCancelledDispatchCard)}
+                    cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer}
+                    onEditServiceWork={openEditSwModal} onReassignDeclined={openReassignModal}
+                    onDismissDeclined={dismissDeclinedDispatch} activeJobsReady={false}
+                    wells={wells} operatorWells={allOperatorWells} nowMs={asOfMs}
+                  /> : <div className="text-center text-gray-500 py-8">No cancelled, declined or dismissed jobs</div>
                 )}
                 {rightPanelTab === 'completed' && (
                   <CompletedJobsPanel
@@ -5259,8 +5276,8 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   }
 
   // Separate declined/cancelled jobs from active (completed filtered out before passing to this component)
-  const declinedJobs = dispatches.filter(d => d.status === 'declined' || d.status === 'cancelled');
-  const nonDeclined = dispatches.filter(d => d.status !== 'declined' && d.status !== 'cancelled');
+  const declinedJobs = dispatches.filter(isCancelledDispatchCard);
+  const nonDeclined = dispatches.filter(d => !isCancelledDispatchCard(d));
 
   // Unassigned transfers need driver assignment
   const unassigned = nonDeclined.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
@@ -5375,7 +5392,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         <>
           <div className="flex items-center gap-2">
             <div className="h-px bg-red-600/30 flex-1" />
-            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Declined ({declinedJobs.length})</span>
+            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Cancelled / Declined / Dismissed ({declinedJobs.length})</span>
             <div className="h-px bg-red-600/30 flex-1" />
           </div>
           {declinedJobs.map(job => (
@@ -5416,9 +5433,10 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                 {/* Row 3: Status & action badges below well name and destination */}
                 <div className="flex flex-wrap items-center justify-between gap-1.5 mt-2 pt-1.5 border-t border-red-900/40">
                   <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">
-                    {job.status === 'cancelled' ? 'CANCELLED' : 'DECLINED'}
+                    {job.status.toUpperCase()}
                   </span>
                   <div className="flex items-center gap-2 ml-auto">
+                    {job.status !== 'dismissed' && <>
                     <button
                       onClick={() => onReassignDeclined?.(job)}
                       className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
@@ -5431,6 +5449,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                       className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
                       title="Accept decline and dismiss"
                     >Dismiss</button>
+                    </>}
                   </div>
                 </div>
               </div>
