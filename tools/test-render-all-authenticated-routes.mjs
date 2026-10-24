@@ -15,6 +15,7 @@ export const AUTH_ROUTES = [
   '/dispatch',
   '/driverlogs',
   '/equipment',
+  '/job-history',
   '/login',
   '/mobile',
   '/payroll',
@@ -77,6 +78,9 @@ export async function renderAllAuthenticatedRoutes() {
     throw new Error('FAIL: Required out/photo-review/index.html is missing from build output.');
   }
   console.log('✓ Verified: out/photo-review/index.html exists in build output.');
+  if (!fs.existsSync(path.join(outDir, 'job-history', 'index.html'))) {
+    throw new Error('FAIL: Required out/job-history/index.html is missing from build output.');
+  }
 
   const server = createStaticServer(outDir);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

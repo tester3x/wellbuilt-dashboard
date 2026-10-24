@@ -4131,7 +4131,7 @@ function DispatchPageInner() {
                   </button>
                   <button onClick={() => setRightPanelTab('cancelled')}
                     className={`px-3 py-1 rounded text-sm font-medium ${rightPanelTab === 'cancelled' ? 'bg-red-900 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}>
-                    Cancelled / Dismissed
+                    Needs Review
                     <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded bg-red-900/40 text-red-200">{dispatches.filter(isCancelledDispatchCard).length}</span>
                   </button>
                   <button
@@ -4166,6 +4166,7 @@ function DispatchPageInner() {
                   </button>
                 </div>
                 <div className="flex items-center gap-1.5">
+                  <a href="/job-history" className="px-2.5 py-1 text-xs text-cyan-300 hover:text-white hover:underline">Job History</a>
                   <button
                     type="button"
                     onClick={() => { if (!jobsDetached) setWorkspaceTab('build'); dockJobs(!jobsDetached); }}
@@ -4227,13 +4228,13 @@ function DispatchPageInner() {
                 )}
                 {rightPanelTab === 'cancelled' && (
                   dispatches.some(isCancelledDispatchCard) ? <ActiveDispatchPanel
-                    key="cancelled-history"
+                    key="needs-review"
                     dispatches={dispatches.filter(isCancelledDispatchCard)}
                     cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer}
                     onEditServiceWork={openEditSwModal} onReassignDeclined={openReassignModal}
                     onDismissDeclined={dismissDeclinedDispatch} activeJobsReady={false}
                     wells={wells} operatorWells={allOperatorWells} nowMs={asOfMs}
-                  /> : <div className="text-center text-gray-500 py-8">No cancelled or declined jobs awaiting dispatch review</div>
+                  /> : <div className="text-center text-gray-500 py-8">No jobs awaiting a dispatch decision</div>
                 )}
                 {rightPanelTab === 'completed' && (
                   <CompletedJobsPanel
