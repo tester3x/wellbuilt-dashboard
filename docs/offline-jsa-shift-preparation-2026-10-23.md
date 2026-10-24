@@ -47,3 +47,10 @@ audit. No direct operational shift write is used by the test operator.
 Suite96 will call this endpoint then use the normal signed durable ETC end.
 Physical test cancellation/HOS cleanup remains pending at this checkpoint.
 No rules, Hosting or unrelated functions were deployed.
+
+Physical cleanup subsequently passed through Suite96 on S24: the driver-authenticated
+operation consumed its protected exact-session authorization, produced the standard
+cancellation audit retaining original login and three closed test fixtures,
+advanced the authority and removed the active test period. No inspection exists.
+The normal signed ETC end completed; independent ETC UI showed OFF SHIFT and
+START SHIFT. Operational records were changed only by that verified endpoint.
