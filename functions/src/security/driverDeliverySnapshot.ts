@@ -4,7 +4,7 @@ import {loadCanonicalDriverAuthority,productionCanonicalDriverReaders} from './c
 import {checkRateLimit} from './rateLimit';
 
 const FIELDS={
- invoice:['companyId','driverId','driverHash','photos','canonicalJobId','packetId','status','dispatchId'],
+ invoice:['companyId','driverId','driverHash','photos','canonicalJobId','packetId','status','dispatchId','haulGroupId'],
  ticket:['companyId','driverId','driverHash','invoiceDocId','ticketNumber','bbls','finishedTime'],
  dispatch:['companyId','driverId','driverHash','status','driverStage','driverDest','invoiceNumber','hauledTo','driverLat','driverLng','driverGpsAt','stageUpdatedAt','loadCount','loadsCompleted','invoiceDocId'],
 } as const;

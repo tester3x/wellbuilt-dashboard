@@ -11,6 +11,7 @@ import {offlineDefaultAssessment} from './jsaOfflineDefault';
 import {offlineHash,validateOfflineEvent,type OfflineGrant,type OfflineEvent,type OfflineAssessment} from './jsaOfflineCore';
 import {jsaNumber} from './jsaNumber';
 import {checkRateLimit} from '../security/rateLimit';
+import {projectOfflineLocations} from './jsaOfflineLocations';
 
 /** New endpoint: does not replace or repackage the live composed Start callable. */
 export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enforceAppCheck:false},async request=>{
@@ -20,7 +21,7 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
  if(!member?.active||member.companyId!==p.companyId||member.driverId!==p.driverId)throw new https.HttpsError('permission-denied','membership_changed');
  if(!await checkRateLimit({bucket:'jsa_offline_shift',key:p.uid,limit:180,windowMs:600000}))throw new https.HttpsError('resource-exhausted','retry_later');
  const b=request.data,db=admin.firestore();
- if(!b||b.version!==1||!['prepare','commit'].includes(b.operation))throw new https.HttpsError('invalid-argument','invalid_offline_operation');
+ if(!b||b.version!==1||!['prepare','commit','project_locations'].includes(b.operation))throw new https.HttpsError('invalid-argument','invalid_offline_operation');
  if(b.operation==='prepare'){
   if(Object.keys(b).some(k=>!['version','operation'].includes(k)))throw new https.HttpsError('invalid-argument','invalid_prepare');
   const cfg=(await db.doc('companies/'+p.companyId).get()).data()||{};
@@ -65,6 +66,13 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
  }
  if(Object.keys(b).some(k=>!['version','operation','event'].includes(k))||!b.event||typeof b.event.grantId!=='string'||!/^[a-f0-9]{64}$/.test(b.event.grantId)||!/^[A-Za-z0-9_-]{43}$/.test(b.event.id))throw new https.HttpsError('invalid-argument','invalid_commit');
  const e=b.event as OfflineEvent;
+ if(b.operation==='project_locations'){
+  if(typeof e.jobRef!=='string'||!/^[A-Za-z0-9._-]{1,128}$/.test(e.jobRef))throw new https.HttpsError('invalid-argument','invalid_job_ref');
+  try{return await projectOfflineLocations(db,p,e);}catch(error){
+   if(String((error as Error)?.message).startsWith('location_projection_'))throw new https.HttpsError('permission-denied','location_evidence_unconfirmed');
+   throw new https.HttpsError('unavailable','Location update remains pending.');
+  }
+ }
  try{return await db.runTransaction(async tx=>{
   const grant=(await tx.get(db.doc('jsa_offline_grants/'+e.grantId))).data() as OfflineGrant|undefined;
   if(!grant||grant.companyId!==p.companyId||grant.driverId!==p.driverId)throw new https.HttpsError('permission-denied','grant_owner');
