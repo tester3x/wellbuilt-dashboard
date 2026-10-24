@@ -4149,3 +4149,4 @@ export { reportDriverSyncAlert, adminListSyncAlerts } from './security/officeSyn
 
 export {jsaOfflineShift} from './jsaReceipt/jsaOfflineCallable';
 export {getDriverDeliverySnapshot} from './security/driverDeliverySnapshot';
+export {cancelAuthorizedSoftwareTestShift} from './security/cancelSoftwareTestShift';
