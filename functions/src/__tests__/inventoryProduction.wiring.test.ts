@@ -25,7 +25,7 @@ test('actual AFR entry point includes the current pull before it is persisted',a
 test('delete/rebuild entry point reads canonical historical and edited observations',async()=>{
  const f=fixture('inventory_balance');f.records.c={...p(6,'c'),wasEdited:true};f.records.b.historicalOnly=true;
  expect(await f.calculate('Example',0)).toBeCloseTo(120/1480);
- delete f.records.b;expect(await f.calculate('Example',0)).toBe(0);
+ delete f.records.b;expect(await f.calculate('Example',0)).toBeCloseTo(120/740);
 });
 test('unconfigured wells retain the legacy AFR route',async()=>{
  const f=fixture();expect(await f.calculate('Example',0.07)).toBe(0.07);

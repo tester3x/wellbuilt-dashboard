@@ -35,11 +35,35 @@ describe('completed-load inventory balance',()=>{
   {source:'whatsapp_watchdog',watchdogProvenance:{principalId:'laptop-watchdog-v2',barrels:{status:'provisional'}}}])('cannot bridge an unverified barrier %j',extra=>{
   expect(rate(history(reading(0),reading(3,6,185,extra),reading(6)),120,start+6*3600000)).toBeNull();
  });
- test('requires a six-hour window, latest endpoint, and safe calibration',()=>{
-  const h=history(reading(0),reading(1.75),reading(3.5));
-  expect(rate(h,120,start+3.5*3600000)).toBeNull();
-  expect(rate(h,0,start+3.5*3600000)).toBeNull();
+ test('requires a three-hour window, latest endpoint, and safe calibration',()=>{
+  const h=history(reading(0),reading(1),reading(2));
+  expect(rate(h,120,start+2*3600000)).toBeNull();
+  expect(rate(h,0,start+2*3600000)).toBeNull();
   expect(rate(h,120,start+7*3600000)).toBeNull();
+ });
+ test('two completed-load endpoints produce a valid partial-day balance',()=>{
+  const r=rate(history(reading(0),reading(4.75,5.9,165)),67.2,start+4.75*3600000)!;
+  expect(r.loads).toBe(1);expect(r.hours).toBe(4.75);
+  expect(r.bblsDay).toBe(Math.round((165-6.72)*24/4.75));
+ });
+ const estimated=(hour:number,anchorHour:number,intervalMinutes=60)=>reading(hour,6,165,{source:'whatsapp_watchdog',watchdogProvenance:{
+  principalId:'laptop-watchdog-v2',reportedBottomFeet:6,barrels:{status:'confirmed'},
+  timeEstimate:{status:'estimated',method:'back_to_back_average',sampleCount:5,intervalMinutes,anchorPostedAt:new Date(start+anchorHour*3600000).toISOString()},
+ }});
+ test('bounded interior timing does not change a confirmed total between exact endpoints',()=>{
+  const a=history(reading(0),estimated(8,10),reading(10,6,165));
+  const r=rate(a,120,start+10*3600000)!;
+  expect(r.withdrawn).toBe(330);expect(r.bblsDay).toBe(792);expect(r.estimatedInteriorLoads).toBe(1);
+  a.p1=estimated(9,10);expect(rate(a,120,start+10*3600000)).toEqual(r);
+ });
+ test('estimated endpoints, unbounded timing and quantities remain excluded',()=>{
+  expect(rate(history(estimated(0,1),reading(4)),120,start+4*3600000)).toBeNull();
+  expect(rate(history(reading(0),estimated(4,5)),120,start+4*3600000)).toBeNull();
+  expect(rate(history(reading(0),estimated(2,3),reading(4)),120,start+4*3600000)).toBeNull(); // declared range crosses start
+  const bad:any=estimated(8,10);bad.watchdogProvenance.barrels.status='provisional';
+  expect(rate(history(reading(0),bad,reading(10)),120,start+10*3600000)).toBeNull();
+  delete bad.watchdogProvenance.barrels;delete bad.watchdogProvenance.timeEstimate.anchorPostedAt;
+  expect(rate(history(reading(0),bad,reading(10)),120,start+10*3600000)).toBeNull();
  });
  test('order, future data and history view copies cannot alter the result',()=>{
   const h=history(reading(0),reading(3),reading(6));const baseline=rate(h,120,start+6*3600000);
