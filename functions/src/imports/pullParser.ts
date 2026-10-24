@@ -176,8 +176,10 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       const explicit = inlineTime || lines.find((line, index) => index >= (levelOnly ? 1 : pair ? (bareAmount ? 2 : 1) : (unlabelled || (labelled && bottom)) ? (bareAmount ? 3 : 2) : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
       if (explicit && clock(explicit)) {
         let resolved = explicit;
-        // Bare 1:30 can mean AM or PM. Choose nearest post only within two hours.
-        if (!/[ap]/i.test(explicit) && Number(clock(explicit)?.hour) < 12) {
+        // Bare 12:38 is ambiguous too: midnight is 12 AM, not 0 AM. A bare
+        // 00:38 remains an unambiguous 24-hour clock. Use the same two-hour guard.
+        const statedHour=Number(clock(explicit)?.hour);
+        if (!/[ap]/i.test(explicit) && statedHour >= 1 && statedHour <= 12) {
           const choices = [explicit + ' AM', explicit + ' PM'].map(time => {
             try { return { time, difference: Math.abs(Date.parse(chatTimestamp(message.date, time, options.timeZone, options.dateOrder)) - Date.parse(postedAt)) }; } catch { return { time, difference: Infinity }; }
           }).sort((a, b) => a.difference - b.difference);
