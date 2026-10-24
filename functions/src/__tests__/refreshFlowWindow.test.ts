@@ -1,7 +1,7 @@
 import {refreshFlowWindow} from '../refreshFlowWindow';
-function mock(initial:any){const values=new Map<string,any>(Object.entries(initial));const changes:any[]=[];
- const ref=(path=''):any=>({once:async()=>({val:()=>values.get(path)}),orderByChild:()=>({equalTo:()=>ref(path)}),update:async(p:any)=>{changes.push({path,p});if(path)values.set(path,{...values.get(path),...p});},transaction:async(fn:any)=>{const v=fn(values.get(path));if(v!==undefined)values.set(path,v);return {committed:v!==undefined};}});
- return {db:{ref},values,changes};}
+function mock(initial:any){const values=new Map<string,any>(Object.entries(initial));const changes:any[]=[];const listening=new Set<string>();
+ const ref=(path=''):any=>({on:()=>listening.add(path),off:()=>listening.delete(path),once:async()=>({val:()=>values.get(path)}),orderByChild:()=>({equalTo:()=>ref(path)}),update:async(p:any)=>{changes.push({path,p});if(path)values.set(path,{...values.get(path),...p});},transaction:async(fn:any)=>{const v=fn(listening.has(path)?values.get(path):null);if(v!==undefined)values.set(path,v);return {committed:v!==undefined};}});
+ return {db:{ref},values,changes,listening};}
 const p=(id:string,h:number,t:number,b:number)=>({packetId:id,requestType:'pull',dateTimeUTC:new Date(Date.UTC(2026,0,1)+h*3600000).toISOString(),tankTopInches:t,tankAfterInches:b,bblsTaken:170});
 test('refresh updates derived history and matching latest response without changing ownership or measurements',async()=>{
  const last=p('b',24,78,44);const m=mock({'well_config/Example':{flowWindowMinimumRecoveryInches:6,bblPerFoot:60,pullBbls:140,allowedBottom:1.25},'packets/processed':{a:p('a',0,100,66),b:last},'packets/outgoing':{response:{lastPullPacketId:'b'}},'packets/outgoing/response':{lastPullPacketId:'b',lastPullDateTimeUTC:last.dateTimeUTC,lastPullBottomLevel:'3\'8"',lastPullDriverId:'owner',wellDown:false},'wells/Example/status':{lastPull:{packetId:'b'},isDown:false,current:{levelInches:44},calculated:{}}});
@@ -25,5 +25,6 @@ test('inventory mode refreshes edit/deletion projections without rewriting origi
  expect(m.values.get('packets/outgoing/response').lastPullDriverId).toBe('owner');
  expect(m.values.get('wells/Example/status').current.levelInches).toBe(72);
  expect(JSON.stringify(records)).toBe(before);
+ expect(m.listening.size).toBe(0);
  expect(m.changes.some(c=>!c.path||c.path.startsWith('packets/processed'))).toBe(false);
 });
