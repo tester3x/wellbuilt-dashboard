@@ -90,3 +90,17 @@ retained valid estimates and existing access; actual withdrawal persistence has
 its user was active. No signed inspection, job, shift or HOS test was created.
 Final Firebase receiver health remained connected/Ready with eight channels,
 zero pending/review backlog and no reported error. Raw evidence stays private.
+
+
+## ZFold acceptance completed
+
+After the user reopened Mobile and authorized continuing, foreground-guarded,
+read-only checks confirmed that a previously cached withdrawn ON estimate now
+falls back to AFR without an ON label in either toggle position. A second well
+with no supported ON estimate also displays AFR without a stale label. A valid
+corrected ON estimate remains available and switches correctly to the daily AFR
+view. The explicitly configured continuous-hauling well uses AFR in both views,
+without an ON label, and received a fresh real pull during verification.
+The original well selection and ON toggle state were restored. No operational
+job, level, inspection, shift or HOS record was created or edited by these checks.
+Screenshots and exact customer values remain outside Git.
