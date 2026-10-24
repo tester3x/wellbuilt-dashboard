@@ -8,6 +8,7 @@ export interface PickerDriver {
   key: string;
   displayName: string;
   legalName?: string;
+  loginAlias?: string;
   shiftPlan?: Record<string, PlannedShift>;
 }
 
@@ -21,11 +22,14 @@ interface Props {
   onShiftChange: (driver: PickerDriver, date: string, shift: PlannedShift) => Promise<void>;
   shiftDot: (driver: PickerDriver) => { symbol: string; title: string };
   readOnlyShifts?: boolean;
+  disabledSelection?: boolean;
+  onSelectMany?: (keys: string[]) => void;
 }
 
 /** One job selection control and one dated shift control for all Dispatch builders. */
-export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selection, shiftDate, onShiftDateChange, onShiftChange, shiftDot, readOnlyShifts }: Props) {
+export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selection, shiftDate, onShiftDateChange, onShiftChange, shiftDot, readOnlyShifts, disabledSelection, onSelectMany }: Props) {
   const [filter, setFilter] = useState<'both' | 'day' | 'night'>('both');
+  const [search, setSearch] = useState('');
   const pickerId = useId();
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -45,7 +49,7 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
     finally { setSavingKey(null); }
   }
 
-  return <div className="rounded border border-gray-700 bg-gray-900/70 text-xs">
+  return <div className="flex flex-1 flex-col rounded border border-gray-700 bg-gray-900/70 text-xs">
     <div className="flex flex-wrap items-center gap-2 border-b border-gray-700 p-2">
       <label className="text-gray-400">Shift date <input type="date" value={shiftDate} onChange={e => onShiftDateChange(e.target.value)} className="ml-1 rounded border border-gray-600 bg-gray-800 px-1 py-1 text-white" /></label>
       <div className="ml-auto flex gap-1" aria-label="Show shifts">
@@ -53,10 +57,23 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
           className={`rounded px-2 py-1 capitalize ${filter === value ? 'bg-cyan-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>{value}</button>)}
       </div>
     </div>
+    {selection === 'multiple' && onSelectMany && <div className="flex flex-wrap items-center gap-2 border-b border-gray-700 p-2">
+      <input type="search" aria-label="Search drivers" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search drivers"
+        className="min-w-0 flex-1 rounded border border-gray-600 bg-gray-800 px-2 py-1 text-white" />
+      <button type="button" disabled={disabledSelection} onClick={() => {
+        const visible = drivers.filter(driver => (filter === 'both' || driver.shiftPlan?.[shiftDate] === filter) &&
+          `${driver.displayName} ${driver.legalName || ''} ${driver.loginAlias || ''}`.toLowerCase().includes(search.trim().toLowerCase()));
+        onSelectMany([...new Set([...selectedKeys, ...visible.map(driver => driver.key)])]);
+      }} className="rounded bg-cyan-900 px-2 py-1 text-cyan-200 disabled:opacity-40">Select shown</button>
+      <button type="button" disabled={disabledSelection || selectedKeys.size === 0} onClick={() => onSelectMany([])}
+        className="rounded bg-gray-800 px-2 py-1 text-gray-300 disabled:opacity-40">Clear selection</button>
+      <span className="text-gray-400">{selectedKeys.size} selected</span>
+    </div>}
     {error && <div role="alert" className="px-2 py-1 text-red-300">{error}</div>}
-    <div className="max-h-52 overflow-y-auto overscroll-contain">
+    <div className="min-h-52 max-h-[min(55vh,640px)] flex-1 overflow-y-auto overscroll-contain">
       {groups.filter(group => filter === 'both' || group.shift === filter).map(group => {
-        const rows = drivers.filter(driver => (driver.shiftPlan?.[shiftDate] || 'unassigned') === group.shift)
+        const rows = drivers.filter(driver => (driver.shiftPlan?.[shiftDate] || 'unassigned') === group.shift &&
+            `${driver.displayName} ${driver.legalName || ''} ${driver.loginAlias || ''}`.toLowerCase().includes(search.trim().toLowerCase()))
           .sort((a, b) => (a.legalName || a.displayName).localeCompare(b.legalName || b.displayName));
         if (!rows.length) return null;
         return <div key={group.shift} className={`border-b last:border-b-0 ${group.color}`}>
@@ -67,7 +84,7 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
             return <div key={driver.key} className="flex items-center gap-2 border-t border-gray-700/60 px-2 py-1.5 text-gray-100">
               <input type={selection === 'single' ? 'radio' : 'checkbox'} name={selection === 'single' ? pickerId : undefined}
                 aria-label={`Choose ${driver.legalName || driver.displayName} for job`}
-                checked={selectedKeys.has(driver.key)} onChange={() => onSelect(driver.key)} className="shrink-0" />
+                checked={selectedKeys.has(driver.key)} disabled={disabledSelection} onChange={() => onSelect(driver.key)} className="shrink-0" />
               <span role="img" aria-label={dot.title} title={dot.title}>{dot.symbol}</span>
               <span className="min-w-0 flex-1 truncate">{driver.legalName || driver.displayName}</span>
               <div className="flex shrink-0 items-center gap-0.5 rounded border border-gray-600 bg-gray-800 p-0.5" aria-label={`Planned shift for ${driver.legalName || driver.displayName}`}>

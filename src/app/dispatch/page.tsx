@@ -7,6 +7,7 @@ import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { isActiveDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
+import { WaterOrderBuilder } from '@/components/WaterOrderBuilder';
 import { DispatchDriverPicker, type PlannedShift } from '@/components/DispatchDriverPicker';
 import { staffWriteDriverRoster } from '@/lib/staffWriteDriverRoster';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
@@ -540,15 +541,15 @@ function DispatchPageInner() {
   // Add Pull modal state (shared component handles its own form state)
   const [showAddPullModal, setShowAddPullModal] = useState(false);
 
-  // Builder tab state (PW / SW / Projects) — persists across page visits
-  const [builderTab, setBuilderTab] = useState<'pw' | 'sw' | 'projects'>(() => {
+  // Builder tab state — persists across page visits
+  const [builderTab, setBuilderTab] = useState<'pw' | 'sw' | 'water' | 'projects'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('dispatch_builder_tab');
-      if (saved === 'pw' || saved === 'sw' || saved === 'projects') return saved;
+      if (saved === 'pw' || saved === 'sw' || saved === 'water' || saved === 'projects') return saved;
     }
     return 'pw';
   });
-  const handleBuilderTabChange = useCallback((tab: 'pw' | 'sw' | 'projects') => {
+  const handleBuilderTabChange = useCallback((tab: 'pw' | 'sw' | 'water' | 'projects') => {
     setBuilderTab(tab);
     localStorage.setItem('dispatch_builder_tab', tab);
   }, []);
@@ -2863,13 +2864,14 @@ function DispatchPageInner() {
 
             {/* ── Tabbed Dispatch Builder (PW / SW / Projects) ── */}
             <div className={`dispatch-builder bg-gray-800 border rounded-lg p-4 flex flex-col ${workspaceTab !== 'build' ? 'is-inactive ' : ''}${
-              builderTab === 'pw' ? 'border-blue-600/40' : builderTab === 'sw' ? 'border-purple-600/40' : 'border-emerald-600/40'
+              builderTab === 'pw' ? 'border-blue-600/40' : builderTab === 'sw' ? 'border-purple-600/40' : builderTab === 'water' ? 'border-cyan-600/40' : 'border-emerald-600/40'
             }`}>
               {/* Builder tab bar + Add Pull */}
               <div className="flex items-center gap-1 mb-3 border-b border-gray-700 pb-2">
                 {([
                   { key: 'pw' as const, label: 'PW', active: 'bg-blue-600/30 text-blue-400' },
                   { key: 'sw' as const, label: 'SW', active: 'bg-purple-600/30 text-purple-400' },
+                  { key: 'water' as const, label: 'Water Orders', active: 'bg-cyan-600/30 text-cyan-400' },
                   { key: 'projects' as const, label: 'Projects', active: 'bg-emerald-600/30 text-emerald-400' },
                 ] as const).map(tab => (
                   <button key={tab.key} onClick={() => { if (demoTourRunning.current) stopDemoDispatchTour(); handleBuilderTabChange(tab.key); }}
@@ -2921,6 +2923,13 @@ function DispatchPageInner() {
               )}
 
               {/* ── PW Tab ── */}
+              {builderTab === 'water' && <WaterOrderBuilder key={`${viewedCompanyId}:${user?.uid || ''}`}
+                companyId={viewedCompanyId} userId={user?.uid || ''} wells={wells} drivers={drivers} jobs={dispatches}
+                shiftForDriver={driverShiftDot}
+                shiftDate={builderShiftDate} onShiftDateChange={setBuilderShiftDate}
+                onShiftChange={updateDriverShiftPlan} readOnlyShifts={user?.role === 'demo_viewer'}
+                ready={!dataLoading && !driversLoading && dispatchesLoaded && !statusUnavailable && !readErrors.wells && !readErrors.dispatches}
+                canWrite={canCreateDispatch} createDispatch={staffCreateDispatch} />}
               {builderTab === 'pw' && (
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
@@ -3012,14 +3021,12 @@ function DispatchPageInner() {
                       })()}
                     </div>
                   </div>
-                  {/* Spacer pushes driver+ to bottom */}
-                  <div className="flex-1" />
                   {/* Bottom: Driver, Disposal, Loads+Notes, Dispatch */}
-                  <div className="space-y-2">
+                  <div className="flex-1 flex flex-col gap-2">
                     {/* Driver */}
-                    <div>
+                    <div className="flex-1 flex flex-col">
                       <label className="block text-xs text-gray-400 mb-1">Driver</label>
-                      <div data-demo-builder-target="driver">
+                      <div data-demo-builder-target="driver" className="flex-1 flex flex-col min-h-0">
                         <DispatchDriverPicker drivers={drivers} selection="single"
                           selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash}
                           shiftDate={builderShiftDate} onShiftDateChange={setBuilderShiftDate}
