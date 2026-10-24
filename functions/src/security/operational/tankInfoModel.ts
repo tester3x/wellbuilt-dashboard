@@ -8,7 +8,7 @@ export function tankInfoAuthority(profile: Row, well: Row, driverId: string, com
   const admin = profile.isAdmin === true || profile.role === 'admin' || (Array.isArray(profile.roles) && profile.roles.includes('admin'));
   const scope = evaluateWbmWellScope(profile.assignedRoutes, profile.assignedWells);
   const canView = wellBelongsToDriverCompany(well, companyId)
-    && (admin || profile.primaryAllRoutes === true || (scope.ok && wellMatchesWbmScope(well.wellName || '', well, scope)));
+    && (admin || (scope.ok && wellMatchesWbmScope(well.wellName || '', well, scope)));
   const primary = profile.primaryAllRoutes === true || (typeof well.route === 'string' && Array.isArray(profile.primaryRoutes)
     && profile.primaryRoutes.includes(well.route) && Array.isArray(profile.assignedRoutes)
     && profile.assignedRoutes.includes(well.route));

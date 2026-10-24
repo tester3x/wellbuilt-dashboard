@@ -11,7 +11,9 @@ test('primary designation grants editing only on that route; fill-in assignments
   expect(tankInfoAuthority({ ...driver, primaryRoutes: [] }, well, 'fill-in', 'company-a').canEdit).toBe(false);
 });
 test('global primary and company admin can edit, but not across companies or as viewer', () => {
-  expect(tankInfoAuthority({ ...driver, primaryAllRoutes: true }, { ...well, route: 'Future route' }, 'driver-a', 'company-a').canEdit).toBe(true);
+  expect(tankInfoAuthority({ ...driver, primaryAllRoutes: true }, { ...well, route: 'Future route' }, 'driver-a', 'company-a').canView).toBe(false);
+  expect(tankInfoAuthority({ ...driver, assignedRoutes: ['Future route'], primaryAllRoutes: true },
+    { ...well, route: 'Future route' }, 'driver-a', 'company-a').canEdit).toBe(true);
   expect(tankInfoAuthority({ ...driver, isAdmin: true }, well, 'admin', 'company-a').canEdit).toBe(true);
   expect(tankInfoAuthority({ ...driver, isAdmin: true }, well, 'admin', 'other-company').canEdit).toBe(false);
   expect(tankInfoAuthority({ ...driver, isViewer: true }, well, 'viewer', 'company-a').canEdit).toBe(false);
