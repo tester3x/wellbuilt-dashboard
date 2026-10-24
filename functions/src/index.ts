@@ -1,3 +1,4 @@
+import {calculateInventoryProduction} from './inventoryProduction';
 import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecision';
 import {calculateOvernightProduction, recordedBottomFeet} from './overnightProduction';
 import { resolveTankBblPerFoot } from './tankCalibration';
@@ -844,7 +845,7 @@ function filterAnomalies(flowRates: number[]): number[] {
 // Alpha = 0.4 gives ~60% weight to recent pulls while smoothing noise.
 const EMA_ALPHA = 0.4;
 
-async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<number> {
+async function calculateAFR(wellName: string, newFlowRateDays: number, current?: Record<string, any>): Promise<number> {
 
   // Get recent processed packets for this well
   // NOTE: Don't use limitToLast() - Firebase sorts by key alphabetically,
@@ -857,6 +858,11 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     .once('value');
 
   const flowConfig=(await db.ref('well_config/'+wellName).once('value')).val()||{};
+  if(flowConfig.productionRateMode==='inventory_balance') {
+    const records={...(snapshot.val()||{}),...(current?{[current.packetId]:current}:{})};
+    const at=current?Date.parse(current.dateTimeUTC):Math.max(...Object.values(records).map((p:any)=>Date.parse(p.dateTimeUTC||'')).filter(t=>Number.isFinite(t)&&t<=Date.now()));
+    return calculateInventoryProduction(records,resolveTankBblPerFoot(flowConfig),at)?.daysPerFoot||0;
+  }
   const windowed=effectiveFlow(snapshot.val()||{},flowConfig);
   if(windowed)return windowed.averageDays;
 
@@ -1199,7 +1205,7 @@ export const processIncomingPull = functionsV1.database
       ? await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value') : null;
     const windowed=flowHistorySnap&&!isProvisionalPull(data)?effectiveFlow({...flowHistorySnap.val(),[packetId]:{...data,packetId,tankTopInches,tankAfterInches,wellDown:nextIsDown}},config):null;
     if(windowed){const sample=windowed.results.find(r=>r.packetId===packetId);flowRateDays=sample?.flowRateDays||0;flowRate=flowRateDays>0?daysToHMMSS(flowRateDays):'';recoveryInches=sample?.recoveryInches||0;timeDifDays=sample?.timeDifDays||0;timeDif=timeDifDays>0?daysToHMM(timeDifDays):'';}
-    const afr = isProvisionalPull(data)?(Number(config.avgFlowRateMinutes)/1440||await calculateAFR(wellName,0)):(windowed?windowed.averageDays:await calculateAFR(wellName, flowRateDays));
+    const afr = isProvisionalPull(data)?(Number(config.avgFlowRateMinutes)/1440||await calculateAFR(wellName,0)):(windowed&&config.productionRateMode!=='inventory_balance'?windowed.averageDays:await calculateAFR(wellName, flowRateDays, {...data,packetId,tankAfterInches,wellDown:nextIsDown}));
 
     // Calculate window-averaged and overnight bbls/day
     // bblPerFoot is the configured total active bank calibration.

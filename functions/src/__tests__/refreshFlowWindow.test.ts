@@ -11,3 +11,19 @@ test('disabled well does not write; concurrent newer latest response is not over
  const off=mock({'well_config/Example':{}});await refreshFlowWindow(off.db,'Example');expect(off.changes).toHaveLength(0);
  const last=p('b',24,78,44);const m=mock({'well_config/Example':{flowWindowMinimumRecoveryInches:6,bblPerFoot:60},'packets/processed':{a:p('a',0,100,66),b:last},'packets/outgoing':{response:{lastPullPacketId:'b'}},'packets/outgoing/response':{lastPullPacketId:'newer',flowRate:'keep'},'wells/Example/status':{lastPull:{packetId:'newer'},calculated:{flowRate:'keep'}}});await refreshFlowWindow(m.db,'Example');expect(m.values.get('packets/outgoing/response').flowRate).toBe('keep');expect(m.values.get('wells/Example/status').calculated.flowRate).toBe('keep');
 });
+
+test('inventory mode refreshes edit/deletion projections without rewriting original history',async()=>{
+ const records=Object.fromEntries([0,3,6].map((h,i)=>['p'+i,{...p('p'+i,h,84,72),tankLevelFeet:7,bblsTaken:185}]));
+ const last=records.p2;
+ const m=mock({'well_config/Example':{productionRateMode:'inventory_balance',bblPerFoot:120,tanks:6},
+ 'packets/processed':records,'packets/outgoing':{response:{lastPullPacketId:'p2'}},
+ 'packets/outgoing/response':{lastPullPacketId:'p2',lastPullDateTimeUTC:last.dateTimeUTC,lastPullBbls:'185',lastPullDriverId:'owner'},
+ 'wells/Example/status':{lastPull:{packetId:'p2'},current:{levelInches:72},calculated:{}}});
+ const before=JSON.stringify(records);await refreshFlowWindow(m.db,'Example');
+ expect(m.values.get('packets/outgoing/response').bbls24hrs).toBe('1480');
+ expect(m.values.get('wells/Example/status').calculated.bbls24hrs).toBe(1480);
+ expect(m.values.get('packets/outgoing/response').lastPullDriverId).toBe('owner');
+ expect(m.values.get('wells/Example/status').current.levelInches).toBe(72);
+ expect(JSON.stringify(records)).toBe(before);
+ expect(m.changes.some(c=>!c.path||c.path.startsWith('packets/processed'))).toBe(false);
+});

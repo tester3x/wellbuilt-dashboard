@@ -1,11 +1,16 @@
 import {effectiveFlow} from './effectiveFlow';
+import {calculateInventoryProduction} from './inventoryProduction';
+import {resolveTankBblPerFoot} from './tankCalibration';
 const display=(days:number)=>{const s=Math.round(days*86400);return `${Math.floor(s/3600)}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;};
 /** Refresh only derived fields; original measurements, ownership and down state are preserved. */
 export async function refreshFlowWindow(db:any,wellName:string):Promise<void>{
  const cfg=(await db.ref('well_config/'+wellName).once('value')).val()||{};
- if(!cfg.flowWindowMinimumRecoveryInches)return;
+ const inventoryMode=cfg.productionRateMode==='inventory_balance';
+ if(!cfg.flowWindowMinimumRecoveryInches&&!inventoryMode)return;
  const history=(await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value')).val()||{};
- const flow=effectiveFlow(history,cfg);if(!flow)return;
+ const latestTime=Math.max(...Object.values(history).map((p:any)=>Date.parse(p.dateTimeUTC||'')).filter(t=>Number.isFinite(t)&&t<=Date.now()));
+ const inventory=inventoryMode?calculateInventoryProduction(history,resolveTankBblPerFoot(cfg),latestTime):null;
+ const flow=inventoryMode?{averageDays:inventory?.daysPerFoot||0,results:[]}:effectiveFlow(history,cfg);if(!flow)return;
  const updates:any={};
  for(const r of flow.results){const key=Object.keys(history).find(k=>(history[k].packetId||k)===r.packetId);if(!key)continue;for(const [field,value] of Object.entries({flowRateDays:r.flowRateDays,flowRate:r.flowRateDays?display(r.flowRateDays):'',recoveryInches:r.recoveryInches,timeDifDays:r.timeDifDays,flowIntervalAction:r.action}))updates[`packets/processed/${key}/${field}`]=value;}
  if(Object.keys(updates).length)await db.ref().update(updates);
