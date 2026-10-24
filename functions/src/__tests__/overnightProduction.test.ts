@@ -19,6 +19,14 @@ describe('overnight production uses actual bottom and Central civil day', () => 
     expect(rate([a, b], 60, b.timestamp)).toBe(480);
     expect(rate([{...a, bblsTaken: 185}, b], 60, b.timestamp)).toBe(480);
   });
+  test('a short interval cannot turn an unmeasured extra drop into a thousand BBL/day', () => {
+    const a=reading('2026-10-21T04:45:00Z',10,9,185);
+    const b=reading('2026-10-21T06:15:00Z',10,9,185);
+    expect(rate([a,b],120,b.timestamp)).toBe(1920);
+    // Legacy subtraction invents65 BBL of additional recovery over1.5 hours.
+    const reconstructed={...a,bottomLevelFeet:undefined};
+    expect(rate([reconstructed,b],120,b.timestamp)).toBe(2960);
+  });
   test('continuous hauling deliberately publishes no separate ON estimate', () => {
     const a=reading('2026-10-21T04:00:00Z',10,6),b=reading('2026-10-21T13:00:00Z',10,6);
     expect(rate([a,b],60,b.timestamp)).toBe(640);
