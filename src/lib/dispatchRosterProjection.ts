@@ -29,6 +29,7 @@ export interface ProjectedDispatchDriver extends DriverIdentity {
   assignedRoutes?: string[];
   phone?: string;
   onShift?: boolean;
+  shiftPlan?: Record<string, 'day' | 'night' | 'off'>;
 }
 
 export type CatalogInput = {
@@ -41,6 +42,12 @@ const uniq = (a: string[]): string[] => [...new Set(a.filter(Boolean))];
 
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+function shiftPlan(v: unknown): Record<string, 'day' | 'night' | 'off'> {
+  return Object.fromEntries(Object.entries(asRecord(v)).filter(([date, shift]) =>
+    /^\d{4}-\d{2}-\d{2}$/.test(date) && (shift === 'day' || shift === 'night' || shift === 'off'),
+  )) as Record<string, 'day' | 'night' | 'off'>;
 }
 
 /** Flatten flat or legacy-nested approved rows. */
@@ -106,6 +113,7 @@ export function projectDispatchDriverRoster(
         ? (row.assignedRoutes as unknown[]).map(t).filter(Boolean)
         : [],
       phone: t(row.phone) || t(asRecord(row.profile).phone) || '',
+      shiftPlan: shiftPlan(row.shiftPlan),
     };
 
     driverMap.set(primaryKey, driver);
@@ -139,6 +147,7 @@ export function projectDispatchDriverRoster(
       }
       if (!existing.companyId && prof.companyId) existing.companyId = t(prof.companyId);
       if (!existing.companyName && prof.companyName) existing.companyName = t(prof.companyName);
+      existing.shiftPlan = { ...existing.shiftPlan, ...shiftPlan(prof.shiftPlan) };
       continue;
     }
 
@@ -159,6 +168,7 @@ export function projectDispatchDriverRoster(
         ? (prof.assignedRoutes as unknown[]).map(t).filter(Boolean)
         : [],
       phone: t(prof.phone) || '',
+      shiftPlan: shiftPlan(prof.shiftPlan),
     };
 
     driverMap.set(profId, newDriver);

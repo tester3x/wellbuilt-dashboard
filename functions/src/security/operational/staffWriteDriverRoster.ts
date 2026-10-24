@@ -18,6 +18,7 @@ export const ROSTER_OPS = Object.freeze([
   'deleteApproved',
   'setAppAdmin',
   'setTier',
+  'setShiftPlan',
 ] as const);
 
 export type RosterOp = (typeof ROSTER_OPS)[number];
@@ -38,6 +39,8 @@ export const ROSTER_REQUEST_KEYS = Object.freeze([
   'assignedRoutes',
   'roles',
   'driverId',
+  'shiftDate',
+  'shift',
 ] as const);
 
 export const ROSTER_FORBIDDEN_KEYS = Object.freeze([
@@ -83,6 +86,8 @@ export type RosterRequest = {
   assignedRoutes: string[] | null;
   roles: string[] | null;
   driverId: string | null;
+  shiftDate: string | null;
+  shift: 'day' | 'night' | 'off' | null;
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -153,6 +158,14 @@ export function parseStaffWriteDriverRoster(raw: unknown): StoreResult<RosterReq
   }
   const driverId = parseKey(raw.driverId, 'driverId');
   if (!driverId.ok) return driverId;
+  const shiftDate = typeof raw.shiftDate === 'string' ? raw.shiftDate.trim() : null;
+  if (raw.op === 'setShiftPlan' && (!shiftDate || !/^\d{4}-\d{2}-\d{2}$/.test(shiftDate)
+    || !Number.isFinite(Date.parse(`${shiftDate}T12:00:00Z`))
+    || new Date(`${shiftDate}T12:00:00Z`).toISOString().slice(0, 10) !== shiftDate)) {
+    return fail('malformed_shift_date', 'shiftDate');
+  }
+  const shift = raw.shift === 'day' || raw.shift === 'night' || raw.shift === 'off' ? raw.shift : null;
+  if (raw.op === 'setShiftPlan' && !shift) return fail('malformed_shift', 'shift');
 
   return {
     ok: true,
@@ -171,6 +184,8 @@ export function parseStaffWriteDriverRoster(raw: unknown): StoreResult<RosterReq
     assignedRoutes,
     roles,
     driverId: driverId.value,
+    shiftDate,
+    shift,
   };
 }
 
@@ -196,6 +211,22 @@ export async function runStaffWriteDriverRoster(input: {
   if (!companyId) return fail('missing_company', 'companyId');
   const req = input.request;
   const path = approvedPath(req);
+
+  if (req.op === 'setShiftPlan') {
+    const profile = req.driverId && input.store.getProfile ? await input.store.getProfile(req.driverId) : null;
+    if (profile) {
+      // A planned shift is a dated profile assignment, independent of the live shift dot.
+      if (profile.companyId !== companyId || !input.store.updateProfile) return fail('cross_company', 'driverId');
+      await input.store.updateProfile(req.driverId!, { [`shiftPlan/${req.shiftDate}`]: req.shift });
+      return { ok: true, op: req.op, path: req.driverId! };
+    }
+    if (!path) return fail('not_found', 'driverId');
+    const approved = await input.store.getApproved(path);
+    if (!approved) return fail('not_found', 'approvedKey');
+    if (approved.companyId !== companyId) return fail('cross_company', 'approvedKey');
+    await input.store.updateApproved(path, { [`shiftPlan/${req.shiftDate}`]: req.shift });
+    return { ok: true, op: req.op, path };
+  }
 
   if (req.op === 'approvePending') {
     if (!req.pendingKey || !req.approvedKey) return fail('missing_field', 'pendingKey');

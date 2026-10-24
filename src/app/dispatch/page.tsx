@@ -7,7 +7,8 @@ import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { isActiveDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
-import { DriverArrivalRecommendations } from '@/components/DriverArrivalRecommendations';
+import { DispatchDriverPicker, type PlannedShift } from '@/components/DispatchDriverPicker';
+import { staffWriteDriverRoster } from '@/lib/staffWriteDriverRoster';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
@@ -101,6 +102,7 @@ interface ApprovedDriver {
   assignedRoutes?: string[];
   phone?: string;        // From profile subpath (WB S settings)
   onShift?: boolean;     // Live shift status from driver_shifts
+  shiftPlan?: Record<string, PlannedShift>;
 }
 
 interface DispatchJob {
@@ -644,7 +646,10 @@ function DispatchPageInner() {
   const [newProjectNotes, setNewProjectNotes] = useState('');
   const [newProjectEndDate, setNewProjectEndDate] = useState('');
   const [newProjectDriverHashes, setNewProjectDriverHashes] = useState<Set<string>>(new Set());
-  const [newProjectDriverShifts, setNewProjectDriverShifts] = useState<Map<string, 'day' | 'night'>>(new Map());
+  const [builderShiftDate, setBuilderShiftDate] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  });
   const [newProjectDriverDisposals, setNewProjectDriverDisposals] = useState<{ [hash: string]: { name: string; lat?: number; lng?: number } }>({});
   const [newProjectJobType, setNewProjectJobType] = useState<'service' | 'pw'>('service');
   const [newProjectServiceType, setNewProjectServiceType] = useState('');
@@ -698,6 +703,14 @@ function DispatchPageInner() {
     loading: shiftLoading,
     error: shiftError,
   }), [shiftResults, shiftResolvedCompany, shiftLoading, shiftError]);
+
+  async function updateDriverShiftPlan(driver: ApprovedDriver, date: string, shift: PlannedShift) {
+    if (user?.role === 'demo_viewer') throw new Error('Demo viewers cannot edit shifts');
+    await staffWriteDriverRoster({ op: 'setShiftPlan', approvedKey: driver.key,
+      driverId: driver.driverId || null, shiftDate: date, shift });
+    setDrivers(previous => previous.map(row => row.key === driver.key && row.companyId === driver.companyId
+      ? { ...row, shiftPlan: { ...row.shiftPlan, [date]: shift } } : row));
+  }
 
   // Persist navigable Well Queue state (view / route / search) into the URL WITHOUT
   // navigating, so a reload restores it. Only applied once auth is resolved and the
@@ -911,14 +924,6 @@ function DispatchPageInner() {
     searchDisposals(q, locationCatalog, locationCatalog.length), q, row => row.well_name,
     searchWellStatus, 15, row => row.kind === 'WELL',
   );
-  const arrivalLocations = useMemo(() => {
-    const rows = [...locationCatalog, ...customCatalogLocations.map(c => ({ well_name: c.locationName, latitude: c.latitude, longitude: c.longitude }))];
-    for (const well of catalogRouteWells) {
-      const linked = allOperatorWells.find(row => row.well_name.toLowerCase() === (well.ndicName || well.wellName).toLowerCase());
-      if (linked) rows.push({ ...linked, well_name: well.wellName });
-    }
-    return rows;
-  }, [locationCatalog, customCatalogLocations, catalogRouteWells, allOperatorWells]);
   const isDemoCompany = viewedCompanyId === 'wellbuilt-demo';
 
   useEffect(() => {
@@ -1936,10 +1941,17 @@ function DispatchPageInner() {
   async function createProject() {
     if (!guardCreateDispatch()) return;
     if (!newProjectName.trim()) return;
+    if (Array.from(newProjectDriverHashes).some(hash => {
+      const shift = drivers.find(driver => driver.key === hash)?.shiftPlan?.[builderShiftDate];
+      return shift !== 'day' && shift !== 'night';
+    })) {
+      setMessage('Set each selected project driver to D or N for the shift date first.');
+      return;
+    }
     setCreatingProject(true);
     try {
       const firestore = getFirestoreDb();
-      const today = new Date().toISOString().slice(0, 10);
+      const today = builderShiftDate;
       // Build initial driver schedule for today
       const schedule: Record<string, string[]> = {};
       if (newProjectDriverHashes.size > 0) {
@@ -1949,7 +1961,7 @@ function DispatchPageInner() {
       const dayHashes: string[] = [];
       const nightHashes: string[] = [];
       for (const hash of newProjectDriverHashes) {
-        const shift = newProjectDriverShifts.get(hash) || 'day';
+        const shift = drivers.find(driver => driver.key === hash)?.shiftPlan?.[builderShiftDate];
         if (shift === 'day') dayHashes.push(hash);
         else nightHashes.push(hash);
       }
@@ -2053,7 +2065,6 @@ function DispatchPageInner() {
           setNewProjectNotes('');
           setNewProjectEndDate('');
           setNewProjectDriverHashes(new Set());
-          setNewProjectDriverShifts(new Map());
           setNewProjectDriverDisposals({});
           setNewProjectJobType('service');
           setNewProjectServiceType('');
@@ -2081,7 +2092,6 @@ function DispatchPageInner() {
     setNewProjectNotes('');
     setNewProjectEndDate('');
     setNewProjectDriverHashes(new Set());
-    setNewProjectDriverShifts(new Map());
     setNewProjectDriverDisposals({});
     setNewProjectJobType('service');
     setNewProjectServiceType('');
@@ -3009,28 +3019,13 @@ function DispatchPageInner() {
                     {/* Driver */}
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">Driver</label>
-                      {assignTarget && selectedWells.size === 0 ? <div data-demo-builder-target="driver">
-                        <DriverArrivalRecommendations key={`${viewedCompanyId || ''}:${assignTarget.ndicName || assignTarget.wellName}`}
-                          picker="single" drivers={drivers} jobs={dispatches} companyId={viewedCompanyId}
-                          targetName={assignTarget.ndicName || assignTarget.wellName} locations={arrivalLocations}
-                          jobsComplete={dispatchesLoaded && !readErrors.dispatches}
-                          selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash} />
-                      </div> : (
-                      <select value={assignDriverHash} onChange={(e) => setAssignDriverHash(e.target.value)} data-demo-builder-target="driver"
-                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500">
-                        <option value="">Select driver...</option>
-                        {assignTarget?.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
-                          <optgroup label={`Route: ${assignTarget.route}`}>
-                            {drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).map(d => (
-                              <option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>
-                            ))}
-                          </optgroup>
-                        )}
-                        <optgroup label="All Drivers">
-                          {drivers.map(d => (<option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>))}
-                        </optgroup>
-                      </select>
-                      )}
+                      <div data-demo-builder-target="driver">
+                        <DispatchDriverPicker drivers={drivers} selection="single"
+                          selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash}
+                          shiftDate={builderShiftDate} onShiftDateChange={setBuilderShiftDate}
+                          onShiftChange={updateDriverShiftPlan} shiftDot={driverShiftDot}
+                          readOnlyShifts={user?.role === 'demo_viewer'} />
+                      </div>
                     </div>
                     {/* Disposal */}
                     <div className="relative" data-demo-builder-target="disposal">
@@ -3521,36 +3516,12 @@ function DispatchPageInner() {
                           Driver{swDriverHashes.size > 1 ? 's' : ''}
                           {swDriverHashes.size > 0 && <span className="ml-1 px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full">{swDriverHashes.size}</span>}
                         </label>
-                        {swWellName.trim() ? (
-                          <DriverArrivalRecommendations picker="multiple" key={`${viewedCompanyId || ''}:${swWellName}`}
-                            drivers={drivers} jobs={dispatches} companyId={viewedCompanyId} targetName={swWellName}
-                            locations={arrivalLocations} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
-                            selectedKeys={swDriverHashes}
-                            onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} />
-                        ) : (
-                        <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto">
-                          {drivers.map(d => {
-                            const checked = swDriverHashes.has(d.key);
-                            const shiftDot = driverShiftDot(d);
-                            const activeJob = dispatches.find(j => j.driverHash === d.key && ['accepted', 'in_progress', 'paused'].includes(j.status));
-                            const stageLabel = activeJob?.driverStage?.replace(/_/g, ' ') || (activeJob ? 'on job' : '');
-                            return (
-                              <button key={d.key} type="button" onClick={() => { setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(d.key)) next.delete(d.key); else next.add(d.key); return next; }); }}
-                                className={`w-full flex items-center gap-2 px-2 py-1 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
-                                <input type="checkbox" checked={checked} readOnly className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-600 pointer-events-none flex-shrink-0" />
-                                <span role="img" aria-label={shiftDot.title} title={shiftDot.title} className="flex-shrink-0">{shiftDot.symbol}</span>
-                                <span className="flex-1 min-w-0 truncate">{operationalDriverName(d)}</span>
-                                {activeJob && (
-                                  <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-900/50 text-blue-400 border border-blue-800">On Job</span>
-                                )}
-                                {stageLabel && (
-                                  <span className="flex-shrink-0 text-[10px] text-gray-500">{stageLabel}</span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                        )}
+                        <DispatchDriverPicker drivers={drivers} selection="multiple"
+                          selectedKeys={swDriverHashes}
+                          onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })}
+                          shiftDate={builderShiftDate} onShiftDateChange={setBuilderShiftDate}
+                          onShiftChange={updateDriverShiftPlan} shiftDot={driverShiftDot}
+                          readOnlyShifts={user?.role === 'demo_viewer'} />
                       </div>
                       {/* Notes */}
                       <div className="flex-1 flex flex-col min-h-0">
@@ -3677,65 +3648,14 @@ function DispatchPageInner() {
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:flex-1">
                   <div className="flex flex-col min-h-0">
-                    <div className="grid grid-cols-2 gap-3 min-h-[220px] md:flex-1">
-                      {/* Day shift column */}
-                      <div className="flex flex-col">
-                        <div className="text-amber-400 text-[10px] font-bold uppercase tracking-wider mb-1">Day Shift ({Array.from(newProjectDriverHashes).filter(h => (newProjectDriverShifts.get(h) || 'day') === 'day').length})</div>
-                        <div className="bg-gray-900 border border-amber-600/20 rounded flex-1 overflow-y-auto">
-                          {drivers.map(d => {
-                            const checked = newProjectDriverHashes.has(d.key);
-                            const shift = newProjectDriverShifts.get(d.key) || 'day';
-                            if (checked && shift !== 'day') return null;
-                            const shiftDot = driverShiftDot(d);
-                            return (
-                              <label key={d.key} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-800 cursor-pointer border-b border-gray-800/50 last:border-0">
-                                <input type="checkbox" checked={checked && shift === 'day'}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setNewProjectDriverHashes(prev => { const next = new Set(prev); next.add(d.key); return next; });
-                                      setNewProjectDriverShifts(prev => { const next = new Map(prev); next.set(d.key, 'day'); return next; });
-                                    } else {
-                                      setNewProjectDriverHashes(prev => { const next = new Set(prev); next.delete(d.key); return next; });
-                                      setNewProjectDriverShifts(prev => { const next = new Map(prev); next.delete(d.key); return next; });
-                                    }
-                                  }}
-                                  className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-amber-500 flex-shrink-0" />
-                                <span role="img" aria-label={shiftDot.title} title={shiftDot.title} className="flex-shrink-0 text-xs">{shiftDot.symbol}</span>
-                                <span className={`text-xs truncate ${checked && shift === 'day' ? 'text-white' : 'text-gray-400'}`}>{operationalDriverName(d)}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      {/* Night shift column */}
-                      <div className="flex flex-col">
-                        <div className="text-blue-400 text-[10px] font-bold uppercase tracking-wider mb-1">Night Shift ({Array.from(newProjectDriverHashes).filter(h => newProjectDriverShifts.get(h) === 'night').length})</div>
-                        <div className="bg-gray-900 border border-blue-600/20 rounded flex-1 overflow-y-auto">
-                          {drivers.map(d => {
-                            const checked = newProjectDriverHashes.has(d.key);
-                            const shift = newProjectDriverShifts.get(d.key) || 'day';
-                            if (checked && shift !== 'night') return null;
-                            const shiftDot = driverShiftDot(d);
-                            return (
-                              <label key={d.key} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-800 cursor-pointer border-b border-gray-800/50 last:border-0">
-                                <input type="checkbox" checked={checked && shift === 'night'}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setNewProjectDriverHashes(prev => { const next = new Set(prev); next.add(d.key); return next; });
-                                      setNewProjectDriverShifts(prev => { const next = new Map(prev); next.set(d.key, 'night'); return next; });
-                                    } else {
-                                      setNewProjectDriverHashes(prev => { const next = new Set(prev); next.delete(d.key); return next; });
-                                      setNewProjectDriverShifts(prev => { const next = new Map(prev); next.delete(d.key); return next; });
-                                    }
-                                  }}
-                                  className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 flex-shrink-0" />
-                                <span role="img" aria-label={shiftDot.title} title={shiftDot.title} className="flex-shrink-0 text-xs">{shiftDot.symbol}</span>
-                                <span className={`text-xs truncate ${checked && shift === 'night' ? 'text-white' : 'text-gray-400'}`}>{operationalDriverName(d)}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
+                    <div className="min-h-[220px] md:flex-1">
+                      <label className="block text-xs text-gray-400 mb-1">Project drivers</label>
+                      <DispatchDriverPicker drivers={drivers} selection="multiple"
+                        selectedKeys={newProjectDriverHashes}
+                        onSelect={key => setNewProjectDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })}
+                        shiftDate={builderShiftDate} onShiftDateChange={setBuilderShiftDate}
+                        onShiftChange={updateDriverShiftPlan} shiftDot={driverShiftDot}
+                        readOnlyShifts={user?.role === 'demo_viewer'} />
                     </div>
                     {/* Drop-off assignments for selected drivers */}
                     {newProjectDriverHashes.size > 0 && (
@@ -3755,7 +3675,6 @@ function DispatchPageInner() {
                                 allDisposals={locationCatalog}
                                 onRemove={() => {
                                   setNewProjectDriverHashes(prev => { const next = new Set(prev); next.delete(hash); return next; });
-                                  setNewProjectDriverShifts(prev => { const next = new Map(prev); next.delete(hash); return next; });
                                   setNewProjectDriverDisposals(prev => { const next = { ...prev }; delete next[hash]; return next; });
                                 }}
                                 onSetDisposal={(disp) => {
@@ -4286,6 +4205,11 @@ function DispatchPageInner() {
                     projectDispatches={projectDispatches}
                     projectInvoices={projectInvoices}
                     drivers={drivers}
+                    shiftDate={builderShiftDate}
+                    onShiftDateChange={setBuilderShiftDate}
+                    onShiftChange={updateDriverShiftPlan}
+                    shiftDot={driverShiftDot}
+                    readOnlyShifts={user?.role === 'demo_viewer'}
                     allDisposals={locationCatalog}
                     cancelDispatch={cancelDispatch}
                     onStatusChange={updateProjectStatus}
@@ -6872,11 +6796,16 @@ function ProjectsListPanel({ projects, dispatches, drivers, onSelect }: {
 
 // ─── Project Detail Panel ─────────────────────────────────────────────────
 
-function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, allDisposals, cancelDispatch, onStatusChange, onAddDriver, onUpdateProject, onDispatchLoad }: {
+function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, shiftDate, onShiftDateChange, onShiftChange, shiftDot, readOnlyShifts, allDisposals, cancelDispatch, onStatusChange, onAddDriver, onUpdateProject, onDispatchLoad }: {
   project: Project;
   projectDispatches: DispatchJob[];
   projectInvoices: ProjectInvoice[];
-  drivers: { key: string; displayName: string; legalName?: string; phone?: string }[];
+  drivers: ApprovedDriver[];
+  shiftDate: string;
+  onShiftDateChange: (date: string) => void;
+  onShiftChange: (driver: ApprovedDriver, date: string, shift: PlannedShift) => Promise<void>;
+  shiftDot: (driver: ApprovedDriver) => { symbol: string; title: string };
+  readOnlyShifts?: boolean;
   allDisposals: NdicWell[];
   cancelDispatch: (id: string) => void;
   onStatusChange: (id: string, status: 'active' | 'paused' | 'completed') => void;
@@ -7089,16 +7018,16 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
               {showLoadForm && (
                 <div className="mt-3 space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <label className="text-xs text-gray-400">Driver
-                      <select value={loadDraft.driverHash} onChange={e => {
-                        const hash = e.target.value;
-                        setLoadDraft(prev => ({ ...prev, driverHash: hash, dropoff: project.driverDisposals?.[hash]?.name || prev.dropoff }));
-                      }} className="block mt-1 w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-sm">
-                        <option value="">Choose driver...</option>
-                        {Array.from(new Set([...(project.dayDriverHashes || []), ...(project.nightDriverHashes || [])])).map(hash =>
-                          <option key={hash} value={hash}>{getDriverName(hash)}</option>)}
-                      </select>
-                    </label>
+                    <div className="text-xs text-gray-400">Driver
+                      <div className="mt-1">
+                        <DispatchDriverPicker
+                          drivers={drivers.filter(driver => project.dayDriverHashes?.includes(driver.key) || project.nightDriverHashes?.includes(driver.key))}
+                          selection="single" selectedKeys={new Set(loadDraft.driverHash ? [loadDraft.driverHash] : [])}
+                          onSelect={hash => setLoadDraft(prev => ({ ...prev, driverHash: hash, dropoff: project.driverDisposals?.[hash]?.name || prev.dropoff }))}
+                          shiftDate={shiftDate} onShiftDateChange={onShiftDateChange}
+                          onShiftChange={onShiftChange} shiftDot={shiftDot} readOnlyShifts={readOnlyShifts} />
+                      </div>
+                    </div>
                     <label className="text-xs text-gray-400">Pickup well / location
                       <input value={loadDraft.pickup} onChange={e => setLoadDraft(prev => ({ ...prev, pickup: e.target.value }))}
                         list="project-load-pickups" placeholder="Search or type pickup..."

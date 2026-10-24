@@ -9,6 +9,17 @@ const CANON_UUID_2 = '8c3d9a10-9876-4321-a123-abcdef012345';
 const LEGACY_HASH_1 = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const LEGACY_HASH_2 = 'f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f';
 
+test('dated profile shift takes precedence over legacy roster shift for the same driver', () => {
+  const roster = projectDispatchDriverRoster({
+    approved: { [LEGACY_HASH_1]: { companyId: 'liquid-gold', displayName: 'Pat', driverId: CANON_UUID_1,
+      shiftPlan: { '2026-10-24': 'day' } } },
+    profiles: { [CANON_UUID_1]: { companyId: 'liquid-gold', displayName: 'Pat',
+      shiftPlan: { '2026-10-24': 'night', '2026-10-25': 'off', bad: 'night' } } },
+  }, 'liquid-gold');
+  assert.equal(roster.length, 1);
+  assert.deepEqual(roster[0].shiftPlan, { '2026-10-24': 'night', '2026-10-25': 'off' });
+});
+
 test('approved demo driver profiles join only the selected demo roster', () => {
   const demoCatalog = { profiles: {
     '2f6e6f75-b468-4239-9831-71faeb623acb': { companyId: 'wellbuilt-demo', displayName: 'AntigDemoDriver', legalName: 'Antig Demo Driver', active: true },
