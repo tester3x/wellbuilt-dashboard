@@ -47,11 +47,16 @@ export const cancelAuthorizedSoftwareTestShift=onCall({timeoutSeconds:30,enforce
     if(current.length!==grant.invoiceIds.length||current.some(s=>!grant.invoiceIds.includes(s.id)))fail('unexpected_test_jobs');
     for(const s of current){
       const invoice=s.data();
-      if(!owned(invoice)||invoice.status!=='closed'||invoice.wellName!=='Test Well'||invoice.operator!=='WB Test Customer'
+      // Additional software-only pickups require a protected exact fixture.
+      // Driver-supplied cancellation requests cannot broaden this authorization.
+      const proof=Array.isArray(grant.invoiceProofs)?grant.invoiceProofs.find((p:any)=>p.invoiceId===s.id):null;
+      const testWell=proof?.wellName||'Test Well';
+      if(typeof testWell!=='string'||!testWell.trim()||!owned(invoice)||invoice.status!=='closed'||invoice.wellName!==testWell||invoice.operator!=='WB Test Customer'
         ||Number(invoice.totalBBL)!==1)fail('non_test_work_found');
       const tickets=await tx.get(db.collection('tickets').where('invoiceDocId','==',s.id).limit(3));
       if(tickets.size!==1||tickets.docs.some(t=>{const r=t.data();return !owned(r)||r.invoiceDocId!==s.id
-        ||r.wellName!=='Test Well'||r.operator!=='WB Test Customer'||!/^SOFTWARE_TEST_ONLY_/.test(String(r.notes||''));}))fail('test_ticket_proof_required');
+        ||r.wellName!==testWell||r.operator!=='WB Test Customer'||!/^SOFTWARE_TEST_ONLY_/.test(String(r.notes||''))
+        ||proof&&String(r.ticketNumber)!==String(proof.ticketNumber);}))fail('test_ticket_proof_required');
     }
     const at=new Date().toISOString();
     tx.create(audit,{driverId:who.driverId,companyId:who.companyId,periodId:period,reason:d.reason.trim(),

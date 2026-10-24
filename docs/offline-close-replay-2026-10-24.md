@@ -25,3 +25,17 @@ Deployed only those two Functions from source 5110d3ac. Both report ACTIVE:
 jsaofflineshift-00003-huf and getdriverdeliverysnapshot-00003-koh. Downloaded
 the deployed source archives and verified exact source matches for both
 handlers and the new projection module. No Dashboard Hosting or rules changed.
+
+The replacement T245 physical test passed offline Close All, cold restart and
+automatic background reconnect: both invoices closed, both dispatches completed,
+one ticket and one monitoring pull per pickup, original close minute retained,
+and the original shift's JSA location mirror deduplicated. T245 and M107 are
+installed on the ZFold after S24 acceptance. Private evidence is outside Git.
+
+Software-test cleanup initially refused the second test pickup, because the
+previous dedicated endpoint hardcoded Test Well. It now additionally accepts
+an operator-protected exact invoice/well/ticket proof in the existing grant.
+The driver cannot submit or broaden this proof. Ownership, operator, one BBL,
+closed status, software-only notes, exact fixture set, no inspection, no real
+shift activity and audit preservation still apply. Thirteen cleanup tests and
+Functions build pass; deployed baseline source was verified before this change.

@@ -4,6 +4,15 @@ jest.mock('firebase-admin/firestore',()=>({FieldValue:{serverTimestamp:()=> 'ser
 jest.mock('../canonicalDriverAuthority',()=>({loadCanonicalDriverAuthority:jest.fn(async()=>({active:true,driverId:'driver',companyId:'company'})),productionCanonicalDriverReaders:()=>({})}));
 import * as admin from 'firebase-admin';
 import {cancelAuthorizedSoftwareTestShift} from '../cancelSoftwareTestShift';
+test('a second test pickup requires a protected exact invoice/well/ticket proof',async()=>{
+ const invoice=invoices[0].data(),ticket=tickets[0].data();
+ invoices[0].data=()=>({...invoice,wellName:'AddedTest'});tickets[0].data=()=>({...ticket,wellName:'AddedTest',ticketNumber:'42'});
+ await expect((cancelAuthorizedSoftwareTestShift as any)(request)).rejects.toThrow('non_test_work_found');
+ records['driver_credentials/driver'].softwareTestCleanup.invoiceProofs=[{invoiceId:'invoice',wellName:'AddedTest',ticketNumber:'wrong'}];
+ await expect((cancelAuthorizedSoftwareTestShift as any)(request)).rejects.toThrow('test_ticket_proof_required');
+ records['driver_credentials/driver'].softwareTestCleanup.invoiceProofs[0].ticketNumber='42';
+ expect((await(cancelAuthorizedSoftwareTestShift as any)(request)).alreadyCancelled).toBe(false);
+});
 const period='2026-01-01_060000',owner={driverId:'driver',companyId:'company'};
 const request={auth:{uid:'uid',token:{kind:'driver',driverId:'driver',companyId:'company',app:null}},data:{periodId:period,reason:'Software acceptance test completed',noActualWork:true}};
 let records:Record<string,any>,invoices:any[],tickets:any[],writes:any[];
