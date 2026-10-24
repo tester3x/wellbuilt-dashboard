@@ -26,3 +26,8 @@ parser files. A read-only replay of the original post resolves the AM time with
 no issues, and all 14 HP recovery checks pass. Its existing supervisor restarted
 the worker with the saved linked browser profile. The recovered observation has
 a completed server receipt; no replacement observation or APK was needed.
+
+Post-restart acceptance: Connected, unpaused, Ready, no error, all nine watched
+channels configured and a fresh receiver check. An orphaned headless browser
+from the stopped worker initially blocked its saved profile; only that exact
+profile's browser tree with a dead parent was removed before reconnecting.
