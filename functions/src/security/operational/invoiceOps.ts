@@ -10,6 +10,7 @@ import { requireSecureDriver, assertSameCompany } from '../requireDriverAuth';
 import { writeSecurityAudit } from '../audit';
 import { evaluateExistingDispatchDriverUpdate } from './dispatchPacketPin';
 import { evaluateSplitLoadBudget } from './splitLoadBudget';
+import { mergeInvoicePhotoEvidence } from './invoicePhotoEvidence';
 
 const MAX_JSON = 400_000;
 
@@ -149,6 +150,9 @@ export const upsertDriverInvoice = httpsV2.onCall(
         }
       }
       if (!ex.exists) inv.createdAt = FieldValue.serverTimestamp();
+      if (Object.prototype.hasOwnProperty.call(inv, 'photos')) {
+        inv.photos = mergeInvoicePhotoEvidence(prev.photos, inv.photos);
+      }
       tx.set(ref, inv, { merge: ex.exists && data.merge !== false });
     });
 

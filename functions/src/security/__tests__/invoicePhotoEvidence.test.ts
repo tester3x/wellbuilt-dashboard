@@ -1,0 +1,16 @@
+jest.mock('firebase-functions/v2/https',()=>({HttpsError:class extends Error{},onCall:(_o:unknown,h:unknown)=>h}));
+jest.mock('firebase-admin',()=>({firestore:jest.fn()}));
+jest.mock('firebase-admin/firestore',()=>({FieldValue:{serverTimestamp:()=> 'server-time'}}));
+jest.mock('../requireDriverAuth',()=>({requireSecureDriver:jest.fn(async()=>({uid:'uid',driverId:'driver',companyId:'company'})),assertSameCompany:jest.fn()}));
+jest.mock('../audit',()=>({writeSecurityAudit:jest.fn(async()=>{})}));
+import * as admin from 'firebase-admin';
+import {upsertDriverInvoice} from '../operational/invoiceOps';
+import {mergeInvoicePhotoEvidence} from '../operational/invoicePhotoEvidence';
+const pending={photoId:'p',deliveryPending:true,upload:{status:'failed'},compliance:{status:'pending'}};
+const confirmed={photoId:'p',storagePath:'photos/company/invoice/p.jpg',gsUri:'gs://bucket/photos/company/invoice/p.jpg',upload:{status:'done'},compliance:{status:'pass',validatedAt:'2026-01-01T12:00:00Z'}};
+let row:Record<string,any>,tail:Promise<unknown>;
+beforeEach(()=>{row={companyId:'company',driverId:'driver',status:'open',photos:[pending]};tail=Promise.resolve();const db={collection:()=>({doc:(id:string)=>({id})}),runTransaction:(fn:any)=>{const run=tail.then(()=>fn({get:async()=>({exists:true,data:()=>row}),set:(_ref:unknown,data:unknown)=>{row={...row,...data as any};}}));tail=run.catch(()=>{});return run;}};(admin.firestore as unknown as jest.Mock).mockReturnValue(db);});
+test.each([true,false])('actual invoice handler preserves uploaded evidence during concurrent stale close and photo writes, closeFirst=%s',async closeFirst=>{const close={invoiceId:'invoice',invoice:{status:'closed',photos:[pending]}},photo={invoiceId:'invoice',invoice:{photos:[confirmed,{photoId:'new',storagePath:'photos/company/invoice/new.jpg'}]}};await Promise.all((closeFirst?[close,photo]:[photo,close]).map(data=>(upsertDriverInvoice as any)({data,auth:{uid:'uid'}})));expect(row.status).toBe('closed');expect(row.photos).toHaveLength(2);expect(row.photos[0]).toMatchObject({storagePath:confirmed.storagePath,upload:{status:'done'},compliance:{status:'pass'}});expect(row.photos[0].deliveryPending).toBeUndefined();});
+test('omitted photos and empty stale arrays preserve other evidence',()=>{expect(mergeInvoicePhotoEvidence([confirmed],[])).toEqual([confirmed]);expect(mergeInvoicePhotoEvidence([confirmed],null)).toEqual([confirmed]);});
+test('private device paths are excluded and independent photo identities remain separate',()=>{const out=mergeInvoicePhotoEvidence([confirmed],[{...pending,photoId:'q',localUri:'file://private',uri:'file://private'}]);expect(out).toHaveLength(2);expect(JSON.stringify(out)).not.toContain('file://');});
+test('newer settled verdict advances while a pending verdict cannot regress it',()=>{const newer={...confirmed,compliance:{status:'fail',validatedAt:'2026-01-02T12:00:00Z'}};expect((mergeInvoicePhotoEvidence([confirmed],[newer,pending])[0] as any).compliance.status).toBe('fail');});
