@@ -34,18 +34,18 @@ button('Driver arrival recommendations').props.onClick();await flush();assert.eq
 button('Driver arrival recommendations').props.onClick();await flush();assert.equal(comparisons,3);
 console.log('PASS: production panel open/refresh only, no feed polling, unknown driver selectable, Google attribution');
 
-// Same production component now owns the actual single-driver selector.
+// Recommendation panel remains selectable beside the shared shift-plan picker.
 slots=[];cursor=0;pending=[];dirty=true;comparisons=0;
 props={...props,picker:'single',selectedKeys:new Set()};
-await flush();assert.ok(button('Select driver'));
-button('Select driver').props.onClick();await flush();assert.equal(comparisons,1);
+await flush();assert.ok(button('Suggested driver / arrival estimates'));
+button('Suggested driver / arrival estimates').props.onClick();await flush();assert.equal(comparisons,1);
 button('Unknown Driver').props.onClick();await flush();assert.equal(selected,'two');
-assert.equal(button('Select driver').props['aria-expanded'],false);
+assert.equal(button('Suggested driver / arrival estimates').props['aria-expanded'],false);
 props={...props,selectedKeys:new Set(['two'])};dirty=true;await flush();
 assert.equal(button('Unknown Driver').props['aria-expanded'],false);
 button('Unknown Driver').props.onClick();await flush();
 assert.equal(comparisons,2);
-console.log('PASS: ranked single-driver selector selects unknown drivers, collapses, and retains the chosen label');
+console.log('PASS: ranked recommendation panel selects unknown drivers, collapses, and retains the chosen label');
 signalsFail=true;button('Refresh estimates').props.onClick();await flush();assert.equal(comparisons,3);assert.ok(text(tree).includes('Account status unverified'));assert.ok(!text(tree).includes('Account signed out · last recorded'));assert.ok(text(tree).includes('On shift'));
 assert.match(fs.readFileSync('src/app/dispatch/page.tsx','utf8'),/shiftForDriver=\{driverShiftDot\}/);
 console.log('PASS: canonical account signals, separate shift/work labels, no status polling and unavailable-status fallback');

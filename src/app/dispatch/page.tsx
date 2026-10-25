@@ -32,6 +32,7 @@ import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, cla
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
 import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
+import { dispatchLevelSnapshot } from '@/lib/dispatchLevelSnapshot';
 import { wellDetailHref } from '@/lib/wellDetailLink';
 import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
 import { groupDispatchRows } from '@/lib/dispatchJobStacks';
@@ -705,7 +706,7 @@ function DispatchPageInner() {
     if (driverCanonicalIds.length === 0) { setShiftLoading(false); return; }
     let cancelled = false;
     const run = async () => {
-      const r = await resolveCompanyDriverShifts(driverCanonicalIds,viewedCompanyId||undefined);
+      const r = await resolveCompanyDriverShifts(driverCanonicalIds);
       if (cancelled) return;
       setShiftResults(r.resultsByDriverId);
       setShiftResolvedCompany(r.companyId);
@@ -1650,7 +1651,9 @@ function DispatchPageInner() {
       if (!driver) throw new Error('Driver not found');
       assertCanPredispatch(driver);
 
-      const priority = getPriority(assignTarget);
+      const assignedAt = Timestamp.now();
+      const liveWell = wells.find(w => w.wellName === assignTarget.wellName);
+      const priority = getPriority(liveWell || assignTarget);
       const firestore = getFirestoreDb();
 
       // Extract first name from legalName for privacy-safe display
@@ -1677,11 +1680,10 @@ function DispatchPageInner() {
         status: 'pending',
         notes: assignNotes || '',
         priority: priority.sortOrder,
-        assignedAt: Timestamp.now(),
+        assignedAt,
         assignedBy: user?.email || 'dashboard',
-        estimatedPullTime: assignTarget.nextPullTimeUTC || '',
-        currentLevel: assignTarget.currentLevel || '',
-        flowRate: assignTarget.flowRate || '',
+        estimatedPullTime: liveWell?.nextPullTimeUTC || '',
+        ...dispatchLevelSnapshot(liveWell, assignedAt.toMillis()),
         ...(assignLoadCount > 1 ? { loadCount: assignLoadCount } : {}),
         ...(assignDisposal ? {
           disposal: assignDisposal,
@@ -2496,6 +2498,7 @@ function DispatchPageInner() {
       const batchActionId = `multi_assign_${driver.key}_${selectedWells.size}`;
       beginAction('multi-assign-modal', batchActionId);
 
+      const assignedAt = Timestamp.now();
       // Create one dispatch doc per well with loadCount from Action # boxes
       const promises: Promise<any>[] = [];
       selectedWells.forEach((loadCount, wellName) => {
@@ -2524,11 +2527,10 @@ function DispatchPageInner() {
           status: 'pending',
           notes: assignNotes || '',
           priority: priority.sortOrder,
-          assignedAt: Timestamp.now(),
+          assignedAt,
           assignedBy: user?.email || 'dashboard',
           estimatedPullTime: well?.nextPullTimeUTC || '',
-          currentLevel: well?.currentLevel || '',
-          flowRate: well?.flowRate || '',
+          ...dispatchLevelSnapshot(well, assignedAt.toMillis()),
           ...(loadCount > 1 ? { loadCount } : {}),
           ...(assignDisposal ? {
             disposal: assignDisposal,
@@ -3077,6 +3079,7 @@ function DispatchPageInner() {
                       </div>
                       {assignTarget && <DriverArrivalRecommendations
                         drivers={preDispatchEligibleDrivers} jobs={dispatches} companyId={viewedCompanyId}
+                        shiftForDriver={driverShiftDot}
                         targetName={assignTarget.ndicName || assignTarget.wellName}
                         locations={locationCatalog} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
                         selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])}

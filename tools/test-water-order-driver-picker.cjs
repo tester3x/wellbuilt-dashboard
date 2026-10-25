@@ -2,8 +2,8 @@ const fs=require('fs'),os=require('os'),path=require('path'),cp=require('child_p
 (async()=>{
  const root=process.cwd(),dir=fs.mkdtempSync(path.join(os.tmpdir(),'water-driver-picker-'));
  const component=path.join(root,'src/components/WaterOrderDriverPicker.tsx').replaceAll('\\','/');
- assert.match(fs.readFileSync('src/components/WaterOrderBuilder.tsx','utf8'),/<WaterOrderDriverPicker drivers=\{scopeDrivers\}/,'Water orders must use scoped compact picker');
- assert.match(fs.readFileSync('src/app/dispatch/page.tsx','utf8'),/<WaterOrderBuilder[^\n]+shiftForDriver=\{driverShiftDot\}/);
+ assert.match(fs.readFileSync('src/components/WaterOrderBuilder.tsx','utf8'),/<DispatchDriverPicker drivers=\{scopeDrivers\}/,'Water orders must use scoped shared picker');
+ assert.match(fs.readFileSync('src/app/dispatch/page.tsx','utf8'),/<WaterOrderBuilder[\s\S]*?shiftForDriver=\{driverShiftDot\}/);
  fs.writeFileSync(path.join(dir,'entry.jsx'),`
  import React,{useState} from 'react';import{createRoot}from'react-dom/client';import{WaterOrderDriverPicker}from ${JSON.stringify(component)};
  const drivers=Array.from({length:42},(_,i)=>({key:'fixture-'+i,driverId:'canonical-'+i,displayName:'Driver '+String(i+1).padStart(2,'0'),companyId:'fixture'}));drivers[0]={...drivers[0],displayName:'private-login',loginAlias:'private-login',legalName:'Driver 01'};

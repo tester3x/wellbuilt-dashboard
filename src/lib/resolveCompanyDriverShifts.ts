@@ -7,6 +7,7 @@
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from './firebase';
 import { parseShiftResolveEnvelope, type ShiftResolveResult } from './shiftDotCore';
+import { shiftResolveRequest } from './shiftResolveRequest.ts';
 
 export const STAFF_RESOLVE_SHIFTS_CALLABLE = 'staffResolveCompanyDriverShifts';
 
@@ -21,20 +22,17 @@ interface WireResult { driverId: string; state: 'open' | 'none' | 'unverifiable'
 
 /**
  * Resolve shift state for a bounded set of canonical driverIds. Company scope is
- * derived SERVER-side from the caller; the optional companyId is honored only for
- * platform admins with viewAllCompanies (ignored otherwise).
+ * derived SERVER-side from the caller. The endpoint rejects extra payload fields.
  */
 export async function resolveCompanyDriverShifts(
   driverIds: string[],
-  companyId?: string,
 ): Promise<CompanyDriverShifts> {
   const empty: CompanyDriverShifts = { resultsByDriverId: new Map(), companyId: null, asOf: null, error: false };
   const ids = [...new Set((driverIds || []).map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean))];
   if (ids.length === 0) return empty;
   try {
     const fn = httpsCallable(getFirebaseFunctions(), STAFF_RESOLVE_SHIFTS_CALLABLE);
-    const payload: Record<string, unknown> = { driverIds: ids };
-    if (companyId) payload.companyId = companyId;
+    const payload = shiftResolveRequest(ids);
     const res = (await fn(payload)) as { data: { results?: WireResult[]; companyId?: string; asOf?: string } };
     const parsed = parseShiftResolveEnvelope(res.data);
     return { ...parsed, error: false };
