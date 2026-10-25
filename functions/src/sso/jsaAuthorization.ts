@@ -30,9 +30,6 @@
  */
 import {
   WELLBUILT_APP_JSA,
-  appRequiresActiveShift,
-  configurationRequiresActiveShift,
-  resolveAppEntitlement,
   type PlanDefinition,
 } from '@tester3x/wellbuilt-contracts';
 import {
@@ -165,11 +162,8 @@ export function decideJsaAccess(input: {
   }
   // Entitlement passed, so contract and plan are present objects here —
   // decideAppEntitlementAuthorization refuses every absent/invalid shape.
-  const contract = input.contract as WellbuiltContract;
   const plan = input.plan as PlanDefinition;
-  const requiresActiveShift =
-    appRequiresActiveShift(resolveAppEntitlement(plan, WELLBUILT_APP_JSA))
-    || configurationRequiresActiveShift(contract.appConfiguration, WELLBUILT_APP_JSA);
+  const requiresActiveShift = false; // JSA policy never requires clocking in.
   const jsaEnabled = Array.isArray((plan as { capabilities?: unknown[] }).capabilities)
     && ((plan as { capabilities?: unknown[] }).capabilities as unknown[]).includes('jsa');
   const bound = decideJsaBinding({ shift: input.shift, requiresActiveShift, jsaEnabled });

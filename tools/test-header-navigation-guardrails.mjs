@@ -20,7 +20,7 @@ export const EXPECTED_TABS = [
   { id: 'equipment', label: 'eQuipment', href: '/equipment', capability: 'viewEQuipment' },
   { id: 'safety', label: 'Safety', href: '/safety', capability: 'viewSafety' },
   { id: 'settings', label: 'Settings', href: '/settings', capability: 'viewSettings' },
-  ...(process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW === 'enabled'
+  ...(process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW !== 'disabled'
     ? [{ id: 'watchdog', label: 'Watchdog', href: '/watchdog', capability: 'viewDispatch' }]
     : []),
 ];
@@ -224,6 +224,10 @@ export async function runHeaderNavigationGuardrails() {
       }),
     },
     '@/lib/tabs': tabsModule,
+    '@/lib/dashboardReturnState': {
+      rememberedTabHref: (_uid, _company, _tab, fallback) => fallback,
+      rememberTabHref: () => {},
+    },
     '@/lib/auth': {
       getRoleLabel: () => 'Admin',
       hasCapability: () => true,

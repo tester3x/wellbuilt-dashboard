@@ -1,3 +1,4 @@
+import {jsaNumber} from './jsaNumber';
 /**
  * Governed JSA request/receipt — pure decision core.
  *
@@ -35,10 +36,15 @@ export type JsaPolicyIntent = 'read' | 'acknowledge' | 'read_and_acknowledge';
  */
 export type JsaCompletionAction = 'read_completed' | 'acknowledged' | 'read_and_acknowledged';
 export type JsaRequestState = 'pending' | 'completed' | 'expired';
-export type JsaShiftState = 'open' | 'none';
+export type JsaShiftState = 'open' | 'none' | 'independent';
 
 export interface JsaAuthorityBinding {
   shiftState: JsaShiftState;
+  /** Original display date. Never roll an active JSA context at midnight. */
+  policyDay?: string;
+  jsaPeriodId?: string;
+  /** Real HOS shift association, optional; JSA does not start HOS. */
+  associatedPeriodId?: string;
   periodId?: string;
   originLocalDate?: string;
   requiresActiveShift: boolean;
@@ -53,6 +59,7 @@ export interface JsaRequestMeta {
 }
 
 export interface JsaGovernedRecord {
+  jsaNumber?: string;
   requestId: string;
   jobRef: string;
   groupRef: string | null;
@@ -245,6 +252,7 @@ export function parseConsumeInput(data: unknown): Decision<{ requestId: string }
 
 /** Server policy: which intents the company allows. */
 export interface JsaCompanyPolicy {
+  minimumIntent?: JsaPolicyIntent;
   jsaEnabled: boolean;
   requiresActiveShift: boolean;
   /** Permitted completion styles. */
@@ -308,7 +316,7 @@ export function decideActionSatisfies(
 }
 
 export function bindingsEqual(a: JsaAuthorityBinding, b: JsaAuthorityBinding): boolean {
-  return a.shiftState === b.shiftState
+  return (a.jsaPeriodId || '') === (b.jsaPeriodId || '') && (a.policyDay || '') === (b.policyDay || '') && a.shiftState === b.shiftState
     && (a.periodId || '') === (b.periodId || '')
     && (a.originLocalDate || '') === (b.originLocalDate || '')
     && a.requiresActiveShift === b.requiresActiveShift
@@ -415,6 +423,7 @@ export function decideComplete(input: {
     state: 'completed',
     action: input.action,
     completedAtMs: input.nowMs,
+    jsaNumber: jsaNumber('JSA-'+input.existing.requestId,input.nowMs,input.existing.jsaNumber),
   };
   return { ok: true, value: { record, write: 'complete' } };
 }
@@ -604,6 +613,11 @@ export interface ConsumeView {
   jobRef: string;
   groupRef: string | null;
   shiftState: JsaShiftState;
+  /** Original display date. Never roll an active JSA context at midnight. */
+  policyDay?: string;
+  jsaPeriodId?: string;
+  /** Real HOS shift association, optional; JSA does not start HOS. */
+  associatedPeriodId?: string;
   periodId?: string;
   originLocalDate?: string;
   alreadyConsumed: boolean;
@@ -643,6 +657,8 @@ export function decideConsume(input: {
     jobRef: input.existing.jobRef,
     groupRef: input.existing.groupRef,
     shiftState: input.existing.binding.shiftState,
+    ...(input.existing.binding.jsaPeriodId ? {jsaPeriodId:input.existing.binding.jsaPeriodId} : {}),
+    ...(input.existing.binding.policyDay ? { policyDay: input.existing.binding.policyDay } : {}),
     ...(input.existing.binding.periodId ? { periodId: input.existing.binding.periodId } : {}),
     ...(input.existing.binding.originLocalDate
       ? { originLocalDate: input.existing.binding.originLocalDate }
@@ -677,7 +693,9 @@ export function fromStored(v: unknown): JsaGovernedRecord | null {
   if (!isRequestId(o.requestId) || !isJobRef(o.jobRef) || !isPolicyIntent(o.intent)) return null;
   if (typeof o.driverId !== 'string' || typeof o.companyId !== 'string') return null;
   const binding = o.binding as JsaAuthorityBinding | undefined;
-  if (!binding || (binding.shiftState !== 'open' && binding.shiftState !== 'none')) return null;
+  if (!binding || (binding.shiftState !== 'open' && binding.shiftState !== 'none' && binding.shiftState !== 'independent')) return null;
+  if (binding.shiftState === 'independent' && (!/^\d{4}-\d{2}-\d{2}$/.test(binding.policyDay || '') || binding.periodId || binding.requiresActiveShift !== false)) return null;
+  if(binding.jsaPeriodId!==undefined&&!/^[a-f0-9]{48}$/.test(binding.jsaPeriodId))return null;
   if (o.state !== 'pending' && o.state !== 'completed' && o.state !== 'expired') return null;
   return {
     requestId: o.requestId,
@@ -692,6 +710,7 @@ export function fromStored(v: unknown): JsaGovernedRecord | null {
     receiptHandle: typeof o.receiptHandle === 'string' ? o.receiptHandle : '',
     createdAtMs: Number(o.createdAtMs) || 0,
     expiresAtMs: Number(o.expiresAtMs) || 0,
+    ...(typeof o.jsaNumber==='string'?{jsaNumber:o.jsaNumber}:{}),
     completedAtMs: typeof o.completedAtMs === 'number' ? o.completedAtMs : null,
     wbtConsumedAtMs: typeof o.wbtConsumedAtMs === 'number' ? o.wbtConsumedAtMs : null,
   };

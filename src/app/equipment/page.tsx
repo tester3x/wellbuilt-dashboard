@@ -1,4 +1,5 @@
 'use client';
+import { useDashboardViewState } from '@/lib/useDashboardViewState';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -59,7 +60,7 @@ function resultBadge(result: string) {
 export default function EquipmentPage() {
   const { user, userCompany, loading, authResolved } = useAuth();
   const router = useRouter();
-  const [section, setSection] = useState<Section>('overview');
+  const [section, setSection] = useDashboardViewState<Section>('section', 'overview', ['overview', 'equipment', 'assignments', 'dvir', 'documents']);
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
   const [dataLoading, setDataLoading] = useState(true);

@@ -3,17 +3,21 @@ import * as admin from 'firebase-admin';
 import { buildSsoDeps } from '../sso/ssoCallables';
 import { checkRateLimit } from '../security/rateLimit';
 import { handleStandalone, StandaloneError, type StandaloneStore } from './jsaStandalone';
+import {resolveJsaWorkPeriod,withJsaPeriodFinalization} from './jsaWorkPeriodStore';
+import {companyJsaDay} from './jsaJobDayPolicy';
 import {readJsaTaskCatalog} from './jsaTaskCatalog';
 export const jsaStandalone=https.onCall({timeoutSeconds:30,memory:'512MiB',enforceAppCheck:false},async request=>{
  if(!request.auth?.uid)throw new https.HttpsError('unauthenticated','authentication');
  if(!await checkRateLimit({bucket:'jsa_standalone',key:request.auth.uid,limit:60,windowMs:600000}))throw new https.HttpsError('resource-exhausted','retry_later');
  const db=admin.firestore();
+ const effective=async(r:Record<string,unknown>)=>r.jsaPeriodId?withJsaPeriodFinalization(r,(await db.doc('jsa_work_periods/'+r.jsaPeriodId).get()).data()):r;
  const store:StandaloneStore={
+  workPeriod:async(c,d)=>{const cfg=(await db.doc('companies/'+c).get()).data()||{};return resolveJsaWorkPeriod(c,d,companyJsaDay(Date.now(),String(cfg.timeZone||cfg.timezone||'America/Chicago')));},
   readCatalog:companyId=>db.runTransaction(async tx=>readJsaTaskCatalog({readTemplate:async path=>{const s=await tx.get(db.doc(path));return s.exists?s.data()!:null;}},companyId)),
-  async readRecord(path){const doc=await db.doc(path).get();return doc.exists?doc.data()!:null;},
+  async readRecord(path){const doc=await db.doc(path).get();return doc.exists?effective(doc.data()!):null;},
   async readTemplate(path){const doc=await db.doc(path).get();return doc.exists?doc.data()!:null;},
-  async list(path,after){let q=db.collection(path).orderBy(admin.firestore.FieldPath.documentId()).limit(50);if(after)q=q.startAfter(after);return(await q.get()).docs.map(d=>d.data());},
-  async transaction(path,update){return db.runTransaction(async tx=>{const ref=db.doc(path),doc=await tx.get(ref),old=doc.exists?doc.data()!:null,next=update(old);if(next)tx.set(ref,next);return next||old!;});},
+  async list(path,after){let q=db.collection(path).orderBy(admin.firestore.FieldPath.documentId()).limit(50);if(after)q=q.startAfter(after);return Promise.all((await q.get()).docs.map(d=>effective(d.data())));},
+  async transaction(path,update){return db.runTransaction(async tx=>{const ref=db.doc(path),doc=await tx.get(ref),raw=doc.exists?doc.data()!:null,period=raw?.jsaPeriodId?(await tx.get(db.doc('jsa_work_periods/'+raw.jsaPeriodId))).data():undefined,old=raw?withJsaPeriodFinalization(raw,period):null,next=update(old);if(next)tx.set(ref,next);return next||old!;});},
  };
  try{return await handleStandalone(buildSsoDeps(),store,{uid:request.auth.uid,claims:request.auth.token},request.data,Date.now());}
  catch(e){if(e instanceof StandaloneError)throw new https.HttpsError(e.code,e.message);throw new https.HttpsError('internal','unavailable');}

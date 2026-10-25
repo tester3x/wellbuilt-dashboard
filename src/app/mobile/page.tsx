@@ -1,4 +1,5 @@
 'use client';
+import { useDashboardViewState } from '@/lib/useDashboardViewState';
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -52,8 +53,8 @@ export default function MobilePage() {
     }
     return new Set();
   });
-  const [viewMode, setViewMode] = useState<ViewMode>('table');
-  const [wellSearch, setWellSearch] = useState('');
+  const [viewMode, setViewMode] = useDashboardViewState<ViewMode>('view', 'table', ['table', 'cards']);
+  const [wellSearch, setWellSearch] = useDashboardViewState<string>('search', '');
 
   // Independent sort state per route
   const [routeSorts, setRouteSorts] = useState<Record<string, RouteSort>>({});

@@ -22,6 +22,7 @@
 
 import {
   decideAppAccessWithConfiguration,
+  WELLBUILT_APP_JSA,
   isCoreApp,
   type PlanDefinition,
   type WellbuiltAppKey,
@@ -141,6 +142,11 @@ export function decideAppEntitlementAuthorization(input: {
 
   if (access.access === 'allowed') {
     return { ok: true, outcome: access.outcome, detail: access.reason };
+  }
+  // JSA safety reading is independent of clocking in. Entitlement/configuration
+  // denials were evaluated above; only the shift prerequisite is inapplicable.
+  if (access.access === 'shift_required' && app === WELLBUILT_APP_JSA) {
+    return {ok:true,outcome:'INCLUDED_NO_SHIFT_REQUIRED',detail:'jsa_shift_optional'};
   }
   if (access.access === 'shift_required') {
     // Plan-level (legacy) OR company-level gate — the composition does not

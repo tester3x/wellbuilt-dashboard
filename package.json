@@ -7,6 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "deploy:hosting": "node scripts/deploy-hosting.cjs",
     "test:joincode-emulator": "firebase emulators:exec --only firestore --project wellbuilt-sync \"node firestore-rules-tests/test-joinCodeRotationEmulator.mjs\""
   },
   "dependencies": {
@@ -30,6 +31,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }

@@ -86,6 +86,28 @@ test('pending queue is explained and not consumed; an orphan open invoice is not
   const orphan = await run({ invoices: [{ id: 'orphan', companyId: 'test-company', driverId: 'free', status: 'open' }] });
   assert.equal(orphan.find(r => r.driverKey === 'free')!.arrivalMinutes, null);
 });
+
+test('open drafts on ended dispatches do not block a free driver or change any work records',async()=>{
+ for(const status of ['completed','cancelled','declined','dismissed']){
+  const jobs=[job({id:'ended',driverId:'free',driverHash:'free',status})];
+  const invoices=[{id:'old-draft',dispatchId:'ended',companyId:'test-company',driverId:'free',status:'open'}];
+  const before=JSON.stringify({jobs,invoices});
+  const rows=await run({drivers:[driver('free')],jobs,invoices});
+  assert.equal(rows[0].arrivalMinutes,20,status);assert.equal(rows[0].workState,'idle');
+  assert.equal(JSON.stringify({jobs,invoices}),before);
+ }
+});
+test('an open draft cannot borrow another driver or tenant ended job to appear free',async()=>{
+ const invoices=[{id:'draft',dispatchId:'ended',companyId:'test-company',driverId:'free',status:'open'}];
+ for(const other of [{driverId:'busy',driverHash:'busy'},{driverId:'free',driverHash:'free',companyId:'other'}]){
+  const rows=await run({drivers:[driver('free')],invoices,jobs:[job({id:'ended',status:'dismissed',...other})]});
+  assert.equal(rows[0].arrivalMinutes,null);assert.equal(rows[0].workState,'unknown');
+ }
+});
+test('nearest free driver ranks first despite an old dismissed-job draft',async()=>{
+ const rows=await run({jobs:[job(),job({id:'ended',driverId:'free',driverHash:'free',status:'dismissed'})],invoices:[{id:'draft',dispatchId:'ended',companyId:'test-company',driverId:'free',status:'open'}],roadTime:async from=>({minutes:from===drop?15:2,source:'road'})});
+ assert.equal(rows[0].driverKey,'free');assert.equal(rows[0].arrivalMinutes,2);
+});
 test('canonical identity wins over another driver legacy hash; cross-company work is not borrowed', async () => {
   const rows = await run({ jobs: [job({ driverHash: 'free' })] });
   assert.equal(rows.find(r => r.driverKey === 'busy')!.arrivalMinutes, 30);

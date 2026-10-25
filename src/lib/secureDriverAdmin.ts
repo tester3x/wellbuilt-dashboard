@@ -159,3 +159,25 @@ export async function adminDeleteSecureDriver(params: {
   });
   return res.data;
 }
+
+/** Independent primary authority: never changes the viewing assignment. */
+export async function staffWritePrimaryRouteAssignment(params: {
+  driverId: string; primaryRoutes: string[]; primaryAllRoutes: boolean; expectedRevision: number;
+}) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffWritePrimaryRouteAssignment');
+  const result = await fn(params);
+  const data = result.data as { ok: boolean; driverId: string; primaryRoutes: string[];
+    primaryAllRoutes: boolean; primaryRouteRevision: number };
+  if (data.ok !== true || data.driverId !== params.driverId || !Array.isArray(data.primaryRoutes)
+    || !Number.isSafeInteger(data.primaryRouteRevision)) throw new Error('Primary assignment was not acknowledged');
+  return data;
+}
+
+export async function staffGetPrimaryRouteAssignments() {
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffGetPrimaryRouteAssignments');
+  const result = await fn({});
+  const data = result.data as { ok: boolean; profiles: Record<string, {
+    primaryRoutes: string[]; primaryAllRoutes: boolean; primaryRouteRevision: number }> };
+  if (data.ok !== true || !data.profiles) throw new Error('Primary assignments unavailable');
+  return data.profiles;
+}

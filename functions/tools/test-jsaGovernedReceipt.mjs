@@ -331,7 +331,7 @@ const MATRIX = [
   ['company disables JSA', { contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { enabled: false } }), plan: PLAN(INCLUDED), shift: OPEN_SHIFT }, false],
   ['included, no shift requirement, off shift (owner-operator)', { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED), shift: NO_SHIFT }, true],
   ['included, company requires shift, OPEN shift', { contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }), plan: PLAN(INCLUDED), shift: OPEN_SHIFT }, true],
-  ['included, company requires shift, NO shift', { contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }), plan: PLAN(INCLUDED), shift: NO_SHIFT }, false],
+  ['included, company requires shift, NO shift', { contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }), plan: PLAN(INCLUDED), shift: NO_SHIFT }, true],
   ['legacy read-compatible plan (apps absent)', { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(undefined), shift: NO_SHIFT }, true],
   ['authority inconsistent', { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED), shift: BAD_SHIFT }, false],
   ['authority inconsistent even with open-gate config', { contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }), plan: PLAN(INCLUDED), shift: BAD_SHIFT }, false],
@@ -362,8 +362,8 @@ for (const [label, world, expectOk] of MATRIX) {
   try {
     await handleComplete(receiptDeps(changed), JSA_AUTH, { requestId: reg.rid, action: 'read_completed' });
   } catch (e) { refusal = e instanceof JsaReceiptError ? e.refusal : String(e); }
-  check('mid-flow: tightened policy refuses completion (fail closed)',
-    refusal === 'active_shift_required' || refusal === 'binding_mismatch', String(refusal));
+  check('mid-flow: historical clock-in flag does not block JSA completion',
+    refusal === null, String(refusal));
 
   // Registered read_and_acknowledge; policy later loosens to bare-ack
   // style: the REGISTERED requirement still governs — read_completed or
@@ -583,15 +583,14 @@ for (const [label, world, expectOk] of MATRIX) {
     const reg = await tryRegister(w, 'read');
     const tightened = { ...w, contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }) };
     const rt = await refusalOf(tightened, JSA_AUTH, { requestId: reg.rid });
-    check('get: tightened policy refuses before any UI',
-      rt === 'active_shift_required' || rt === 'binding_mismatch', String(rt));
+    check('get: adding a clock-in flag leaves JSA readable',rt === null,String(rt));
   }
   {
     const w = OPEN_WORLD();
     const reg = await tryRegister(w, 'read');
     const loosened = { ...w, contract: CONTRACT_OK() }; // gate removed
-    check('get: loosened policy also refuses (binding drift, never downgrade)',
-      await refusalOf(loosened, JSA_AUTH, { requestId: reg.rid }) === 'binding_mismatch');
+    check('get: removing a clock-in flag leaves the registered JSA requirement intact',
+      await refusalOf(loosened, JSA_AUTH, { requestId: reg.rid }) === null);
   }
 
   // Launch metadata disagreeing with the server request: get takes NO

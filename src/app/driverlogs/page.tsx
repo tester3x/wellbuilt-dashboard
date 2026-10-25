@@ -1,4 +1,5 @@
 'use client';
+import { useDashboardViewState } from '@/lib/useDashboardViewState';
 
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
@@ -67,8 +68,8 @@ export default function DriverLogsPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Filters
-  const [selectedDate, setSelectedDate] = useState(() => getLocalDateString());
-  const [driverFilter, setDriverFilter] = useState<string>('all');
+  const [selectedDate, setSelectedDate] = useDashboardViewState<string>('date', getLocalDateString());
+  const [driverFilter, setDriverFilter] = useDashboardViewState<string>('driver', 'all');
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
   // Phase 7: truth-layer view mode. Default stays 'legacy' — the existing

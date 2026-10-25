@@ -65,6 +65,9 @@ interface ApprovedDriver {
 }
 
 interface CanonicalWbmDriver {
+  primaryRoutes?: string[];
+  primaryAllRoutes?: boolean;
+  primaryRouteRevision?: number;
   driverId: string;
   displayName: string;
   legalName?: string;
@@ -172,6 +175,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // Assign routes modal
   const [showRoutesModal, setShowRoutesModal] = useState(false);
   const [routeTarget, setRouteTarget] = useState<CanonicalWbmDriver | null>(null);
+  const [primaryRoutes, setPrimaryRoutes] = useState<string[]>([]);
+  const [primaryAllRoutes, setPrimaryAllRoutes] = useState(false);
+  const [primaryBusy, setPrimaryBusy] = useState(false);
+  const [primaryError, setPrimaryError] = useState('');
+  useEffect(() => {
+    setPrimaryRoutes(routeTarget?.primaryRoutes || []);
+    setPrimaryAllRoutes(routeTarget?.primaryAllRoutes === true);
+    setPrimaryError('');
+  }, [routeTarget?.driverId, routeTarget?.primaryRouteRevision]);
   const [selectedRoutes, setSelectedRoutes] = useState<string[]>([]);
   const [selectedWells, setSelectedWells] = useState<string[]>([]);
   const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
@@ -249,6 +261,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         setMessage(`Failed to load employees [${catalogErrorCode(catalogErr)}]`);
         throw catalogErr;
       }
+      const { staffGetPrimaryRouteAssignments } = await import('@/lib/secureDriverAdmin');
+      const primaryAssignments = await staffGetPrimaryRouteAssignments();
       const canonical: CanonicalWbmDriver[] = [];
       {
         const data = (catalog.profiles || {}) as Record<string, any>;
@@ -266,6 +280,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             companyName: typeof val.companyName === 'string' ? val.companyName : undefined,
             assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : null,
             assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : null,
+            primaryRoutes: primaryAssignments[id]?.primaryRoutes || [],
+            primaryAllRoutes: primaryAssignments[id]?.primaryAllRoutes === true,
+            primaryRouteRevision: primaryAssignments[id]?.primaryRouteRevision || 0,
             assignmentRevision: typeof val.assignmentRevision === 'number' ? val.assignmentRevision : null,
             usualShift: val.usualShift === 'day' || val.usualShift === 'night' ? val.usualShift : undefined,
             weeklyDaysOff: Array.isArray(val.weeklyDaysOff) ? val.weeklyDaysOff : [],
@@ -507,6 +524,25 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       console.error('Failed to set default package:', err);
       setMessage('Failed to set default package');
     }
+  };
+
+  const savePrimaryRoutes = async () => {
+    if (!routeTarget || primaryBusy) return;
+    const target = routeTarget, generation = assignmentGenRef.current;
+    setPrimaryBusy(true); setPrimaryError('');
+    try {
+      const { staffWritePrimaryRouteAssignment } = await import('@/lib/secureDriverAdmin');
+      const result = await staffWritePrimaryRouteAssignment({ driverId: target.driverId,
+        primaryRoutes: primaryAllRoutes ? [] : primaryRoutes, primaryAllRoutes,
+        expectedRevision: target.primaryRouteRevision || 0 });
+      if (assignmentGenRef.current === generation) {
+        setRouteTarget(current => current?.driverId === target.driverId ? { ...current, ...result } : current);
+        setMessage('Primary route access saved. Viewing assignments are unchanged.');
+      }
+      await loadDrivers();
+    } catch {
+      if (assignmentGenRef.current === generation) setPrimaryError('Primary access was not confirmed. Refresh this driver and try again.');
+    } finally { setPrimaryBusy(false); }
   };
 
   // ── Assign routes to canonical WB-M driver (preview then apply) ──
@@ -2093,7 +2129,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       {/* ── Assign Routes Modal ── */}
       {showRoutesModal && routeTarget && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
             <h3 className="text-white font-medium mb-1">Assign WB-M Routes</h3>
             <p className="text-gray-400 text-sm mb-1">
               Well-scope routes for <span className="text-white">{routeTarget.displayName}</span>
@@ -2124,6 +2160,30 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 ))}
               </div>
             )}
+
+            <section className="mt-4 border-t border-gray-600 pt-4" aria-label="Primary route access">
+              <h4 className="font-medium text-blue-300">Primary route driver · tank info editing</h4>
+              <p className="text-gray-400 text-xs mt-1 mb-3">Route access above controls what this driver sees in WB M. Primary access below allows tank info editing. More than one driver can be primary.</p>
+              <label className="flex gap-3 items-center text-white text-sm mb-3">
+                <input type="checkbox" checked={primaryAllRoutes} disabled={primaryBusy}
+                  onChange={e => setPrimaryAllRoutes(e.target.checked)} />
+                Primary on all routes, including future routes
+              </label>
+              {!primaryAllRoutes && <div className="max-h-48 overflow-y-auto space-y-2">
+                {availableRoutes.map(route => <label key={route} className="flex items-center gap-3 text-sm text-white">
+                  <input type="checkbox" checked={primaryRoutes.includes(route)}
+                    disabled={primaryBusy || (!routeTarget.assignedRoutes?.includes(route) && !primaryRoutes.includes(route))}
+                    onChange={e => setPrimaryRoutes(previous => e.target.checked ? [...previous, route] : previous.filter(r => r !== route))} />
+                  {route}
+                </label>)}
+              </div>}
+              <p className="text-gray-400 text-xs mt-2">Apply viewing assignments first when adding access to a route.</p>
+              {!!primaryError && <p role="alert" className="text-red-300 text-sm mt-2">{primaryError}</p>}
+              <button type="button" disabled={primaryBusy} onClick={savePrimaryRoutes}
+                className="mt-3 px-4 py-2 bg-blue-700 text-white rounded disabled:opacity-40">
+                {primaryBusy ? 'Saving…' : 'Save primary access'}
+              </button>
+            </section>
 
             {assignmentPreview && (
               <pre className="mt-3 text-xs text-gray-300 bg-gray-900 rounded p-2 overflow-auto max-h-32">

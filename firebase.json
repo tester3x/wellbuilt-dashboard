@@ -36,6 +36,9 @@
     "predeploy": [
       "node scripts/preflight-hosting-deploy.cjs"
     ],
+    "postdeploy": [
+      "node scripts/deploy-hosting.cjs --verify"
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",

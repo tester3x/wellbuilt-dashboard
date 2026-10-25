@@ -213,15 +213,15 @@ if (!audienceLive) {
       && stored.jsaBinding.requiresActiveShift === false);
   }
   {
-    // Company shift gate: config requires a shift, none open → refused.
+    // JSA reading is available off shift even with the historical shift flag.
     const cfg = { [JSA_AUDIENCE]: { requiresActiveShift: true } };
     const w = makeWorld({
       contractState: 'active', contract: CONTRACT(cfg), plan: planWith(JSA_INCLUDED),
       authority: EMPTY_AUTHORITY,
     });
     const r = await issue(w);
-    check('company shift gate refuses off-shift jsa issuance',
-      !r.ok && r.publicCode === 'not_authorized' && w.docs.size === 0);
+    check('historical company shift flag does not block JSA issuance',
+      r.ok && w.docs.size === 1 && [...w.docs.values()][0].jsaBinding.shiftState === 'none');
   }
   {
     // The vc5 defect shape: stale/inconsistent authority — refused, never bound.

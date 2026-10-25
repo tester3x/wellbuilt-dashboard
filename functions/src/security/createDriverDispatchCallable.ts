@@ -17,7 +17,8 @@ function throwFail(decided: { ok: false; reason: string; field?: string }): neve
 }
 
 export const createDriverDispatchIfAbsent = httpsV2.onCall(
-  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  // Interactive driver job creation must not wait for a scale-from-zero startup.
+  { minInstances: 1, timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
     const driver = await requireSecureDriver(request, { allowLegacyHash: false });
     if (!driver.companyId) throw new httpsV2.HttpsError('failed-precondition', 'unscoped_driver');

@@ -4080,6 +4080,14 @@ export { ssoIssueAuthorizationCode, ssoExchangeAuthorizationCode } from './sso/s
 
 // Governed JSA producers. These are source exports, not a deployment.
 export {
+  jsaRegisterJobShiftReadRequest,
+  jsaResolveJobShiftEvidence,
+  jsaAcknowledgeJobShift,
+  jsaRecordJobShiftReadCoverage,
+  jsaRecordJobReadCoverage,
+  jsaRegisterJobReadRequest,
+  jsaResolveJobReadEvidence,
+  jsaAcknowledgeJobDay,
   jsaRegisterReadRequest,
   jsaGetReadRequest,
   jsaCompleteReadRequest,
@@ -4089,6 +4097,10 @@ export {
   jsaAcknowledgeJob,
 } from './jsaReceipt/jsaReceiptCallables';
 export { jsaStandalone } from './jsaReceipt/jsaStandaloneCallable';
+export { jsaWeeklyForms } from './jsaReceipt/jsaWeeklyFormsCallable';
+export { jsaShiftSummary } from './jsaReceipt/jsaShiftSummaryCallable';
+export { jsaHomeState } from './jsaReceipt/jsaHomeStateCallable';
+export { jsaGetSavedJob } from './jsaReceipt/jsaSavedJobCallable';
 export { jsaManageTemplate } from './jsaReceipt/jsaTemplateManagementCallable';
 
 // ── vc51.9A6-B: protected platform-admin callables ─────────────────────────
@@ -4130,3 +4142,8 @@ export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './w
 export { liveDemoSnapshot, demoViewerSession, liveDemoPhoneFrame, uploadLiveDemoPhoneFrame } from './liveDemo/runtime';
 export { dispatchDemoViewerJob } from './liveDemo/dispatch';
 export { demoWellPullPlan } from './liveDemo/wellPlan';
+
+export {jsaFinalizeShiftContext} from './jsaReceipt/jsaWorkPeriodLifecycle';
+
+export {platformIssueDeviceAccount,platformExchangeDeviceAccount,platformRevokeDeviceAccount,platformRefreshDeviceAccount} from './platform/deviceAccountCallables';
+export { reportDriverSyncAlert, adminListSyncAlerts } from './security/officeSyncAlerts';

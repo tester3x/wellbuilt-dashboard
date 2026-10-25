@@ -19,3 +19,9 @@ test('separate chains stay separate and incomplete sequence metadata sorts last'
   const physical = [job('B2', 'split-2', 2), job('C1', 'split-1', 3), job('A2', 'split-2', 1), job('unknown1', 'split-1'), job('B1', 'split-1', 2)];
   assert.deepEqual(orderSplitTicketChains(physical).map(j => j.id), ['A2', 'B2', 'B1', 'C1', 'unknown1']);
 });
+
+test('the ongoing ticket stays first even when an earlier split sibling is still listed', () => {
+  const physical = [job('C', 'split-1', 3), job('other'), job('B', 'split-1', 2), job('A', 'split-1', 1)];
+  assert.deepEqual(orderSplitTicketChains(physical, j => j.id === 'C').map(j => j.id), ['C', 'other', 'A', 'B']);
+  assert.deepEqual(physical.map(j => j.id), ['C', 'other', 'B', 'A']);
+});

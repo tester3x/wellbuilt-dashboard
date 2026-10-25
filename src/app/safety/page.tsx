@@ -1,4 +1,5 @@
 'use client';
+import { useDashboardViewState } from '@/lib/useDashboardViewState';
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -16,7 +17,7 @@ export default function SafetyPage() {
   const router = useRouter();
   const [companyId, setCompanyId] = useState<string>('');
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
-  const [filter, setFilter] = useState<SpillListFilter>('open');
+  const [filter, setFilter] = useDashboardViewState<SpillListFilter>('filter', 'open', ['open', 'acknowledged', 'resolved', 'closed', 'all']);
   const [state, setState] = useState<SpillLoadState>({ kind: 'loading' });
   const [rows, setRows] = useState<SpillListRow[]>([]);
   const access = decideSafetyAccess(user, companyId || user?.companyId || null, {

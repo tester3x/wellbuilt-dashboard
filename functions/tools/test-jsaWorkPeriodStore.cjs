@@ -1,0 +1,22 @@
+const assert=require('node:assert/strict'),admin=require('firebase-admin');
+if(!/^(127\.0\.0\.1|localhost):\d+$/.test(process.env.FIRESTORE_EMULATOR_HOST||''))throw Error('Local emulator required; never production');
+admin.initializeApp({projectId:'demo-jsa-shift'});
+const {resolveJsaWorkPeriod,withJsaPeriodFinalization}=require('../lib/jsaReceipt/jsaWorkPeriodStore');
+const db=admin.firestore();
+(async()=>{
+ const company='fixture-company',driver='fixture-driver',authority=db.doc('driver_shift_authority/'+driver);
+ await authority.set({companyId:company,driverId:driver,initialized:true,openPeriodId:null,originLocalDate:null});
+ const [first,parallel]=await Promise.all([resolveJsaWorkPeriod(company,driver,'2026-10-18'),resolveJsaWorkPeriod(company,driver,'2026-10-18')]);
+ assert.equal(first.id,parallel.id);assert.equal(first.shiftId,null);
+ const midnight=await resolveJsaWorkPeriod(company,driver,'2026-10-19');assert.equal(midnight.id,first.id);assert.equal(midnight.originDate,'2026-10-18');
+ await authority.update({openPeriodId:'2026-10-18_230000',originLocalDate:'2026-10-18'});
+ const attached=await resolveJsaWorkPeriod(company,driver,'2026-10-19');assert.equal(attached.id,first.id);assert.equal(attached.shiftId,'2026-10-18_230000');
+ await authority.update({openPeriodId:null,originLocalDate:null});
+ const next=await resolveJsaWorkPeriod(company,driver,'2026-10-19');assert.notEqual(next.id,first.id);
+ const ended=(await db.doc('jsa_work_periods/'+first.id).get()).data();assert.equal(ended.state,'finalized');
+ const signed={id:'signed',companyId:company,driverId:driver,jsaPeriodId:first.id,state:'open',snapshot:{signature:{data:'immutable'},printedName:'Fixture'}};
+ const result=withJsaPeriodFinalization(signed,ended);assert.equal(result.state,'closed');assert.equal(result.snapshot,signed.snapshot);assert.equal(signed.state,'open');
+ assert.equal(withJsaPeriodFinalization(signed,{...ended,driverId:'foreign'}),signed);
+ console.log('12 local-emulator checks passed: concurrent creation, midnight, pre-shift attachment, end/new shift, signed-content preservation and owner isolation.');
+ await db.terminate();
+})().catch(e=>{console.error(e);process.exitCode=1});

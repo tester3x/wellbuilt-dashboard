@@ -2,6 +2,7 @@
 import { UserRole } from './auth';
 
 export type NotificationCategory =
+  | 'sync_attention'
   | 'driver_registration'
   | 'dispatch_update'
   | 'pull_submitted'
@@ -10,6 +11,7 @@ export type NotificationCategory =
   | 'ticket_submitted';
 
 export const CATEGORY_LABELS: Record<NotificationCategory, string> = {
+  sync_attention: 'Sync needs office review',
   driver_registration: 'Driver Registration',
   dispatch_update: 'Dispatch',
   pull_submitted: 'New Pull',
@@ -19,6 +21,7 @@ export const CATEGORY_LABELS: Record<NotificationCategory, string> = {
 };
 
 export const CATEGORY_COLORS: Record<NotificationCategory, string> = {
+  sync_attention: '#EF4444',
   driver_registration: '#3B82F6', // blue
   dispatch_update: '#F59E0B',     // amber
   pull_submitted: '#10B981',      // green
@@ -30,9 +33,9 @@ export const CATEGORY_COLORS: Record<NotificationCategory, string> = {
 // Default notification preferences per role
 // Users can override these in their settings
 export const DEFAULT_PREFS: Record<UserRole, NotificationCategory[]> = {
-  it: ['driver_registration', 'dispatch_update', 'pull_submitted', 'well_alert', 'payroll_dispute', 'ticket_submitted'],
-  manager: ['driver_registration', 'dispatch_update', 'pull_submitted', 'well_alert', 'payroll_dispute', 'ticket_submitted'],
-  admin: ['driver_registration', 'dispatch_update', 'well_alert'],
+  it: ['sync_attention', 'driver_registration', 'dispatch_update', 'pull_submitted', 'well_alert', 'payroll_dispute', 'ticket_submitted'],
+  manager: ['sync_attention', 'driver_registration', 'dispatch_update', 'pull_submitted', 'well_alert', 'payroll_dispute', 'ticket_submitted'],
+  admin: ['sync_attention', 'driver_registration', 'dispatch_update', 'well_alert'],
   dispatch: ['dispatch_update', 'pull_submitted', 'ticket_submitted'],
   payroll: ['payroll_dispute', 'ticket_submitted'],
   viewer: ['well_alert'],
@@ -64,7 +67,18 @@ const READ_STORAGE_KEY = 'wb_read_notifications';
 export function loadNotificationPrefs(role: UserRole): NotificationCategory[] {
   try {
     const stored = localStorage.getItem(PREFS_STORAGE_KEY);
-    if (stored) return JSON.parse(stored);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (!Array.isArray(parsed)) return DEFAULT_PREFS[role] || [];
+      const marker = `wb_sync_alert_pref_v1:${role}`;
+      if (DEFAULT_PREFS[role]?.includes('sync_attention') && !localStorage.getItem(marker)) {
+        const migrated = [...new Set<NotificationCategory>([...parsed, 'sync_attention'])];
+        localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(migrated));
+        localStorage.setItem(marker, '1');
+        return migrated;
+      }
+      return parsed;
+    }
   } catch { /* ignore */ }
   return DEFAULT_PREFS[role] || [];
 }

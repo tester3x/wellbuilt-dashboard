@@ -7,6 +7,7 @@ import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { isActiveDispatchCard, isCancelledDispatchCard } from '@/lib/dispatchActiveVisibility';
 import { operationalDriverName } from '@/lib/operationalDriverName';
+import { preferredDropoff } from '@/lib/preferredDropoff';
 import { WaterOrderBuilder } from '@/components/WaterOrderBuilder';
 import { DispatchDriverPicker, type PlannedShift } from '@/components/DispatchDriverPicker';
 import { plannedDriverShift, preDispatchBlocked } from '@/lib/driverWeeklySchedule';
@@ -26,12 +27,12 @@ import { buildSearchWellStatus, rankWellSearchRows } from '@/lib/wellSearchPrese
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
 import { combinedLocationResults, dropoffSourcesForBuilderOperator, operatorForBuilderWell, wellsForBuilderOperator } from '@/lib/builderWellSearch';
 import { heavyWaterWellResults } from '@/lib/heavyWaterWellSearch';
-import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
 import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
+import { dispatchLevelSnapshot } from '@/lib/dispatchLevelSnapshot';
 import { wellDetailHref } from '@/lib/wellDetailLink';
 import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
 import { groupDispatchRows } from '@/lib/dispatchJobStacks';
@@ -310,11 +311,6 @@ function DispatchPageInner() {
   const viewedCompanyId = resolveViewedCompanyId(user?.companyId, operatingCompanyId, isPlatformAdmin(user));
   const router = useRouter();
   const dispatchPathname = usePathname();
-  // Restore scroll position across refresh (session-scoped; restores after data lays out).
-  useScrollRestore(
-    { uid: user?.uid ?? null, companyId: user?.companyId || userCompany?.id || null, pathname: dispatchPathname },
-    { elementSelector: '[data-dashboard-scroll="dispatch"]', ready: !loading && !!user },
-  );
 
   // Capability gate for ALL dispatch mutations. The Dispatch tab is visible to
   // any role with `viewDispatch` (e.g. `viewer`), but only `createDispatch`
@@ -505,6 +501,21 @@ function DispatchPageInner() {
   const [bulkDisposalSearch, setBulkDisposalSearch] = useState('');
   const [bulkDisposalResults, setBulkDisposalResults] = useState<NdicWell[]>([]);
   const [bulkDispatching, setBulkDispatching] = useState(false);
+  const autoDropoffScope = useRef('');
+  useEffect(() => {
+    if (!viewedCompanyId || !dispatchesLoaded || readErrors.dispatches || !allDisposals.length) return;
+    const pickups = selectedWells.size ? [...selectedWells.keys()].sort() : assignTarget ? [assignTarget.wellName] : [];
+    const scope = JSON.stringify([viewedCompanyId, pickups, builderOperator]);
+    if (autoDropoffScope.current === scope) return;
+    // Wait for a real pickup selection. An explicit clear/change stays manual
+    // for this selection; later snapshots must not put an unwanted default back.
+    if (!pickups.length) { autoDropoffScope.current = ''; return; }
+    autoDropoffScope.current = scope;
+    if (assignDisposalWell || assignDisposal || disposalSearch) return;
+    const preferred = preferredDropoff({companyId:viewedCompanyId,wellNames:pickups,operator:assignTarget?.operator||builderOperator,catalog:allDisposals,jobs:dispatches});
+    if (preferred) {setAssignDisposal(preferred.well_name);setAssignDisposalWell(preferred);setDisposalSearch('');setDisposalResults([]);}
+  }, [viewedCompanyId, dispatchesLoaded, readErrors.dispatches, allDisposals, dispatches, selectedWells, assignTarget, builderOperator, assignDisposalWell, assignDisposal, disposalSearch]);
+
 
   // Service work form state
   const [swWellName, setSwWellName] = useState('');
@@ -561,7 +572,7 @@ function DispatchPageInner() {
   }, []);
   const [workspaceTab, setWorkspaceTab] = useState<'build' | 'queue' | 'jobs'>(() => {
     const tab = readInitialParam('tab');
-    return tab === 'jobs' || tab === 'completed' || tab === 'projects' ? 'jobs'
+    return tab === 'jobs' || tab === 'completed' || tab === 'cancelled' || tab === 'projects' ? 'jobs'
       : tab === 'queue' ? 'queue' : 'build';
   });
   const [demoTourTarget, setDemoTourTarget] = useState<string | null>(null);
@@ -621,7 +632,10 @@ function DispatchPageInner() {
 
   // Right panel tab
   const searchParams = useSearchParams();
-  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'cancelled' | 'projects'>('jobs');
+  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'cancelled' | 'projects'>(() => {
+    const tab = readInitialParam('tab');
+    return tab === 'completed' || tab === 'cancelled' || tab === 'projects' ? tab : 'jobs';
+  });
   const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
 
   // Handle URL params from notification deep links (e.g., ?tab=completed&highlight=abc123)
@@ -702,7 +716,7 @@ function DispatchPageInner() {
     run();
     const timer = setInterval(run, 60000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [user, driversLoading, driverCanonicalIds]);
+  }, [user, driversLoading, driverCanonicalIds,viewedCompanyId]);
 
   const driverShiftDot = useCallback((d: { driverId?: string; key?: string; companyId?: string }) => shiftDotForDriver({
     canonicalDriverId: d.driverId || (typeof d.key === 'string' && d.key.includes('-') ? d.key : ''),
@@ -742,9 +756,10 @@ function DispatchPageInner() {
     setOrDel('view', queueView, 'needs-pull');
     setOrDel('route', routeFilter, 'all');
     setOrDel('q', search.trim(), '');
+    setOrDel('tab', workspaceTab === 'jobs' ? rightPanelTab : workspaceTab === 'queue' ? 'queue' : 'build', 'build');
     const qs = params.toString();
     window.history.replaceState(window.history.state, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
-  }, [queueView, routeFilter, search, loading, user]);
+  }, [queueView, routeFilter, search, workspaceTab, rightPanelTab, loading, user]);
 
   // Z Fold recovery — track stacked (Fold/narrow/short) vs desktop-split layout.
   useEffect(() => {
@@ -1636,7 +1651,9 @@ function DispatchPageInner() {
       if (!driver) throw new Error('Driver not found');
       assertCanPredispatch(driver);
 
-      const priority = getPriority(assignTarget);
+      const assignedAt = Timestamp.now();
+      const liveWell = wells.find(w => w.wellName === assignTarget.wellName);
+      const priority = getPriority(liveWell || assignTarget);
       const firestore = getFirestoreDb();
 
       // Extract first name from legalName for privacy-safe display
@@ -1663,11 +1680,10 @@ function DispatchPageInner() {
         status: 'pending',
         notes: assignNotes || '',
         priority: priority.sortOrder,
-        assignedAt: Timestamp.now(),
+        assignedAt,
         assignedBy: user?.email || 'dashboard',
-        estimatedPullTime: assignTarget.nextPullTimeUTC || '',
-        currentLevel: assignTarget.currentLevel || '',
-        flowRate: assignTarget.flowRate || '',
+        estimatedPullTime: liveWell?.nextPullTimeUTC || '',
+        ...dispatchLevelSnapshot(liveWell, assignedAt.toMillis()),
         ...(assignLoadCount > 1 ? { loadCount: assignLoadCount } : {}),
         ...(assignDisposal ? {
           disposal: assignDisposal,
@@ -2482,6 +2498,7 @@ function DispatchPageInner() {
       const batchActionId = `multi_assign_${driver.key}_${selectedWells.size}`;
       beginAction('multi-assign-modal', batchActionId);
 
+      const assignedAt = Timestamp.now();
       // Create one dispatch doc per well with loadCount from Action # boxes
       const promises: Promise<any>[] = [];
       selectedWells.forEach((loadCount, wellName) => {
@@ -2510,11 +2527,10 @@ function DispatchPageInner() {
           status: 'pending',
           notes: assignNotes || '',
           priority: priority.sortOrder,
-          assignedAt: Timestamp.now(),
+          assignedAt,
           assignedBy: user?.email || 'dashboard',
           estimatedPullTime: well?.nextPullTimeUTC || '',
-          currentLevel: well?.currentLevel || '',
-          flowRate: well?.flowRate || '',
+          ...dispatchLevelSnapshot(well, assignedAt.toMillis()),
           ...(loadCount > 1 ? { loadCount } : {}),
           ...(assignDisposal ? {
             disposal: assignDisposal,
@@ -3062,6 +3078,7 @@ function DispatchPageInner() {
                       </div>
                       {assignTarget && <DriverArrivalRecommendations
                         drivers={preDispatchEligibleDrivers} jobs={dispatches} companyId={viewedCompanyId}
+                        shiftForDriver={driverShiftDot}
                         targetName={assignTarget.ndicName || assignTarget.wellName}
                         locations={locationCatalog} jobsComplete={dispatchesLoaded && !readErrors.dispatches}
                         selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])}
@@ -3850,7 +3867,7 @@ function DispatchPageInner() {
                 </div>
               )}
 
-              <div id="dispatch-queue-body" className="dispatch-queue-body">
+              <div id="dispatch-queue-body" data-dashboard-scroll="dispatch-queue" className="dispatch-queue-body">
               {/* Scrollable well table */}
               <div className="overflow-x-auto">
                 {dataLoading ? (
@@ -4203,7 +4220,7 @@ function DispatchPageInner() {
                 </div>
               )}
               {/* Scrollable content (owns internal scroll in the CP2 desktop grid) */}
-              <div className="dispatch-jobs-body p-3">
+              <div data-dashboard-scroll="dispatch-jobs" className="dispatch-jobs-body p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
                     dispatches={dispatches.filter(isActiveDispatchCard)}
@@ -5103,7 +5120,6 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
         {job.jobType === 'pw' && job.flowRate && <span>Flow at dispatch: <span className="text-gray-200">{job.flowRate}</span></span>}
         {job.jobType === 'service' && job.serviceType && <span>Service: <span className="text-gray-200">{job.serviceType}</span></span>}
         {job.jobType === 'service' && job.onsiteBy && <span>Be on site by: <span className="text-gray-200">{job.onsiteBy.replace('T', ' ')}</span></span>}
-        {job.driverDest && <span>Heading to: <span className="text-gray-200">{job.driverDest}</span></span>}
       </div>
 
       {/* Status and actions stay inside the same job boundary as the details. */}
@@ -5211,11 +5227,11 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   // Expanded driver groups persist across refresh — session-scoped by uid+companyId+
   // pathname, keyed by the canonical group id the Active Jobs render groups on
   // (dispatchDriverGroupKey — canonical driverId), never a display name or list index.
-  const { user: expandedUser } = useAuth();
+  const { user: expandedUser, operatingCompanyId: expandedCompany } = useAuth();
   const expandedPathname = usePathname();
   const expandedScope = useMemo(
-    () => ({ uid: expandedUser?.uid ?? null, companyId: expandedUser?.companyId ?? null, pathname: expandedPathname }),
-    [expandedUser?.uid, expandedUser?.companyId, expandedPathname],
+    () => ({ uid: expandedUser?.uid ?? null, companyId: expandedCompany || expandedUser?.companyId || '@platform', pathname: expandedPathname }),
+    [expandedUser?.uid, expandedUser?.companyId, expandedCompany, expandedPathname],
   );
   const [expandedList, setExpandedList] = useSessionDeepLinkState<string[]>(
     expandedScope,
@@ -5330,7 +5346,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     map.forEach((jobs, key) => {
       const rankById = new Map(jobs.map(jb => [jb.id, rankOf(jb)]));
       const physicalOrder = [...jobs].sort((a, b) => comparePhysicalJobs(rankById.get(a.id)!, rankById.get(b.id)!));
-      const ordered = orderSplitTicketChains(physicalOrder);
+      const ordered = orderSplitTicketChains(physicalOrder, job => rankById.get(job.id)!.inProgress);
       map.set(key, ordered);
     });
     return new Map(

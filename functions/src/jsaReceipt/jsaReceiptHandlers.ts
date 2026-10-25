@@ -35,6 +35,7 @@ import {
   JSA_APP_JSA,
   JSA_APP_WBT,
   type AuthPrincipal,
+  type JsaGovernedRecord,
   type ConsumeView,
   type Decision,
   type JsaAuthorityBinding,
@@ -68,6 +69,9 @@ export interface ReceiptTxn {
 }
 
 export interface ReceiptDeps {
+  registerJobDay?: boolean;
+  readRequest?(requestId:string):Promise<JsaGovernedRecord|null>;
+  jobDayBinding?(p:AuthPrincipal,day?:string,contextId?:string):Promise<{binding:JsaAuthorityBinding;policy:JsaCompanyPolicy}>;
   nowMs(): number;
   randomBytes(n: number): Uint8Array;
   base64Url(bytes: Uint8Array): string;
@@ -134,7 +138,18 @@ function principal(auth: { uid?: string | null; claims?: Record<string, unknown>
 async function authorBinding(
   deps: ReceiptDeps,
   p: AuthPrincipal,
+  requestId?:string, jobRef?:string,
 ): Promise<{ binding: JsaAuthorityBinding; policy: JsaCompanyPolicy }> {
+  const stored = requestId && deps.readRequest ? await deps.readRequest(requestId) : null;
+  if (deps.jobDayBinding && (stored?.binding.shiftState === 'independent' || deps.registerJobDay && jobRef)) {
+    if (jobRef) {
+      const invoice=await deps.readInvoice(jobRef);
+      unwrap(decideInvoiceJobFields({expectedCompanyId:p.companyId,expectedDriverId:p.driverId,invoice:{exists:invoice.exists,...invoice.data}}));
+    }
+    const result=await deps.jobDayBinding(p,stored?.binding.policyDay,stored?.binding.jsaPeriodId);
+    if (stored?.intent === 'acknowledge' && !result.policy.allowAcknowledge || stored && result.policy.minimumIntent === 'read_and_acknowledge' && stored.intent !== 'read_and_acknowledge') throw new JsaReceiptError('failed-precondition','intent_not_permitted','current_policy');
+    return result;
+  }
   // THE canonical decision — identical inputs and identical function to
   // SSO issuance, so registration and issuance agree byte-for-byte.
   const contractState = await deps.getCompanyContract(p.companyId);
@@ -159,7 +174,10 @@ async function authorBinding(
   }
   const style = await deps.getJsaStylePolicy(p.companyId);
   return {
-    binding: access.binding,
+    // Old receipts retain their stored compatibility flag. Actual period and
+    // actor checks still apply; the new product policy does not invalidate an
+    // in-flight legacy read merely because clock-in became optional.
+    binding: stored ? {...access.binding,requiresActiveShift:stored.binding.requiresActiveShift} : access.binding,
     policy: {
       jsaEnabled: access.jsaEnabled,
       requiresActiveShift: access.requiresActiveShift,
@@ -176,7 +194,8 @@ export async function handleRegister(
 ): Promise<{ requestId: string; state: 'pending' | 'completed'; reused: boolean }> {
   const p = principal(auth, JSA_APP_WBT);
   const meta = unwrap(parseRegisterInput(data));
-  const { binding, policy } = await authorBinding(deps, p);
+  const { binding, policy } = await authorBinding(deps, p, meta.requestId, meta.jobRef);
+  if (binding.shiftState === 'independent' && policy.minimumIntent === 'read_and_acknowledge' && meta.intent !== 'read_and_acknowledge') throw new JsaReceiptError('failed-precondition','intent_not_permitted','combined_required');
   return deps.runTransaction(async (txn) => {
     const path = recordPath(meta.requestId);
     const snap = await txn.get(path);
@@ -211,7 +230,7 @@ export async function handleComplete(
 ): Promise<{ requestId: string; action: string; reused: boolean }> {
   const p = principal(auth, JSA_APP_JSA);
   const body = unwrap(parseCompleteInput(data));
-  const { binding } = await authorBinding(deps, p);
+  const { binding } = await authorBinding(deps, p, body.requestId);
   return deps.runTransaction(async (txn) => {
     const path = recordPath(body.requestId);
     const snap = await txn.get(path);
@@ -230,6 +249,7 @@ export async function handleComplete(
         state: out.record.state,
         action: out.record.action,
         completedAtMs: out.record.completedAtMs,
+        jsaNumber: out.record.jsaNumber,
       });
     }
     deps.log('jsa.receipt.complete', { write: out.write, action: body.action });
@@ -244,7 +264,7 @@ export async function handlePersistArtifact(
 ): Promise<{ requestId: string; reused: boolean; schemaVersion: number; snapshotHash: string; artifactWrittenAtMs: number; signature: StoredArtifact['signature'] }> {
   const p = principal(auth, JSA_APP_JSA);
   const body = unwrap(parseArtifactInput(data));
-  const { binding } = await authorBinding(deps, p);
+  const { binding } = await authorBinding(deps, p, body.requestId);
   return deps.runTransaction(async (txn) => {
     const requestSnap = await txn.get(recordPath(body.requestId));
     const artifactSnap = await txn.get(artifactPath(body.requestId));
@@ -280,7 +300,7 @@ export async function handleGetContext(
 ): Promise<import('./jsaReceiptCore.js').RequestContextView> {
   const p = principal(auth, JSA_APP_JSA);
   const body = unwrap(parseGetContextInput(data));
-  const { binding } = await authorBinding(deps, p);
+  const { binding } = await authorBinding(deps, p, body.requestId);
   const path = recordPath(body.requestId);
   const out = await deps.runTransaction(async (txn) => {
     const snap = await txn.get(path);

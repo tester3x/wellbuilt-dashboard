@@ -7,6 +7,8 @@ import { collection, query, where, onSnapshot, Timestamp } from 'firebase/firest
 import { docBelongsToTenant } from '@/lib/tenantScope';
 import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
+import { hasCapability } from '@/lib/auth';
+import { listOfficeSyncAlerts } from '@/lib/officeSyncAlerts';
 import {
   NotificationItem,
   NotificationCategory,
@@ -24,7 +26,7 @@ import {
 } from '@/lib/notifications';
 
 export function NotificationBell() {
-  const { user } = useAuth();
+  const { user, operatingCompanyId, userCompany, authResolved } = useAuth();
   const pathname = usePathname();
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [isOpen, setIsOpen] = useState(false);
@@ -38,6 +40,40 @@ export function NotificationBell() {
   const pendingInitialLoadDone = useRef(false);
   const dispatchInitialLoadDone = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  // Bounded server-scoped reads on entry, focus and opening the bell. No polling.
+  useEffect(() => {
+    setNotifications(prev => prev.filter(n => n.category !== 'sync_attention'));
+  }, [user?.uid, operatingCompanyId]);
+  useEffect(() => {
+    let current = true;
+    if (!authResolved || !user || !operatingCompanyId || !hasCapability(user, 'manageDrivers', userCompany) || !prefs.includes('sync_attention')) {
+      setNotifications(prev => prev.filter(n => n.category !== 'sync_attention'));
+      return;
+    }
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight || document.visibilityState === 'hidden') return;
+      inFlight = true;
+      try {
+        const rows = await listOfficeSyncAlerts(operatingCompanyId);
+        if (!current) return;
+        const items: NotificationItem[] = rows.filter(r => r.companyId === operatingCompanyId && r.status === 'open' && !dismissedRef.current.has(`sync_${r.id}`)).map(r => ({
+          id: `sync_${r.id}`, category: 'sync_attention', title: 'Saved update needs office review',
+          message: `${r.driverName || 'Driver'} · ${r.kind} · ${r.attempts} attempts`,
+          timestamp: r.firstReportedAtMs, read: false, actionLabel: 'Review', actionHref: '/sync-alerts',
+        }));
+        if (items.some(n => !knownIdsRef.current.has(n.id)) && soundEnabled) playNotificationSound();
+        items.forEach(n => knownIdsRef.current.add(n.id));
+        setNotifications(prev => [...prev.filter(n => n.category !== 'sync_attention'), ...items].sort((a, b) => b.timestamp - a.timestamp));
+      } catch { /* Retain last known incidents on temporary loss of service. */ }
+      finally { inFlight = false; }
+    };
+    void refresh();
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { current = false; window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [authResolved, user, operatingCompanyId, userCompany, prefs, isOpen, soundEnabled]);
 
   // Load preferences on mount
   useEffect(() => {

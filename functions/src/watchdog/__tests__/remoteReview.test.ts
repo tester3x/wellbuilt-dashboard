@@ -1,9 +1,10 @@
 const records=new Map<string,any>();
 const ref=(key:string)=>({key,get:async()=>({exists:records.has(key),data:()=>records.get(key)})});
 jest.mock('firebase-functions/v2/https',()=>({onCall:(_opts:any,fn:any)=>fn,onRequest:(_opts:any,fn:any)=>fn,HttpsError:class extends Error{constructor(public code:string,message:string){super(message);}}}));
-jest.mock('firebase-admin',()=>({firestore:()=>({doc:ref,collection:(path:string)=>({doc:(id:string)=>ref(path+'/'+id),where:()=>({limit:()=>({get:async()=>({size:0,docs:[]})})})}),runTransaction:async(fn:any)=>fn({get:(r:any)=>r.get(),update:(r:any,v:any)=>records.set(r.key,{...records.get(r.key),...v}),create:(r:any,v:any)=>records.set(r.key,v)})})}));
+jest.mock('../intake',()=>({authenticate:jest.fn(async()=>{})}));
+jest.mock('firebase-admin',()=>({firestore:()=>({doc:ref,collection:(path:string)=>({doc:(id:string)=>ref(path+'/'+id),where:()=>({limit:()=>({get:async()=>({size:0,docs:[]})})})}),runTransaction:async(fn:any)=>fn({get:(r:any)=>r.get(),set:(r:any,v:any)=>records.set(r.key,{...records.get(r.key),...v}),update:(r:any,v:any)=>records.set(r.key,{...records.get(r.key),...v}),create:(r:any,v:any)=>records.set(r.key,v)})})}));
 jest.mock('../../security/trustedStaffAuthority',()=>({requireTrustedCompanyCapability:jest.fn(async(uid:string,cap:string)=>{if(uid==='staff'&&cap==='viewDispatch')return {companyId:'liquid-gold'};if(uid==='manager')return {companyId:'liquid-gold'};throw Error('permission-denied');})}));
-import {listWatchdogReviews,decideWatchdogReview} from '../remoteReview';
+import {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from '../remoteReview';
 const id='a'.repeat(64),revision='b'.repeat(64);
 beforeEach(()=>{records.clear();records.set('watchdog_review_inbox/liquid-gold/items/'+id,{companyId:'liquid-gold',rowId:'r',status:'review',revision,editable:true,row:{wellName:'Kahuna 5',tankLevelFeet:12,bottomLevelFeet:10,bblsTaken:165,issues:[]}});});
 const decision=(extra:any={})=>({auth:{uid:'manager',token:{}},data:{companyId:'liquid-gold',id,revision,decision:'exclude',reason:'Already entered',...extra}});
@@ -11,3 +12,17 @@ test('signed-out and cross-company callers are denied',async()=>{await expect((l
 test('view-only staff cannot decide and stale revisions are denied',async()=>{await expect((decideWatchdogReview as any)({...decision(),auth:{uid:'staff',token:{}}})).rejects.toThrow('permission-denied');await expect((decideWatchdogReview as any)(decision({revision:'c'.repeat(64)}))).rejects.toThrow('Review changed');});
 test('commands are audited with authenticated actor and cannot be overwritten while pending',async()=>{await (decideWatchdogReview as any)(decision({actorUid:'forged'}));const item=records.get('watchdog_review_inbox/liquid-gold/items/'+id);expect(item.command.actorUid).toBe('manager');expect(records.get('watchdog_review_audit/'+item.command.id).companyId).toBe('liquid-gold');await expect((decideWatchdogReview as any)(decision())).rejects.toThrow('Review changed');});
 test('measurement correction validates ranges before writing a command',async()=>{await expect((decideWatchdogReview as any)(decision({decision:'confirm',timeCentral:'2026-10-06T07:00',tankLevelFeet:12,bottomLevelFeet:15,bblsTaken:165}))).rejects.toThrow('invalid_review_bottom');expect(records.get('watchdog_review_inbox/liquid-gold/items/'+id).command).toBeUndefined();});
+
+const mirror=async(wellName:string,channel='approved')=>{
+ records.set('watchdog_v2_config/laptop',{enabled:true,channels:{approved:{wells:['Allowed Well']}}});
+ let code=200,value:any;
+ await (syncWatchdogReviewV2 as any)({body:{rowId:'new-held-row',revision,channel,status:'review',body:'Original post',issues:['Choose well'],editable:true,row:{wellName}}},{status:(v:number)=>{code=v;return {json:(v:any)=>{value=v;}};},json:(v:any)=>{value=v;}});
+ return {code,value,record:[...records.entries()].find(([k,v])=>k.startsWith('watchdog_review_inbox/')&&v.rowId==='new-held-row')?.[1]};
+};
+test.each(['','Unknown Well'])('unresolved well %s mirrors as a visible non-sendable review',async well=>{
+ const r=await mirror(well);expect(r.code).toBe(200);expect(r.record.status).toBe('review');expect(r.record.row.wellName).toBe(well);expect(r.record.editable).toBe(false);
+});
+test('allowed named well remains reviewable; unapproved channel remains rejected',async()=>{
+ expect((await mirror('Allowed Well')).record.editable).toBe(true);
+ expect((await mirror('', 'foreign')).value.error).toBe('channel_not_allowed');
+});
