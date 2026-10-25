@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { plannedDriverShift, preDispatchBlocked, type DriverWeeklySchedule } from '@/lib/driverWeeklySchedule';
 
 export type PlannedShift = 'day' | 'night' | 'off';
@@ -13,6 +13,7 @@ export interface PickerDriver extends DriverWeeklySchedule {
 }
 
 interface Props {
+  title?: string;
   drivers: PickerDriver[];
   selectedKeys: Set<string>;
   onSelect: (key: string) => void;
@@ -28,11 +29,15 @@ interface Props {
 }
 
 /** One job selection control and one dated shift control for all Dispatch builders. */
-export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selection, shiftDate, onShiftDateChange, onShiftChange, shiftDot, readOnlyShifts, disabledSelection, onSelectMany, suggestedKey }: Props) {
+export function DispatchDriverPicker({ title = 'Driver', drivers, selectedKeys, onSelect, selection, shiftDate, onShiftDateChange, onShiftChange, shiftDot, readOnlyShifts, disabledSelection, onSelectMany, suggestedKey }: Props) {
+  const [expanded, setExpanded] = useState(false);
   const [filter, setFilter] = useState<'both' | 'day' | 'night'>('both');
   const [search, setSearch] = useState('');
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const listId = useId();
+  const selectedNames = drivers.filter(driver => selectedKeys.has(driver.key)).map(driver => driver.legalName || driver.displayName);
+  const suggestedDriver = drivers.find(driver => driver.key === suggestedKey);
   const groups: { shift: 'day' | 'night' | 'unassigned' | 'offDuty'; title: string; color: string }[] = [
     { shift: 'day', title: 'Day shift', color: 'border-amber-600/40 bg-amber-950/20 text-amber-300' },
     { shift: 'night', title: 'Night shift', color: 'border-blue-600/40 bg-blue-950/20 text-blue-300' },
@@ -53,7 +58,22 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
     finally { setSavingKey(null); }
   }
 
-  return <div className="flex min-h-0 flex-col rounded border border-gray-700 bg-gray-900/70 text-xs">
+  return <div className="min-w-0 rounded border border-gray-700 bg-gray-900/70 text-xs">
+    <div className="flex min-w-0 items-center gap-3 p-2.5">
+      <div className="min-w-0 flex-1">
+        <div className="font-semibold text-gray-200">{title}</div>
+        <div className="truncate text-gray-300" title={selectedNames.join(', ')}>
+          {selectedNames.length ? `${selectedNames.length > 1 ? `${selectedNames.length} selected: ` : ''}${selectedNames.join(', ')}` : 'No driver selected'}
+        </div>
+        {suggestedDriver && <div className="truncate text-cyan-300">Suggested driver: {suggestedDriver.legalName || suggestedDriver.displayName}</div>}
+      </div>
+      <button type="button" aria-expanded={expanded} aria-controls={listId}
+        onClick={() => setExpanded(value => !value)}
+        className="shrink-0 rounded border border-gray-600 bg-gray-800 px-3 py-1.5 font-medium text-white hover:border-cyan-500">
+        {expanded ? 'Done' : 'Change'}
+      </button>
+    </div>
+    {expanded && <div id={listId} className="border-t border-gray-700">
     <div className="flex flex-wrap items-center gap-2 border-b border-gray-700 p-2">
       <label className="text-gray-400">Shift date <input type="date" value={shiftDate} onChange={e => onShiftDateChange(e.target.value)} className="ml-1 rounded border border-gray-600 bg-gray-800 px-1 py-1 text-white" /></label>
       <span className="text-gray-500" title="The colored dot reflects the driver's actual shift, independently of the D/N plan">Dot = on/off now · D/N = planned shift</span>
@@ -62,10 +82,10 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
           className={`rounded px-2 py-1 capitalize ${filter === value ? 'bg-cyan-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>{value}</button>)}
       </div>
     </div>
-    {selection === 'multiple' && onSelectMany && <div className="flex flex-wrap items-center gap-2 border-b border-gray-700 p-2">
+    <div className="flex flex-wrap items-center gap-2 border-b border-gray-700 p-2">
       <input type="search" aria-label="Search drivers" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search drivers"
         className="min-w-0 flex-1 rounded border border-gray-600 bg-gray-800 px-2 py-1 text-white" />
-      <button type="button" disabled={disabledSelection} onClick={() => {
+      {selection === 'multiple' && onSelectMany && <><button type="button" disabled={disabledSelection} onClick={() => {
         const visible = drivers.filter(driver => (filter === 'both' || plannedGroup(driver) === filter) &&
           !preDispatchBlocked(driver, shiftDate, shiftDot(driver).title) &&
           `${driver.displayName} ${driver.legalName || ''} ${driver.loginAlias || ''}`.toLowerCase().includes(search.trim().toLowerCase()));
@@ -73,10 +93,10 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
       }} className="rounded bg-cyan-900 px-2 py-1 text-cyan-200 disabled:opacity-40">Select shown</button>
       <button type="button" disabled={disabledSelection || selectedKeys.size === 0} onClick={() => onSelectMany([])}
         className="rounded bg-gray-800 px-2 py-1 text-gray-300 disabled:opacity-40">Clear selection</button>
-      <span className="text-gray-400">{selectedKeys.size} selected</span>
-    </div>}
+      <span className="text-gray-400">{selectedKeys.size} selected</span></>}
+    </div>
     {error && <div role="alert" className="px-2 py-1 text-red-300">{error}</div>}
-    <div className="max-h-[min(38vh,360px)] min-h-0 overflow-y-auto" aria-label="Driver list">
+    <div aria-label="Driver list">
       {groups.map(group => {
         const rows = drivers.filter(driver => (filter === 'both' || plannedGroup(driver) === filter) &&
             (group.shift === 'offDuty' ? shiftDot(driver).title === 'Off shift' : shiftDot(driver).title !== 'Off shift' && plannedGroup(driver) === group.shift) &&
@@ -95,7 +115,7 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
                 <input type="checkbox"
                   aria-label={`Choose ${driver.legalName || driver.displayName} for job`}
                   checked={selectedKeys.has(driver.key)} disabled={disabledSelection || dayOffBlocked}
-                  onChange={() => onSelect(selection === 'single' && selectedKeys.has(driver.key) ? '' : driver.key)} className="shrink-0" />
+                  onChange={() => { onSelect(selection === 'single' && selectedKeys.has(driver.key) ? '' : driver.key); if (selection === 'single') setExpanded(false); }} className="shrink-0" />
                 <span role="img" aria-label={dot.title} title={dot.title}>{dot.symbol}</span>
                 <span className="min-w-0 flex-1 truncate">{driver.legalName || driver.displayName}</span>
                 {suggestedKey === driver.key && <span className="shrink-0 rounded bg-cyan-900 px-1.5 py-0.5 text-cyan-100">Suggested</span>}
@@ -115,5 +135,6 @@ export function DispatchDriverPicker({ drivers, selectedKeys, onSelect, selectio
       })}
       {!drivers.length && <div className="p-2 text-gray-400">No drivers available.</div>}
     </div>
+    </div>}
   </div>;
 }

@@ -540,7 +540,7 @@ export function WaterOrderBuilder({
         ? releasableWaterTrips(plan, [], now, {}, {}).length
         : 0;
   return (
-    <section className="space-y-4 text-gray-200 min-w-0 overflow-y-auto">
+    <section className="space-y-4 text-gray-200 min-w-0">
       <div>
         <h2 className="text-lg font-semibold text-cyan-300">Water Orders</h2>
         <p className="text-xs text-gray-400">

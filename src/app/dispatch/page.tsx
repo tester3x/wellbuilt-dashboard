@@ -3052,7 +3052,6 @@ function DispatchPageInner() {
                   <div className="flex flex-col gap-2">
                     {/* Driver */}
                     <div className="flex flex-col">
-                      <label className="block text-xs text-gray-400 mb-1">Driver</label>
                       <div data-demo-builder-target="driver" className="flex flex-col min-h-0">
                         <DispatchDriverPicker drivers={drivers} selection="single"
                           selectedKeys={new Set(assignDriverHash ? [assignDriverHash] : [])} onSelect={setAssignDriverHash}
@@ -3548,16 +3547,11 @@ function DispatchPageInner() {
                                 : `${swBblPlan.plan?.plannedTotal} BBL planned for delivery; Split A starts with ${swBblPlan.plan?.pickupBbls} BBL. ${swBblPlan.plan?.unallocatedBbls} BBL has no planned stop yet.`}
                       </div>
                     )}
-                    {/* Keep driver selection and notes usable as split cards grow.
-                        The builder owns vertical scrolling on desktop. */}
-                    <div className="flex gap-3 min-h-[220px]">
+                    {/* The picker expands in the form's scroll area, with no nested driver scroll. */}
+                    <div className="flex flex-col md:flex-row gap-3">
                       {/* Driver picker */}
-                      <div className="flex-1 flex flex-col min-h-0">
-                        <label className="block text-xs text-gray-400 mb-1">
-                          Driver{swDriverHashes.size > 1 ? 's' : ''}
-                          {swDriverHashes.size > 0 && <span className="ml-1 px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full">{swDriverHashes.size}</span>}
-                        </label>
-                        <DispatchDriverPicker drivers={drivers} selection="multiple"
+                      <div className="min-w-0 flex-1">
+                        <DispatchDriverPicker title="Drivers" drivers={drivers} selection="multiple"
                           selectedKeys={swDriverHashes}
                           onSelect={key => setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })}
                           shiftDate={builderShiftDate} onShiftDateChange={setBuilderShiftDate}
@@ -3565,10 +3559,10 @@ function DispatchPageInner() {
                           readOnlyShifts={user?.role === 'demo_viewer'} />
                       </div>
                       {/* Notes */}
-                      <div className="flex-1 flex flex-col min-h-0">
+                      <div className="min-w-0 flex-1 flex flex-col">
                         <label className="block text-xs text-gray-400 mb-1">Notes</label>
                         <textarea value={swNotes} onChange={(e) => setSwNotes(e.target.value)} placeholder="Special instructions, equipment needed, etc."
-                          className="w-full flex-1 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none" />
+                          className="w-full min-h-24 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-y" />
                       </div>
                     </div>{/* end bottom row */}
                   </div>{/* end SW body */}
@@ -3607,8 +3601,8 @@ function DispatchPageInner() {
 
               {/* ── Projects Tab ── */}
               {builderTab === 'projects' && (
-                <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                  <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 pr-1">
+                <div className="flex flex-col">
+                  <div className="flex flex-col gap-4">
                   <div className="space-y-2">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="flex-1">
@@ -3687,11 +3681,10 @@ function DispatchPageInner() {
                       </div>
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:flex-1">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="flex flex-col min-h-0">
-                    <div className="min-h-[220px] md:flex-1">
-                      <label className="block text-xs text-gray-400 mb-1">Project drivers</label>
-                      <DispatchDriverPicker drivers={drivers} selection="multiple"
+                    <div>
+                      <DispatchDriverPicker title="Project drivers" drivers={drivers} selection="multiple"
                         selectedKeys={newProjectDriverHashes}
                         onSelect={key => setNewProjectDriverHashes(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })}
                         shiftDate={builderShiftDate} onShiftDateChange={setBuilderShiftDate}
@@ -7077,9 +7070,9 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
               {showLoadForm && (
                 <div className="mt-3 space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="text-xs text-gray-400">Driver
-                      <div className="mt-1">
-                        <DispatchDriverPicker
+                    <div>
+                      <div>
+                        <DispatchDriverPicker title="Driver"
                           drivers={drivers.filter(driver => project.dayDriverHashes?.includes(driver.key) || project.nightDriverHashes?.includes(driver.key))}
                           selection="single" selectedKeys={new Set(loadDraft.driverHash ? [loadDraft.driverHash] : [])}
                           onSelect={hash => setLoadDraft(prev => ({ ...prev, driverHash: hash, dropoff: project.driverDisposals?.[hash]?.name || prev.dropoff }))}
