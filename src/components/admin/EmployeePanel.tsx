@@ -320,9 +320,9 @@ export function EmployeePanel<D, U>({
                             Company
                           </button>
                         )}
-                        {isWbAdmin && row.driver && !row.canonical && !row.hasDashboardLogin && row.mobileLoginActive === false && onDeleteApproved && (
+                        {isWbAdmin && row.driver && onDeleteApproved && (
                           <button onClick={() => onDeleteApproved(row)} className="rounded bg-red-800 px-2 py-1 text-xs text-red-100 hover:bg-red-700">
-                            Delete inactive WB-T record
+                            Delete WB-T driver record
                           </button>
                         )}
                       </div>

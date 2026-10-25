@@ -1075,11 +1075,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
 
   // ── Delete a driver permanently ──
   const deleteDriver = async (driver: ApprovedDriver) => {
-    if (driver.active !== false || driver.dashboardUid || hasCanonicalDriverId(driver)) {
-      setMessage('Deactivate the WB-T login first. Linked dashboard or WB-M identities cannot be removed here.');
-      return;
-    }
-    if (!confirm(`Permanently remove the inactive WB-T record for ${driver.displayName}? This does not remove WB-M profiles, dashboard accounts, or job history.`)) return;
+    const linkedNote = driver.dashboardUid
+      ? ' Its linked Dashboard account will remain; only this WB-T driver record will be removed.'
+      : '';
+    if (!confirm(`Permanently delete the WB-T driver record for ${driver.displayName}? Its mobile login will stop working immediately. Existing jobs and WB-M profiles are not deleted.${linkedNote}`)) return;
     try {
       await staffWriteDriverRoster({ op: 'deleteApproved', approvedKey: driver.key });
       setMessage(`Deleted: ${driver.displayName}`);
@@ -1367,12 +1366,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 Migrate
               </button>
             )}
-            {isWbAdmin && driver.active === false && !driver.dashboardUid && !hasCanonicalDriverId(driver) && (
+            {isWbAdmin && (
               <button
                 onClick={() => deleteDriver(driver)}
                 className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-red-200 ml-auto"
               >
-                Delete inactive WB-T record
+                Delete WB-T driver record
               </button>
             )}
           </div>
