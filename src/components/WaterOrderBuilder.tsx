@@ -16,7 +16,8 @@ import { operationalDriverName } from "@/lib/operationalDriverName";
 import { assignmentIdentityForDriver } from "@/lib/dispatchWriterIdentity";
 import type { DriverIdentity } from "@/lib/dispatchDriverIdentity";
 import type { ShiftDotView } from "@/lib/shiftDotCore";
-import {WaterOrderDriverPicker} from "@/components/WaterOrderDriverPicker";
+import { DispatchDriverPicker, type PickerDriver, type PlannedShift } from "@/components/DispatchDriverPicker";
+import { preDispatchBlocked } from "@/lib/driverWeeklySchedule";
 import type { WellResponse } from "@/lib/wellPoolCore";
 import {
   estimateCycleMinutes,
@@ -37,6 +38,7 @@ type Job = {
   loadsCompleted?: number;
   bbls?: number;
 };
+type WaterOrderDriver = DriverIdentity & PickerDriver;
 type Draft = {
   name: string;
   destination: string;
@@ -105,15 +107,23 @@ export function WaterOrderBuilder({
   canWrite,
   createDispatch,
   shiftForDriver,
+  shiftDate,
+  onShiftDateChange,
+  onShiftChange,
+  readOnlyShifts,
 }: {
   companyId?: string;
   userId: string;
   wells: WellResponse[];
-  drivers: DriverIdentity[];
+  drivers: WaterOrderDriver[];
   jobs: Job[];
   ready: boolean;
   canWrite: boolean;
   shiftForDriver?: (driver:DriverIdentity)=>ShiftDotView;
+  shiftDate: string;
+  onShiftDateChange: (date: string) => void;
+  onShiftChange: (driver: WaterOrderDriver, date: string, shift: PlannedShift) => Promise<void>;
+  readOnlyShifts?: boolean;
   createDispatch: (
     record: Record<string, unknown>,
     options: { actionId: string; actionScope: string; unitId: string },
@@ -468,6 +478,13 @@ export function WaterOrderBuilder({
       for (const trip of trips) {
         if(alive.current)setDispatchProgress(`Sending job ${sent+1} of ${trips.length} · ${sent} confirmed`);
         requireScope();
+        const tripDriver = scopeDrivers.find(driver => driver.key === trip.driverKey);
+        if (!tripDriver) throw Error('A planned driver is no longer available');
+        const pickupDate = new Date(trip.pickupAt);
+        const localPickupDate = `${pickupDate.getFullYear()}-${String(pickupDate.getMonth() + 1).padStart(2, '0')}-${String(pickupDate.getDate()).padStart(2, '0')}`;
+        if (preDispatchBlocked(tripDriver, localPickupDate, shiftForDriver?.(tripDriver).title || 'Shift status unavailable')) {
+          throw Error(`${operationalDriverName(tripDriver)} has a regular or planned day off on ${localPickupDate}. Wait for the driver to clock on shift.`);
+        }
         const well = scopeWells.find((w) => w.wellName === trip.wellName);
         if (!well) throw Error("Source is no longer available");
         const source = waterSourceFromWell(
@@ -757,13 +774,17 @@ export function WaterOrderBuilder({
             />
           </label>
         </div>
-        <WaterOrderDriverPicker drivers={scopeDrivers} selectedKeys={draft.truckKeys} onChange={truckKeys=>update({truckKeys})} shiftForDriver={shiftForDriver} disabled={busy||!!saved||!canWrite}/>
+        <DispatchDriverPicker drivers={scopeDrivers} selection="multiple" selectedKeys={new Set(draft.truckKeys)}
+          onSelect={key => update({truckKeys: draft.truckKeys.includes(key) ? draft.truckKeys.filter(value => value !== key) : [...draft.truckKeys, key]})}
+          onSelectMany={truckKeys => update({truckKeys})} disabledSelection={busy || !!saved || !canWrite}
+          shiftDate={shiftDate} onShiftDateChange={onShiftDateChange} onShiftChange={onShiftChange}
+          shiftDot={shiftForDriver || (() => ({symbol: '○', title: 'Shift unverified'}))} readOnlyShifts={readOnlyShifts} />
         {draft.truckKeys.length>0&&<details>
           <summary className="cursor-pointer py-2 text-xs">Individual truck settings · {draft.truckKeys.length} drivers</summary>
           <p className="text-xs text-gray-400">Defaults apply unless overridden here. Enter the truck’s load capacity and hours available to this order; these are not HOS balances.</p>
           <input type="search" aria-label="Search truck settings" className={`${field} mt-2`} value={fleetSearch} onChange={e=>setFleetSearch(e.target.value)} placeholder="Find selected driver"/>
           <div className="max-h-64 overflow-auto"><table className="w-full min-w-[400px] text-xs"><thead><tr><th className="text-left">Driver</th><th>Capacity, BBL</th><th>Hours / day</th></tr></thead><tbody>
-            {draft.truckKeys.map(key=>scopeDrivers.find(d=>d.key===key)).filter((d):d is DriverIdentity=>!!d).filter(d=>operationalDriverName(d).toLowerCase().includes(fleetSearch.trim().toLowerCase())).map(d=><tr key={d.key}><td className="p-2">{operationalDriverName(d)}</td>{(['capacity','hours'] as const).map(setting=><td key={setting} className="p-1"><input aria-label={`${operationalDriverName(d)} ${setting}`} className={`${field} max-w-24`} type="number" min="0" placeholder={String(setting==='capacity'?draft.capacity:draft.hours)} value={draft.truckSettings?.[d.key]?.[setting]??''} onChange={e=>update({truckSettings:{...draft.truckSettings,[d.key]:{...draft.truckSettings?.[d.key],[setting]:e.target.value===''?undefined:Number(e.target.value)}}})}/></td>)}</tr>)}
+            {draft.truckKeys.map(key=>scopeDrivers.find(d=>d.key===key)).filter((d):d is WaterOrderDriver=>!!d).filter(d=>operationalDriverName(d).toLowerCase().includes(fleetSearch.trim().toLowerCase())).map(d=><tr key={d.key}><td className="p-2">{operationalDriverName(d)}</td>{(['capacity','hours'] as const).map(setting=><td key={setting} className="p-1"><input aria-label={`${operationalDriverName(d)} ${setting}`} className={`${field} max-w-24`} type="number" min="0" placeholder={String(setting==='capacity'?draft.capacity:draft.hours)} value={draft.truckSettings?.[d.key]?.[setting]??''} onChange={e=>update({truckSettings:{...draft.truckSettings,[d.key]:{...draft.truckSettings?.[d.key],[setting]:e.target.value===''?undefined:Number(e.target.value)}}})}/></td>)}</tr>)}
           </tbody></table></div>
         </details>}
         <details>

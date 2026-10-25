@@ -18,6 +18,7 @@ export interface DriverArrivalRecommendationsProps {
   targetName: string; locations: Location[]; jobsComplete: boolean;
   selectedKeys: ReadonlySet<string>; onSelect: (key: string) => void;
   picker?: 'single' | 'multiple';
+  onSuggestedDriverChange?: (key: string | null) => void;
   roadTime?: (from: ArrivalPoint, to: ArrivalPoint) => Promise<ArrivalTravel | null>;
   shiftForDriver?: (driver:DriverIdentity)=>ShiftDotView;
 }
@@ -25,7 +26,7 @@ const normalized = (s: string) => s.trim().toLowerCase();
 
 /** Advisory only: never creates jobs, changes a queue or restricts driver selection. */
 export function DriverArrivalRecommendations(props: DriverArrivalRecommendationsProps) {
-  const { drivers, jobs, companyId, targetName, locations, jobsComplete, roadTime } = props;
+  const { drivers, jobs, companyId, targetName, locations, jobsComplete, roadTime, onSuggestedDriverChange } = props;
   const [expanded, setExpanded] = useState(false);
   const [invoices, setInvoices] = useState<ArrivalInvoice[]>([]);
   const [historyScope, setHistoryScope] = useState('');
@@ -130,15 +131,16 @@ export function DriverArrivalRecommendations(props: DriverArrivalRecommendations
     const controller = new AbortController();
     running.current = { scope, controller };
     const checkedAt = Date.now(); setNow(checkedAt); setBusy(true); setRows([]);
+    onSuggestedDriverChange?.(null);
     const comparison = createDriverRoadComparison({ signal: controller.signal });
     recommendDriverArrivals({ drivers, jobs, invoices: combined, companyId, target, nowMs: checkedAt,
       jobsComplete: jobsComplete && !openError, history: buildArrivalHistory(combined, companyId, checkedAt),
       accountPresence:driver=>accountSignals[driver.driverId||'']?.state==='signed_out'?'logged_out':accountSignals[driver.driverId||'']?.state==='recently_active'?'logged_in':'unknown',
       locate: name => locationIndex.get(normalized(name)) || null, roadTime: roadTime || comparison.roadTime,
     }).then(result => {
-      if (!controller.signal.aborted) { setRows(result); setUsage(comparison.usage()); setCheckedScope(scope); setBusy(false); }
+      if (!controller.signal.aborted) { setRows(result); onSuggestedDriverChange?.(result.find(row => row.arrivalMinutes !== null)?.driverKey || null); setUsage(comparison.usage()); setCheckedScope(scope); setBusy(false); }
     }).catch(() => { if (!controller.signal.aborted) setBusy(false); });
-  }, [expanded, companyId, historyReady, openReady, linksReady, accountsReady, accountSignals, drivers, jobs, combined, target, jobsComplete, historyError, openError, locationIndex, roadTime, scope]);
+  }, [expanded, companyId, historyReady, openReady, linksReady, accountsReady, accountSignals, drivers, jobs, combined, target, jobsComplete, historyError, openError, locationIndex, roadTime, scope, onSuggestedDriverChange]);
   const selectedNames = drivers.filter(d => props.selectedKeys.has(d.key)).map(operationalDriverName);
   const displayRows: ArrivalRecommendation[] = checkedScope === scope && rows.length ? rows : drivers.map(d => ({
     driverKey: d.key, arrivalMinutes: null, releaseMinutes: null, travelMinutes: null,
@@ -147,12 +149,12 @@ export function DriverArrivalRecommendations(props: DriverArrivalRecommendations
   if (!targetName.trim()) return null;
   return <section className="rounded border border-cyan-800/60 bg-gray-950/40 text-xs" data-driver-arrival-recommendations>
     <button type="button" className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-cyan-300" aria-expanded={expanded} onClick={() => { refresh(); setExpanded(v => !v); }}>
-      <span>{props.picker ? (selectedNames.join(', ') || 'Select driver…') : 'Driver arrival recommendations'}</span><span aria-hidden="true">{expanded ? '▴' : '▾'}</span>
+      <span>{props.picker ? `Suggested driver / arrival estimates${selectedNames.length ? ` · Selected: ${selectedNames.join(', ')}` : ''}` : 'Driver arrival recommendations'}</span><span aria-hidden="true">{expanded ? '▴' : '▾'}</span>
     </button>
     {expanded && <div className="space-y-2 border-t border-cyan-900/60 p-3" onKeyDown={event => {
       if (event.key === 'Escape') { running.current?.controller.abort(); setExpanded(false); }
     }}>
-      <p className="break-words text-gray-300">To {targetName}. After current work; existing queued assignments are shown separately. All drivers remain selectable.</p>
+      <p className="break-words text-gray-300">To {targetName}. After current work; existing queued assignments are shown separately. Eligible drivers remain selectable.</p>
       {!!companyId && <p className="text-cyan-300">No shift start required. Recommendations use recent job/location evidence; missing data shows Arrival unknown.</p>}
       {!companyId && <p className="text-amber-300">Select a company to compare arrivals.</p>}
       {!!companyId && !target && <p className="text-amber-300">Pickup coordinates unavailable or ambiguous.</p>}

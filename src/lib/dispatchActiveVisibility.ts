@@ -1,7 +1,15 @@
-/** Terminal/rejected work stays one click away in the cancellation tab. */
-export function isCancelledDispatchCard(job: { status: string }): boolean {
-  return ['cancelled', 'declined', 'dismissed'].includes(job.status);
+/** Rejected work stays in the review tab until Dispatch reassigns or dismisses it. */
+export function isCancelledDispatchCard(job: { status: string; reassignedTo?: string | null }): boolean {
+  return (job.status === 'declined' || job.status === 'cancelled')
+    && !job.reassignedTo?.trim();
+}
+/** Decisions already made by Dispatch belong in read-only history. */
+export function isResolvedDispatchCard(job: { status: string; reassignedTo?: string | null }): boolean {
+  return job.status === 'dismissed'
+    || ((job.status === 'cancelled' || job.status === 'declined') && !!job.reassignedTo?.trim());
 }
 export function isActiveDispatchCard(job: { status: string; reassignedTo?: string | null }): boolean {
-  return job.status !== 'completed' && !isCancelledDispatchCard(job);
+  return job.status !== 'completed' && job.status !== 'dismissed'
+    && !isCancelledDispatchCard(job)
+    && !isResolvedDispatchCard(job);
 }
