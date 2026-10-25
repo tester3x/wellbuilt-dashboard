@@ -1,5 +1,5 @@
 import * as admin from 'firebase-admin';
-import {buildHistoricalPackets, canonicalHistory, digest, reviewPulls} from '../imports/pullImportModel';
+import {buildHistoricalPackets, calibration, canonicalHistory, digest, reviewPulls} from '../imports/pullImportModel';
 
 const principal='laptop-watchdog-v2';
 export function historicalResolutionReceipt(entry:any, packet:any, identity:string):any|null {
@@ -25,8 +25,17 @@ export async function resolveRejectedReview(input:{companyId:string;id:string;re
   if(!item||item.companyId!==input.companyId)throw Error('Review not in this company');
   if(item.recoveryResult){if(item.recoveryDecision!==input.decision)throw Error('Review already resolved differently');return item.recoveryResult;}
   if(item.status!=='review'||item.revision!==input.revision||item.command?.state==='pending')throw Error('Review changed; refresh');
-  const row=item.row,identity=digest([row.wellName,row.dateTimeUTC,row.tankLevelFeet,row.bottomLevelFeet,row.bblsTaken]);
-  const entryRef=fs.doc('watchdog_v2_deliveries/'+identity),entry=(await entryRef.get()).data();
+  const row=item.row;
+  // Receipts display the calibrated bottom when a reviewer discarded the reported
+  // bottom. Its observation identity still binds the original null value.
+  const identities=[...new Set([row.bottomLevelFeet,null].map(bottom=>digest([row.wellName,row.dateTimeUTC,row.tankLevelFeet,bottom,row.bblsTaken])))];
+  const candidates=await Promise.all(identities.map(async identity=>{
+    const entryRef=fs.doc('watchdog_v2_deliveries/'+identity),entry=(await entryRef.get()).data();
+    return {identity,entryRef,entry};
+  }));
+  const matches=candidates.filter(({entry})=>entry && (entry.reportedBottomFeet===row.bottomLevelFeet || entry.reportedBottomFeet===null&&entry.bottom===row.bottomLevelFeet));
+  if(matches.length!==1)throw Error('Observation ownership changed');
+  const {identity,entryRef,entry}=matches[0];
   const policy=(await fs.doc('watchdog_v2_config/laptop').get()).data();
   if(!policy?.enabled||!policy.channels?.[item.channel]?.wells?.includes(row.wellName)||!entry||entry.identity!==identity||entry.principalId!==principal||
     entry.wellName!==row.wellName||entry.dateTimeUTC!==row.dateTimeUTC||entry.top!==row.tankLevelFeet||entry.bbl!==row.bblsTaken||entry.pendingReview)throw Error('Observation ownership changed');
@@ -50,7 +59,7 @@ export async function resolveRejectedReview(input:{companyId:string;id:string;re
   try {
   if(input.decision==='record_history'){
     const config=(await db.ref('well_config/'+row.wellName).once('value')).val();
-    const bank=20*Number(config?.tanks||config?.numTanks);
+    const bank=config?calibration(config):0;
     if(!config||!Number.isFinite(bank)||bank<=0)throw Error('Valid tank calibration required');
     const history=(await db.ref('packets/processed').orderByChild('wellName').equalTo(row.wellName).once('value')).val()||{};
     const reviewed=reviewPulls([{...row,issues:[],excluded:false}],{[row.wellName]:config},{[row.wellName]:history},{[row.wellName]:bank},new Set())[0];

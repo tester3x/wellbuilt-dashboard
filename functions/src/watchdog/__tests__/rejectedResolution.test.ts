@@ -17,7 +17,7 @@ beforeEach(()=>{documents.clear();database.clear();failWrite=false;
  documents.set(entryKey,{identity,packetId:'original',wellName:'Well',dateTimeUTC:row.dateTimeUTC,top:12,bottom:8,reportedBottomFeet:8,bbl:160,principalId:'laptop-watchdog-v2'});
  documents.set('watchdog_v2_config/laptop',{enabled:true,channels:{group:{wells:['Well']}}});
  database.set('packets/rejected/original',{packetId:'original',reason:'STALE_PULL_TIME',packet:original});
- database.set('well_config/Well',{tanks:2,tankHeight:20});
+ database.set('well_config/Well',{tanks:2,tankHeight:20,bblPerFoot:40});
  for(const [id,time]of [['previous','00:00'],['newer','02:00']])database.set('packets/processed/'+id,{packetId:id,wellName:'Well',dateTimeUTC:'2026-10-20T'+time+':00.000Z',tankLevelFeet:12,bblsTaken:160});
  database.set('wells/Well/status',{lastPull:{packetId:'newer'},current:{level:'12'}});database.set('packets/outgoing/Well',{packetId:'newer'});
 });
@@ -48,4 +48,19 @@ test('unbound or forged historical packets cannot become confirmed receipts',asy
  const entry=documents.get(entryKey);expect(historicalResolutionReceipt(entry,{},identity)).toBeNull();
  await resolveRejectedReview(input,'manager');const resolved=documents.get(entryKey),packet=database.get('packets/processed/original');
  for(const change of [{bblsTaken:999},{wellName:'Foreign'},{historicalOnly:false},{watchdogHistoricalResolution:{id:'foreign'}}])expect(historicalResolutionReceipt(resolved,{...packet,...change},identity)).toBeNull();
+});
+
+test('historical recovery uses configured bank calibration rather than assuming 20 BBL per tank foot',async()=>{
+ database.set('well_config/Well',{tanks:2,tankHeight:30,bblPerFoot:68});
+ await resolveRejectedReview(input,'manager');
+ expect(database.get('packets/processed/original').tankAfterInches).toBeCloseTo((12-160/68)*12);
+});
+test('discarded reported bottom remains bound to its null observation identity',async()=>{
+ const nullId=digest([row.wellName,row.dateTimeUTC,row.tankLevelFeet,null,row.bblsTaken]);
+ const old=documents.get(entryKey);documents.delete(entryKey);
+ documents.set('watchdog_v2_deliveries/'+nullId,{...old,identity:nullId,reportedBottomFeet:null});
+ documents.set(itemKey,{...documents.get(itemKey),row:{...row,bottomLevelFeet:8}});
+ database.set('packets/rejected/original',{packetId:'original',reason:'STALE_PULL_TIME',packet:{...original,watchdogProvenance:{...original.watchdogProvenance,observationDigest:nullId,reportedBottomFeet:null}}});
+ expect((await resolveRejectedReview(input,'manager')).identity).toBe(nullId);
+ expect(database.get('packets/processed/original').watchdogProvenance.reportedBottomFeet).toBeNull();
 });
