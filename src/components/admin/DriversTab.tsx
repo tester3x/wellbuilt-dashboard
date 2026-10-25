@@ -238,10 +238,42 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // ── Unified employee rows (7/9 refactor) — one row per PERSON, merging
   // drivers/approved + users/{uid} via the dashboardUid/driverHash link.
   // Pure derivation; the underlying stores and modals are unchanged.
-  const employees: EmployeeRow<ApprovedDriver, DashboardUser>[] = useMemo(
-    () => mergeEmployees(approvedDrivers, dashboardUsers),
-    [approvedDrivers, dashboardUsers],
-  );
+  const employees = useMemo(() => {
+    const rows = mergeEmployees(approvedDrivers, dashboardUsers);
+    const used = new Set<string>();
+    const normalize = (name?: string) => (name || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+    const matches = (row: EmployeeRow<ApprovedDriver, DashboardUser>, profile: CanonicalWbmDriver) =>
+      !!row.driver && row.companyId === profile.companyId &&
+      normalize(row.name) === normalize(profile.legalName || profile.displayName);
+    const directory = rows.map(row => {
+      const byId = row.driver?.driverId
+        ? canonicalDrivers.find(profile => profile.driverId === row.driver?.driverId)
+        : undefined;
+      const byName = byId ? [] : canonicalDrivers.filter(profile => matches(row, profile));
+      const uniqueNameMatch = byName.length === 1 && rows.filter(other => matches(other, byName[0])).length === 1
+        ? byName[0] : undefined;
+      const canonical = byId || uniqueNameMatch;
+      if (canonical && !used.has(canonical.driverId)) {
+        used.add(canonical.driverId);
+        return { ...row, canonical };
+      }
+      return { ...row, canonical: undefined };
+    });
+    for (const canonical of canonicalDrivers) {
+      if (used.has(canonical.driverId)) continue;
+      directory.push({
+        id: `canonical:${canonical.driverId}`,
+        name: canonical.legalName || canonical.displayName,
+        companyId: canonical.companyId,
+        companyName: canonical.companyName,
+        mobileLoginActive: undefined,
+        hasDashboardLogin: false,
+        dashboardRoles: [],
+        canonical,
+      });
+    }
+    return directory.sort((a, b) => a.name.localeCompare(b.name));
+  }, [approvedDrivers, dashboardUsers, canonicalDrivers]);
   // Dev refactor (7/9): the unified panel is primary; the pre-refactor
   // Approved Drivers / dashboard-user lists stay behind this toggle until
   // the panel is field-approved. Nothing was deleted.
@@ -1043,7 +1075,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
 
   // ── Delete a driver permanently ──
   const deleteDriver = async (driver: ApprovedDriver) => {
-    if (!confirm(`Permanently delete ${driver.displayName}? This cannot be undone.`)) return;
+    if (driver.active !== false || driver.dashboardUid || hasCanonicalDriverId(driver)) {
+      setMessage('Deactivate the WB-T login first. Linked dashboard or WB-M identities cannot be removed here.');
+      return;
+    }
+    if (!confirm(`Permanently remove the inactive WB-T record for ${driver.displayName}? This does not remove WB-M profiles, dashboard accounts, or job history.`)) return;
     try {
       await staffWriteDriverRoster({ op: 'deleteApproved', approvedKey: driver.key });
       setMessage(`Deleted: ${driver.displayName}`);
@@ -1331,12 +1367,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 Migrate
               </button>
             )}
-            {isWbAdmin && (
+            {isWbAdmin && driver.active === false && !driver.dashboardUid && !hasCanonicalDriverId(driver) && (
               <button
                 onClick={() => deleteDriver(driver)}
                 className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-red-200 ml-auto"
               >
-                Delete
+                Delete inactive WB-T record
               </button>
             )}
           </div>
@@ -1524,63 +1560,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         </div>
       )}
 
-      {/* ── Canonical WB-M authority ── */}
-      <div className="mb-6 border border-blue-800/60 rounded-lg p-4 bg-gray-900/40">
-        <h3 className="text-white font-medium mb-1">WB-M canonical drivers</h3>
-        <p className="text-gray-400 text-xs mb-3">
-          These profiles control WB-M routes and wells. Employee records below show sign-in access.
-        </p>
-        {canonicalDrivers.length === 0 ? (
-          <p className="text-gray-500 text-sm">No canonical profiles in catalog.</p>
-        ) : (
-          <div className="space-y-2">
-            {canonicalDrivers
-              .filter(d => !scopeCompanyId || d.companyId === scopeCompanyId)
-              .filter(d => !search.trim() || d.displayName.toLowerCase().includes(search.toLowerCase()))
-              .map((d) => (
-                <div key={d.driverId} className="flex flex-wrap items-center justify-between gap-2 bg-gray-800 rounded p-3">
-                  <div>
-                    <div className="text-white font-medium">{d.displayName}</div>
-                    <div className="text-gray-400 text-xs font-mono">{d.driverId}</div>
-                    <div className="text-gray-400 text-xs">
-                      {d.active ? 'active' : 'inactive'} · {d.companyId || 'unscoped'} ·
-                      {d.assignedRoutes == null && d.assignedWells == null
-                        ? ' scope_not_configured'
-                        : ` routes ${d.assignedRoutes?.length ?? 0} / wells ${d.assignedWells?.length ?? 0}`}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button onClick={() => openRegularSchedule(d)} className="px-3 py-1 text-sm rounded bg-gray-600 hover:bg-gray-500 text-white">Regular shift & days off</button>
-                    {isWbAdmin && d.active && d.companyId && (
-                      <button
-                        onClick={() => ensureCanonicalCompanyBinding(d)}
-                        disabled={canonicalBindBusyDriverId !== null}
-                        className="px-3 py-1 text-sm rounded bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white"
-                        title="Verify this canonical driver's existing company and initialize missing shift authority through the governed server function"
-                      >
-                        {canonicalBindBusyDriverId === d.driverId ? 'Verifying…' : 'Verify company & shift authority'}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => {
-                        bumpAssignmentGeneration();
-                        setRouteTarget(d);
-                        setSelectedRoutes(d.assignedRoutes || []);
-                        setSelectedWells(d.assignedWells || []);
-                        setShowRoutesModal(true);
-                      }}
-                      className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
-                    >
-                      Preview WB-M routes
-                    </button>
-                  </div>
-                </div>
-              ))}
-          </div>
-        )}
-      </div>
-
-      {/* ── Unified Employee panel (7/9 refactor) ── */}
+      {/* One directory combines employee access and WB-M profile authority. */}
       <EmployeePanel
         employees={scopeCompanyId ? employees.filter(e => e.companyId === scopeCompanyId) : employees}
         isWbAdmin={isWbAdmin}
@@ -1602,10 +1582,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           setInviteResult(null);
         }}
         onSaveRoles={saveEmployeeRoles}
-        onRegularSchedule={(row) => { if (row.driver) openRegularSchedule(row.driver); }}
+        onRegularSchedule={(row) => { if (row.canonical || row.driver) openRegularSchedule(row.canonical || row.driver); }}
         onAssignRoutes={(row) => {
-          const id = row.driver?.driverId?.trim();
-          const canonical = id ? canonicalDrivers.find(c => c.driverId === id) : undefined;
+          const canonical = canonicalDrivers.find(profile => profile.driverId === row.canonical?.driverId);
           if (!canonical) {
             setMessage('LEGACY — NOT WB-M AUTHORITY. Assign routes on the canonical profile.');
             return;
@@ -1620,6 +1599,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           if (!row.driver) return;
           setCompanyTarget(row.driver); setAssignCompanyId(row.driver.companyId || ''); setAssignCompanyName(row.driver.companyName || ''); setCompanyError(''); setShowCompanyModal(true);
         }}
+        onVerifyCanonical={(driverId) => { const profile = canonicalDrivers.find(row => row.driverId === driverId); if (profile) ensureCanonicalCompanyBinding(profile); }}
+        canonicalBindBusyDriverId={canonicalBindBusyDriverId}
+        onDeleteApproved={(row) => { if (row.driver) deleteDriver(row.driver); }}
       />
 
       <div className="flex justify-end">
