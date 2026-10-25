@@ -32,3 +32,6 @@ Dashboard independently showed those same values and “No pulls waiting for rev
 User authorized closing ChatGPT and WhatsApp desktop on HP; only those apps were
 closed, leaving the receiver/browser/supervisor running. Immediate free memory
 increased from roughly 55 MB to 233 MB. No startup settings were changed.
+
+Recovery callable source 6aebdfc3 deployed successfully and independently verified
+ACTIVE after the update. All cleanup work and durable fixes are complete.
