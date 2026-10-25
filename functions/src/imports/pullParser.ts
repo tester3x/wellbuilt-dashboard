@@ -129,7 +129,16 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       // Preserve an unknown named report for review instead of silently dropping it.
       if (!matches.length) {
         const named = /^([^\n]*[a-z][^\n]*)\n([\s\S]+)$/i.exec(segment.body);
-        if (named && (/^(?:\s*(?:top|t)\s*[:=.\-]?\s*\d|\s*\d{1,2}(?:[ .,:']\d{1,2})?\s*\/\s*\d)/i.test(named[2]) || /^(?:\s*\d{1,2}[^\n]*\n){2}/.test(named[2]))) { segment.body = named[2]; segment.well = ''; }
+        if (named && (/^(?:\s*(?:top|t)\s*[:=.\-]?\s*\d|\s*\d{1,2}(?:[ .,:']\d{1,2})?\s*\/\s*\d)/i.test(named[2]) || /^(?:\s*\d{1,2}[^\n]*\n){2}/.test(named[2]))) {
+          // A whole-line pad name may omit its number only when this channel's
+          // catalogue has exactly one matching numbered well. Explicit other
+          // numbers, prose, foreign names and ambiguous pads remain held.
+          const key = normalizeWell(named[1]);
+          const candidates = [...new Set(options.wellNames || [])].filter(name =>
+            /[ \t]+\d+$/.test(name) && normalizeWell(name.replace(/[ \t]+\d+$/, '')) === key);
+          segment.body = named[2];
+          segment.well = candidates.length === 1 ? candidates[0] : '';
+        }
       }
       let inlineTime = '';
       // A well-name suffix such as '. On' is pump status, not a gauge line.
