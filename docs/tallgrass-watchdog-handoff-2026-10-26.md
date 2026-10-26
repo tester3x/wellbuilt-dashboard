@@ -1,0 +1,30 @@
+# Temporary laptop Watchdog handoff
+
+## Source and deployment
+
+The laptop branch `codex/watchdog-tallgrass-laptop-20261026` retains the previously deployed intake/parser baseline from `codex/watchdog-combined-time-20261019`. Product checkpoint: `5c8333ce`.
+
+- Accept Granli's observed Grenli/Granil spelling variants only when Granli is in the authorized catalogue.
+- Accept a standalone pad/CTB suffix on a known well heading.
+- Resolve the official operator for newly created wells from unique API/name matches in active and inactive NDIC catalogues. This remains server-owned metadata.
+- Only `ingestWatchdogPullV2` and `staffWriteWellConfig` were deployed. Both report ACTIVE. No Hosting or security rules deployment.
+
+Validation: functions TypeScript build passed; 117 focused parser/import/operator/config tests and 66 worker tests passed. An additional legacy intake suite retains six pre-existing decimal-versus-feet/inches fixture failures; do not describe the full repository test suite as passing.
+
+## Temporary receiver
+
+The local receiver runs hidden, with its own linked WhatsApp session and durable private queue, at `http://127.0.0.1:8791/`. Its data directory is under `%LOCALAPPDATA%/WellBuilt/WhatsAppWatchdog-Tallgrass-live-20261026`. Only the Tallgrass group is enabled locally; the home HP's existing groups were not changed.
+
+The worker was restarted onto the product checkpoint and verified Connected, Watching, with WB M Ready and current receiver checks. A new written-barrel load completed through the authenticated receiver and the owner confirmed its arrival in WB M. The queue survives restart; do not copy a live browser profile or run competing receivers for this group during the future HP handoff.
+
+## History and configuration
+
+The owner-supplied export was normalized with original message bodies retained losslessly, previewed and applied through the governed owner import UI: 26 historical pulls, no duplicates. Two new wells had empty live projections; after verifying the completed governed import and empty heads, derived projections were initialized separately with reconciliation audit evidence. The import callable's model-seed cold-cache issue was not fixed by this change.
+
+Both wells opt into the existing inventory-balance estimator. New packet ingestion continues to refresh projections automatically. Historical source times, top readings, written barrel quantities and packet identities were preserved.
+
+Granli's subsequently supplied manufacturer plaque replaces its provisional tank dimensions: two equalizing tanks, 500 BBL nominal each, 20 ft height, 13 ft 6 in diameter. Following the existing diameter-based calibration convention, 25.5 BBL/ft per tank gives a 51 BBL/ft bank. Historical computed after-levels were recalibrated with original import provenance retained and an appended correction audit; actual reported readings and live packet provenance were preserved. Dwyer's provisional 20 BBL/ft per tank was not changed.
+
+Customer/payment identity remains separate from legal well operator. The Tallgrass customer and both well choices were verified in the live Dispatch builder without creating jobs. Requested route assignments were appended while retaining existing routes and viewer restrictions.
+
+Private exports, photos, device captures, credentials, backups and reconciliation records remain outside Git. The HP migration is pending until the home machine is reachable.
