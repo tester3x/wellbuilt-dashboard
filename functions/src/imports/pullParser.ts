@@ -109,11 +109,12 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
   const predatorCanonical = predatorMatches.length === 1 && !(options.wellNames || []).some(name => normalizeWell(name) === 'predator') ? predatorMatches[0] : null;
   // Match only scoped catalogue entries; whitespace is optional, never the well number.
   const canonicalFor = (value: string): string => {
-    const key = normalizeWell(value) === 'matildabay2' ? 'matilda2' : normalizeWell(value);
+    const normalized = normalizeWell(value);
+    const key = normalized === 'matildabay2' ? 'matilda2' : ['grenli', 'granil'].includes(normalized) ? 'granli' : normalized;
     const names = (options.wellNames || []).filter(name => normalizeWell(name) === key);
     return names.length === 1 ? names[0] : value;
   };
-  const catalogueNames = (options.wellNames || []).filter(Boolean).flatMap(name => normalizeWell(name) === 'matilda2' ? [name, 'Matilda bay 2'] : [name]).sort((a, b) => b.length - a.length).map(name => [...name].map(character => /\s/.test(character) ? '[ \t]*' : String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
+  const catalogueNames = (options.wellNames || []).filter(Boolean).flatMap(name => normalizeWell(name) === 'matilda2' ? [name, 'Matilda bay 2'] : normalizeWell(name) === 'granli' ? [name, 'Grenli', 'Granil'] : [name]).sort((a, b) => b.length - a.length).map(name => [...name].map(character => /\s/.test(character) ? '[ \t]*' : String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
   const boundary = String.fromCharCode(92) + 'b';
   const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + wellPattern.source + '|' + catalogueNames.join('|') + (pesekCanonical ? '|Pesek(?![ \t]*\\d)' : '') + ')' + boundary, 'ig') : wellPattern;
   for (const message of splitChat(text)) {
@@ -125,6 +126,9 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
     const segments = matches.length ? matches.map((match, i) => ({ well: pesekCanonical && normalizeWell(match[0]) === 'pesek' ? pesekCanonical : canonicalFor(match[0]), body: body.slice((match.index || 0) + match[0].length, matches[i + 1]?.index ?? body.length) })) : [{ well: options.defaultWell || '', body }];
     for (let part = 0; part < segments.length; part++) {
       const segment = segments[part];
+      // Shared-pad reports often put only "pad" or "CTB" after the scoped
+      // well name. Strip that standalone heading, never arbitrary prose.
+      if (matches.length) segment.body = segment.body.replace(/^[ \t]*(?:pad|ctb)[ \t]*[.:]?[ \t]*(?:\r?\n|(?=\d))/i, '');
       if (predatorCanonical && normalizeWell(segment.well) === 'predator') segment.well = predatorCanonical;
       // Preserve an unknown named report for review instead of silently dropping it.
       if (!matches.length) {
