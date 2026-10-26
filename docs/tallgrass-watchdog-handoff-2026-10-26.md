@@ -33,6 +33,14 @@ Product checkpoint `d0ab5453` adds the authoritative import company to newly bui
 
 After the owner released the ZFold, both exact-well histories were reopened and their complete counts/totals verified on screen. Dwyer's tank card and info modal show the corrected dimensions, tank count, per-tank calibration, operator and edit permission; its main-card AFR matches the server projection. Granli's corrected main-card AFR and tank details were also verified. Evidence remains in private device captures outside Git. Watchdog was Connected/Ready, actively checking, with the confirmed live receipt complete and no reviews pending. No synthetic loads were added for this acceptance check.
 
+## Immediate tank-edit recalculation
+
+Product checkpoint `e1addbc5` adds a derived refresh to `saveWbmTankInfo` for flow-relevant edits. The callable awaits completion and records `recalculatedAt` on the audited operation receipt. An acknowledged retry does not apply the edit twice, and an unfinished receipt can resume recalculation. Competing observation/configuration changes trigger a fresh bounded retry. Notes/H2S edits avoid the flow path. The three existing estimator modes remain selected by each well's configuration; unusable corrected data clears a stale rate.
+
+Only `saveWbmTankInfo` was deployed. The active handler and both recalculation helpers byte-match the compiled product checkpoint. Build and 98 focused tests passed, including old refresh/ON/inventory behavior, calibration refreshes for all estimator modes, source preservation, conflicts and retries. ZFold M107 passed an actual authorized calibration edit and restoration: the main-card AFR changed both ways without a new observation, restart or manual refresh. Exact private results and immutable-field comparisons are outside Git.
+
+A separate Mobile draft correction on branch `codex/wbm-stale-level-20261005`, product checkpoint `297c784`, keeps the single visible count aligned with the active count when all known tanks are in use. An explicitly smaller active bank remains protected. This client correction is being built as M108; no production pull-processor or security-rule deployment was required for this work.
+
 Customer/payment identity remains separate from legal well operator. The Tallgrass customer and both well choices were verified in the live Dispatch builder without creating jobs. Requested route assignments were appended while retaining existing routes and viewer restrictions.
 
 Private exports, photos, device captures, credentials, backups and reconciliation records remain outside Git. The HP migration is pending until the home machine is reachable.
