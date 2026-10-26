@@ -1,4 +1,5 @@
 import { approveInactivePlace } from './approvedInactivePlaces';
+import { canonicalWellOperator } from './canonicalWellOperator';
 /**
  * Staff create/update/rename/delete for RTDB well_config.
  * Client identity writes are denied. GPS route/routeRecording/routeGroupWell
@@ -174,8 +175,13 @@ export const staffWriteWellConfig = httpsV2.onCall(
       };
     }
 
-    await rtdb.ref(`well_config/${decided.wellName}`).set(decided.payload);
-    await approveInactivePlace(caller.companyId, decided.wellName, decided.payload, caller.uid);
+    const operator = await canonicalWellOperator(async (collection, field, value) => {
+      const matches = await admin.firestore().collection(collection).where(field, '==', value).limit(3).get();
+      return matches.docs.map(doc => doc.data());
+    }, decided.payload.ndicApiNo, decided.payload.ndicName);
+    const createdConfig = operator ? { ...decided.payload, operator } : decided.payload;
+    await rtdb.ref(`well_config/${decided.wellName}`).set(createdConfig);
+    await approveInactivePlace(caller.companyId, decided.wellName, createdConfig, caller.uid);
 
     await writeSecurityAudit({
       action: 'staffWriteWellConfig',
@@ -189,7 +195,7 @@ export const staffWriteWellConfig = httpsV2.onCall(
       created: true,
       updated: false,
       idempotent: false,
-      config: decided.payload,
+      config: createdConfig,
     };
   },
 );
