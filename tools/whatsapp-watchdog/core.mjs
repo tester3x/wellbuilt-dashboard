@@ -1,3 +1,4 @@
+import {combinedPullTimes} from './combined-times.mjs';
 import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {readFileSync,writeFileSync,renameSync,mkdirSync} from 'node:fs';
@@ -27,10 +28,11 @@ export class Queue{
  for(const message of Object.values(this.data.messages)){
   const options=channelOptions[message.channel];
   if(!options||message.deleted||message.edited||message.id.startsWith('export:'))continue;
-  const rows=parsePullChat(message.chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:message.key+':'+row.id})).map(row=>{const d=this.data.deliveries?.[row.id];return d&&(['duplicate','excluded','archived','before_activation'].includes(d.status)||(d.status==='complete'&&!d.needsReview))?message.rows.find(old=>old.id===row.id)||row:row;});
-  if(JSON.stringify(rows)!==JSON.stringify(message.rows)){message.rows=rows;changed=true;}
+  let rows=parsePullChat(message.chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:message.key+':'+row.id})).map(row=>{const d=this.data.deliveries?.[row.id];return d&&(['duplicate','excluded','archived','before_activation'].includes(d.status)||(d.status==='complete'&&!d.needsReview))?message.rows.find(old=>old.id===row.id)||row:row;});
+  const estimated=combinedPullTimes({...message,rows},this.data);if(estimated)rows=estimated.map(row=>{const d=this.data.deliveries?.[row.id];return d&&(['duplicate','excluded','archived','before_activation'].includes(d.status)||(d.status==='complete'&&!d.needsReview)||d.review)?message.rows.find(old=>old.id===row.id)||row:row;});
+   if(JSON.stringify(rows)!==JSON.stringify(message.rows)){message.rows=rows;changed=true;}
   for(const row of rows){const delivery=this.data.deliveries?.[row.id];
-   if(!row.issues.length&&!message.notices.length&&delivery?.status==='review'&&!delivery.identity&&!delivery.review&&delivery.issues?.length===1&&['Missing barrels','Unreadable levels'].includes(delivery.issues[0])){delete this.data.deliveries[row.id];changed=true;}
+   if(!row.issues.length&&!message.notices.length&&delivery?.status==='review'&&!delivery.identity&&!delivery.review&&delivery.issues?.length===1&&(['Missing barrels','Unreadable levels'].includes(delivery.issues[0])||row.combinedTimeResolved&&delivery.issues[0]==='Multiple wells in one message; confirm individual pull times')){delete this.data.deliveries[row.id];changed=true;}
   }
  }
  if(changed)this.save();

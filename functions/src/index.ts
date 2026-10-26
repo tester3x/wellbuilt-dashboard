@@ -1,4 +1,7 @@
+import {calculateInventoryProduction} from './inventoryProduction';
+import {previousPullBottomInches} from './previousPullLevel';
 import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecision';
+import {calculateOvernightProductionSample, overnightReadingProof, recordedBottomFeet} from './overnightProduction';
 import { resolveTankBblPerFoot } from './tankCalibration';
 import {refreshFlowWindow} from './refreshFlowWindow';
 import {effectiveFlow} from './effectiveFlow';
@@ -441,6 +444,7 @@ interface OutgoingResponse {
   originalPacketId?: string;
   windowBblsDay?: string | null;
   overnightBblsDay?: string | null;
+  overnightEstimatedTime?: boolean;
   lastPullDriverId?: string | null;
   lastPullDriverName?: string | null;
   lastPullPacketId?: string | null;
@@ -534,6 +538,8 @@ interface HistoricalPull {
   bblsTaken: number;
   wellDown: boolean;
   provisional?: boolean;
+  estimatedTime?: boolean;
+  bottomLevelFeet?: number | null;
 }
 
 /**
@@ -591,7 +597,8 @@ async function getHistoricalPulls(wellName: string, limit: number = 50): Promise
         tankLevelFeet: parseFloat(packet.tankLevelFeet) || 0,
         bblsTaken: parseFloat(packet.bblsTaken) || 0,
         wellDown: packet.wellDown === true || packet.wellDown === 'true',
-        provisional: isProvisionalPull(packet),
+        ...overnightReadingProof(packet),
+        bottomLevelFeet: recordedBottomFeet(packet),
       });
     }
 
@@ -690,46 +697,6 @@ function calculateWindowBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot
   if (avgFlowRateDays <= 0) return 0;
 
   return Math.round((1 / avgFlowRateDays) * bblPerFoot);
-}
-
-/**
- * Overnight/longest-gap bbls/day.
- * Finds the longest time gap between pulls in the current 6am window.
- */
-function calculateOvernightBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot: number, pullTimestamp: number): number {
-  if (!historicalPulls || historicalPulls.length < 2) return 0;
-
-  // Driver's manual method: most recent pull from any previous day → first pull today.
-  const todayDate = new Date(pullTimestamp).toISOString().slice(0, 10);
-
-  let firstPullToday: HistoricalPull | null = null;
-  let lastPullPrevDay: HistoricalPull | null = null;
-
-  // Pulls are chronological (oldest first). Walk backwards.
-  for (let i = historicalPulls.length - 1; i >= 0; i--) {
-    const pull = historicalPulls[i];
-    const pullDate = new Date(pull.timestamp).toISOString().slice(0, 10);
-
-    if (pullDate === todayDate) {
-      firstPullToday = pull; // Keeps overwriting — last one standing is earliest today
-    } else {
-      lastPullPrevDay = pull; // Most recent pull from a previous day
-      break;
-    }
-  }
-
-  if (!firstPullToday || !lastPullPrevDay) return 0;
-  if (firstPullToday.wellDown || lastPullPrevDay.wellDown || firstPullToday.provisional || lastPullPrevDay.provisional) return 0;
-
-  const timeDifDays = (firstPullToday.timestamp - lastPullPrevDay.timestamp) / (1000 * 60 * 60 * 24);
-  if (timeDifDays <= 0) return 0;
-
-  const prevBottomFeet = Math.max(lastPullPrevDay.tankLevelFeet - (lastPullPrevDay.bblsTaken / bblPerFoot), 0);
-  const recoveryFeet = firstPullToday.tankLevelFeet - prevBottomFeet;
-  if (recoveryFeet <= 0) return 0;
-
-  const flowRateDays = timeDifDays / recoveryFeet;
-  return Math.round((1 / flowRateDays) * bblPerFoot);
 }
 
 /**
@@ -876,7 +843,7 @@ function filterAnomalies(flowRates: number[]): number[] {
 // Alpha = 0.4 gives ~60% weight to recent pulls while smoothing noise.
 const EMA_ALPHA = 0.4;
 
-async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<number> {
+async function calculateAFR(wellName: string, newFlowRateDays: number, current?: Record<string, any>): Promise<number> {
 
   // Get recent processed packets for this well
   // NOTE: Don't use limitToLast() - Firebase sorts by key alphabetically,
@@ -889,6 +856,11 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     .once('value');
 
   const flowConfig=(await db.ref('well_config/'+wellName).once('value')).val()||{};
+  if(flowConfig.productionRateMode==='inventory_balance') {
+    const records={...(snapshot.val()||{}),...(current?{[current.packetId]:current}:{})};
+    const at=current?Date.parse(current.dateTimeUTC):Math.max(...Object.values(records).map((p:any)=>Date.parse(p.dateTimeUTC||'')).filter(t=>Number.isFinite(t)&&t<=Date.now()));
+    return calculateInventoryProduction(records,resolveTankBblPerFoot(flowConfig),at)?.daysPerFoot||0;
+  }
   const windowed=effectiveFlow(snapshot.val()||{},flowConfig);
   if(windowed)return windowed.averageDays;
 
@@ -1156,6 +1128,12 @@ export const processIncomingPull = functionsV1.database
       await db.ref(`well_config/${targetConfigKey}/isDown`).set(nextIsDown);
     }
 
+    // Display levels truncate fractional inches; use the linked measurement for AFR.
+    if (typeof prevResponse?.lastPullPacketId === 'string') {
+      const previousSourcePacket = (await db.ref('packets/processed/' + prevResponse.lastPullPacketId).once('value')).val();
+      prevTankAfterInches = previousPullBottomInches(previousSourcePacket, prevTankAfterInches);
+    }
+
     // Calculate all fields
     const tankTopInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
 
@@ -1231,7 +1209,7 @@ export const processIncomingPull = functionsV1.database
       ? await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value') : null;
     const windowed=flowHistorySnap&&!isProvisionalPull(data)?effectiveFlow({...flowHistorySnap.val(),[packetId]:{...data,packetId,tankTopInches,tankAfterInches,wellDown:nextIsDown}},config):null;
     if(windowed){const sample=windowed.results.find(r=>r.packetId===packetId);flowRateDays=sample?.flowRateDays||0;flowRate=flowRateDays>0?daysToHMMSS(flowRateDays):'';recoveryInches=sample?.recoveryInches||0;timeDifDays=sample?.timeDifDays||0;timeDif=timeDifDays>0?daysToHMM(timeDifDays):'';}
-    const afr = isProvisionalPull(data)?(Number(config.avgFlowRateMinutes)/1440||await calculateAFR(wellName,0)):(windowed?windowed.averageDays:await calculateAFR(wellName, flowRateDays));
+    const afr = isProvisionalPull(data)?(Number(config.avgFlowRateMinutes)/1440||await calculateAFR(wellName,0)):(windowed&&config.productionRateMode!=='inventory_balance'?windowed.averageDays:await calculateAFR(wellName, flowRateDays, {...data,packetId,tankAfterInches,wellDown:nextIsDown}));
 
     // Calculate window-averaged and overnight bbls/day
     // bblPerFoot is the configured total active bank calibration.
@@ -1245,12 +1223,14 @@ export const processIncomingPull = functionsV1.database
       tankLevelFeet: parseFloat(String(data.tankLevelFeet)) || 0,
       bblsTaken: parseFloat(String(data.bblsTaken)) || 0,
       wellDown: data.wellDown === true || data.wellDown === ('true' as any),
-      provisional: isProvisionalPull(data),
+      ...overnightReadingProof(data),
+      bottomLevelFeet: tankAfterInches / 12,
     });
     historicalPulls.sort((a, b) => a.timestamp - b.timestamp);
 
     const windowBblsDay = windowed ? 0 : calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
-    const overnightBblsDay = windowed ? 0 : calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
+    const overnightSample = calculateOvernightProductionSample(historicalPulls, bblPerFoot, pullTimeMs, config.overnightProductionMode === 'afr' ? 'afr' : 'overnight');
+    const overnightBblsDay = overnightSample.bblsDay;
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);
 
     // Recovery Needed
@@ -1342,6 +1322,7 @@ export const processIncomingPull = functionsV1.database
       timestampUTC: timestamp.toISOString(),
       windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
       overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+      overnightEstimatedTime: overnightBblsDay > 0 && overnightSample.estimatedTime,
     };
 
     // Write to outgoing/ (delete old responses for this well first)
@@ -2147,7 +2128,8 @@ export const processDeleteRequest = functionsV1.database
           const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
           const historicalPulls = await getHistoricalPulls(wellName, 500);
           const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
-          const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+          const overnightSample = calculateOvernightProductionSample(historicalPulls, bblPerFoot, latestTimeMs, config.overnightProductionMode === 'afr' ? 'afr' : 'overnight');
+          const overnightBblsDay = overnightSample.bblsDay;
 
           const tankAfterInches = latestPacket.tankAfterInches || 0;
           const pullHeightInches = (pullBbls / bblPerFoot) * 12;
@@ -2209,6 +2191,7 @@ export const processDeleteRequest = functionsV1.database
             isDeleteRebuild: true,
             windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
             overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+            overnightEstimatedTime: overnightBblsDay > 0 && overnightSample.estimatedTime,
             companyId: outgoingCompanyId(config),
           });
 
@@ -4087,6 +4070,11 @@ export { ingestWatchdogPullV2, getWatchdogPullReceiptV2, stopWatchdogWellV2, get
 
 export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';
 
-export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './watchdog/remoteReview';
+export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview,resolveWatchdogRejectedReview} from './watchdog/remoteReview';
+export {getWatchdogAgentHealth,requestWatchdogRecovery,syncWatchdogAgentV2} from './watchdog/remoteAgent';
+export {staffGetDispatchDriverSignals} from './security/dispatchDriverSignals';
+export {staffWriteWaterOrder} from './security/staffWriteWaterOrder';
 
 export {reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from './watchdog/intake';
+export { getWbmTankInfo, saveWbmTankInfo } from './security/operational/tankInfoCallables';
+export { staffWritePrimaryRouteAssignment, staffGetPrimaryRouteAssignments } from './security/operational/staffWritePrimaryRouteAssignment';

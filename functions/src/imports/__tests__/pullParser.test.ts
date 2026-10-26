@@ -1,6 +1,23 @@
 import { parsePullChat, parseFeet, chatTimestamp } from '../pullParser';
 const msg = (body: string, time = '3:41:19 PM') => `[9/20/26, ${time}] Driver: ${body}`;
 describe('historical pull parser', () => {
+  test.each([
+    ['00:39:21','12:38','2026-10-24T05:38:00.000Z'],
+    ['12:39:21','12:38','2026-10-24T17:38:00.000Z'],
+    ['00:39:21','00:38','2026-10-24T05:38:00.000Z'],
+    ['00:39:21','1238','2026-10-24T05:38:00.000Z'],
+    ['12:39:21','1238','2026-10-24T17:38:00.000Z'],
+  ])('bare noon/midnight clock %s / %s follows the nearby post', (posted,stated,expected)=>{
+    const details=stated.includes(':')?`${stated}\n185 bbls`:`185 bbls\n${stated}`;
+    const [row]=parsePullChat(`[10/24/2026, ${posted}] Test Driver: Cyclone 2 10.4/8.3\n${details}`,{levelNotation:'feet_inches'});
+    expect(row.dateTimeUTC).toBe(expected);expect(row.issues).toEqual([]);
+    expect(row.tankLevelFeet).toBeCloseTo(10+4/12);expect(row.bottomLevelFeet).toBe(8.25);expect(row.bblsTaken).toBe(185);
+  });
+  test('distant bare noon remains review-only and an explicit meridiem is never reversed',()=>{
+    const body=(time:string)=>`[10/24/2026, 00:39:21] Test Driver: Cyclone 2 10.4/8.3\n${time}\n185 bbls`;
+    expect(parsePullChat(body('12:38 PM'))[0].issues).toContain('Stated time is far from the post; confirm the pull date and time');
+    expect(parsePullChat('[10/24/2026, 08:39:21] Test Driver: Cyclone 2 10.4/8.3\n12:38\n185 bbls')[0].issues).toContain('Pull time lacks AM/PM; confirm');
+  });
   test('decimal feet and feet/inches remain distinct', () => {
     expect(parseFeet('7.11')).toBe(7.11);
     expect(parseFeet('7’11')).toBeCloseTo(7 + 11 / 12);

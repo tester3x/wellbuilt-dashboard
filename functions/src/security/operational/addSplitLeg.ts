@@ -1,4 +1,5 @@
 import { fail, revisionDocId, type StoreResult } from './jobPacketRevisionStore';
+import { evaluateSplitLoadBudget } from './splitLoadBudget';
 import {
   evaluateCreateIfAbsent,
   evaluateWellAuthorized,
@@ -39,6 +40,7 @@ export const LEG_SPEC_KEYS = Object.freeze([
   'serviceType',
   'notes',
   'destinationType',
+  'usedBbls',
 ] as const);
 
 function str(v: unknown): string {
@@ -84,6 +86,10 @@ function parseLegSpec(raw: unknown): StoreResult<{
   if (typeof obj.disposalLat === 'number' && Number.isFinite(obj.disposalLat)) fields.disposalLat = obj.disposalLat;
   if (typeof obj.disposalLng === 'number' && Number.isFinite(obj.disposalLng)) fields.disposalLng = obj.disposalLng;
   if (typeof obj.bbls === 'number' && Number.isFinite(obj.bbls)) fields.bbls = obj.bbls;
+  if (obj.usedBbls !== undefined) {
+    if (typeof obj.usedBbls !== 'number' || !Number.isFinite(obj.usedBbls) || obj.usedBbls < 0) return fail('split_invalid_delivery', 'legSpec.usedBbls');
+    fields.usedBbls = obj.usedBbls;
+  }
   if (typeof obj.serviceType === 'string' && obj.serviceType.trim()) fields.serviceType = obj.serviceType.trim();
   if (typeof obj.notes === 'string') fields.notes = obj.notes;
   if (typeof obj.destinationType === 'string' && obj.destinationType.trim()) {
@@ -250,7 +256,7 @@ export async function runAddSplitLeg(input: {
   getRevision: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
   getCompany?: (id: string) => Promise<Record<string, unknown> | null>;
   listSiblings: (splitGroupId: string) => Promise<Array<{ id: string; data: Record<string, unknown> }>>;
-  listInvoices?: (splitGroupId: string) => Promise<Array<{ id: string }>>;
+  listInvoices?: (splitGroupId: string) => Promise<Array<{ id: string; data?: Record<string, unknown> }>>;
   applyCreate: (id: string, data: Record<string, unknown>) => void;
   applySiblingTotal?: (id: string, total: number) => void;
   applyInvoiceTotal?: (id: string, total: number) => void;
@@ -302,7 +308,18 @@ export async function runAddSplitLeg(input: {
   const pins = verifyDispatchPinsAgainstEnvelope(parent, loaded.envelope, input.caller.companyId, customJobTypes);
   if (!pins.ok) return pins;
 
-  const parentWell = readCanonicalWell(parent);
+  const splitGroupId = str(parent.splitGroupId);
+  if (!splitGroupId) return fail('parent_not_split_chain', 'splitGroupId');
+  const siblings = await input.listSiblings(splitGroupId);
+  const sibs = siblings.some(s => s.id === parentId.dispatchId) ? siblings : [...siblings, { id: parentId.dispatchId, data: parent }];
+  for (const sib of sibs) {
+    const ownedSibling = parentOwnedByCaller(sib.data, input.caller);
+    if (!ownedSibling.ok) return ownedSibling;
+  }
+  const anchors = sibs.filter(s => s.data.splitSequence === 1);
+  if (anchors.length !== 1) return fail('split_anchor_missing');
+  const anchor = anchors[0];
+  const parentWell = readCanonicalWell(anchor.data);
   if (!parentWell.ok) return parentWell;
   const wellGate = evaluateWellAuthorized(
     parentWell.well.wellName,
@@ -314,9 +331,6 @@ export async function runAddSplitLeg(input: {
   const requestedType = (spec.jobType as string) || str(parent.jobTypeId) || str(parent.jobType);
   const jobType = resolveCanonicalJobType(requestedType, loaded.envelope.jobTypes, customJobTypes);
   if (!jobType.ok) return jobType;
-
-  const splitGroupId = str(parent.splitGroupId);
-  if (!splitGroupId) return fail('parent_not_split_chain', 'splitGroupId');
 
   const identity: SplitLegBirthIdentity = {
     parentDispatchId: parentId.dispatchId,
@@ -335,6 +349,7 @@ export async function runAddSplitLeg(input: {
   const replay = evaluateSplitLegCreateIfAbsent({ existing: childExisting, expected: identity });
   if (!replay.ok) return replay;
   if (replay.result === 'already_exists') {
+    if (spec.fields.usedBbls !== undefined && childExisting?.splitParentUsedBbls !== spec.fields.usedBbls) return fail('conflict', 'usedBbls');
     const persisted = readSplitLegBirthIdentity(childExisting);
     return {
       ok: true,
@@ -347,11 +362,24 @@ export async function runAddSplitLeg(input: {
     };
   }
 
-  const siblings = await input.listSiblings(splitGroupId);
   const invoiceIds = input.listInvoices ? await input.listInvoices(splitGroupId) : [];
-  const sibs = siblings.some((s) => s.id === parentId.dispatchId)
-    ? siblings
-    : [...siblings, { id: parentId.dispatchId, data: parent }];
+  const childFields = { ...spec.fields };
+  delete childFields.usedBbls;
+  if (spec.fields.usedBbls !== undefined) {
+    const records = invoiceIds.filter((row): row is { id: string; data: Record<string, unknown> } => !!row.data);
+    const current = records.filter(row => row.data.dispatchId === parentId.dispatchId);
+    const budget = evaluateSplitLoadBudget(anchor.id, records.filter(row => row.data.dispatchId !== parentId.dispatchId));
+    if (!budget.ok) return fail(budget.reason);
+    const used = Number(spec.fields.usedBbls);
+    if (used >= budget.remaining) return fail('split_no_remaining_water');
+    if (current.some(row => ['closed', 'completed'].includes(str(row.data.status)) && Number(row.data.totalBBL) !== used)) return fail('split_closed_delivery_mismatch');
+    const remainder = Math.round((budget.remaining - used) * 100) / 100;
+    if (childFields.bbls !== undefined && childFields.bbls !== remainder) return fail('split_remainder_mismatch');
+    childFields.bbls = remainder;
+    childFields.splitPickupBbls = budget.pickup;
+    childFields.splitParentUsedBbls = used;
+  }
+  childFields.splitPickupDispatchId = anchor.id;
   if (!sibs.length) return fail('split_siblings_missing', 'splitGroupId');
   let maxSequence = 0;
   for (const sib of sibs) {
@@ -362,7 +390,7 @@ export async function runAddSplitLeg(input: {
   const splitTotal = sibs.length + 1;
   const fields = materializeChild({
     caller: input.caller,
-    parent,
+    parent: { ...parent, operator: anchor.data.operator ?? parent.operator },
     parentDispatchId: parentId.dispatchId,
     binding: identity.binding,
     well: identity.well,
@@ -370,7 +398,7 @@ export async function runAddSplitLeg(input: {
     splitGroupId,
     splitSequence,
     splitTotal,
-    fields: spec.fields,
+    fields: childFields,
   });
   input.applyCreate(childId.dispatchId, fields);
   if (input.applySiblingTotal) {

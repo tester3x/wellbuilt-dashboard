@@ -133,15 +133,24 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       // Preserve an unknown named report for review instead of silently dropping it.
       if (!matches.length) {
         const named = /^([^\n]*[a-z][^\n]*)\n([\s\S]+)$/i.exec(segment.body);
-        if (named && (/^(?:\s*(?:top|t)\s*[:=.\-]?\s*\d|\s*\d{1,2}(?:[ .,:']\d{1,2})?\s*\/\s*\d)/i.test(named[2]) || /^(?:\s*\d{1,2}[^\n]*\n){2}/.test(named[2]))) { segment.body = named[2]; segment.well = ''; }
+        if (named && (/^(?:\s*(?:top|t)\s*[:=.\-]?\s*\d|\s*\d{1,2}(?:[ .,:']\d{1,2})?\s*\/\s*\d)/i.test(named[2]) || /^(?:\s*\d{1,2}[^\n]*\n){2}/.test(named[2]))) {
+          // A whole-line pad name may omit its number only when this channel's
+          // catalogue has exactly one matching numbered well. Explicit other
+          // numbers, prose, foreign names and ambiguous pads remain held.
+          const key = normalizeWell(named[1]);
+          const candidates = [...new Set(options.wellNames || [])].filter(name =>
+            /[ \t]+\d+$/.test(name) && normalizeWell(name.replace(/[ \t]+\d+$/, '')) === key);
+          segment.body = named[2];
+          segment.well = candidates.length === 1 ? candidates[0] : '';
+        }
       }
       let inlineTime = '';
       // A well-name suffix such as '. On' is pump status, not a gauge line.
       // Strip only that exact leading annotation; keep arbitrary prose held.
-      const gaugeBody=segment.body.replace(/^\s*[.,:]?\s*on\s*(?:\r?\n|$)/i,'\n').replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
+      const gaugeBody=segment.body.replace(/^\s*[.,:]?\s*on\s*(?:\r?\n|$)/i,'\n').replace(/^\s*levels?\s*[:=]?\s*(?=\d)/i,'').replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
       const rawLines=gaugeBody.split('\n').map(line=>line.trim()).filter(Boolean);
       const lines = gaugeBody.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
-        const suffix = /\s+(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
+        const suffix = /(?:\s+@?\s*|@)(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
         const prefix = suffix ? line.slice(0,suffix.index).trim().replace(/^(?:top|bottom|t|b)\s*[:=.\-]?\s*/i,'').replace(/\.(?!\d)$/,'') : '';
         if (suffix && clock(suffix[1]) && (/[ap]/i.test(suffix[1]) || parseFeet(prefix)!==null)) { inlineTime = suffix[1]; line = line.slice(0, suffix.index).trim(); }
         return line.replace(/^(?:top|bottom|t|b)\s*[:=.\-]?\s*(?=\d)/i, '').replace(/\.(?!\d)$/, '').trim();
@@ -180,8 +189,10 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
       const explicit = inlineTime || lines.find((line, index) => index >= (levelOnly ? 1 : pair ? (bareAmount ? 2 : 1) : (unlabelled || (labelled && bottom)) ? (bareAmount ? 3 : 2) : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
       if (explicit && clock(explicit)) {
         let resolved = explicit;
-        // Bare 1:30 can mean AM or PM. Choose nearest post only within two hours.
-        if (!/[ap]/i.test(explicit) && Number(clock(explicit)?.hour) < 12) {
+        // Bare 12:38 is ambiguous too: midnight is 12 AM, not 0 AM. A bare
+        // 00:38 remains an unambiguous 24-hour clock. Use the same two-hour guard.
+        const statedHour=Number(clock(explicit)?.hour);
+        if (!/[ap]/i.test(explicit) && statedHour >= 1 && statedHour <= 12) {
           const choices = [explicit + ' AM', explicit + ' PM'].map(time => {
             try { return { time, difference: Math.abs(Date.parse(chatTimestamp(message.date, time, options.timeZone, options.dateOrder)) - Date.parse(postedAt)) }; } catch { return { time, difference: Infinity }; }
           }).sort((a, b) => a.difference - b.difference);
