@@ -2,7 +2,7 @@
   "capturedAt": "2026-10-15",
   "project": "wellbuilt-sync",
   "source": "firebase functions:list",
-  "count": 214,
+  "count": 217,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -193,9 +193,12 @@
     "ssrwellbuiltsync",
     "staffConvertApprovedDriverSecureLogin",
     "staffDeletePull",
+    "staffGetPrimaryRouteAssignments",
     "staffResolveCompanyDriverShifts",
     "staffWriteDispatch",
     "staffWriteDriverAssignment",
+    "staffWritePrimaryRouteAssignment",
+    "staffWriteWaterOrder",
     "staffWriteWellConfig",
     "startPickupSplit",
     "stopWatchdogWellV2",
@@ -220,5 +223,7 @@
     "writeDiagnosticLog"
   ],
   "officeSyncVerifiedAt": "2026-10-21T22:18:00Z",
-  "officeSyncVerification": "Named Cloud Functions v2 metadata ACTIVE, deployed source downloaded and anonymous requests rejected"
+  "officeSyncVerification": "Named Cloud Functions v2 metadata ACTIVE, deployed source downloaded and anonymous requests rejected",
+  "primaryRouteVerifiedAt": "2026-10-24",
+  "primaryRouteVerification": "Named Cloud Functions v2 metadata ACTIVE; downloaded deployed source byte-matches the four-endpoint release; anonymous requests return 401."
 }

@@ -22,8 +22,18 @@ export type ArrivalRecommendation = {
   driverKey: string; arrivalMinutes: number | null; releaseMinutes: number | null;
   travelMinutes: number | null; miles?: number; queueCount: number;
   confidence: 'estimated' | 'unknown'; reasons: string[];
+  workState?: 'idle' | 'busy' | 'paused' | 'unknown';
 };
 export const DRIVER_GPS_MAX_AGE_MS = 15 * 60000;
+const finishedDispatchStates = new Set(['completed','cancelled','declined','dismissed']);
+/** An open billing draft is not active physical work when its own dispatch ended. */
+export function hasUnresolvedOpenWork(driver:DriverIdentity,jobs:readonly ArrivalJob[],invoices:readonly ArrivalInvoice[],drivers:readonly DriverIdentity[],companyId:string){
+ return invoices.some(invoice=>{
+  if(invoice.companyId!==companyId||invoice.status!=='open'||resolveDispatchDriver(invoice,[...drivers])?.key!==driver.key)return false;
+  const dispatch=invoice.dispatchId?jobs.find(j=>j.id===invoice.dispatchId&&resolveDispatchDriver(j,[...drivers])?.key===driver.key):null;
+  return !dispatch||!finishedDispatchStates.has(dispatch.status);
+ });
+}
 const key = (s: string | undefined | null) => (s || '').trim().toLowerCase();
 export function arrivalTimestampMs(value: any): number {
   const n = typeof value?.toMillis === 'function' ? value.toMillis()
@@ -103,15 +113,16 @@ export async function recommendDriverArrivals(input: {
   const result = await Promise.all(input.drivers.map(async driver => {
     const jobs = input.jobs.filter(j => (j.companyId === companyId || (!j.companyId && companyId === 'liquid-gold')) && resolveDispatchDriver(j, [...input.drivers])?.key === driver.key);
     const queueCount = jobs.filter(j => j.status === 'pending' || j.status === 'pending_approval').length;
+    const active = jobs.filter(j => ['accepted', 'in_progress', 'paused'].includes(j.status));
+    const workState:ArrivalRecommendation['workState']=!input.jobsComplete||driver.companyId&&driver.companyId!==companyId?'unknown':active.some(j=>j.status==='paused'||j.driverStage==='paused')?'paused':active.length?'busy':hasUnresolvedOpenWork(driver,jobs,input.invoices,input.drivers,companyId)?'unknown':'idle';
     const reasons: string[] = [];
     const unknown = (reason: string): ArrivalRecommendation => ({ driverKey: driver.key, arrivalMinutes: null, releaseMinutes: null,
-      travelMinutes: null, queueCount, confidence: 'unknown', reasons: [...reasons, reason] });
+      travelMinutes: null, queueCount, workState, confidence: 'unknown', reasons: [...reasons, reason] });
     if (driver.companyId && driver.companyId !== companyId) return unknown('Outside the selected company; not compared');
     if (!driver.companyId && companyId !== 'liquid-gold') return unknown('Driver company identity unavailable');
     if (!input.jobsComplete) return unknown('Current job feed unavailable; cannot assume this driver is free');
     if (!input.target) return unknown('Pickup coordinates unavailable or ambiguous');
     if (input.accountPresence?.(driver) === 'logged_out') return unknown('WB account logged out; next availability unknown');
-    const active = jobs.filter(j => ['accepted', 'in_progress', 'paused'].includes(j.status));
     let origin: ArrivalPoint | null = null, release = 0;
     if (active.length) {
       const linked = active.map(j => input.invoices.find(i => i.id === j.invoiceDocId && i.dispatchId === j.id && i.companyId === companyId));
@@ -179,7 +190,7 @@ export async function recommendDriverArrivals(input: {
       } else return unknown('Current job stage is unknown');
       reasons.push(`Available after current work at ${dropName}`);
     } else {
-      const orphan = input.invoices.some(i => i.companyId === companyId && i.status === 'open' && resolveDispatchDriver(i, [...input.drivers])?.key === driver.key);
+      const orphan = hasUnresolvedOpenWork(driver,jobs,input.invoices,input.drivers,companyId);
       if (orphan) return unknown('Open invoice without a current job; availability needs review');
       const latest = jobs.filter(j => arrivalPoint(j.driverLat, j.driverLng))
         .sort((a, b) => arrivalTimestampMs(b.driverGpsAt) - arrivalTimestampMs(a.driverGpsAt))[0];
@@ -195,7 +206,7 @@ export async function recommendDriverArrivals(input: {
     if (queueCount) reasons.push(`${queueCount} queued assignment${queueCount === 1 ? '' : 's'} remain; this estimate assumes dispatch places this job next`);
     reasons.push('HOS and equipment suitability not verified');
     return { driverKey: driver.key, arrivalMinutes: Math.ceil(release + onward.minutes), releaseMinutes: Math.ceil(release),
-      travelMinutes: Math.ceil(onward.minutes), miles: onward.miles, queueCount, confidence: 'estimated' as const, reasons };
+      travelMinutes: Math.ceil(onward.minutes), miles: onward.miles, queueCount, workState, confidence: 'estimated' as const, reasons };
   }));
   return result.sort((a, b) => (a.arrivalMinutes ?? Infinity) - (b.arrivalMinutes ?? Infinity)
     || (a.miles ?? Infinity) - (b.miles ?? Infinity) || a.driverKey.localeCompare(b.driverKey));

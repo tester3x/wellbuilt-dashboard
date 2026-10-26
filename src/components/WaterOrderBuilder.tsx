@@ -2,21 +2,26 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   collection,
-  doc,
   onSnapshot,
   query,
-  runTransaction,
   where,
 } from "firebase/firestore";
-import { getFirestoreDb } from "@/lib/firebase";
-import { loadWellsForOperator } from "@/lib/firestoreWells";
+import { getFirestoreDb, getFirebaseFunctions } from "@/lib/firebase";
+import { httpsCallable } from "firebase/functions";
+import { loadWellsForOperator, loadDisposals, searchWellsByName, type NdicWell } from "@/lib/firestoreWells";
+import { BuilderAutocomplete } from "@/components/BuilderAutocomplete";
+import { WaterOrderPlanReview } from "@/components/WaterOrderPlanReview";
+import { releasableWaterTrips } from "@/lib/waterOrderProgress";
+import { operationalDriverName } from "@/lib/operationalDriverName";
 import { assignmentIdentityForDriver } from "@/lib/dispatchWriterIdentity";
 import type { DriverIdentity } from "@/lib/dispatchDriverIdentity";
+import type { ShiftDotView } from "@/lib/shiftDotCore";
+import { DispatchDriverPicker, type PickerDriver, type PlannedShift } from "@/components/DispatchDriverPicker";
+import { preDispatchBlocked } from "@/lib/driverWeeklySchedule";
 import type { WellResponse } from "@/lib/wellPoolCore";
 import {
   estimateCycleMinutes,
   planWaterOrder,
-  readyWaterTrips,
   reservedWater,
   waterSourceFromWell,
   type WaterPlan,
@@ -33,6 +38,7 @@ type Job = {
   loadsCompleted?: number;
   bbls?: number;
 };
+type WaterOrderDriver = DriverIdentity & PickerDriver;
 type Draft = {
   name: string;
   destination: string;
@@ -49,6 +55,7 @@ type Draft = {
   handling: number;
   excluded: string[];
   cycles: Record<string, string>;
+  truckSettings?: Record<string,{capacity?:number;hours?:number}>;
 };
 type Saved = {
   id: string;
@@ -69,22 +76,7 @@ const blank = (): Draft => ({
   longitude: "",
   deadline: localTime(Date.now() + 3 * 86400000),
   notes: "",
-  tanks: [
-    {
-      id: "upright-1",
-      name: "Upright 1",
-      capacity: 400,
-      buffer: 40,
-      current: 0,
-    },
-    {
-      id: "upright-2",
-      name: "Upright 2",
-      capacity: 400,
-      buffer: 40,
-      current: 0,
-    },
-  ],
+  tanks: [],
   truckKeys: [],
   capacity: 185,
   hours: 10,
@@ -101,17 +93,9 @@ const display = (at: string) =>
     hour: "numeric",
     minute: "2-digit",
   });
-const canonical = (v: unknown): string =>
-  JSON.stringify(v, (_key, value) =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(
-          Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
-        )
-      : value,
-  );
 const id = () => "water_" + crypto.randomUUID();
 const field =
-  "w-full rounded border border-gray-600 bg-gray-900 px-2 py-1.5 text-sm text-white";
+  "min-w-0 w-full rounded border border-gray-600 bg-gray-900 px-2 py-1.5 text-sm text-white";
 
 export function WaterOrderBuilder({
   companyId,
@@ -122,14 +106,24 @@ export function WaterOrderBuilder({
   ready,
   canWrite,
   createDispatch,
+  shiftForDriver,
+  shiftDate,
+  onShiftDateChange,
+  onShiftChange,
+  readOnlyShifts,
 }: {
   companyId?: string;
   userId: string;
   wells: WellResponse[];
-  drivers: DriverIdentity[];
+  drivers: WaterOrderDriver[];
   jobs: Job[];
   ready: boolean;
   canWrite: boolean;
+  shiftForDriver?: (driver:DriverIdentity)=>ShiftDotView;
+  shiftDate: string;
+  onShiftDateChange: (date: string) => void;
+  onShiftChange: (driver: WaterOrderDriver, date: string, shift: PlannedShift) => Promise<void>;
+  readOnlyShifts?: boolean;
   createDispatch: (
     record: Record<string, unknown>,
     options: { actionId: string; actionScope: string; unitId: string },
@@ -148,6 +142,13 @@ export function WaterOrderBuilder({
     [orderJobsReady, setOrderJobsReady] = useState(false);
   const alive = useRef(true),
     running = useRef(false);
+  const authority=useRef({companyId,userId,canWrite});
+  authority.current={companyId,userId,canWrite};
+  const [sourceSearch,setSourceSearch]=useState(''),[destinationRows,setDestinationRows]=useState<NdicWell[]>([]),
+    [destinationState,setDestinationState]=useState(''),[dispatchProgress,setDispatchProgress]=useState('');
+  const [fleetSearch,setFleetSearch]=useState('');
+  const destinationRequest=useRef(0);
+  const destinationCatalog=useRef<Promise<PromiseSettledResult<NdicWell[]>[]>|null>(null);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -243,15 +244,39 @@ export function WaterOrderBuilder({
   const scopeDrivers = drivers.filter((d) =>
     d.companyId ? d.companyId === companyId : companyId === "liquid-gold",
   );
+  const visibleSources=scopeWells.filter(w=>`${w.wellName} ${w.operator||''}`.toLowerCase().includes(sourceSearch.trim().toLowerCase()));
   const requireScope = () => {
     if (
       !alive.current ||
       !companyId ||
       companyId === "__no_company_access__" ||
-      !canWrite
+      !canWrite || !authority.current.canWrite || authority.current.companyId!==companyId || authority.current.userId!==userId
     )
       throw Error("Choose a company with dispatch permission");
   };
+  async function searchDestination(value:string) {
+    update({destination:value,latitude:'',longitude:''});
+    const request=++destinationRequest.current;
+    setDestinationRows([]);
+    if(value.trim().length<2){setDestinationState('Type at least two characters to search locations.');return;}
+    setDestinationState('Searching locations…');
+    try {
+      const pending=destinationCatalog.current ||= Promise.allSettled([
+        loadDisposals(),
+        ...[...new Set(scopeWells.map(w=>w.operator).filter((o):o is string=>!!o))].map(loadWellsForOperator),
+      ]);
+      const groups=await pending;
+      if(groups.some(g=>g.status==='rejected'))destinationCatalog.current=null;
+      if(!alive.current||request!==destinationRequest.current)return;
+      const unique=new Map<string,NdicWell>();
+      groups.forEach(g=>{if(g.status==='fulfilled')g.value.forEach(w=>unique.set(`${w.operator}:${w.well_name}`,w));});
+      const matches=searchWellsByName(value,[...unique.values()],30);
+      setDestinationRows(matches);
+      setDestinationState(groups.some(g=>g.status==='rejected')?'Some locations could not be loaded. You can enter a destination name and use the fallback turnaround.':matches.length?'Choose a matching location, or keep your typed destination.':'No catalog match. You can keep this name and use the fallback turnaround.');
+    } catch {
+      if(alive.current&&request===destinationRequest.current)setDestinationState('Location search unavailable. Enter the name and use the fallback turnaround.');
+    }
+  }
   async function makePlan() {
     if (running.current) return;
     running.current = true;
@@ -265,6 +290,7 @@ export function WaterOrderBuilder({
         );
       if (!draft.name.trim() || !draft.destination.trim())
         throw Error("Enter the order name and destination");
+      if(!draft.tanks.length) throw Error('Add the tank types needed for this order');
       if (
         ![draft.fallback, draft.mph, draft.handling].every(Number.isFinite) ||
         draft.fallback <= 0 ||
@@ -341,9 +367,9 @@ export function WaterOrderBuilder({
         if (!d) throw Error("A selected driver is no longer available");
         return {
           key,
-          name: d.legalName || d.displayName || "Driver",
-          capacity: draft.capacity,
-          hoursPerDay: draft.hours,
+          name: operationalDriverName(d),
+          capacity: draft.truckSettings?.[key]?.capacity ?? draft.capacity,
+          hoursPerDay: draft.truckSettings?.[key]?.hours ?? draft.hours,
         };
       });
       const result = planWaterOrder({
@@ -421,65 +447,25 @@ export function WaterOrderBuilder({
           records,
           sent: [],
         }),
-      ),
-      ref = doc(getFirestoreDb(), "projects", orderId);
-    const result = await runTransaction(getFirestoreDb(), async (tx) => {
-      const snap = await tx.get(ref);
-      requireScope();
-      if (snap.exists()) {
-        const existing = snap.data().waterOrder as Saved;
-        if (
-          snap.data().companyId !== companyId ||
-          !existing ||
-          canonical(existing.plan) !== canonical(plan)
-        )
-          throw Error("Saved order changed; reopen it before dispatch");
-        return { ...existing, id: orderId };
-      }
-      tx.set(ref, {
-        name: `Water Order Â· ${draft.name.trim()}`,
-        companyId,
-        createdBy: userId,
-        createdAt: new Date().toISOString(),
-        startDate: plan.createdAt.slice(0, 10),
-        projectedEndDate: plan.deadline.slice(0, 10),
-        wellNames: [...new Set(plan.trips.map((t) => t.wellName))],
-        operatorName: [...new Set(plan.sources.map((s) => s.operator))].join(
-          "; ",
-        ),
-        jobType: "pw",
-        status: "active",
-        driverSchedule: {},
-        notes: draft.notes,
-        waterOrder: value,
-      });
-      return value;
-    });
+      );
+    if(new TextEncoder().encode(JSON.stringify(value)).length>900000)
+      throw Error('This order is too large to save safely. Split it into smaller orders.');
+    const response=await httpsCallable(getFirebaseFunctions(),'staffWriteWaterOrder')({op:'save',orderId,companyId,value});
+    requireScope();
+    const result=(response.data as {order:Saved}).order;
+    if(result?.id!==orderId||result?.companyId!==companyId)throw Error('Order confirmation did not match this company');
     if (alive.current) setSaved(result);
     return result;
   }
   function eligible(order: Saved, at: number) {
-    return readyWaterTrips(order.plan, order.sent, at).filter((t) =>
-      order.plan.trips
-        .filter(
-          (p) =>
-            p.driverKey === t.driverKey &&
-            Date.parse(p.startAt) < Date.parse(t.startAt),
-        )
-        .every(
-          (p) =>
-            closed[p.id] !== undefined ||
-            linked[p.id] === "completed" ||
-            linked[p.id] === "cancelled" ||
-            linked[p.id] === "dismissed",
-        ),
-    );
+    return releasableWaterTrips(order.plan,order.sent,at,closed,linked);
   }
   async function dispatch() {
     if (running.current) return;
     running.current = true;
     setBusy(true);
     setMessage("");
+    setDispatchProgress('Saving order…');
     let sent = 0;
     try {
       requireScope();
@@ -487,9 +473,18 @@ export function WaterOrderBuilder({
       if (saved && !orderJobsReady)
         throw Error("Wait for this order’s live job status");
       const order = await persist();
+      const trips=eligible(order,Date.now());
       const committed: Record<string, number> = {};
-      for (const trip of eligible(order, Date.now())) {
+      for (const trip of trips) {
+        if(alive.current)setDispatchProgress(`Sending job ${sent+1} of ${trips.length} · ${sent} confirmed`);
         requireScope();
+        const tripDriver = scopeDrivers.find(driver => driver.key === trip.driverKey);
+        if (!tripDriver) throw Error('A planned driver is no longer available');
+        const pickupDate = new Date(trip.pickupAt);
+        const localPickupDate = `${pickupDate.getFullYear()}-${String(pickupDate.getMonth() + 1).padStart(2, '0')}-${String(pickupDate.getDate()).padStart(2, '0')}`;
+        if (preDispatchBlocked(tripDriver, localPickupDate, shiftForDriver?.(tripDriver).title || 'Shift status unavailable')) {
+          throw Error(`${operationalDriverName(tripDriver)} has a regular or planned day off on ${localPickupDate}. Wait for the driver to clock on shift.`);
+        }
         const well = scopeWells.find((w) => w.wellName === trip.wellName);
         if (!well) throw Error("Source is no longer available");
         const source = waterSourceFromWell(
@@ -511,22 +506,12 @@ export function WaterOrderBuilder({
         if (result.dispatchId !== trip.id)
           throw Error("Dispatch identity changed");
         requireScope();
-        await runTransaction(getFirestoreDb(), async (tx) => {
-          const ref = doc(getFirestoreDb(), "projects", order.id),
-            snap = await tx.get(ref);
-          requireScope();
-          if (
-            snap.data()?.companyId !== companyId ||
-            snap.data()?.waterOrder?.id !== order.id
-          )
-            throw Error("Order ownership changed");
-          tx.update(ref, {
-            "waterOrder.sent": [
-              ...new Set([...(snap.data()!.waterOrder.sent || []), trip.id]),
-            ],
-          });
-        });
+        const response=await httpsCallable(getFirebaseFunctions(),'staffWriteWaterOrder')({op:'acknowledge',orderId:order.id,companyId,dispatchId:trip.id});
+        requireScope();
+        const confirmed=(response.data as {order:Saved}).order;
+        if(confirmed?.id!==order.id||confirmed.companyId!==companyId||!confirmed.sent?.includes(trip.id))throw Error('Server has not confirmed this order job');
         sent++;
+        if(alive.current)setSaved(current=>current?.id===order.id?{...current,sent:[...new Set([...current.sent,trip.id])]}:current);
         if (!linked[trip.id])
           committed[trip.wellName] = (committed[trip.wellName] || 0) + trip.bbl;
       }
@@ -540,23 +525,22 @@ export function WaterOrderBuilder({
       if (alive.current)
         setMessage(
           e instanceof Error
-            ? e.message
+            ? `${sent ? `${sent} jobs confirmed before this stopped. ` : ''}${e.message} Retry keeps the same job identities.`
             : "Dispatch failed; retry uses the same job identities",
         );
     } finally {
       running.current = false;
-      if (alive.current) setBusy(false);
+      if (alive.current) {setBusy(false);setDispatchProgress('');}
     }
   }
   const activePlan = saved?.plan || plan,
-    delivered = Object.values(closed).reduce((a, b) => a + b, 0),
     due = saved
       ? eligible(saved, now).length
       : plan
-        ? readyWaterTrips(plan, [], now).length
+        ? releasableWaterTrips(plan, [], now, {}, {}).length
         : 0;
   return (
-    <section className="space-y-4 text-gray-200 min-w-0 overflow-y-auto">
+    <section className="space-y-4 text-gray-200 min-w-0">
       <div>
         <h2 className="text-lg font-semibold text-cyan-300">Water Orders</h2>
         <p className="text-xs text-gray-400">
@@ -572,6 +556,7 @@ export function WaterOrderBuilder({
           onChange={(e) => {
             const o = orders.find((o) => o.id === e.target.value);
             if (o) {
+              destinationRequest.current++;setDestinationRows([]);setDestinationState('');setSourceSearch('');setFleetSearch('');
               setSaved(o);
               setDraft(o.draft);
               setPlan(o.plan);
@@ -580,7 +565,7 @@ export function WaterOrderBuilder({
             }
           }}
         >
-          <option value="">Saved ordersâ€¦</option>
+          <option value="">Saved orders…</option>
           {orders.map((o) => (
             <option key={o.id} value={o.id}>
               {o.draft.name}
@@ -591,6 +576,7 @@ export function WaterOrderBuilder({
           className="rounded border border-gray-600 px-3"
           disabled={busy}
           onClick={() => {
+            destinationRequest.current++;setDestinationRows([]);setDestinationState('');setSourceSearch('');setFleetSearch('');
             setSaved(null);
             setPlan(null);
             setDraft(blank());
@@ -603,7 +589,7 @@ export function WaterOrderBuilder({
       </div>
       <fieldset
         disabled={busy || !!saved || !canWrite}
-        className="space-y-3 disabled:opacity-75"
+        className="min-w-0 space-y-3 disabled:opacity-75"
       >
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs">
@@ -614,13 +600,14 @@ export function WaterOrderBuilder({
               onChange={(e) => update({ name: e.target.value })}
             />
           </label>
-          <label className="text-xs">
+          <label className="text-xs min-w-0">
             Destination
-            <input
-              className={field}
-              value={draft.destination}
-              onChange={(e) => update({ destination: e.target.value })}
-            />
+            <BuilderAutocomplete ariaLabel="Order destination" value={draft.destination} onValueChange={value=>void searchDestination(value)}
+              items={destinationRows} minChars={2} inputClassName={field} placeholder="Search well or drop-off name"
+              listClassName="max-h-52 overflow-y-auto rounded border border-gray-600 bg-gray-900" optionClassName="wb-option-row block w-full px-2 py-2 text-left text-xs"
+              getItemKey={w=>`${w.operator}:${w.well_name}`} renderItem={w=><>{w.well_name}<span className="block text-gray-400">{w.operator}</span></>}
+              onSelect={w=>{destinationRequest.current++;setDestinationRows([]);const valid=typeof w.latitude==='number'&&Number.isFinite(w.latitude)&&Math.abs(w.latitude)<=90&&typeof w.longitude==='number'&&Number.isFinite(w.longitude)&&Math.abs(w.longitude)<=180;update({destination:w.well_name,latitude:valid?String(w.latitude):'',longitude:valid?String(w.longitude):''});setDestinationState(valid?'Location selected. Travel estimates use its catalog coordinates.':'Location selected; no catalog coordinates. Fallback turnaround will be used.');}}/>
+            <span role="status" className="block mt-1 text-gray-400">{destinationState}</span>
           </label>
           <label className="text-xs">
             Deadline
@@ -644,7 +631,7 @@ export function WaterOrderBuilder({
         </div>
         <details>
           <summary className="text-xs cursor-pointer">
-            Destination coordinates and travel estimates
+            Travel estimates / optional coordinate override
           </summary>
           <div className="grid grid-cols-2 gap-2 mt-2">
             {(
@@ -682,12 +669,13 @@ export function WaterOrderBuilder({
             </label>
           </div>
           <p className="text-xs text-gray-400 mt-1">
-            With coordinates, travel uses distance Ã— 1.25 at the chosen speed.
+            With coordinates, travel uses distance × 1.25 at the chosen speed.
             Enter a known turnaround below to override it.
           </p>
         </details>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+        {!draft.tanks.length&&<p className="text-sm text-gray-400">Choose the tank types needed below. No tanks are selected yet.</p>}
+        <div className="max-h-80 overflow-auto">
+          <table className="w-full min-w-[520px] text-xs">
             <thead>
               <tr>
                 <th className="text-left">Tank</th>
@@ -732,7 +720,7 @@ export function WaterOrderBuilder({
                         })
                       }
                     >
-                      Ã—
+                      ×
                     </button>
                   </td>
                 </tr>
@@ -745,13 +733,14 @@ export function WaterOrderBuilder({
             <button
               className="rounded border border-gray-600 px-3 py-1 text-xs"
               key={kind}
+              disabled={draft.tanks.length>=120}
               onClick={() =>
                 update({
                   tanks: [
                     ...draft.tanks,
                     {
                       id: crypto.randomUUID(),
-                      name: `${kind} ${draft.tanks.filter((t) => t.name.startsWith(kind)).length + 1}`,
+                      name: `${kind} ${Math.max(0,...draft.tanks.filter(t=>t.name.startsWith(kind+' ')).map(t=>Number(t.name.split(' ').at(-1))||0))+1}`,
                       capacity: kind === "Frac" ? 500 : 400,
                       buffer: 40,
                       current: 0,
@@ -764,9 +753,10 @@ export function WaterOrderBuilder({
             </button>
           ))}
         </div>
+        <p className="text-xs text-gray-400">{draft.tanks.length} tanks · {draft.tanks.reduce((sum,t)=>sum+Math.max(0,t.capacity-t.buffer-t.current),0)} BBL needed. Capacities, buffers and current water remain editable.</p>
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs">
-            Truck load capacity, BBL
+            Default truck load capacity, BBL
             <input
               className={field}
               type="number"
@@ -775,7 +765,7 @@ export function WaterOrderBuilder({
             />
           </label>
           <label className="text-xs">
-            Hours available for this order / truck / day
+            Default hours available / truck / day
             <input
               className={field}
               type="number"
@@ -784,30 +774,32 @@ export function WaterOrderBuilder({
             />
           </label>
         </div>
-        <div className="flex flex-wrap gap-3">
-          {scopeDrivers.map((driver) => (
-            <label className="text-xs flex gap-1 items-center" key={driver.key}>
-              <input
-                type="checkbox"
-                checked={draft.truckKeys.includes(driver.key)}
-                onChange={(e) =>
-                  update({
-                    truckKeys: e.target.checked
-                      ? [...draft.truckKeys, driver.key]
-                      : draft.truckKeys.filter((k) => k !== driver.key),
-                  })
-                }
-              />
-              {driver.legalName || driver.displayName || "Driver"}
-            </label>
-          ))}
-        </div>
+        <DispatchDriverPicker drivers={scopeDrivers} selection="multiple" selectedKeys={new Set(draft.truckKeys)}
+          onSelect={key => update({truckKeys: draft.truckKeys.includes(key) ? draft.truckKeys.filter(value => value !== key) : [...draft.truckKeys, key]})}
+          onSelectMany={truckKeys => update({truckKeys})} disabledSelection={busy || !!saved || !canWrite}
+          shiftDate={shiftDate} onShiftDateChange={onShiftDateChange} onShiftChange={onShiftChange}
+          shiftDot={shiftForDriver || (() => ({symbol: '○', title: 'Shift unverified'}))} readOnlyShifts={readOnlyShifts} />
+        {draft.truckKeys.length>0&&<details>
+          <summary className="cursor-pointer py-2 text-xs">Individual truck settings · {draft.truckKeys.length} drivers</summary>
+          <p className="text-xs text-gray-400">Defaults apply unless overridden here. Enter the truck’s load capacity and hours available to this order; these are not HOS balances.</p>
+          <input type="search" aria-label="Search truck settings" className={`${field} mt-2`} value={fleetSearch} onChange={e=>setFleetSearch(e.target.value)} placeholder="Find selected driver"/>
+          <div className="max-h-64 overflow-auto"><table className="w-full min-w-[400px] text-xs"><thead><tr><th className="text-left">Driver</th><th>Capacity, BBL</th><th>Hours / day</th></tr></thead><tbody>
+            {draft.truckKeys.map(key=>scopeDrivers.find(d=>d.key===key)).filter((d):d is WaterOrderDriver=>!!d).filter(d=>operationalDriverName(d).toLowerCase().includes(fleetSearch.trim().toLowerCase())).map(d=><tr key={d.key}><td className="p-2">{operationalDriverName(d)}</td>{(['capacity','hours'] as const).map(setting=><td key={setting} className="p-1"><input aria-label={`${operationalDriverName(d)} ${setting}`} className={`${field} max-w-24`} type="number" min="0" placeholder={String(setting==='capacity'?draft.capacity:draft.hours)} value={draft.truckSettings?.[d.key]?.[setting]??''} onChange={e=>update({truckSettings:{...draft.truckSettings,[d.key]:{...draft.truckSettings?.[d.key],[setting]:e.target.value===''?undefined:Number(e.target.value)}}})}/></td>)}</tr>)}
+          </tbody></table></div>
+        </details>}
         <details>
           <summary className="text-xs cursor-pointer">
-            Eligible source wells Â· choose sources allowed for this order
+            Source wells · choose sources allowed for this order
           </summary>
+          <input type="search" aria-label="Search source wells" className={`${field} mt-2`} placeholder="Search source or operator" value={sourceSearch} onChange={e=>setSourceSearch(e.target.value)}/>
+          <p className="text-xs text-gray-400">{scopeWells.filter(w=>!draft.excluded.includes(w.wellName)).length} of {scopeWells.length} allowed. Planning excludes sources without verified tank data.</p>
+          <div className="flex flex-wrap gap-3 py-2 text-xs">
+            <button type="button" disabled={!visibleSources.length} className="text-cyan-300 underline disabled:opacity-40" onClick={()=>update({excluded:scopeWells.filter(w=>!visibleSources.some(v=>v.wellName===w.wellName)).map(w=>w.wellName)})}>Use only shown sources</button>
+            <button type="button" disabled={!visibleSources.length} className="text-cyan-300 underline disabled:opacity-40" onClick={()=>update({excluded:draft.excluded.filter(name=>!visibleSources.some(w=>w.wellName===name))})}>Allow shown sources</button>
+            <button type="button" disabled={!visibleSources.length} className="text-gray-300 underline disabled:opacity-40" onClick={()=>update({excluded:[...new Set([...draft.excluded,...visibleSources.map(w=>w.wellName)])]})}>Exclude shown sources</button>
+          </div>
           <div className="max-h-52 overflow-auto mt-2 space-y-1">
-            {scopeWells.map((w) => (
+            {visibleSources.map((w) => (
               <div className="flex items-center gap-2 text-xs" key={w.wellName}>
                 <input
                   aria-label={`Use ${w.wellName}`}
@@ -821,11 +813,11 @@ export function WaterOrderBuilder({
                     })
                   }
                 />
-                <span className="flex-1">
+                <span className="flex-1 min-w-0 break-words">
                   {w.wellName}
                   <span className="text-gray-500">
                     {" "}
-                    Â· {w.operator || "Operator missing"}
+                    · {w.operator || "Operator missing"}
                   </span>
                 </span>
                 <input
@@ -843,6 +835,7 @@ export function WaterOrderBuilder({
                 />
               </div>
             ))}
+            {!visibleSources.length&&<p className="text-xs text-gray-400">No sources match this search.</p>}
           </div>
         </details>
         <label className="block text-xs">
@@ -873,126 +866,13 @@ export function WaterOrderBuilder({
           className="rounded bg-blue-600 px-4 py-2 font-semibold disabled:opacity-40"
           onClick={() => void dispatch()}
         >
-          Dispatch{due ? ` Â· ${due} ready` : ""}
+          Dispatch{due ? ` · ${due} ready` : ""}
         </button>
       </div>
       <p role="status" className="text-sm text-amber-300">
-        {busy ? "Workingâ€¦" : message}
+        {busy ? dispatchProgress||"Planning supply…" : message}
       </p>
-      {activePlan && (
-        <>
-          <div className="grid grid-cols-3 gap-2 text-center text-xs">
-            {[
-              ["Fill targets", activePlan.target],
-              ["Already present", activePlan.existing],
-              ["Needed", activePlan.needed],
-              ["Planned", activePlan.planned],
-              ["Delivered", delivered],
-              ["Still needed", Math.max(0, activePlan.needed - delivered)],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded bg-gray-900 p-2">
-                <div className="text-gray-400">{label}</div>
-                <strong>{value} BBL</strong>
-              </div>
-            ))}
-          </div>
-          {activePlan.shortfall > 0 && (
-            <p className="text-amber-300 text-sm">
-              {activePlan.shortfall} BBL cannot be supplied within the deadline
-              and current truck hours.
-            </p>
-          )}
-          <p className="text-xs text-gray-400">
-            Dispatch sends ready loads with stable job identities. Future
-            pickups stay with this order; reopen it and use Dispatch when ready.
-            Later loads wait for that driver's earlier load to finish. Forecasts
-            are estimates, not tank measurements.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr>
-                  <th className="text-left">Source / operator</th>
-                  <th>Available*</th>
-                  <th>BBL/day</th>
-                  <th>Reserved</th>
-                  <th>Cycle</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activePlan.sources.map((s) => (
-                  <tr key={s.wellName} className="border-t border-gray-700">
-                    <td className="py-2">
-                      {s.wellName}
-                      <div className="text-gray-500">{s.operator}</div>
-                    </td>
-                    <td className="text-center">{s.available}</td>
-                    <td className="text-center">{s.daily}</td>
-                    <td className="text-center">{s.reserved}</td>
-                    <td className="text-center">{s.cycleMinutes} min</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="text-gray-500 text-xs">
-              *Estimated above the minimum level, after existing dispatch
-              commitments; as of {display(activePlan.createdAt)}.
-            </p>
-          </div>
-          <div className="max-h-80 overflow-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr>
-                  <th className="text-left">Pickup / delivery</th>
-                  <th>Driver / source</th>
-                  <th>BBL / tank</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activePlan.trips.map((t) => (
-                  <tr key={t.id} className="border-t border-gray-700">
-                    <td className="py-2">
-                      {display(t.pickupAt)}
-                      <div className="text-gray-500">
-                        â†’ {display(t.deliveryAt)}
-                      </div>
-                    </td>
-                    <td>
-                      {scopeDrivers.find((d) => d.key === t.driverKey)
-                        ?.legalName ||
-                        scopeDrivers.find((d) => d.key === t.driverKey)
-                          ?.displayName ||
-                        "Driver"}
-                      <div className="text-gray-500">{t.wellName}</div>
-                    </td>
-                    <td>
-                      {t.bbl}
-                      <div className="text-gray-500">
-                        {t.tanks
-                          .map(
-                            (a) =>
-                              `${draft.tanks.find((tank) => tank.id === a.id)?.name || a.id}: ${a.bbl}`,
-                          )
-                          .join("; ")}
-                      </div>
-                    </td>
-                    <td>
-                      {closed[t.id] !== undefined
-                        ? `Delivered ${closed[t.id]}`
-                        : saved?.sent.includes(t.id)
-                          ? linked[t.id] || "Sent"
-                          : Date.parse(t.startAt) > now
-                            ? "Scheduled"
-                            : "Ready"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
+      {activePlan && <WaterOrderPlanReview key={saved?.id||activePlan.createdAt} plan={activePlan} drivers={scopeDrivers} selectedKeys={draft.truckKeys} tanks={draft.tanks} sent={saved?.sent||[]} closed={closed} linked={linked} now={now}/>}
     </section>
   );
 }

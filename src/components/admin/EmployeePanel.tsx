@@ -23,19 +23,35 @@ const ROLE_CHECKBOXES: { role: UserRole; label: string }[] = [
   { role: 'viewer', label: 'Viewer' },
 ];
 
+interface CanonicalProfile {
+  driverId: string;
+  displayName: string;
+  legalName?: string;
+  active: boolean;
+  companyId?: string;
+  assignedRoutes: string[] | null;
+  assignedWells: string[] | null;
+}
+
+type DirectoryRow = EmployeeRow<any, any> & { canonical?: CanonicalProfile };
+
 interface EmployeePanelProps<D, U> {
-  employees: EmployeeRow<any, any>[];
+  employees: DirectoryRow[];
   isWbAdmin: boolean;
   scopeCompanyId?: string;
   /** Toggle WB-T mobile login (drivers/approved active flag). */
-  onToggleMobile: (row: EmployeeRow<any, any>) => void;
+  onToggleMobile: (row: DirectoryRow) => void;
   /** Open the existing Invite Employee modal for a driver row. */
-  onInvite: (row: EmployeeRow<any, any>) => void;
+  onInvite: (row: DirectoryRow) => void;
   /** Persist users/{uid}.roles[] + primary role. */
   onSaveRoles: (uid: string, roles: UserRole[]) => Promise<void>;
   /** Optional existing driver actions (routes / company / package modals). */
-  onAssignRoutes?: (row: EmployeeRow<any, any>) => void;
-  onAssignCompany?: (row: EmployeeRow<any, any>) => void;
+  onAssignRoutes?: (row: DirectoryRow) => void;
+  onAssignCompany?: (row: DirectoryRow) => void;
+  onRegularSchedule?: (row: DirectoryRow) => void;
+  onVerifyCanonical?: (driverId: string) => void;
+  canonicalBindBusyDriverId?: string | null;
+  onDeleteApproved?: (row: DirectoryRow) => void;
   /**
    * Secure WellBuilt login (canonical identity + passcode) — resolved by the
    * parent's shared state resolver so this panel and the legacy list can
@@ -48,8 +64,8 @@ interface EmployeePanelProps<D, U> {
 
 export function EmployeePanel<D, U>({
   employees, isWbAdmin, scopeCompanyId,
-  onToggleMobile, onInvite, onSaveRoles, onAssignRoutes, onAssignCompany,
-  secureLoginStateFor, onCreateSecureLogin,
+  onToggleMobile, onInvite, onSaveRoles, onAssignRoutes, onAssignCompany, onRegularSchedule,
+  onVerifyCanonical, canonicalBindBusyDriverId, onDeleteApproved, secureLoginStateFor, onCreateSecureLogin,
 }: EmployeePanelProps<D, U>) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -68,7 +84,7 @@ export function EmployeePanel<D, U>({
   // and platform admins (no companyId) can never be edited by tenant admins
   // regardless of which group they render in.
   const groups = useMemo(() => {
-    const map = new Map<string, { label: string; rows: EmployeeRow<any, any>[] }>();
+    const map = new Map<string, { label: string; rows: DirectoryRow[] }>();
     for (const row of employees) {
       const key = row.companyId || (row.companyName ? `name:${row.companyName}` : 'wb-platform');
       const label = row.companyName || (row.companyId ? row.companyId : 'WellBuilt (platform / unassigned)');
@@ -82,19 +98,19 @@ export function EmployeePanel<D, U>({
   // edit anyone; a tenant admin may edit ONLY rows whose companyId equals
   // their scope. companyId — never the display grouping — is the authority,
   // so platform admins and legacy no-companyId rows are read-only to tenants.
-  const canEditRow = (row: EmployeeRow<any, any>) =>
+  const canEditRow = (row: DirectoryRow) =>
     isWbAdmin || (!!scopeCompanyId && row.companyId === scopeCompanyId);
 
-  const effectiveRoles = (row: EmployeeRow<any, any>): UserRole[] =>
+  const effectiveRoles = (row: DirectoryRow): UserRole[] =>
     roleEdits[row.id] ?? row.dashboardRoles;
 
-  const toggleRole = (row: EmployeeRow<any, any>, role: UserRole) => {
+  const toggleRole = (row: DirectoryRow, role: UserRole) => {
     const cur = effectiveRoles(row);
     const next = cur.includes(role) ? cur.filter(r => r !== role) : [...cur, role];
     setRoleEdits(prev => ({ ...prev, [row.id]: next }));
   };
 
-  const saveRoles = async (row: EmployeeRow<any, any>) => {
+  const saveRoles = async (row: DirectoryRow) => {
     if (!row.dashboardUid) return;
     const roles = effectiveRoles(row);
     setSavingId(row.id);
@@ -141,6 +157,11 @@ export function EmployeePanel<D, U>({
                     {row.email && <span className="text-gray-400 text-xs truncate">{row.email}</span>}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    {row.canonical && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${row.canonical.active ? 'bg-cyan-900/60 text-cyan-200' : 'bg-gray-600 text-gray-300'}`}>
+                        WB-M {row.canonical.active ? 'active' : 'inactive'}
+                      </span>
+                    )}
                     {row.mobileLoginActive !== undefined && (
                       <span className={`text-[10px] px-1.5 py-0.5 rounded ${row.mobileLoginActive ? 'bg-green-900/60 text-green-300' : 'bg-gray-600 text-gray-300'}`}>
                         WB-T {row.mobileLoginActive ? 'active' : 'inactive'}
@@ -170,6 +191,32 @@ export function EmployeePanel<D, U>({
                       </span></div>
                     </div>
 
+                    {row.driver && row.driver.displayName !== row.name && (
+                      <div className="text-xs text-gray-400">WB-T app name: {row.driver.displayName}</div>
+                    )}
+
+                    {row.canonical && (
+                      <div className="rounded border border-cyan-900/60 bg-gray-800/70 p-3 text-sm text-gray-200">
+                        <div className="font-medium text-cyan-200">WB-M driver profile</div>
+                        {row.canonical.displayName !== row.name && (
+                          <div className="text-xs text-gray-400">App name: {row.canonical.displayName}</div>
+                        )}
+                        <div className="text-xs text-gray-400">
+                          {row.canonical.assignedRoutes == null && row.canonical.assignedWells == null
+                            ? 'Route scope has not been configured'
+                            : `${row.canonical.assignedRoutes?.length ?? 0} routes · ${row.canonical.assignedWells?.length ?? 0} wells`}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {onAssignRoutes && <button onClick={() => onAssignRoutes(row)} className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500">WB-M routes & wells</button>}
+                          {onVerifyCanonical && isWbAdmin && row.canonical.active && row.canonical.companyId && (
+                            <button onClick={() => onVerifyCanonical(row.canonical!.driverId)} disabled={canonicalBindBusyDriverId !== null} className="rounded bg-teal-700 px-2 py-1 text-xs text-white hover:bg-teal-600 disabled:opacity-50">
+                              {canonicalBindBusyDriverId === row.canonical.driverId ? 'Verifying…' : 'Verify company & shift authority'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Logins */}
                     <div className="flex flex-wrap gap-4 text-sm">
                       <label className={`flex items-center gap-2 ${row.driver && editable ? 'cursor-pointer text-gray-200' : 'text-gray-500'}`}>
@@ -182,7 +229,7 @@ export function EmployeePanel<D, U>({
                         <span title="Legacy approved-hash mobile login — enable/disable only. Not the secure WellBuilt login.">
                           WB-T Mobile Login
                         </span>
-                        {!row.driver && <span className="text-[10px] text-gray-500">(no driver record — registers via WB-T app)</span>}
+                        {!row.driver && <span className="text-[10px] text-gray-500">(no WB-T record)</span>}
                       </label>
                       <label className="flex items-center gap-2 text-gray-200">
                         <input type="checkbox" checked={row.hasDashboardLogin} disabled readOnly />
@@ -262,16 +309,20 @@ export function EmployeePanel<D, U>({
                     )}
 
                     {/* Existing driver actions */}
-                    {row.driver && editable && (
+                    {(row.driver || row.canonical) && editable && (
                       <div className="flex flex-wrap gap-2 pt-1">
-                        {onAssignRoutes && (
-                          <button onClick={() => onAssignRoutes(row)} className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-gray-200 text-xs rounded">
-                            Routes
-                          </button>
-                        )}
-                        {isWbAdmin && onAssignCompany && (
+                        {row.driver && <button onClick={() => onToggleMobile(row)} className="rounded bg-gray-600 px-2 py-1 text-xs text-gray-200 hover:bg-gray-500">
+                          {row.mobileLoginActive ? 'Deactivate WB-T login' : 'Activate WB-T login'}
+                        </button>}
+                        {onRegularSchedule && <button onClick={() => onRegularSchedule(row)} className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-gray-200 text-xs rounded">Regular shift & days off</button>}
+                        {isWbAdmin && row.driver && onAssignCompany && (
                           <button onClick={() => onAssignCompany(row)} className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-gray-200 text-xs rounded">
                             Company
+                          </button>
+                        )}
+                        {isWbAdmin && row.driver && onDeleteApproved && (
+                          <button onClick={() => onDeleteApproved(row)} className="rounded bg-red-800 px-2 py-1 text-xs text-red-100 hover:bg-red-700">
+                            Delete WB-T driver record
                           </button>
                         )}
                       </div>

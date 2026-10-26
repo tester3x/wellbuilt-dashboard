@@ -45,6 +45,8 @@ interface ApprovedDriver {
   assignedRoutes?: string[];   // WB-M well-scope routes (not WB-T job assignment)
   assignedWells?: string[];    // WB-M direct well permits (not WB-T job assignment)
   defaultPackageId?: string;   // default job package for shift start
+  usualShift?: 'day' | 'night';
+  weeklyDaysOff?: number[];
   // Dashboard account link — set by inviteEmployee Cloud Function when a
   // driver is promoted to a dashboard role.
   dashboardUid?: string;
@@ -75,6 +77,8 @@ interface CanonicalWbmDriver {
   assignedRoutes: string[] | null;
   assignedWells: string[] | null;
   assignmentRevision: number | null;
+  usualShift?: 'day' | 'night';
+  weeklyDaysOff?: number[];
 }
 
 /** Secure-credential presentation state shared by BOTH employee views. */
@@ -121,6 +125,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [search, setSearch] = useState('');
+  const [scheduleTarget, setScheduleTarget] = useState<{ driverId?: string; approvedKey?: string; nestedKey?: string; name: string; usualShift?: 'day' | 'night'; weeklyDaysOff?: number[] } | null>(null);
+  const [scheduleShift, setScheduleShift] = useState<'day' | 'night' | ''>('');
+  const [scheduleDaysOff, setScheduleDaysOff] = useState<number[]>([]);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
 
   // Assign customer modal
   const [showAssignModal, setShowAssignModal] = useState(false);
@@ -230,10 +238,42 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // ── Unified employee rows (7/9 refactor) — one row per PERSON, merging
   // drivers/approved + users/{uid} via the dashboardUid/driverHash link.
   // Pure derivation; the underlying stores and modals are unchanged.
-  const employees: EmployeeRow<ApprovedDriver, DashboardUser>[] = useMemo(
-    () => mergeEmployees(approvedDrivers, dashboardUsers),
-    [approvedDrivers, dashboardUsers],
-  );
+  const employees = useMemo(() => {
+    const rows = mergeEmployees(approvedDrivers, dashboardUsers);
+    const used = new Set<string>();
+    const normalize = (name?: string) => (name || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+    const matches = (row: EmployeeRow<ApprovedDriver, DashboardUser>, profile: CanonicalWbmDriver) =>
+      !!row.driver && row.companyId === profile.companyId &&
+      normalize(row.name) === normalize(profile.legalName || profile.displayName);
+    const directory = rows.map(row => {
+      const byId = row.driver?.driverId
+        ? canonicalDrivers.find(profile => profile.driverId === row.driver?.driverId)
+        : undefined;
+      const byName = byId ? [] : canonicalDrivers.filter(profile => matches(row, profile));
+      const uniqueNameMatch = byName.length === 1 && rows.filter(other => matches(other, byName[0])).length === 1
+        ? byName[0] : undefined;
+      const canonical = byId || uniqueNameMatch;
+      if (canonical && !used.has(canonical.driverId)) {
+        used.add(canonical.driverId);
+        return { ...row, canonical };
+      }
+      return { ...row, canonical: undefined };
+    });
+    for (const canonical of canonicalDrivers) {
+      if (used.has(canonical.driverId)) continue;
+      directory.push({
+        id: `canonical:${canonical.driverId}`,
+        name: canonical.legalName || canonical.displayName,
+        companyId: canonical.companyId,
+        companyName: canonical.companyName,
+        mobileLoginActive: undefined,
+        hasDashboardLogin: false,
+        dashboardRoles: [],
+        canonical,
+      });
+    }
+    return directory.sort((a, b) => a.name.localeCompare(b.name));
+  }, [approvedDrivers, dashboardUsers, canonicalDrivers]);
   // Dev refactor (7/9): the unified panel is primary; the pre-refactor
   // Approved Drivers / dashboard-user lists stay behind this toggle until
   // the panel is field-approved. Nothing was deleted.
@@ -276,6 +316,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             primaryAllRoutes: primaryAssignments[id]?.primaryAllRoutes === true,
             primaryRouteRevision: primaryAssignments[id]?.primaryRouteRevision || 0,
             assignmentRevision: typeof val.assignmentRevision === 'number' ? val.assignmentRevision : null,
+            usualShift: val.usualShift === 'day' || val.usualShift === 'night' ? val.usualShift : undefined,
+            weeklyDaysOff: Array.isArray(val.weeklyDaysOff) ? val.weeklyDaysOff : [],
           });
         });
         canonical.sort((a, b) => a.displayName.localeCompare(b.displayName));
@@ -303,6 +345,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
               assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
               defaultPackageId: val.defaultPackageId || undefined,
+              usualShift: val.usualShift === 'day' || val.usualShift === 'night' ? val.usualShift : undefined,
+              weeklyDaysOff: Array.isArray(val.weeklyDaysOff) ? val.weeklyDaysOff : [],
               dashboardUid: val.dashboardUid || undefined,
               dashboardRole: val.dashboardRole || undefined,
               // Canonical linkage when the server stamped one (migration
@@ -350,6 +394,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
               assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
               driverId: typeof val.migratedToDriverId === 'string' ? val.migratedToDriverId : undefined,
+              usualShift: val.usualShift === 'day' || val.usualShift === 'night' ? val.usualShift : undefined,
+              weeklyDaysOff: Array.isArray(val.weeklyDaysOff) ? val.weeklyDaysOff : [],
               _legacy: true,
               _legacyDeviceId: legacyDeviceId,
             });
@@ -1029,7 +1075,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
 
   // ── Delete a driver permanently ──
   const deleteDriver = async (driver: ApprovedDriver) => {
-    if (!confirm(`Permanently delete ${driver.displayName}? This cannot be undone.`)) return;
+    const linkedNote = driver.dashboardUid
+      ? ' Its linked Dashboard account will remain; only this WB-T driver record will be removed.'
+      : '';
+    if (!confirm(`Permanently delete the WB-T driver record for ${driver.displayName}? Its mobile login will stop working immediately. Existing jobs and WB-M profiles are not deleted.${linkedNote}`)) return;
     try {
       await staffWriteDriverRoster({ op: 'deleteApproved', approvedKey: driver.key });
       setMessage(`Deleted: ${driver.displayName}`);
@@ -1126,6 +1175,33 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
 
   // For pending drivers, company admins see all pending (they'll approve into their company)
   const visiblePending = pendingDrivers;
+
+  const openRegularSchedule = (driver: ApprovedDriver | CanonicalWbmDriver) => {
+    const canonical = driver.driverId ? canonicalDrivers.find(row => row.driverId === driver.driverId) : undefined;
+    const current = canonical || driver;
+    setScheduleTarget({ driverId: driver.driverId, approvedKey: 'key' in driver ? driver.key : undefined,
+      nestedKey: '_legacyDeviceId' in driver ? driver._legacyDeviceId : undefined,
+      name: driver.displayName, usualShift: current.usualShift, weeklyDaysOff: current.weeklyDaysOff });
+    setScheduleShift(current.usualShift || '');
+    setScheduleDaysOff(current.weeklyDaysOff || []);
+  };
+
+  const saveRegularSchedule = async () => {
+    if (!scheduleTarget || scheduleSaving) return;
+    setScheduleSaving(true);
+    try {
+      await staffWriteDriverRoster({ op: 'setRegularSchedule', driverId: scheduleTarget.driverId || null,
+        approvedKey: scheduleTarget.approvedKey || null, nestedKey: scheduleTarget.nestedKey || null,
+        usualShift: scheduleShift || null, weeklyDaysOff: scheduleDaysOff });
+      setScheduleTarget(null);
+      await loadDrivers();
+      setMessage(`Regular schedule saved for ${scheduleTarget.name}.`);
+    } catch (error) {
+      setMessage(classifyRosterError(error));
+    } finally {
+      setScheduleSaving(false);
+    }
+  };
 
   // ── Render helpers ────────────────────────────────────────────────────
   // Extracted so the same driver row + dashboard user row JSX can be used
@@ -1276,6 +1352,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             >
               {driver.defaultPackageId ? `Pkg: ${availablePackages.find(p => p.id === driver.defaultPackageId)?.name || driver.defaultPackageId}` : 'Default Package'}
             </button>
+            <button onClick={() => openRegularSchedule(driver)} className="px-3 py-1 text-sm rounded bg-gray-600 hover:bg-gray-500 text-white">Regular shift & days off</button>
             {isWbAdmin && (
               <button
                 onClick={() => { setCompanyTarget(driver); setAssignCompanyId(driver.companyId || ''); setAssignCompanyName(driver.companyName || ''); setCompanyError(''); setShowCompanyModal(true); }}
@@ -1294,7 +1371,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 onClick={() => deleteDriver(driver)}
                 className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-red-200 ml-auto"
               >
-                Delete
+                Delete WB-T driver record
               </button>
             )}
           </div>
@@ -1382,6 +1459,32 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       {message && (
         <div className="p-3 bg-blue-900 text-blue-200 rounded text-sm">{message}</div>
       )}
+      {scheduleTarget && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label={`Regular schedule for ${scheduleTarget.name}`}>
+        <div className="w-full max-w-md space-y-4 rounded border border-gray-600 bg-gray-800 p-5 text-white shadow-xl">
+          <h3 className="font-semibold">Regular schedule · {scheduleTarget.name}</h3>
+          <p className="text-xs text-gray-300">The live on/off shift dot comes from driver clock-in. Regular days off block pre-dispatch until the driver is on shift.</p>
+          <label className="block text-sm">Usual shift
+            <select value={scheduleShift} onChange={event => setScheduleShift(event.target.value as 'day' | 'night' | '')}
+              className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-white">
+              <option value="">No usual D/N shift</option><option value="day">Day</option><option value="night">Night</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend className="mb-2 text-sm">Regular days off</legend>
+            <div className="flex flex-wrap gap-2">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) =>
+                <label key={day} className="flex cursor-pointer items-center gap-1 rounded border border-gray-600 px-2 py-1 text-sm">
+                  <input type="checkbox" checked={scheduleDaysOff.includes(index)} onChange={() => setScheduleDaysOff(previous => previous.includes(index) ? previous.filter(value => value !== index) : [...previous, index].sort())} />
+                  {day}
+                </label>)}
+            </div>
+          </fieldset>
+          <div className="flex justify-end gap-2">
+            <button type="button" disabled={scheduleSaving} onClick={() => setScheduleTarget(null)} className="rounded bg-gray-600 px-3 py-1.5 text-sm">Cancel</button>
+            <button type="button" disabled={scheduleSaving} onClick={saveRegularSchedule} className="rounded bg-blue-600 px-3 py-1.5 text-sm disabled:opacity-50">{scheduleSaving ? 'Saving…' : 'Save schedule'}</button>
+          </div>
+        </div>
+      </div>}
 
       {/* ── Pending Registrations ── */}
       {pendingDrivers.length > 0 && (
@@ -1456,62 +1559,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         </div>
       )}
 
-      {/* ── Canonical WB-M authority ── */}
-      <div className="mb-6 border border-blue-800/60 rounded-lg p-4 bg-gray-900/40">
-        <h3 className="text-white font-medium mb-1">WB-M canonical drivers</h3>
-        <p className="text-gray-400 text-xs mb-3">
-          These profiles control WB-M routes and wells. Employee records below show sign-in access.
-        </p>
-        {canonicalDrivers.length === 0 ? (
-          <p className="text-gray-500 text-sm">No canonical profiles in catalog.</p>
-        ) : (
-          <div className="space-y-2">
-            {canonicalDrivers
-              .filter(d => !scopeCompanyId || d.companyId === scopeCompanyId)
-              .filter(d => !search.trim() || d.displayName.toLowerCase().includes(search.toLowerCase()))
-              .map((d) => (
-                <div key={d.driverId} className="flex flex-wrap items-center justify-between gap-2 bg-gray-800 rounded p-3">
-                  <div>
-                    <div className="text-white font-medium">{d.displayName}</div>
-                    <div className="text-gray-400 text-xs font-mono">{d.driverId}</div>
-                    <div className="text-gray-400 text-xs">
-                      {d.active ? 'active' : 'inactive'} · {d.companyId || 'unscoped'} ·
-                      {d.assignedRoutes == null && d.assignedWells == null
-                        ? ' scope_not_configured'
-                        : ` routes ${d.assignedRoutes?.length ?? 0} / wells ${d.assignedWells?.length ?? 0}`}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {isWbAdmin && d.active && d.companyId && (
-                      <button
-                        onClick={() => ensureCanonicalCompanyBinding(d)}
-                        disabled={canonicalBindBusyDriverId !== null}
-                        className="px-3 py-1 text-sm rounded bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white"
-                        title="Verify this canonical driver's existing company and initialize missing shift authority through the governed server function"
-                      >
-                        {canonicalBindBusyDriverId === d.driverId ? 'Verifying…' : 'Verify company & shift authority'}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => {
-                        bumpAssignmentGeneration();
-                        setRouteTarget(d);
-                        setSelectedRoutes(d.assignedRoutes || []);
-                        setSelectedWells(d.assignedWells || []);
-                        setShowRoutesModal(true);
-                      }}
-                      className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
-                    >
-                      Preview WB-M routes
-                    </button>
-                  </div>
-                </div>
-              ))}
-          </div>
-        )}
-      </div>
-
-      {/* ── Unified Employee panel (7/9 refactor) ── */}
+      {/* One directory combines employee access and WB-M profile authority. */}
       <EmployeePanel
         employees={scopeCompanyId ? employees.filter(e => e.companyId === scopeCompanyId) : employees}
         isWbAdmin={isWbAdmin}
@@ -1533,9 +1581,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           setInviteResult(null);
         }}
         onSaveRoles={saveEmployeeRoles}
+        onRegularSchedule={(row) => { if (row.canonical || row.driver) openRegularSchedule(row.canonical || row.driver); }}
         onAssignRoutes={(row) => {
-          const id = row.driver?.driverId?.trim();
-          const canonical = id ? canonicalDrivers.find(c => c.driverId === id) : undefined;
+          const canonical = canonicalDrivers.find(profile => profile.driverId === row.canonical?.driverId);
           if (!canonical) {
             setMessage('LEGACY — NOT WB-M AUTHORITY. Assign routes on the canonical profile.');
             return;
@@ -1550,6 +1598,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           if (!row.driver) return;
           setCompanyTarget(row.driver); setAssignCompanyId(row.driver.companyId || ''); setAssignCompanyName(row.driver.companyName || ''); setCompanyError(''); setShowCompanyModal(true);
         }}
+        onVerifyCanonical={(driverId) => { const profile = canonicalDrivers.find(row => row.driverId === driverId); if (profile) ensureCanonicalCompanyBinding(profile); }}
+        canonicalBindBusyDriverId={canonicalBindBusyDriverId}
+        onDeleteApproved={(row) => { if (row.driver) deleteDriver(row.driver); }}
       />
 
       <div className="flex justify-end">

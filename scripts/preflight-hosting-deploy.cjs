@@ -117,7 +117,7 @@ if (process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW !== 'disabled') {
 // 5. Mechanical Guardrail Tests Execution
 console.log('\n--- Running Mandatory Pre-Deploy Test Suites on Fresh Build ---');
 try {
-  for (const test of ['tools/test-dashboardReturnState.cjs', 'tools/test-officeAlertPreferences.cjs', 'tools/test-driver-arrival-panel.mjs', 'tools/test-hosting-release-state.cjs', 'tools/test-staffChatDelivery.cjs']) {
+  for (const test of ['tools/test-dashboardReturnState.cjs', 'tools/test-officeAlertPreferences.cjs', 'tools/test-driver-arrival-panel.mjs', 'tools/test-dispatch-shift-picker.cjs', 'tools/test-water-order-driver-picker.cjs', 'tools/test-water-order-workflow.cjs', 'tools/test-hosting-release-state.cjs', 'tools/test-staffChatDelivery.cjs']) {
     execSync(`node ${test}`, { stdio: 'inherit' });
   }
   execSync('npx tsx --test src/lib/__tests__/*.test.ts', { stdio: 'inherit' });
@@ -134,6 +134,25 @@ try {
 try {
   console.log('Executing: node tools/test-watchdog-refresh.cjs ...');
   execSync('node tools/test-watchdog-refresh.cjs', { stdio: 'inherit' });
+  execSync('node tools/test-watchdog-rejected-recovery.cjs', { stdio: 'inherit' });
+  execSync('node tools/test-watchdog-health.cjs', { stdio: 'inherit' });
+  console.log('✓ Watchdog Manual Refresh (no idle polling): PASSED');
+} catch (err) {
+  fatal('Watchdog manual refresh verification FAILED. Deployment aborted.');
+}
+
+try {
+  console.log('Executing: node tools/test-approved-dashboard-restorations.cjs ...');
+  execSync('node tools/test-approved-dashboard-restorations.cjs', { stdio: 'inherit' });
+  console.log('✓ Approved Demo Media and Completed Dates: PASSED');
+} catch (err) {
+  fatal('Approved Dashboard restoration verification FAILED. Deployment aborted.');
+}
+
+try {
+  console.log('Executing: node tools/test-watchdog-refresh.cjs ...');
+  execSync('node tools/test-watchdog-refresh.cjs', { stdio: 'inherit' });
+  execSync('node tools/test-watchdog-rejected-recovery.cjs', { stdio: 'inherit' });
   console.log('✓ Watchdog Manual Refresh (no idle polling): PASSED');
 } catch (err) {
   fatal('Watchdog manual refresh verification FAILED. Deployment aborted.');

@@ -4133,6 +4133,7 @@ export { previewHistoricalPullImport, applyHistoricalPullImport } from './import
 export { ingestWatchdogPullV2, getWatchdogPullReceiptV2, stopWatchdogWellV2, getWatchdogWellLifecycleV2 } from './watchdog/intake';
 
 export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';
+export { staffWriteWaterOrder } from './security/staffWriteWaterOrder';
 
 export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './watchdog/remoteReview';
 

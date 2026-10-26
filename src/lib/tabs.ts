@@ -41,7 +41,7 @@ export const TABS: TabConfig[] = [
     id: 'dispatch',
     label: 'Dispatch',
     href: '/dispatch',
-    matchPrefixes: ['/dispatch'],
+    matchPrefixes: ['/dispatch', '/job-history'],
     capability: 'viewDispatch',
   },
   {
