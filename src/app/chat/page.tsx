@@ -174,7 +174,7 @@ function ChatPageInner() {
   // → TabletS10" sequence. Firestore thread data is the single source of truth;
   // we only subscribe once authentication has resolved to a real uid.
   const myParticipantId = user?.uid ? userParticipantId(user.uid) : '';
-  const companyId = user?.companyId || '';
+  const [companyId, setChatCompanyId] = useState('');
 
   // --- Capability gates (UI CONTAINED; server rules remain the authority) ---
   // viewChat  → may see the chat surface at all
@@ -216,6 +216,14 @@ function ChatPageInner() {
   const [slotPickerIndex, setSlotPickerIndex] = useState<number | null>(null);
   const [highlightedPane, setHighlightedPane] = useState<number | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    setChatCompanyId(''); setThreads([]); setPaneMessages({}); setProfiles([]); setDrivers([]);
+    if (!authLoading && canViewChat && myParticipantId) void staffChatCall({ action: 'threads', ownOnly: true }).then(result => {
+      if (current && typeof result.companyId === 'string') setChatCompanyId(result.companyId);
+    }).catch(error => { if (current) setToastMsg(error.message); });
+    return () => { current = false; };
+  }, [authLoading, canViewChat, myParticipantId]);
   const hasInitializedRef = useRef(false); // Guard for auto-open on initial load
   // Temp slots: threads placed via sidebar click but NOT yet locked to the profile.
   // Map of slot index → SlotAssignment. Not saved to Firestore until user clicks lock.
@@ -634,22 +642,10 @@ function ChatPageInner() {
 
   // --- Load drivers ---
   const loadDrivers = useCallback(async () => {
-    const { adminGetDashboardCatalog, classifiedReadFailure } = await import('@/lib/adminDashboardCatalog');
     try {
-      const catalog = await adminGetDashboardCatalog();
-      const all = catalog.approved || {};
-      const list: { hash: string; name: string; companyId?: string }[] = [];
-      for (const [hash, data] of Object.entries(all) as [string, any][]) {
-        if (!data.active && data.active !== undefined) continue;
-        const name = data.legalName || data.displayName || 'Driver';
-        if (companyId && data.companyId && data.companyId !== companyId) continue;
-        list.push({ hash, name, companyId: data.companyId });
-      }
-      list.sort((a, b) => a.name.localeCompare(b.name));
-      setDrivers(list);
-    } catch (err) {
-      console.error(classifiedReadFailure('chat drivers', err));
-    }
+      const result = await staffChatCall({ action: 'directory', companyId });
+      setDrivers(result.drivers.sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)));
+    } catch (err) { setToastMsg(err instanceof Error ? err.message : 'Could not load drivers'); }
   }, [companyId]);
 
   // --- Sidebar filtering — unanswered first, then by updatedAt ---

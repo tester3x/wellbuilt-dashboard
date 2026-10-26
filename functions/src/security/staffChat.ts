@@ -11,10 +11,27 @@ const serial = (value: any): any => value?.toDate instanceof Function ? value.to
   : Array.isArray(value) ? value.map(serial) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, serial(v)])) : value;
 const time = (value: any): number => value?.toMillis?.() || Date.parse(value || '') || 0;
 const stamp = () => admin.firestore.FieldValue.serverTimestamp();
+async function directory(companyId: string): Promise<{ drivers: { hash: string; name: string }[]; aliases: Map<string, string> }> {
+  const rt = admin.database();
+  const [profiles, forward, reverse] = await Promise.all([
+    rt.ref('drivers/profiles').orderByChild('companyId').equalTo(companyId).once('value'),
+    rt.ref('drivers/identityBindings/byDriver').once('value'), rt.ref('drivers/identityBindings/byApproved').once('value'),
+  ]);
+  const byDriver = forward.val() || {}, byApproved = reverse.val() || {}, aliases = new Map<string, string>(), drivers: { hash: string; name: string }[] = [];
+  for (const [id, value] of Object.entries(profiles.val() || {})) {
+    const row = value as any;
+    if (row.companyId !== companyId) continue;
+    aliases.set(`driver:${id}`, `driver:${id}`);
+    const binding = byDriver[id], back = byApproved[binding?.approvedKey];
+    if (binding?.driverId === id && back?.driverId === id && back.approvedKey === binding.approvedKey && back.opId === binding.opId) aliases.set(`driver:${binding.approvedKey}`, `driver:${id}`);
+    if (row.active !== false) drivers.push({ hash: id, name: row.legalName || row.displayName || 'Driver' });
+  }
+  return { drivers, aliases };
+}
 
 export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false }, async request => {
   const data = request.data || {}, action = data.action;
-  const readActions = ['threads', 'messages', 'profiles', 'read'];
+  const readActions = ['threads', 'messages', 'profiles', 'read', 'directory'];
   if (![...readActions, 'saveProfile', 'deleteProfile', 'send', 'direct', 'group', 'members', 'archive', 'broadcast', 'clear'].includes(action)) throw new https.HttpsError('invalid-argument', 'Unknown chat action');
   const staff = await requireTrustedCompanyCapability(request.auth?.uid,
     ['saveProfile', 'deleteProfile'].includes(action) ? 'manageCompany' : readActions.includes(action) ? 'viewChat' : 'sendChat');
@@ -22,10 +39,16 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
   const db = admin.firestore(), participant = `user:${staff.uid}`;
   const profile = (await admin.database().ref(`users/${staff.uid}`).once('value')).val();
   const name = profile?.displayName || profile?.name || 'Dispatch';
+  if (action === 'directory') return { companyId: staff.companyId, drivers: (await directory(staff.companyId)).drivers };
   if (action === 'threads' || action === 'profiles') {
     const collection = action === 'threads' ? 'chat_threads' : 'chat_monitors';
     const snap = await db.collection(collection).where('companyId', '==', staff.companyId).get();
     let rows = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as Record<string, any>));
+    if (action === 'threads') {
+      const { aliases } = await directory(staff.companyId);
+      rows = rows.map(row => ({ ...row, participants: [...new Set((row.participants || []).map((id: string) => aliases.get(id) || id))],
+        participantNames: Object.fromEntries(Object.entries(row.participantNames || {}).map(([id, name]) => [aliases.get(id) || id, name])) }));
+    }
     if (data.ownOnly && action === 'threads') rows = rows.filter(row => row.participants?.includes(participant));
     rows.sort((a, b) => time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt));
     return { companyId: staff.companyId, rows: serial(rows) };
@@ -44,8 +67,9 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     const type = action === 'direct' ? 'direct' : data.type;
     if (!['direct', 'service_group', 'project', 'well'].includes(type)) throw new https.HttpsError('invalid-argument', 'Invalid thread type');
     if (action === 'direct') {
-      const old = await db.collection('chat_threads').where('companyId', '==', staff.companyId).where('participants', 'array-contains', `driver:${targets[0]}`).get();
-      const match = old.docs.find(doc => doc.get('type') === 'direct' && doc.get('participants')?.includes(participant));
+      const { aliases } = await directory(staff.companyId);
+      const old = await db.collection('chat_threads').where('companyId', '==', staff.companyId).where('participants', 'array-contains', participant).get();
+      const match = old.docs.find(doc => doc.get('type') === 'direct' && doc.get('participants')?.some((id: string) => (aliases.get(id) || id) === `driver:${targets[0]}`));
       if (match) { await match.ref.update({ status: 'active', updatedAt: stamp() }); return { ok: true, threadId: match.id }; }
     }
     const id = action === 'direct' ? 'direct_' + createHash('sha256').update(staff.companyId + ':' + participants.join('|')).digest('hex') : key(data.requestId);

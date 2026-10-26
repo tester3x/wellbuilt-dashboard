@@ -81,12 +81,13 @@ interface ChatSidebarProps {
 
 // ── Component ───────────────────────────────────────────────────────────────
 
-export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChange }: ChatSidebarProps) {
+export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSidebarProps) {
   // Capability gates (UI CONTAINED; server rules stay the authority). The
   // sidebar renders inside AuthProvider, so read the user directly rather than
   // threading new props through AppHeader.
   const { user, userCompany } = useAuth();
   const canViewChat = hasCapability(user, 'viewChat', userCompany);
+  const [companyId, setChatCompanyId] = useState('');
   const canSendChat = hasCapability(user, 'sendChat', userCompany);
 
   const [threads, setThreads] = useState<ChatThread[]>([]);
@@ -100,6 +101,14 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
   const panelRef = useRef<HTMLDivElement>(null);
 
   const myParticipantId = userParticipantId(userId);
+
+  useEffect(() => {
+    let current = true; setChatCompanyId(''); setThreads([]); setMessages([]);
+    if (visible && canViewChat && userId) void staffChatCall({ action: 'threads', ownOnly: true }).then(result => {
+      if (current && typeof result.companyId === 'string') setChatCompanyId(result.companyId);
+    }).catch(error => { if (current) setSendError(error.message); });
+    return () => { current = false; };
+  }, [visible, canViewChat, userId]);
 
   // ── Thread subscription ─────────────────────────────────────────────────
   useEffect(() => {
