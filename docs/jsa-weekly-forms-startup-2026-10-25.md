@@ -1,0 +1,9 @@
+# JSA weekly-forms startup isolation
+
+Investigated TicketTime's slow weekly JSA checks. Live requests included 53- and 116-second responses. For the latter, the new-instance startup message and successful startup probe were approximately 115 seconds apart, followed immediately by callable verification. This exceeds JSA's 45-second caller timeout. Other requests completed in under one second. Logs are retained privately without customer data in this repository.
+
+The deployed package starts the broad Dashboard index, loading unrelated functions. Added a dedicated weekly-forms entry that initializes the same Admin app/Firestore settings and exports the existing callable. The isolated packaging tool is run only on an audited copy of the current live function source; it changes package main and adds the compiled entry. The existing callable, ownership checks, dependencies, runtime, IAM and scaling settings remain unchanged. This avoids introducing a permanently billed warm instance.
+
+Validation: Functions TypeScript compilation passed; all 12 weekly-forms ownership/history tests passed. The isolated-entry regression verifies the single callable export and excludes the broad Dashboard index, AI SDK and dispatch module. Local startup took approximately 187 ms; this is not a cloud latency guarantee. Live source and installed callable compiled bytes were compared before packaging.
+
+Source checkpoint only at creation. Deployment must update only jsaWeeklyForms buildConfig.source after checking live updateTime, preserve service configuration and IAM, compare the downloaded deployed source to the intended archive, and verify anonymous calls remain denied. Authenticated device latency and cold-start logs are required before calling the issue resolved.
