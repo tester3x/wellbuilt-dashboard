@@ -1,5 +1,6 @@
 'use client';
 import { httpsCallable } from 'firebase/functions';
+import { onIdTokenChanged } from 'firebase/auth';
 import { getFirebaseAuth, getFirebaseFunctions } from './firebase';
 
 const listeners = new Set<() => void>();
@@ -16,6 +17,9 @@ export async function staffChatCall(data: Record<string, unknown>): Promise<any>
 export function watchStaffChat(data: Record<string, unknown>, onRows: (rows: any[]) => void, onError?: (error: Error) => void, interval = 10000): () => void {
   let stopped = false, busy = false, timer: ReturnType<typeof setTimeout>;
   const owner = getFirebaseAuth().currentUser;
+  const authStop = onIdTokenChanged(getFirebaseAuth(), user => {
+    if (user !== owner) { stopped = true; clearTimeout(timer); onRows([]); }
+  });
   const refresh = async () => {
     clearTimeout(timer);
     if (stopped || busy) return;
@@ -39,7 +43,7 @@ export function watchStaffChat(data: Record<string, unknown>, onRows: (rows: any
   };
   const signal = () => { void refresh(); };
   listeners.add(signal); document.addEventListener('visibilitychange', signal); signal();
-  return () => { stopped = true; clearTimeout(timer); listeners.delete(signal); document.removeEventListener('visibilitychange', signal); };
+  return () => { stopped = true; authStop(); clearTimeout(timer); listeners.delete(signal); document.removeEventListener('visibilitychange', signal); };
 }
 
 /** Persist the exact send identity before attempting delivery. Failed responses

@@ -65,7 +65,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
   }
   if (action === 'saveProfile' || action === 'deleteProfile') {
     const id = key(data.profileId), ref = db.collection('chat_monitors').doc(id), old = await ref.get();
-    if (old.exists && (old.get('companyId') !== staff.companyId || ![staff.uid, participant].includes(old.get('createdBy')))) throw new https.HttpsError('permission-denied', 'Only the monitor owner may edit it');
+    if (old.exists && old.get('companyId') !== staff.companyId) throw new https.HttpsError('permission-denied', 'Monitor outside your company');
     if (action === 'deleteProfile') { if (old.exists) await ref.delete(); return { ok: true }; }
     const fields: Record<string, any> = {};
     for (const k of ['name', 'gridLayout', 'threadType', 'locked', 'slots']) if (data.record?.[k] !== undefined) fields[k] = data.record[k];

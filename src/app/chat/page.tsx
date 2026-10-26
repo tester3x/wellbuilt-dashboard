@@ -10,24 +10,6 @@ import { hasCapability } from '@/lib/auth';
 import { getFirestoreDb } from '@/lib/firebase';
 import { watchStaffChat, staffChatCall, sendStaffChat, chatIntentId } from '@/lib/staffChatClient';
 import {
-  collection,
-  query,
-  where,
-  orderBy,
-  limit,
-  onSnapshot,
-  addDoc,
-  updateDoc,
-  getDocs,
-  getDoc,
-  setDoc,
-  deleteDoc,
-  doc,
-  serverTimestamp,
-  writeBatch,
-} from 'firebase/firestore';
-
-import {
   type ChatThread,
   type ChatMessage,
   type ThreadType,
@@ -324,9 +306,9 @@ function ChatPageInner() {
 
   // --- Load profiles from Firestore ---
   useEffect(() => {
-    if (authLoading || !myParticipantId || !companyId) return;
+    if (authLoading || !canViewChat || !myParticipantId || !companyId) return;
     return watchStaffChat({ action: 'profiles', companyId }, rows => setProfiles(rows), error => setToastMsg(error.message));
-  }, [authLoading, myParticipantId, companyId]);
+  }, [authLoading, myParticipantId, companyId, canViewChat]);
 
   // Initialize stack from URL param or legacy localStorage on first profile load
   useEffect(() => {
@@ -359,7 +341,7 @@ function ChatPageInner() {
     // Do not subscribe until auth resolves to a real uid. Subscribing with a
     // 'user:dev' fallback caused three successive snapshot overrides during boot
     // (cache → dev query → real-uid query), each rewriting threads state.
-    if (authLoading || !myParticipantId) return;
+    if (authLoading || !canViewChat || !myParticipantId || !companyId) return;
     const unsub = watchStaffChat({ action: 'threads', companyId, ownOnly: true }, rows => {
       const list: ChatThread[] = rows.map(row => normalizeThread(row, row.id));
       setThreads(list);
@@ -394,7 +376,7 @@ function ChatPageInner() {
       prevThreadMapRef.current = newMap;
     });
     return () => unsub();
-  }, [myParticipantId, authLoading, companyId]);
+  }, [myParticipantId, authLoading, companyId, canViewChat]);
 
   // --- Subscribe to messages for open panes ---
   const activeThreadIds = openPanes.filter(Boolean) as string[];
@@ -407,14 +389,14 @@ function ChatPageInner() {
     // before the promise is even returned, so `.catch(() => {})` does not
     // swallow it. This was the exact cause of the ErrorBoundary trace from
     // the Watford Crew profile crash.
-    if (authLoading || !myParticipantId) return;
+    if (authLoading || !canViewChat || !myParticipantId || !companyId) return;
     const unsubs = activeThreadIds.map(threadId => watchStaffChat({ action: 'messages', threadId, companyId }, rows => {
       setPaneMessages(prev => ({ ...prev, [threadId]: rows }));
       setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 150);
     }, error => setToastMsg(error.message), 5000));
     for (const threadId of activeThreadIds) void staffChatCall({ action: 'read', threadId, companyId }).catch(() => {});
     return () => unsubs.forEach(stop => stop());
-  }, [activeThreadIds.join(','), myParticipantId, authLoading, companyId]);
+  }, [activeThreadIds.join(','), myParticipantId, authLoading, companyId, canViewChat]);
 
   // Cross-profile thread index — maps threadId to profile IDs that contain it
   const threadToProfiles = useMemo(() => {

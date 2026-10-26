@@ -1,18 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import {
-  collection,
-  query,
-  where,
-  orderBy,
-  onSnapshot,
-  addDoc,
-  updateDoc,
-  doc,
-  Timestamp,
-  limit,
-} from 'firebase/firestore';
 import { watchStaffChat, staffChatCall, sendStaffChat } from '@/lib/staffChatClient';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
@@ -118,7 +106,7 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
     // userId must be a real Firebase Auth uid. Empty string (pre-auth) or
     // any 'dev' fallback would trigger a stale cached snapshot followed by
     // re-subscription once auth resolves, flashing the thread list.
-    if (!visible || !userId || userId === 'dev') return;
+    if (!visible || !canViewChat || !companyId || !userId || userId === 'dev') return;
 
     const unsub = watchStaffChat({ action: 'threads', companyId, ownOnly: true }, rows => {
       const list = rows.filter(row => row.status === 'active') as ChatThread[];
@@ -127,7 +115,7 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
     }, error => setSendError(error.message));
 
     return () => unsub();
-  }, [visible, userId, companyId, myParticipantId]);
+  }, [visible, userId, companyId, myParticipantId, canViewChat]);
 
   // ── Message subscription for selected thread ────────────────────────────
   useEffect(() => {

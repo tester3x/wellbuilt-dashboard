@@ -250,7 +250,7 @@ export const sendChatMessage = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'message too long');
     }
     const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
+      allowLegacyHash: false,
       legacyDriverHash: data.driverHash,
     });
 
@@ -265,7 +265,7 @@ export const sendChatMessage = httpsV2.onCall(
       const [thread, previous] = await Promise.all([tx.get(threadRef), tx.get(messageRef)]);
       const row = thread.data();
       const members = [...(Array.isArray(row?.participantIds) ? row!.participantIds : []), ...(Array.isArray(row?.participants) ? row!.participants : [])];
-      if (!row || !driver.companyId || row.companyId !== driver.companyId || !members.some(id => id === driver.driverId || id === senderId)) {
+      if (!row || row.broadcast === true || !driver.companyId || row.companyId !== driver.companyId || !members.some(id => id === driver.driverId || id === senderId)) {
         throw new httpsV2.HttpsError('permission-denied', 'Not a member of this company chat');
       }
       if (previous.exists) {
