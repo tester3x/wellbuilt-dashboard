@@ -100,7 +100,7 @@ export function buildHistoricalPackets(rows: ReviewedPull[], history: JsonRecord
     const days = elapsed > 0 && recovery > 0 && !preceding?.wellDown ? elapsed / recovery : 0;
     const flowRateDays = days > 0 && days < 365 ? days : 0;
     packets[row.packetId] = {
-      packetId: row.packetId, requestType: 'pull', wellName: row.wellName,
+      packetId: row.packetId, requestType: 'pull', wellName: row.wellName, companyId,
       dateTime: row.dateTimeUTC, dateTimeUTC: row.dateTimeUTC,
       tankLevelFeet: row.tankLevelFeet, bblsTaken: row.bblsTaken,
       tankTopInches: Number(row.tankLevelFeet) * 12, tankAfterInches: Number(row.afterFeet) * 12,
