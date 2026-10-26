@@ -4,6 +4,8 @@ import { createHash } from 'crypto';
 import { requireSecureDriver } from '../requireDriverAuth';
 import { loadCanonicalDriverAuthority, productionCanonicalDriverReaders } from '../canonicalDriverAuthority';
 import { tankInfoAuthority, tankInfoPatch, tankInfoProjection, type Row } from './tankInfoModel';
+import {refreshFlowWindow} from '../../refreshFlowWindow';
+import {flowRelevantTankEdit} from '../../tankEditFlow';
 
 function requestData(raw: any, keys: string[]): Row {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !keys.includes(k)))
@@ -36,7 +38,19 @@ async function present(ctx: Awaited<ReturnType<typeof context>>, well = ctx.well
     primaryDrivers: owners.map(([id, p]: any) => ({ id, name: p.displayName || id, allRoutes: p.primaryAllRoutes === true })),
     };
 }
-const options = { timeoutSeconds: 30, memory: '256MiB' as const, enforceAppCheck: false };
+async function finishTankEdit(ctx:Awaited<ReturnType<typeof context>>,well:Row,operationId:string){
+ const receipt=well.tankInfoEdits?.[operationId];
+ if(receipt&&!receipt.recalculatedAt&&flowRelevantTankEdit(receipt.before,{...receipt.before,...receipt.patch})){
+  for(let attempt=0;;attempt++){
+   try{await refreshFlowWindow(ctx.db,ctx.raw.wellName,{tankEdit:true});break;}
+   catch(error){if(attempt>=2||!['tank_flow_history_changed','tank_flow_config_changed'].includes((error as Error).message))throw error;}
+  }
+  const ref=ctx.db.ref(`well_config/${ctx.raw.wellName}/tankInfoEdits/${operationId}`),listener=()=>{};ref.on('value',listener);
+  try{await ref.once('value');await ref.transaction((current:Row|null)=>current?.digest===receipt.digest?{...current,recalculatedAt:Date.now()}:undefined);}finally{ref.off('value',listener);}
+ }
+ return {...await present(ctx,(await ctx.ref.once('value')).val()),operationId};
+}
+const options = { timeoutSeconds: 120, memory: '256MiB' as const, enforceAppCheck: false };
 export const getWbmTankInfo = https.onCall(options, async request => present(await context(request, ['wellName'])));
 
 export const saveWbmTankInfo = https.onCall(options, async request => {
@@ -49,7 +63,7 @@ export const saveWbmTankInfo = https.onCall(options, async request => {
     Object.entries(patch || {}).sort(([a], [b]) => a.localeCompare(b))])).digest('hex');
   const receipt = ctx.well.tankInfoEdits?.[operationId];
   if (receipt?.digest === digest && receipt.driverId === ctx.driver.driverId)
-    return { ...await present(ctx), operationId };
+    return finishTankEdit(ctx,ctx.well,operationId);
   if (!ctx.permissions.canEdit) throw new https.HttpsError('permission-denied', 'tank_info_edit_forbidden');
   let refusal = 'tank_info_conflict';
   const now = Date.now();
@@ -81,5 +95,5 @@ export const saveWbmTankInfo = https.onCall(options, async request => {
   } finally { ctx.ref.off('value', listener); }
   if (!result.committed) throw new https.HttpsError(refusal === 'tank_info_conflict' ? 'aborted'
     : refusal === 'tank_info_edit_forbidden' ? 'permission-denied' : 'invalid-argument', refusal);
-  return { ...await present(ctx, result.snapshot.val()), operationId };
+  return finishTankEdit(ctx,result.snapshot.val(),operationId);
 });

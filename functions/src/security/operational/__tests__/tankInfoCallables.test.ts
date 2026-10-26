@@ -1,4 +1,6 @@
 let mockData: any;
+const mockRefresh=jest.fn();
+jest.mock('../../../refreshFlowWindow',()=>({refreshFlowWindow:(...args:any[])=>mockRefresh(...args)}));
 const clone = (v: any) => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
 const mockRef = (path: string) => {
   const parts = path.split('/');
@@ -41,6 +43,7 @@ const writePrimary = staffWritePrimaryRouteAssignment as any, getPrimary = staff
 const request = (driver: string, data: any) => ({ auth: { uid: 'uid-' + driver, token: { driverId: driver } }, data });
 const op = { wellName: 'Example', operationId: 'operation-1234567890123456', expectedRevision: 0, patch: { activeTanks: 2 } };
 beforeEach(() => {
+  mockRefresh.mockReset();mockRefresh.mockResolvedValue(undefined);
   mockData = { drivers: { profiles: {
     primary: { companyId: 'company-a', active: true, assignedRoutes: ['Route A', 'Route B'], primaryRoutes: ['Route A'], displayName: 'Primary' },
     helper: { companyId: 'company-a', active: true, assignedRoutes: ['Route A'], displayName: 'Helper' },
@@ -64,6 +67,31 @@ test('a committed edit has a durable audited receipt; retry after lost acknowled
   const retry = await saveInfo(request('primary', op));
   expect(retry.config.tankInfoRevision).toBe(1); expect(mockData.well_config.Example).toEqual(saved);
   expect(first.config.tankInfoEdits).toBeUndefined();
+  expect(mockRefresh).toHaveBeenCalledTimes(1);
+  expect(mockRefresh).toHaveBeenCalledWith(expect.anything(),'Example',{tankEdit:true});
+  expect(saved.tankInfoEdits[op.operationId].recalculatedAt).toEqual(expect.any(Number));
+});
+
+test('a saved edit retries unfinished recalculation without reapplying the tank change',async()=>{
+ mockRefresh.mockRejectedValueOnce(Error('temporary failure'));
+ await expect(saveInfo(request('primary',op))).rejects.toThrow('temporary failure');
+ expect(mockData.well_config.Example.tankInfoRevision).toBe(1);
+ expect(mockData.well_config.Example.tankInfoEdits[op.operationId].recalculatedAt).toBeUndefined();
+ await saveInfo(request('primary',op));
+ expect(mockRefresh).toHaveBeenCalledTimes(2);
+ expect(mockData.well_config.Example.tankInfoRevision).toBe(1);
+});
+
+test('notes and H2S changes do not run production recalculation',async()=>{
+ await saveInfo(request('primary',{...op,patch:{h2sStatus:'low',tankNotes:'Updated inspection'}}));
+ expect(mockRefresh).not.toHaveBeenCalled();
+});
+
+test('a new pull arriving during recalculation is retried against fresh history automatically',async()=>{
+ mockRefresh.mockRejectedValueOnce(Error('tank_flow_history_changed'));
+ await saveInfo(request('primary',op));
+ expect(mockRefresh).toHaveBeenCalledTimes(2);
+ expect(mockData.well_config.Example.tankInfoRevision).toBe(1);
 });
 test('stale revisions and reused operation identities cannot overwrite somebody else’s setup', async () => {
   await saveInfo(request('primary', op));
