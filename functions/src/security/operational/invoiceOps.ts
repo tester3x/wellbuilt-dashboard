@@ -70,29 +70,34 @@ export const upsertDriverInvoice = httpsV2.onCall(
     const col = admin.firestore().collection('invoices');
     if (invoiceId) {
       const ref = col.doc(invoiceId);
-      const ex = await ref.get();
+      await admin.firestore().runTransaction(async tx => {
+      const ex = await tx.get(ref);
       if (ex.exists) {
         const prev = ex.data() || {};
-        const owner =
-          prev.driverId === driver.driverId ||
-          prev.driverHash === data.driverHash ||
-          prev.driverHash === driver.driverId;
-        if (!owner && prev.driverId) {
+        const owner = prev.driverId ? prev.driverId === driver.driverId
+          : prev.driverHash === driver.driverId || (!!data.driverHash && prev.driverHash === data.driverHash);
+        if (!owner) {
           throw new httpsV2.HttpsError('permission-denied', 'Invoice owned by another driver');
         }
         if (driver.companyId && prev.companyId && prev.companyId !== driver.companyId) {
           throw new httpsV2.HttpsError('permission-denied', 'Cross-company invoice');
         }
+        if (prev.lockedForTransfer || prev.activeTransferRequestId) {
+          throw new httpsV2.HttpsError('failed-precondition', 'Load is locked while its transfer offer is pending');
+        }
+        // Transfer authority belongs to the dedicated server transaction.
+        for (const field of ['lockedForTransfer', 'activeTransferRequestId', 'transferRevision', 'transferAcceptedAt', 'transferAcceptedBy']) delete inv[field];
         const prevStatus = String(prev.status || '').toLowerCase();
         const nextStatus = String(inv.status || prevStatus).toLowerCase();
         if (TERMINAL_STATUSES.has(prevStatus) && !TERMINAL_STATUSES.has(nextStatus)) {
           throw new httpsV2.HttpsError('failed-precondition', 'Cannot reopen terminal invoice');
         }
-        await ref.set(inv, { merge: data.merge !== false });
+        tx.set(ref, inv, { merge: data.merge !== false });
       } else {
         inv.createdAt = FieldValue.serverTimestamp();
-        await ref.set(inv);
+        tx.set(ref, inv);
       }
+      });
     } else {
       inv.createdAt = FieldValue.serverTimestamp();
       const created = await col.add(inv);
@@ -249,54 +254,28 @@ export const sendChatMessage = httpsV2.onCall(
       legacyDriverHash: data.driverHash,
     });
 
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(threadId)) throw new httpsV2.HttpsError('invalid-argument', 'Invalid thread');
     const threadRef = admin.firestore().collection('chat_threads').doc(threadId);
-    const thread = await threadRef.get();
-    if (!thread.exists) {
-      throw new httpsV2.HttpsError('not-found', 'thread not found');
-    }
-    const t = thread.data() || {};
-    const participants: string[] = Array.isArray(t.participantIds)
-      ? t.participantIds
-      : Array.isArray(t.participants)
-        ? t.participants
-        : [];
-    const member =
-      participants.includes(driver.driverId) ||
-      participants.includes(data.driverHash || '') ||
-      t.companyId === driver.companyId;
-    if (!member && t.companyId && driver.companyId && t.companyId !== driver.companyId) {
-      throw new httpsV2.HttpsError('permission-denied', 'Not a thread member / wrong company');
-    }
-
-    const msgId = data.clientId
-      ? `c_${String(data.clientId).replace(/\//g, '_').slice(0, 64)}`
-      : undefined;
-    const msg = {
-      text,
-      senderId: driver.driverId,
-      senderName: data.senderName || driver.displayName || 'Driver',
-      createdAt: FieldValue.serverTimestamp(),
-      clientId: data.clientId || null,
-      authSource: driver.authSource,
-    };
-    if (msgId) {
-      const mref = threadRef.collection('messages').doc(msgId);
-      const ex = await mref.get();
-      if (ex.exists) {
-        return { ok: true, messageId: msgId, duplicate: true };
+    const clientId = String(data.clientId || '').trim();
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(clientId)) throw new httpsV2.HttpsError('invalid-argument', 'Stable message identity required');
+    const senderId = `driver:${driver.driverId}`;
+    const profile = (await admin.database().ref(`drivers/profiles/${driver.driverId}`).once('value')).val();
+    const messageRef = threadRef.collection('messages').doc(`c_${clientId}`);
+    return admin.firestore().runTransaction(async tx => {
+      const [thread, previous] = await Promise.all([tx.get(threadRef), tx.get(messageRef)]);
+      const row = thread.data();
+      const members = [...(Array.isArray(row?.participantIds) ? row!.participantIds : []), ...(Array.isArray(row?.participants) ? row!.participants : [])];
+      if (!row || !driver.companyId || row.companyId !== driver.companyId || !members.some(id => id === driver.driverId || id === senderId)) {
+        throw new httpsV2.HttpsError('permission-denied', 'Not a member of this company chat');
       }
-      await mref.set(msg);
-      await threadRef.set(
-        { lastMessageAt: FieldValue.serverTimestamp(), lastMessageText: text },
-        { merge: true },
-      );
-      return { ok: true, messageId: msgId, duplicate: false };
-    }
-    const created = await threadRef.collection('messages').add(msg);
-    await threadRef.set(
-      { lastMessageAt: FieldValue.serverTimestamp(), lastMessageText: text },
-      { merge: true },
-    );
-    return { ok: true, messageId: created.id, duplicate: false };
+      if (previous.exists) {
+        if (previous.get('senderId') !== senderId || previous.get('text') !== text) throw new httpsV2.HttpsError('permission-denied', 'Message identity conflict');
+        return { ok: true, messageId: messageRef.id, duplicate: true };
+      }
+      const preview = { text, senderId, senderName: profile?.legalName || profile?.displayName || driver.displayName || 'Driver', type: 'text', timestamp: FieldValue.serverTimestamp() };
+      tx.create(messageRef, { ...preview, createdAt: FieldValue.serverTimestamp(), clientId, authSource: driver.authSource });
+      tx.update(threadRef, { lastMessage: preview, updatedAt: FieldValue.serverTimestamp(), lastMessageAt: FieldValue.serverTimestamp(), lastMessageText: text });
+      return { ok: true, messageId: messageRef.id, duplicate: false };
+    });
   },
 );

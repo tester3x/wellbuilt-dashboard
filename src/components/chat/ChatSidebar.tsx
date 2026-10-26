@@ -13,7 +13,7 @@ import {
   Timestamp,
   limit,
 } from 'firebase/firestore';
-import { getFirestoreDb } from '@/lib/firebase';
+import { watchStaffChat, staffChatCall, sendStaffChat } from '@/lib/staffChatClient';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
 import {
@@ -120,35 +120,11 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
     // re-subscription once auth resolves, flashing the thread list.
     if (!visible || !userId || userId === 'dev') return;
 
-    const firestore = getFirestoreDb();
-    const constraints = [
-      where('participants', 'array-contains', myParticipantId),
-      where('status', '==', 'active'),
-      orderBy('updatedAt', 'desc'),
-      limit(100),
-    ];
-
-    // Company scoping: if companyId set, filter by it
-    if (companyId) {
-      constraints.splice(0, 0, where('companyId', '==', companyId));
-    }
-
-    const q = query(collection(firestore, 'chat_threads'), ...constraints);
-
-    const unsub = onSnapshot(q, (snap) => {
-      const list: ChatThread[] = [];
-      snap.forEach((d) => {
-        list.push({ id: d.id, ...d.data() } as ChatThread);
-      });
+    const unsub = watchStaffChat({ action: 'threads', companyId, ownOnly: true }, rows => {
+      const list = rows.filter(row => row.status === 'active') as ChatThread[];
       setThreads(list);
-      // Report unread count to parent
-      if (onUnreadChange) {
-        const unread = list.filter(t => isThreadUnread(t, myParticipantId)).length;
-        onUnreadChange(unread);
-      }
-    }, (err) => {
-      console.warn('[Chat] Thread listener error:', err.message);
-    });
+      onUnreadChange?.(list.filter(t => isThreadUnread(t, myParticipantId)).length);
+    }, error => setSendError(error.message));
 
     return () => unsub();
   }, [visible, userId, companyId, myParticipantId]);
@@ -160,35 +136,16 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
       return;
     }
 
-    const firestore = getFirestoreDb();
-    const q = query(
-      collection(firestore, 'chat_threads', selectedThreadId, 'messages'),
-      orderBy('timestamp', 'asc'),
-      limit(200),
-    );
-
-    const unsub = onSnapshot(q, (snap) => {
-      const list: ChatMessage[] = [];
-      snap.forEach((d) => {
-        list.push({ id: d.id, ...d.data() } as ChatMessage);
-      });
-      setMessages(list);
-    }, (err) => {
-      console.warn('[Chat] Message listener error:', err.message);
-    });
+    const unsub = watchStaffChat({ action: 'messages', threadId: selectedThreadId, companyId }, rows => setMessages(rows), error => setSendError(error.message), 3000);
 
     return () => unsub();
-  }, [selectedThreadId]);
+  }, [selectedThreadId, companyId]);
 
   // ── Mark thread as read when selected ───────────────────────────────────
   useEffect(() => {
     if (!selectedThreadId) return;
-    const firestore = getFirestoreDb();
-    const threadRef = doc(firestore, 'chat_threads', selectedThreadId);
-    updateDoc(threadRef, {
-      [`lastRead.${myParticipantId}`]: Timestamp.now(),
-    }).catch(() => { /* ignore permission errors */ });
-  }, [selectedThreadId, messages.length, myParticipantId]);
+    void staffChatCall({ action: 'read', threadId: selectedThreadId, companyId }).catch(() => {});
+  }, [selectedThreadId, messages.length, myParticipantId, companyId]);
 
   // ── Auto-scroll to bottom on new messages ───────────────────────────────
   useEffect(() => {
@@ -200,7 +157,7 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
     if (selectedThreadId) {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [selectedThreadId]);
+  }, [selectedThreadId, companyId]);
 
   // ── Close on outside click ──────────────────────────────────────────────
   useEffect(() => {
@@ -242,39 +199,15 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
     setSendError(null);
 
     setInputText('');
-    const firestore = getFirestoreDb();
-    const now = Timestamp.now();
-
     try {
-      // Write message to subcollection
-      await addDoc(collection(firestore, 'chat_threads', selectedThreadId, 'messages'), {
-        text,
-        senderId: myParticipantId,
-        senderName: 'Admin', // Dashboard users are admin
-        timestamp: now,
-        type: 'text',
-      });
-
-      // Update thread's lastMessage + updatedAt
-      const threadRef = doc(firestore, 'chat_threads', selectedThreadId);
-      await updateDoc(threadRef, {
-        lastMessage: {
-          text,
-          senderId: myParticipantId,
-          senderName: 'Admin',
-          timestamp: now,
-          type: 'text',
-        },
-        updatedAt: now,
-        [`lastRead.${myParticipantId}`]: now,
-      });
+      await sendStaffChat(selectedThreadId, text, companyId || '');
     } catch (err) {
       console.error('[Chat] send failed', err);
       // Restore the unsent text so it isn't silently lost.
       setInputText(text);
       setSendError('Message failed to send. Check your access.');
     }
-  }, [inputText, selectedThreadId, myParticipantId, user, userCompany]);
+  }, [inputText, selectedThreadId, myParticipantId, user, userCompany, companyId]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
