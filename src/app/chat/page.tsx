@@ -8,7 +8,7 @@ import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
 import { getFirestoreDb } from '@/lib/firebase';
-import { watchStaffChat, staffChatCall, sendStaffChat, chatIntentId } from '@/lib/staffChatClient';
+import { watchStaffChat, watchStaffChatCompany, staffChatCall, sendStaffChat, chatIntentId } from '@/lib/staffChatClient';
 import {
   type ChatThread,
   type ChatMessage,
@@ -217,12 +217,9 @@ function ChatPageInner() {
   const [highlightedPane, setHighlightedPane] = useState<number | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   useEffect(() => {
-    let current = true;
     setChatCompanyId(''); setThreads([]); setPaneMessages({}); setProfiles([]); setDrivers([]);
-    if (!authLoading && canViewChat && myParticipantId) void staffChatCall({ action: 'threads', ownOnly: true }).then(result => {
-      if (current && typeof result.companyId === 'string') setChatCompanyId(result.companyId);
-    }).catch(error => { if (current) setToastMsg(error.message); });
-    return () => { current = false; };
+    if (authLoading || !canViewChat || !myParticipantId) return;
+    return watchStaffChatCompany(company => { setChatCompanyId(company); setToastMsg(null); }, error => setToastMsg(error.message));
   }, [authLoading, canViewChat, myParticipantId]);
   const hasInitializedRef = useRef(false); // Guard for auto-open on initial load
   // Temp slots: threads placed via sidebar click but NOT yet locked to the profile.

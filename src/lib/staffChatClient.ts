@@ -4,6 +4,26 @@ import { onIdTokenChanged } from 'firebase/auth';
 import { getFirebaseAuth, getFirebaseFunctions } from './firebase';
 
 const listeners = new Set<() => void>();
+/** Retry the initial authorized scope after an offline/cold-start failure. */
+export function watchStaffChatCompany(onScope: (companyId: string) => void, onError: (error: Error) => void): () => void {
+  let stopped = false, busy = false, timer: ReturnType<typeof setTimeout>;
+  const owner = getFirebaseAuth().currentUser;
+  const refresh = async () => {
+    if (stopped || busy || getFirebaseAuth().currentUser !== owner) return;
+    busy = true;
+    try {
+      const result = await httpsCallable(getFirebaseFunctions(), 'staffChat')({ action: 'threads', ownOnly: true });
+      const companyId = (result.data as any).companyId;
+      if (typeof companyId !== 'string' || !companyId) throw new Error('Chat company could not be confirmed');
+      if (!stopped && getFirebaseAuth().currentUser === owner) { onScope(companyId); stopped = true; }
+    } catch (error) {
+      if (!stopped && getFirebaseAuth().currentUser === owner) onError(error instanceof Error ? error : new Error('Chat unavailable'));
+    } finally { busy = false; if (!stopped) timer = setTimeout(refresh, 10000); }
+  };
+  const signal = () => { clearTimeout(timer); void refresh(); };
+  window.addEventListener('online', signal); document.addEventListener('visibilitychange', signal); signal();
+  return () => { stopped = true; clearTimeout(timer); window.removeEventListener('online', signal); document.removeEventListener('visibilitychange', signal); };
+}
 export const chatIntentId = () => crypto.randomUUID();
 export async function staffChatCall(data: Record<string, unknown>): Promise<any> {
   const owner = getFirebaseAuth().currentUser;

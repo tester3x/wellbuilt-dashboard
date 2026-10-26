@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { watchStaffChat, staffChatCall, sendStaffChat } from '@/lib/staffChatClient';
+import { watchStaffChat, watchStaffChatCompany, staffChatCall, sendStaffChat } from '@/lib/staffChatClient';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
 import {
@@ -103,11 +103,9 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
   const myParticipantId = userParticipantId(userId);
 
   useEffect(() => {
-    let current = true; setChatCompanyId(''); setThreads([]); setMessages([]);
-    if (visible && canViewChat && userId) void staffChatCall({ action: 'threads', ownOnly: true }).then(result => {
-      if (current && typeof result.companyId === 'string') setChatCompanyId(result.companyId);
-    }).catch(error => { if (current) setSendError(error.message); });
-    return () => { current = false; };
+    setChatCompanyId(''); setThreads([]); setMessages([]); setSendError(null);
+    if (!visible || !canViewChat || !userId) return;
+    return watchStaffChatCompany(company => { setChatCompanyId(company); setSendError(null); }, error => setSendError(error.message));
   }, [visible, canViewChat, userId]);
 
   // ── Thread subscription ─────────────────────────────────────────────────
@@ -119,7 +117,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
 
     const unsub = watchStaffChat({ action: 'threads', companyId, ownOnly: true }, rows => {
       const list = rows.filter(row => row.status === 'active') as ChatThread[];
-      setThreads(list);
+      setThreads(list); setSendError(null);
       onUnreadChange?.(list.filter(t => isThreadUnread(t, myParticipantId)).length);
     }, error => setSendError(error.message));
 
@@ -133,7 +131,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
       return;
     }
 
-    const unsub = watchStaffChat({ action: 'messages', threadId: selectedThreadId, companyId }, rows => setMessages(rows), error => setSendError(error.message), 3000);
+    const unsub = watchStaffChat({ action: 'messages', threadId: selectedThreadId, companyId }, rows => { setMessages(rows); setSendError(null); }, error => setSendError(error.message), 3000);
 
     return () => unsub();
   }, [selectedThreadId, companyId]);
@@ -316,6 +314,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
             })}
           </div>
 
+          {sendError && <p role="alert" className="px-4 py-2 text-xs text-red-400">{sendError}. Retrying automatically.</p>}
           {/* Thread list */}
           <div className="flex-1 overflow-y-auto">
             {filteredThreads.length === 0 ? (
