@@ -44,3 +44,11 @@ A separate Mobile draft correction on branch `codex/wbm-stale-level-20261005`, p
 Customer/payment identity remains separate from legal well operator. The Tallgrass customer and both well choices were verified in the live Dispatch builder without creating jobs. Requested route assignments were appended while retaining existing routes and viewer restrictions.
 
 Private exports, photos, device captures, credentials, backups and reconciliation records remain outside Git. The HP migration is pending until the home machine is reachable.
+
+## Olson addition
+
+Owner requested the same Tallgrass payer / Liquid Gold hauling setup for a third operational pad, Olson, with two provisional equalizing tanks matching Granli/Dwyer dimensions. The active NDIC 34X-19D record links the nearby Arnegard Olson pad; all five same-pad NDIC wellheads are retained as metadata. Channel context explicitly places Olson next to Granli. Config was created through the governed Add Well UI, then enriched with tenant/operator, coordinates, nominal capacity, active bank and provisional calibration provenance. No Granli plaque serial/year/manufacturer verification was copied.
+
+Starting tank configuration: two active 500-BBL nominal tanks, 20 ft tall, 13.5 ft diameter, 25.5 BBL/ft per tank and 51 BBL/ft bank, explicitly awaiting Olson field verification. Inventory-balance production mode is enabled; no rate, observation or history was fabricated or seeded. Existing four Tallgrass route accounts remain assigned, including LGDispatch's viewer restriction. Tallgrass Dispatch selection and Watchdog lifecycle both visibly include Olson. Group activation time and existing channel settings were preserved.
+
+After scope refresh, an actual new written-140-BBL Olson post was recognized but held because it has no level; it has not produced a processed load or AFR. Two dispatch ticket-number messages were dismissed from review with source records preserved. Receiver remained Connected/Ready/Watching. Public NDIC lookup, private before/after backups, mutation audit, Dispatch screenshot and final verification are outside Git. No APK or backend deployment is needed for this catalogue change. Phones were disconnected during this final addition check, so do not claim on-phone Olson acceptance.
