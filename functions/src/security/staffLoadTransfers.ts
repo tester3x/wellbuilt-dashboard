@@ -12,7 +12,7 @@ function serial(value: any): any {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, serial(v)]));
   return value;
 }
-export const staffLoadTransfers = https.onCall({ timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false }, async request => {
+export const staffLoadTransfers = https.onCall({ timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false, invoker: 'public' }, async request => {
   const data = request.data || {}, action = data.action;
   if (!['list', 'assign', 'decline'].includes(action)) throw new https.HttpsError('invalid-argument', 'Unknown transfer action');
   for (const field of Object.keys(data)) if (!['action', 'requestId', 'driverId', 'viewedCompanyId'].includes(field)) throw new https.HttpsError('invalid-argument', `Unexpected field: ${field}`);

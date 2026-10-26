@@ -29,7 +29,7 @@ async function directory(companyId: string): Promise<{ drivers: { hash: string; 
   return { drivers, aliases };
 }
 
-export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false }, async request => {
+export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false, invoker: 'public' }, async request => {
   const data = request.data || {}, action = data.action;
   const readActions = ['threads', 'messages', 'profiles', 'read', 'directory'];
   if (![...readActions, 'saveProfile', 'deleteProfile', 'send', 'direct', 'group', 'members', 'archive', 'broadcast', 'clear'].includes(action)) throw new https.HttpsError('invalid-argument', 'Unknown chat action');

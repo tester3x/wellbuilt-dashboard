@@ -44,6 +44,7 @@ import * as functionsV1 from 'firebase-functions/v1';
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
 import { logCanonicalDiag } from './canonical-jobs/diag';
+import { requireTrustedCompanyCapability } from './security/trustedStaffAuthority';
 
 const MAX_EXPIRE_PER_RUN = 100;
 
@@ -68,6 +69,7 @@ interface ExpiryResult {
  */
 export async function runTransferRequestExpiry(
   maxToExpire: number = MAX_EXPIRE_PER_RUN,
+  companyId?: string,
 ): Promise<ExpiryResult> {
   const db = admin.firestore();
   const now = admin.firestore.Timestamp.now();
@@ -81,9 +83,11 @@ export async function runTransferRequestExpiry(
 
   let snap;
   try {
-    snap = await db
+    let query: admin.firestore.Query = db
       .collection('transfer_requests')
-      .where('status', '==', 'pending')
+      .where('status', '==', 'pending');
+    if (companyId) query = query.where('companyId', '==', companyId);
+    snap = await query
       .where('ttlExpiresAt', '<=', now)
       .orderBy('ttlExpiresAt', 'asc')
       .limit(maxToExpire)
@@ -125,6 +129,9 @@ export async function runTransferRequestExpiry(
           return { ok: false as const, reason: `status_already_${currentReq.status}` };
         }
 
+        const invRef = db.collection('invoices').doc(sourceInvoiceDocId);
+        const invSnap = await tx.get(invRef);
+        // All transaction reads must precede its first write.
         // Mark request expired
         tx.update(reqDoc.ref, {
           status: 'expired',
@@ -136,8 +143,6 @@ export async function runTransferRequestExpiry(
 
         // Clear sender's invoice lock (idempotent — if already cleared,
         // no harm; if still set, this releases it).
-        const invRef = db.collection('invoices').doc(sourceInvoiceDocId);
-        const invSnap = await tx.get(invRef);
         if (invSnap.exists) {
           const invData = invSnap.data();
           // Only clear if THIS request is the active lock. Defensive: if
@@ -278,11 +283,9 @@ export const transferRequestExpiry = functionsV2.onSchedule(
  */
 export const runTransferRequestExpiryOnDemand = functionsV1.https.onCall(
   async (data, context) => {
-    if (!context.auth) {
-      throw new functionsV1.https.HttpsError('unauthenticated', 'Sign-in required');
-    }
+    const staff = await requireTrustedCompanyCapability(context.auth?.uid, 'createDispatch');
     const maxToExpire =
-      typeof data?.maxToExpire === 'number' ? data.maxToExpire : MAX_EXPIRE_PER_RUN;
-    return await runTransferRequestExpiry(maxToExpire);
+      typeof data?.maxToExpire === 'number' ? Math.min(100, Math.max(1, Math.trunc(data.maxToExpire))) : MAX_EXPIRE_PER_RUN;
+    return await runTransferRequestExpiry(maxToExpire, staff.companyId);
   },
 );

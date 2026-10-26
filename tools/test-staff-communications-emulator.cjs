@@ -7,6 +7,7 @@ const db = admin.firestore(), rt = admin.database();
 const chat = require('../functions/lib/security/staffChat').staffChat.run;
 const transfer = require('../functions/lib/security/staffLoadTransfers').staffLoadTransfers.run;
 const { upsertDriverInvoice, sendChatMessage } = require('../functions/lib/security/operational/invoiceOps');
+const { runTransferRequestExpiry, runTransferRequestExpiryOnDemand } = require('../functions/lib/transfer-request-expiry');
 const A = '11111111-1111-4111-8111-111111111111', B = '22222222-2222-4222-8222-222222222222';
 const staff = { uid: 'fixture-dispatch', token: {} }, viewer = { uid: 'fixture-viewer', token: {} };
 const request = (data, auth = staff) => ({ data, auth });
@@ -68,6 +69,17 @@ async function check(label, run) { await run(); console.log('PASS', label); coun
     const auth = { uid: 'fixture-driver', token: { kind: 'driver', driverId: B, companyId: 'fixture-co' } };
     await assert.rejects(() => sendChatMessage.run(request({ threadId, text: 'No', clientId: 'attack', driverHash: A }, auth)));
     await assert.rejects(() => sendChatMessage.run(request({ threadId, text: 'No', clientId: 'attack', driverHash: A }, undefined)));
+  });
+  await check('expiry unlocks only its own offer and keeps the sender job open', async () => {
+    for (const id of ['expired', 'replaced']) {
+      await db.doc(`transfer_requests/${id}`).set({ companyId: 'fixture-co', status: 'pending', sourceInvoiceDocId: id, ttlExpiresAt: admin.firestore.Timestamp.fromMillis(1) });
+      await db.doc(`invoices/${id}`).set({ companyId: 'fixture-co', driverId: A, status: 'open', lockedForTransfer: true, activeTransferRequestId: id === 'replaced' ? 'newer-offer' : id });
+    }
+    const result = await runTransferRequestExpiry(100, 'fixture-co'); assert.equal(result.errors.length, 0); assert.equal(result.expired.length, 2);
+    assert.equal((await db.doc('invoices/expired').get()).get('lockedForTransfer'), false);
+    assert.equal((await db.doc('invoices/expired').get()).get('status'), 'open');
+    assert.equal((await db.doc('invoices/replaced').get()).get('activeTransferRequestId'), 'newer-offer');
+    await assert.rejects(() => runTransferRequestExpiryOnDemand.run({}, { auth: { uid: 'unproven', token: {} } }));
   });
   console.log(`Staff communications: ${count} checks passed.`);
   await admin.app().delete();
