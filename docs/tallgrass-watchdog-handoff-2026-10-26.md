@@ -23,7 +23,13 @@ The owner-supplied export was normalized with original message bodies retained l
 
 Both wells opt into the existing inventory-balance estimator. New packet ingestion continues to refresh projections automatically. Historical source times, top readings, written barrel quantities and packet identities were preserved.
 
-Granli's subsequently supplied manufacturer plaque replaces its provisional tank dimensions: two equalizing tanks, 500 BBL nominal each, 20 ft height, 13 ft 6 in diameter. Following the existing diameter-based calibration convention, 25.5 BBL/ft per tank gives a 51 BBL/ft bank. Historical computed after-levels were recalibrated with original import provenance retained and an appended correction audit; actual reported readings and live packet provenance were preserved. Dwyer's provisional 20 BBL/ft per tank was not changed.
+Granli's subsequently supplied manufacturer plaque replaces its provisional tank dimensions: two equalizing tanks, 500 BBL nominal each, 20 ft height, 13 ft 6 in diameter. Following the existing diameter-based calibration convention, 25.5 BBL/ft per tank gives a 51 BBL/ft bank. Historical computed after-levels were recalibrated with original import provenance retained and an appended correction audit; actual reported readings and live packet provenance were preserved. The owner subsequently relayed that Dwyer's tanks look the same; its four-tank configuration now uses those dimensions, explicitly marked as a driver visual comparison rather than a verified Dwyer plaque. Do not copy Granli's serial/year to Dwyer.
+
+## Imported history visibility repair
+
+On-device verification found that imported packets lacked top-level `companyId`; the governed company appeared only in nested import provenance. The exact-well Mobile reader correctly excludes records lacking its required tenant field. Do not relax that reader or infer arbitrary packet ownership during reads.
+
+Product checkpoint `d0ab5453` adds the authoritative import company to newly built historical packets. Functions build and both focused import suites passed (17 tests). Only `applyHistoricalPullImport` was deployed; its active deployed packet builder byte-matches the compiled checkpoint. Existing affected rows from the completed governed import received the missing company projection after checking the batch, well tenant and nested provenance. No new load identities or source measurements were created. Independent inventory-balance arithmetic agrees with both published AFRs. The original model-seed cold-cache limitation remains separate.
 
 Customer/payment identity remains separate from legal well operator. The Tallgrass customer and both well choices were verified in the live Dispatch builder without creating jobs. Requested route assignments were appended while retaining existing routes and viewer restrictions.
 
