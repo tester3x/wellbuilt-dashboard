@@ -1,3 +1,4 @@
+import { resultingLevel, projectedLevel, inferredDailyBbl } from '@tester3x/water-hauling';
 /** Fresh-water supply is a separate inventory from produced-water pull levels.
  * Each accepted delivery is one load. A shared gauge is used only after
  * multi-tank equalization has been explicitly verified.
@@ -51,7 +52,6 @@ export type FreshWaterState = {
 };
 
 const round = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
-const dayMs = 86_400_000;
 
 export function validFreshWaterConfig(value: unknown): value is FreshWaterConfig {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -69,12 +69,8 @@ export function validFreshWaterConfig(value: unknown): value is FreshWaterConfig
 
 export function projectFreshWaterFeet(state: Pick<FreshWaterState, 'levelFeet' | 'asOfUTC' | 'dailyUseBbl'>,
   config: FreshWaterConfig, atUTC: string): number | null {
-  const elapsed = Date.parse(atUTC) - Date.parse(state.asOfUTC);
-  if (!Number.isFinite(elapsed) || elapsed < 0) return null;
-  const dailyUseBbl = state.dailyUseBbl ?? null;
-  if (elapsed > 0 && dailyUseBbl === null) return null;
-  const bblPerFoot = config.tankCount * config.bblPerFootPerTank;
-  return round(Math.max(0, state.levelFeet - (dailyUseBbl || 0) * elapsed / dayMs / bblPerFoot));
+  return projectedLevel('freshwater', state.levelFeet, state.asOfUTC, atUTC,
+    state.dailyUseBbl, config.tankCount * config.bblPerFootPerTank, config.tankHeightFeet);
 }
 
 export type FreshWaterDecision =
@@ -113,7 +109,7 @@ export function applyFreshWaterDelivery(current: FreshWaterState | null, config:
     Date.parse(a.deliveredAtUTC) - Date.parse(b.deliveredAtUTC) || a.deliveryId.localeCompare(b.deliveryId));
   let levelFeet = seedLevelFeet;
   let asOfUTC = seedAtUTC;
-  const rate = seedDailyUseBbl;
+  let rate = seedDailyUseBbl;
   let lastMeasuredFeet: number | undefined = seedLevelFeet;
   let lastMeasuredAtUTC: string | undefined = seedAtUTC;
   let deliveredSinceMeasurementBbl = 0;
@@ -124,9 +120,14 @@ export function applyFreshWaterDelivery(current: FreshWaterState | null, config:
       return { ok: false, reason: rate === null ? 'usage_rate_unknown' : 'stale_delivery' };
     }
     const before = event.measuredBeforeFeet ?? projected!;
-    const after = before + event.deliveredBbl / bblPerFoot;
-    if (after > config.tankHeightFeet + 0.000001) return { ok: false, reason: 'tank_overflow' };
+    const after = resultingLevel('freshwater', before, event.deliveredBbl, bblPerFoot, config.tankHeightFeet);
+    if (after === null) return { ok: false, reason: 'tank_overflow' };
     if (event.measuredBeforeFeet !== undefined) {
+      if (lastMeasuredFeet !== undefined && lastMeasuredAtUTC) {
+        const inferred = inferredDailyBbl('freshwater', lastMeasuredFeet, lastMeasuredAtUTC, before,
+          event.deliveredAtUTC, deliveredSinceMeasurementBbl, bblPerFoot);
+        if (inferred !== null) rate = inferred;
+      }
       lastMeasuredFeet = before;
       lastMeasuredAtUTC = event.deliveredAtUTC;
       deliveredSinceMeasurementBbl = 0;

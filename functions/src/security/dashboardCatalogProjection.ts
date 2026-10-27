@@ -96,6 +96,7 @@ export const PENDING_ALLOWLIST = [
  * Operational display/edit fields must not be silently dropped.
  */
 export const WELL_CONFIG_ALLOWLIST = [
+  'routeType', 'inventoryGroupId', 'displayName', 'suppliesWells', 'equalization',
   'route',
   'operator',
   'routeColor',

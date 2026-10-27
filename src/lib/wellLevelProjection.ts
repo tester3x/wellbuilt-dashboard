@@ -1,3 +1,4 @@
+import { projectedLevel } from '@tester3x/water-hauling';
 // wellLevelProjection — the ONE shared current-level projection used by the
 // aggregate Well Status page (/mobile), the individual Well Status card (/well),
 // and the Dispatch Well Queue. It reuses the proven WB‑M vc58 estimator
@@ -72,6 +73,13 @@ export interface WellLevelProjection {
 
 /** Project a well's CURRENT level at a single shared asOfMs. */
 export function projectWellLevel(well: WellResponse, asOfMs: number): WellLevelProjection {
+  if (well.routeType === 'freshwater') {
+    const estFeet = well.inventoryLevelFeet == null || !well.inventoryAsOfUTC ? null : projectedLevel('freshwater',
+      well.inventoryLevelFeet, well.inventoryAsOfUTC, new Date(asOfMs).toISOString(), well.inventoryDailyBbl,
+      well.bblPerFoot || 0, well.tankHeight || 0);
+    return { estFeet, estDisplay: estFeet == null ? '--' : formatFeetWBM(estFeet), hasFlow: (well.inventoryDailyBbl || 0) > 0,
+      frozen: false, capped: estFeet === well.tankHeight, wellDown: false, available: estFeet != null };
+  }
   const inputs = wbmInputsFromWell(well);
   const wellDown = inputs.wellDown;
   // Unavailable (never zero): no baseline, or a live well with no valid timestamp.

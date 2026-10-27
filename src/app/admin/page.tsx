@@ -56,6 +56,9 @@ const PlansTab = dynamic(() => import('@/components/admin/PlansTab').then((m) =>
 const AdminAuditTab = dynamic(() => import('@/components/admin/AdminAuditTab').then((m) => m.AdminAuditTab), { ssr: false });
 
 interface WellConfig {
+  routeType?: 'produced-water' | 'freshwater';
+  suppliesWells?: string[];
+  equalization?: 'single-tank' | 'verified-equalized' | 'unverified';
   route?: string;
   bottomLevel?: number;
   tanks?: number;
@@ -104,6 +107,18 @@ export default function AdminPage() {
 
   // New route/well forms
   const [newRouteName, setNewRouteName] = useState('');
+  const [routeType, setRouteType] = useState<'produced-water' | 'freshwater'>('produced-water');
+  const [stagedRouteTypes, setStagedRouteTypes] = useState<Record<string, 'produced-water' | 'freshwater'>>({});
+  const [newMembers, setNewMembers] = useState('');
+  const [editMembers, setEditMembers] = useState('');
+  const [newEqualization, setNewEqualization] = useState<'single-tank' | 'verified-equalized' | 'unverified'>('single-tank');
+  const [editEqualization, setEditEqualization] = useState<'single-tank' | 'verified-equalized' | 'unverified'>('single-tank');
+  const typeForRoute = (route: string) => Object.values(configs).find(c => c.route === route)?.routeType || stagedRouteTypes[route] || 'produced-water';
+  const freshConfig = (route:string,tanks:string,capacity:string,height:string,members:string,equalization:string) => ({
+    routeType:'freshwater', route, tanks:Number(tanks), numTanks:Number(tanks), tankCapacity:Number(capacity),
+    tankHeight:Number(height), bblPerFoot:Number(tanks)*Number(capacity)/Number(height), equalization,
+    suppliesWells:members.split(',').map(n=>n.trim()).filter(Boolean),
+  });
   const [newWellName, setNewWellName] = useState('');
   // Search inputs are decoupled from the well name so users can name the well
   // however they want for drivers (e.g. "Sparrow SOG") while finding the legal
@@ -336,6 +351,8 @@ export default function AdminPage() {
       const config = configs[selectedWell];
       setEditWellName(selectedWell); // Set the editable name
       setEditWellRoute(config.route || 'Unrouted');
+      setEditMembers((config.suppliesWells || []).join(', '));
+      setEditEqualization(config.equalization || 'single-tank');
       setEditWellBottom(String(config.bottomLevel || 3));
       setEditWellTanks(String(config.tanks || config.numTanks || 1));
       setEditWellPullBbls(String(config.pullBbls || 140));
@@ -635,6 +652,8 @@ export default function AdminPage() {
     }
     // Routes are implicit — a route only persists once a well is assigned to it.
     // Stage it locally and tell the operator the truth (no fake "created").
+    setStagedRouteTypes(prev=>({...prev,[routeName]:routeType}));
+    setNewWellRoute(routeName);
     setRoutes([...routes, routeName].sort());
     setRouteWells({ ...routeWells, [routeName]: [] });
     setNewRouteName('');
@@ -750,6 +769,17 @@ export default function AdminPage() {
       showMessage('You do not have permission to manage wells.');
       return;
     }
+    if (typeForRoute(newWellRoute) === 'freshwater') {
+      if (isAddingWell || addWellInflightRef.current) return;
+      setIsAddingWell(true); addWellInflightRef.current=true;
+      try {
+        const result=await staffCreateWellConfig({wellName:newWellName.trim(), config:freshConfig(newWellRoute,newWellTanks,newWellTankCapacity,newWellTankHeight,newMembers,newEqualization) as any});
+        applyWellCatalog({...configs,[result.wellName]:result.config as WellConfig});
+        showMessage('Freshwater tank group saved. Level and usage remain unknown until measured.');
+      } catch(error) { showMessage(classifyAddWellError(error).message); }
+      finally { setIsAddingWell(false); addWellInflightRef.current=false; }
+      return;
+    }
     const click = decideAddWellClick({
       form: {
         wellName: newWellName,
@@ -847,6 +877,17 @@ export default function AdminPage() {
       return;
     }
 
+    if (configs[selectedWell]?.routeType === 'freshwater') {
+      if (isUpdatingWell) return;
+      setIsUpdatingWell(true);
+      try {
+        const result=await staffUpdateWellConfig({wellName:selectedWell, config:freshConfig(editWellRoute,editWellTanks,editWellTankCapacity,editWellTankHeight,editMembers,editEqualization) as any});
+        applyWellCatalog({...configs,[result.wellName]:result.config as WellConfig});
+        showMessage('Freshwater tank group saved. Existing inventory and delivery history preserved.');
+      } catch(error) { showMessage(classifyUpdateWellError(error).message); }
+      finally { setIsUpdatingWell(false); }
+      return;
+    }
     const db = getFirebaseDatabase();
     const newName = editWellName.trim();
     const isNameChanged = newName !== selectedWell;
@@ -1127,6 +1168,9 @@ export default function AdminPage() {
             <div className="bg-gray-800 rounded-lg p-4">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-semibold text-white">Routes</h2>
+                <select aria-label="Route type" value={routeType} onChange={e=>setRouteType(e.target.value as typeof routeType)} className="bg-gray-700 text-white rounded px-2 py-1">
+                  <option value="produced-water">Produced Water</option><option value="freshwater">Freshwater</option>
+                </select>
                 <input
                   type="text"
                   value={routeSearch}
@@ -1137,11 +1181,11 @@ export default function AdminPage() {
               </div>
               <div className="space-y-2">
                 {routes
-                  .filter(route => route.toLowerCase().includes(routeSearch.toLowerCase()))
+                  .filter(route => typeForRoute(route) === routeType && route.toLowerCase().includes(routeSearch.toLowerCase()))
                   .map(route => (
                   <div
                     key={route}
-                    onClick={() => setSelectedRoute(route)}
+                    onClick={() => { setSelectedRoute(route); setNewWellRoute(route); }}
                     className={`p-3 rounded cursor-pointer ${selectedRoute === route ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'}`}
                   >
                     <div className="text-white font-medium">{route}</div>
@@ -1360,10 +1404,18 @@ export default function AdminPage() {
                     className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                   >
                     <option value="">Select Route</option>
-                    {routes.map(r => <option key={r} value={r}>{r}</option>)}
+                    {routes.filter(r=>typeForRoute(r) === routeType).map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
+                    {typeForRoute(newWellRoute) === 'freshwater' && <div className="space-y-2 mt-2">
+                      <label className="block text-gray-400 text-sm">Supplies existing wells (comma separated)</label>
+                      <input className="bg-gray-700 text-white p-2 rounded w-full" value={newMembers} onChange={e=>setNewMembers(e.target.value)} />
+                      <label className="block text-gray-400 text-sm">Tank equalization</label>
+                      <select className="bg-gray-700 text-white p-2 rounded" value={newEqualization} onChange={e=>setNewEqualization(e.target.value as typeof newEqualization)}>
+                        <option value="single-tank">Single tank</option><option value="unverified">Unverified</option><option value="verified-equalized">Verified equalized</option>
+                      </select>
+                    </div>}
                   <div className="grid grid-cols-3 gap-2">
-                    <div>
+                    {typeForRoute(newWellRoute) !== 'freshwater' && <div>
                       <label className="text-gray-400 text-sm">Bottom (ft)</label>
                       <input
                         type="text"
@@ -1373,7 +1425,7 @@ export default function AdminPage() {
                         className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                       />
                       <div className="text-xs text-gray-500 mt-0.5">= {feetToDisplay(parseLevelToFeet(newWellBottom))}</div>
-                    </div>
+                    </div>}
                     <div>
                       <label className="text-gray-400 text-sm">Tanks</label>
                       <input
@@ -1383,7 +1435,7 @@ export default function AdminPage() {
                         className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                       />
                     </div>
-                    <div>
+                    {typeForRoute(newWellRoute) !== 'freshwater' && <div>
                       <label className="text-gray-400 text-sm">Pull BBLs</label>
                       <input
                         type="number"
@@ -1391,7 +1443,7 @@ export default function AdminPage() {
                         onChange={(e) => setNewWellPullBbls(e.target.value)}
                         className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                       />
-                    </div>
+                    </div>}
                   </div>
                   {/* Tank dimensions */}
                   <div className="grid grid-cols-2 gap-3 mt-2">
@@ -1647,9 +1699,17 @@ export default function AdminPage() {
                       >
                         {routes.map(r => <option key={r} value={r}>{r}</option>)}
                       </select>
+                      {configs[selectedWell]?.routeType === 'freshwater' && <div className="space-y-2 mt-2">
+                        <label className="block text-gray-400 text-sm">Supplies existing wells (comma separated)</label>
+                        <input className="bg-gray-700 text-white p-2 rounded w-full" value={editMembers} onChange={e=>setEditMembers(e.target.value)} />
+                        <label className="block text-gray-400 text-sm">Tank equalization</label>
+                        <select className="bg-gray-700 text-white p-2 rounded" value={editEqualization} onChange={e=>setEditEqualization(e.target.value as typeof editEqualization)}>
+                          <option value="single-tank">Single tank</option><option value="unverified">Unverified</option><option value="verified-equalized">Verified equalized</option>
+                        </select>
+                      </div>}
                     </div>
                     <div className="grid grid-cols-3 gap-2">
-                      <div>
+                      {configs[selectedWell]?.routeType !== 'freshwater' && <div>
                         <label className="text-gray-400 text-sm">Bottom (ft)</label>
                         <input
                           type="text"
@@ -1660,7 +1720,7 @@ export default function AdminPage() {
                           disabled={isRenaming}
                         />
                         <div className="text-xs text-gray-500 mt-0.5">= {feetToDisplay(parseLevelToFeet(editWellBottom))}</div>
-                      </div>
+                      </div>}
                       <div>
                         <label className="text-gray-400 text-sm">Tanks</label>
                         <input
@@ -1671,7 +1731,7 @@ export default function AdminPage() {
                           disabled={isRenaming}
                         />
                       </div>
-                      <div>
+                      {configs[selectedWell]?.routeType !== 'freshwater' && <div>
                         <label className="text-gray-400 text-sm">Pull BBLs</label>
                         <input
                           type="number"
@@ -1680,7 +1740,7 @@ export default function AdminPage() {
                           className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                           disabled={isRenaming}
                         />
-                      </div>
+                      </div>}
                     </div>
                     {/* Tank dimensions */}
                     <div className="grid grid-cols-2 gap-3 mt-2">

@@ -1,3 +1,4 @@
+import type { FreshWaterState } from './operational/freshWaterSupplyCore';
 /**
  * Admin-SDK catalog reads for Dashboard. Live hosting still parent-gets
  * RTDB well_config / drivers/approved / users / packets/outgoing, which
@@ -183,6 +184,14 @@ export const adminGetWellPool = httpsV2.onCall(
       outgoing: outgoingSnap.exists() ? outgoingSnap.val() : {},
       caller,
     });
+    const inventory = (await rtdb.ref('fresh_water_supply/'+caller.companyId).once('value')).val() || {};
+    for (const [key, cfg] of Object.entries(full.wellConfig)) {
+      const c=cfg as Record<string, unknown>;
+      if (c.routeType !== 'freshwater' || c.companyId !== caller.companyId) continue;
+      const state=inventory[String(c.inventoryGroupId)] as FreshWaterState | undefined;
+      full.wellStatus[key] = { inventoryLevelFeet: state?.levelFeet ?? null,
+        inventoryAsOfUTC: state?.asOfUTC ?? null, inventoryDailyBbl: state?.dailyUseBbl ?? null };
+    }
     return {
       ok: true as const,
       canViewWellPool: true,

@@ -40,6 +40,7 @@ export const bootstrapWbmSession = httpsV2.onCall(
       companyId: authority.companyId,
       profile,
       wellConfig,
+      routeContractVersion: request.data?.routeContractVersion,
     });
     const binding = parseBinding(
       (await admin.database().ref(BINDING_BY_DRIVER(driver.driverId)).once('value')).val(),

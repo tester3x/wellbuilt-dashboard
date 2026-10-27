@@ -38,6 +38,7 @@ export const getDriverWellConfig = httpsV2.onCall(
       companyId: authority.companyId,
       profile,
       wellConfig,
+      routeContractVersion: request.data?.routeContractVersion,
     });
     if (snap.eligibilityStatus !== 'eligible') {
       throw new httpsV2.HttpsError('failed-precondition', snap.eligibilityReason, {

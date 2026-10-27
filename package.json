@@ -11,6 +11,7 @@
     "test:joincode-emulator": "firebase emulators:exec --only firestore --project wellbuilt-sync \"node firestore-rules-tests/test-joinCodeRotationEmulator.mjs\""
   },
   "dependencies": {
+    "@tester3x/water-hauling": "file:vendor/tester3x-water-hauling-1.0.0.tgz",
     "@tester3x/wellbuilt-contracts": "0.4.0",
     "fflate": "0.8.3",
     "firebase": "^12.8.0",

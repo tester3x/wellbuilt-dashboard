@@ -1,3 +1,4 @@
+import { ingestWbmFreshWaterGroupDelivery } from './freshWaterGroupsCallable';
 /**
  * Secure packet ingest — replaces client PUT to packets/incoming.
  * Admin SDK write; processIncomingPull RTDB trigger remains authority for processing.
@@ -76,6 +77,16 @@ export const ingestDriverPacket = httpsV2.onCall(
     packet.packetId = key;
     if (typeof packet.idempotencyKey === 'string') {
       packet.idempotencyKey = packet.idempotencyKey.trim();
+    }
+    const configKey=typeof packet.wellConfigKey === 'string' ? packet.wellConfigKey : packet.wellName;
+    if (typeof configKey === 'string' && configKey.length <= 150 && !/[.#$\[\]\/]/.test(configKey)) {
+      const config=(await admin.database().ref('well_config/'+configKey).once('value')).val();
+      if (config?.routeType === 'freshwater') {
+        if (packet.requestType !== 'pull') throw new httpsV2.HttpsError('failed-precondition','delivery_correction_requires_review');
+        const result=await ingestWbmFreshWaterGroupDelivery.run({...request,data:{groupId:config.inventoryGroupId,
+          deliveryId:key,deliveredAtUTC:packet.dateTimeUTC,deliveredBbl:packet.bblsTaken,measuredBeforeFeet:packet.tankLevelFeet}});
+        return {...result,ok:true,key,packetId:key,inventoryOperation:true};
+      }
     }
     // Return the same identity we store. For current clients this is their
     // packetId; older clients may supply only an idempotencyKey. The generated

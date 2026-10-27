@@ -50,6 +50,7 @@ export function buildWbmBootstrapSnapshot(input: {
   companyId: string;
   profile: Record<string, unknown>;
   wellConfig: Record<string, unknown>;
+  routeContractVersion?: number;
 }): WbmBootstrapSnapshot {
   const scope = evaluateWbmWellScope(input.profile.assignedRoutes, input.profile.assignedWells);
 
@@ -76,7 +77,7 @@ export function buildWbmBootstrapSnapshot(input: {
   }
 
   const wells = scope.ok
-    ? projectWbmWells(input.wellConfig, input.companyId, scope)
+    ? projectWbmWells(Object.fromEntries(Object.entries(input.wellConfig).filter(([,v]) => (v as Record<string,unknown>)?.routeType !== 'freshwater' || input.routeContractVersion === 1)), input.companyId, scope)
     : {};
 
   return {

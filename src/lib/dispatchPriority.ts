@@ -1,3 +1,5 @@
+import { urgency } from '@tester3x/water-hauling';
+import { projectWellLevel } from './wellLevelProjection';
 /**
  * Firebase-free PW-queue priority + prediction helpers for the Dispatch board.
  *
@@ -257,6 +259,18 @@ export interface ClassifyOpts { assigned?: boolean; }
  * basis stays actionable regardless of age (it just estimates and caps at 20').
  */
 export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opts: ClassifyOpts = {}): WellClassification {
+  if (well.routeType === 'freshwater') {
+    const projection=projectWellLevel(well,nowMs);
+    const threshold=well.bottomLevel ?? null;
+    const low=urgency('freshwater',projection.estFeet,threshold);
+    return {state:low === 'urgent' ? 'pull-now' : 'verify',label:low === 'urgent' ? 'LOW FRESHWATER' : 'NEEDS DATA',
+      color:low === 'urgent' ? 'bg-red-600' : 'bg-gray-500',textColor:'text-white',sortOrder:low === 'urgent' ? 1 : 50,
+      targetInches:threshold == null ? null : threshold*12,lastLevel:null,lastLevelInches:null,lastLevelAgeHours:null,
+      estInches:projection.estFeet == null ? null : projection.estFeet*12,remainingInches:null,ttpHours:null,
+      gainValid:projection.hasFlow,fresh:projection.available,reason:projection.available ? 'missing_target' : 'missing_baseline',
+      estFeet:projection.estFeet,estDisplay:projection.estDisplay,readyFeet:threshold,predictedReadyAtMs:null,
+      hasFlow:projection.hasFlow,availableLoads:0};
+  }
   // Level inputs come from the ONE shared resolver so Dispatch, the aggregate
   // Well Status page, and the individual card all estimate identically.
   const { startingBottomFeet, pullTimeMs, flowMinutesPerFoot, wellDown } = wbmInputsFromWell(well);
