@@ -45,7 +45,9 @@ const event=(id,jobRef,kind,details={})=>({version:1,id:id.repeat(43),grantId,jo
  assert.equal((await db.doc('jsa_governed_artifacts/'+full.id).get()).get('snapshot.printedName'),'Software Test Driver');
  assert.equal((await db.collection('jsa_offline_receipts').get()).size,1);
  const ack=event('A','job-b','acknowledged',{fullReadId:full.id});const response=await commit(ack);assert.equal(response.state,'confirmed');
- assert.equal((await db.doc('jsa_job_acknowledgments/'+response.recordId).get()).get('recordedAtMs'),ack.occurredAtMs);
+ const storedAck=(await db.doc('jsa_job_acknowledgments/'+response.recordId).get()).data();
+ assert.equal(storedAck.recordedAtMs,ack.occurredAtMs);
+ assert.equal(storedAck.jsaNumber,(await db.doc('jsa_governed_requests/'+full.id).get()).get('jsaNumber'),'Acknowledgement shares the original signed document number');
  await assert.rejects(commit({...ack,occurredAtMs:now-500}),/needs review/);
  await assert.rejects(commit(event('F','job-foreign','acknowledged',{fullReadId:full.id})),/needs review/);
  await assert.rejects(commit(event('U','job-b','acknowledged',{fullReadId:'N'.repeat(43)})),/needs review/);

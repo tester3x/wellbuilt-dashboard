@@ -9,7 +9,7 @@ import {resolveJsaWorkPeriod} from './jsaWorkPeriodStore';
 import {readJsaTaskCatalog} from './jsaTaskCatalog';
 import {offlineDefaultAssessment} from './jsaOfflineDefault';
 import {offlineHash,validateOfflineEvent,type OfflineGrant,type OfflineEvent,type OfflineAssessment} from './jsaOfflineCore';
-import {jsaNumber} from './jsaNumber';
+import {jsaNumber,signedReadJsaNumber} from './jsaNumber';
 import {checkRateLimit} from '../security/rateLimit';
 import {projectOfflineLocations} from './jsaOfflineLocations';
 import {readPreparedExecutionProfiles} from './preparedExecutionProfiles';
@@ -109,7 +109,7 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
    if(old&&(old.companyId!==p.companyId||old.driverId!==p.driverId||old.jobRef!==e.jobRef||old.fullReadId!==e.fullReadId))throw Error('coverage_conflict');
    if(!old)tx.create(ref,{schemaVersion:1,job:stop,companyId:p.companyId,driverId:p.driverId,jobRef:e.jobRef,method:checked.method,fullReadId:e.fullReadId,
     requirementKey:grant.requirementKey,policyDay:grant.policyDay,periodId:grant.shiftId,jsaPeriodId:grant.binding.jsaPeriodId,recordedAtMs:e.occurredAtMs,offlineGrantId:grant.id,
-    jsaNumber:jsaNumber('JSA-'+(acknowledged&&grant.mode==='per_job'?recordId.toUpperCase():e.fullReadId),e.occurredAtMs)});
+    jsaNumber:signedReadJsaNumber(readSnap!.data()!)});
   }
   tx.create(receipt,{version:1,companyId:p.companyId,driverId:p.driverId,eventId:e.id,eventHash,recordId,confirmedAtMs:Date.now()});
   return {version:1,state:'confirmed',eventId:e.id,eventHash,recordId};
