@@ -5,18 +5,22 @@ import { requireTrustedCompanyCapability } from '../trustedStaffAuthority';
 import { writeSecurityAudit } from '../audit';
 import { loadCanonicalDriverAuthority, productionCanonicalDriverReaders } from '../canonicalDriverAuthority';
 import { assertWbmWriter } from './viewerWriteGuard';
-import { evaluateWbmWellScope, wellBelongsToDriverCompany, wellMatchesWbmScope } from './wbmWellScope';
+import { wellBelongsToDriverCompany } from './wbmWellScope';
+import { evaluateFreshWaterRouteScope } from './freshWaterRouteScope';
 import { applyFreshWaterDelivery, overlappingFreshWaterGroup, projectFreshWaterFeet, validFreshWaterConfig,
-  type FreshWaterConfig, type FreshWaterDelivery, type FreshWaterState } from './freshWaterSupplyCore';
+  supportsSharedFreshWaterLevel, type FreshWaterConfig, type FreshWaterDelivery,
+  type FreshWaterState } from './freshWaterSupplyCore';
 
-type TankGroup = { name: string; wellNames: string[]; config: FreshWaterConfig };
+type TankGroup = { routeName: string; name: string; wellNames: string[]; config: FreshWaterConfig };
 const unsafeKey = /[.#$\[\]/]/;
 const validKey = (value: unknown): value is string => typeof value === 'string'
   && value.length > 0 && value.length <= 150 && !unsafeKey.test(value);
 const groupPath = (company: string) => `fresh_water_groups/${company}`;
 const statePath = (company: string, id: string) => `fresh_water_supply/${company}/${id}`;
 const validGroup = (value: unknown): value is TankGroup => !!value && typeof value === 'object'
-  && !Array.isArray(value) && typeof (value as TankGroup).name === 'string'
+  && !Array.isArray(value) && typeof (value as TankGroup).routeName === 'string'
+  && (value as TankGroup).routeName.trim().length > 0
+  && typeof (value as TankGroup).name === 'string'
   && (value as TankGroup).name.trim().length > 0
   && Array.isArray((value as TankGroup).wellNames)
   && (value as TankGroup).wellNames.length > 0
@@ -32,17 +36,18 @@ async function authorizedGroups(request: httpsV2.CallableRequest, write: boolean
   if (!profileSnap.exists()) throw new httpsV2.HttpsError('failed-precondition', 'profile_missing');
   const profile = (profileSnap.val() || {}) as Record<string, unknown>;
   if (write) assertWbmWriter(profile, driver.roles);
-  const scope = evaluateWbmWellScope(profile.assignedRoutes, profile.assignedWells);
-  if (!scope.ok) throw new httpsV2.HttpsError('permission-denied', scope.reason);
+  const freshScope = evaluateFreshWaterRouteScope(profile.assignedFreshWaterRoutes);
+  if (!freshScope.ok) throw new httpsV2.HttpsError('permission-denied', freshScope.reason);
+  const assignedFreshWaterRoutes = freshScope.routes;
   const [groupsSnap, wellsSnap] = await Promise.all([
     rtdb.ref(groupPath(authority.companyId)).once('value'), rtdb.ref('well_config').once('value'),
   ]);
   const groups = (groupsSnap.val() || {}) as Record<string, TankGroup>;
   const wells = (wellsSnap.val() || {}) as Record<string, Record<string, unknown>>;
   const visible = Object.entries(groups).flatMap(([groupId, group]) => {
-    if (!validKey(groupId) || !validGroup(group) || !group.wellNames.every(name => wells[name]
-      && wellBelongsToDriverCompany(wells[name], authority.companyId)
-      && wellMatchesWbmScope(name, wells[name], scope))) return [];
+    if (!validKey(groupId) || !validGroup(group) || !assignedFreshWaterRoutes.has(group.routeName)
+      || !group.wellNames.every(name => wells[name]
+      && wellBelongsToDriverCompany(wells[name], authority.companyId))) return [];
     return [{ groupId, ...group }];
   });
   return { driver, companyId: authority.companyId, groups: visible };
@@ -109,18 +114,19 @@ export const staffConfigureFreshWaterTankGroup = httpsV2.onCall(
     const staff = await requireTrustedCompanyCapability(request.auth?.uid, 'manageWells');
     const data = request.data as Record<string, unknown> | null;
     if (!data || typeof data !== 'object' || Array.isArray(data)
-      || Object.keys(data).some(key => !['groupId', 'name', 'wellNames', 'config', 'initialLevelFeet'].includes(key)))
+      || Object.keys(data).some(key => !['groupId', 'routeName', 'name', 'wellNames', 'config', 'initialLevelFeet'].includes(key)))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_request');
+    const routeName = typeof data.routeName === 'string' ? data.routeName.trim() : '';
     const name = typeof data.name === 'string' ? data.name.trim() : '';
     const wellNames = data.wellNames;
-    if (!name || name.length > 100 || !Array.isArray(wellNames) || wellNames.length < 1
+    if (!routeName || routeName.length > 100 || !name || name.length > 100 || !Array.isArray(wellNames) || wellNames.length < 1
       || wellNames.length > 50 || !wellNames.every(validKey)
       || new Set(wellNames).size !== wellNames.length || !validFreshWaterConfig(data.config))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_group_config');
     const config = data.config as FreshWaterConfig;
     if (data.initialLevelFeet !== undefined && (typeof data.initialLevelFeet !== 'number'
       || !Number.isFinite(data.initialLevelFeet) || data.initialLevelFeet < 0
-      || data.initialLevelFeet > config.tankHeightFeet))
+      || data.initialLevelFeet > config.tankHeightFeet || !supportsSharedFreshWaterLevel(config)))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_initial_level');
     const rtdb = admin.database();
     const wellsSnap = await rtdb.ref('well_config').once('value');
@@ -142,7 +148,9 @@ export const staffConfigureFreshWaterTankGroup = httpsV2.onCall(
       || existing.config.tankCount !== config.tankCount
       || existing.config.tankHeightFeet !== config.tankHeightFeet
       || existing.config.bblPerFootPerTank !== config.bblPerFootPerTank
+      || existing.config.equalization !== config.equalization
       || existing.config.dailyUseBbl !== config.dailyUseBbl
+      || existing.routeName !== routeName
       || [...existing.wellNames].sort().join('\u0000') !== [...wellNames].sort().join('\u0000')))
       throw new httpsV2.HttpsError('failed-precondition', 'active_group_config_requires_migration');
     let conflict = false;
@@ -151,7 +159,7 @@ export const staffConfigureFreshWaterTankGroup = httpsV2.onCall(
       if (overlappingFreshWaterGroup(groups, groupId, wellNames)) {
         conflict = true; return;
       }
-      return { ...groups, [groupId]: { name, wellNames, config } };
+      return { ...groups, [groupId]: { routeName, name, wellNames, config } };
     });
     if (!result.committed) throw new httpsV2.HttpsError('failed-precondition',
       conflict ? 'well_already_linked_to_tank_group' : 'group_update_conflict');
@@ -169,7 +177,7 @@ export const staffConfigureFreshWaterTankGroup = httpsV2.onCall(
       seeded = seedResult.committed;
     }
     await writeSecurityAudit({ action: 'staffConfigureFreshWaterTankGroup', actorUid: staff.uid,
-      detail: { companyId: staff.companyId, groupId, wellNames, seeded } });
+      detail: { companyId: staff.companyId, groupId, routeName, wellNames, seeded } });
     return { ok: true, groupId, seeded };
   });
 
@@ -195,9 +203,11 @@ export const staffListFreshWaterTankGroups = httpsV2.onCall(
       const status = states[groupId];
       const projectedFeet = status ? projectFreshWaterFeet(status, group.config, now) : null;
       const usableBbl = projectedFeet === null ? null : projectedFeet * group.config.tankCount * group.config.bblPerFootPerTank;
-      const daysRemaining = usableBbl === null || status.dailyUseBbl <= 0 ? null : usableBbl / status.dailyUseBbl;
-      return [{ groupId, name: group.name, wellNames: group.wellNames,
-        route: String(wells[group.wellNames[0]].route || ''), operator: String(wells[group.wellNames[0]].operator || ''),
+      const daysRemaining = usableBbl === null || status.dailyUseBbl === null || status.dailyUseBbl <= 0
+        ? null : usableBbl / status.dailyUseBbl;
+      return [{ groupId, routeName: group.routeName, name: group.name, wellNames: group.wellNames,
+        producedWaterRoute: String(wells[group.wellNames[0]].route || ''),
+        operator: String(wells[group.wellNames[0]].operator || ''),
         config: group.config, status: status ? { levelFeet: status.levelFeet, asOfUTC: status.asOfUTC,
           projectedFeet, dailyUseBbl: status.dailyUseBbl, daysRemaining } : null }];
     });

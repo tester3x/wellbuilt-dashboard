@@ -6,10 +6,11 @@ import { wellBelongsToDriverCompany } from './wbmWellScope';
 
 export const MAX_SCOPE_ITEMS = 200;
 
-export function assignmentDigest(routes: unknown, wells: unknown): string {
+export function assignmentDigest(routes: unknown, wells: unknown, freshWaterRoutes: unknown = null): string {
   return JSON.stringify({
     r: Array.isArray(routes) ? routes : null,
     w: Array.isArray(wells) ? wells : null,
+    f: Array.isArray(freshWaterRoutes) ? freshWaterRoutes : null,
   });
 }
 
@@ -19,15 +20,17 @@ export function previewContextDigest(input: {
   assignmentRevision: number;
   currentRoutes: unknown;
   currentWells: unknown;
+  currentFreshWaterRoutes?: unknown;
   proposedRoutes: string[];
   proposedWells: string[];
+  proposedFreshWaterRoutes?: string[];
 }): string {
   return JSON.stringify({
     driverId: input.driverId,
     companyId: input.companyId,
     assignmentRevision: input.assignmentRevision,
-    current: assignmentDigest(input.currentRoutes, input.currentWells),
-    proposed: assignmentDigest(input.proposedRoutes, input.proposedWells),
+    current: assignmentDigest(input.currentRoutes, input.currentWells, input.currentFreshWaterRoutes),
+    proposed: assignmentDigest(input.proposedRoutes, input.proposedWells, input.proposedFreshWaterRoutes ?? []),
   });
 }
 
@@ -38,7 +41,7 @@ export function revisionNumber(raw: unknown): number {
 
 export function parseScopeList(
   raw: unknown,
-  field: 'assignedRoutes' | 'assignedWells',
+  field: 'assignedRoutes' | 'assignedWells' | 'assignedFreshWaterRoutes',
 ): { ok: true; values: string[] } | { ok: false; reason: string } {
   if (raw === undefined) return { ok: false, reason: `${field}_required` };
   if (raw === null) return { ok: false, reason: `${field}_required` };
@@ -79,6 +82,17 @@ export function validateAssignedRoutesAgainstCatalog(
   return { ok: true };
 }
 
+export function knownFreshWaterRouteNames(groups: Record<string, unknown>): Set<string> {
+  const names = new Set<string>();
+  for (const raw of Object.values(groups || {})) {
+    const group = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? raw as Record<string, unknown>
+      : {};
+    if (typeof group.routeName === 'string' && group.routeName.trim()) names.add(group.routeName.trim());
+  }
+  return names;
+}
+
 export function validateAssignedWellsAgainstCatalog(
   wells: string[],
   wellConfig: Record<string, unknown>,
@@ -107,6 +121,7 @@ export function evaluateAssignmentTransaction(input: {
   expectedPreviewContextDigest: string;
   proposedRoutes: string[];
   proposedWells: string[];
+  proposedFreshWaterRoutes?: string[];
   callerCompanyId?: string;
   isPlatformAdmin: boolean;
 }): AssignmentApplyDecision {
@@ -125,8 +140,10 @@ export function evaluateAssignmentTransaction(input: {
     assignmentRevision: revisionNumber(input.profile.assignmentRevision),
     currentRoutes: input.profile.assignedRoutes,
     currentWells: input.profile.assignedWells,
+    currentFreshWaterRoutes: input.profile.assignedFreshWaterRoutes,
     proposedRoutes: input.proposedRoutes,
     proposedWells: input.proposedWells,
+    proposedFreshWaterRoutes: input.proposedFreshWaterRoutes ?? [],
   });
   if (live !== input.expectedPreviewContextDigest) {
     return { ok: false, reason: 'stale_preview_context' };

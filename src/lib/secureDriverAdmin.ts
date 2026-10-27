@@ -53,6 +53,7 @@ export async function staffWriteDriverAssignment(params: {
   driverId: string;
   assignedRoutes: string[];
   assignedWells: string[];
+  assignedFreshWaterRoutes: string[];
   mode: 'dry-run' | 'apply';
   expectedAssignmentDigest?: string;
   expectedProposedDigest?: string;
@@ -65,8 +66,8 @@ export async function staffWriteDriverAssignment(params: {
     mode: 'dry-run' | 'apply';
     driverId: string;
     companyId: string;
-    before: { assignedRoutes: unknown; assignedWells: unknown; assignmentRevision?: unknown };
-    after: { assignedRoutes: string[]; assignedWells: string[] };
+    before: { assignedRoutes: unknown; assignedWells: unknown; assignedFreshWaterRoutes: unknown; assignmentRevision?: unknown };
+    after: { assignedRoutes: string[]; assignedWells: string[]; assignedFreshWaterRoutes: string[] };
     currentDigest: string;
     proposedDigest: string;
     previewContextDigest: string;

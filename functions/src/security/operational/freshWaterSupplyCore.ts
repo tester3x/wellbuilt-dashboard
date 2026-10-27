@@ -1,13 +1,21 @@
 /** Fresh-water supply is a separate inventory from produced-water pull levels.
- * Each accepted delivery is one load. Tanks on a pad are treated as equalized.
+ * Each accepted delivery is one load. A shared gauge is used only after
+ * multi-tank equalization has been explicitly verified.
  */
 export type FreshWaterConfig = {
   enabled: true;
   tankCount: number;
   tankHeightFeet: number;
   bblPerFootPerTank: number;
-  dailyUseBbl: number;
+  equalization: 'single-tank' | 'verified-equalized' | 'unverified';
+  dailyUseBbl: number | null;
 };
+
+export function supportsSharedFreshWaterLevel(config: FreshWaterConfig): boolean {
+  return config.tankCount === 1
+    ? config.equalization === 'single-tank'
+    : config.equalization === 'verified-equalized';
+}
 
 /** A well's fresh-water demand belongs to exactly one physical tank group. */
 export function overlappingFreshWaterGroup(
@@ -32,10 +40,10 @@ export type FreshWaterDelivery = {
 export type FreshWaterState = {
   seedLevelFeet: number;
   seedAtUTC: string;
-  seedDailyUseBbl: number;
+  seedDailyUseBbl: number | null;
   levelFeet: number;
   asOfUTC: string;
-  dailyUseBbl: number;
+  dailyUseBbl: number | null;
   lastMeasuredFeet?: number;
   lastMeasuredAtUTC?: string;
   deliveredSinceMeasurementBbl: number;
@@ -52,24 +60,31 @@ export function validFreshWaterConfig(value: unknown): value is FreshWaterConfig
     && Number.isInteger(config.tankCount) && Number(config.tankCount) >= 1 && Number(config.tankCount) <= 3
     && typeof config.tankHeightFeet === 'number' && Number.isFinite(config.tankHeightFeet) && config.tankHeightFeet > 0
     && typeof config.bblPerFootPerTank === 'number' && Number.isFinite(config.bblPerFootPerTank) && config.bblPerFootPerTank > 0
-    && typeof config.dailyUseBbl === 'number' && Number.isFinite(config.dailyUseBbl) && config.dailyUseBbl >= 0;
+    && (config.equalization === 'single-tank' || config.equalization === 'verified-equalized'
+      || config.equalization === 'unverified')
+    && (config.tankCount === 1 ? config.equalization === 'single-tank' : config.equalization !== 'single-tank')
+    && (config.dailyUseBbl === null || (typeof config.dailyUseBbl === 'number'
+      && Number.isFinite(config.dailyUseBbl) && config.dailyUseBbl >= 0));
 }
 
 export function projectFreshWaterFeet(state: Pick<FreshWaterState, 'levelFeet' | 'asOfUTC' | 'dailyUseBbl'>,
   config: FreshWaterConfig, atUTC: string): number | null {
   const elapsed = Date.parse(atUTC) - Date.parse(state.asOfUTC);
   if (!Number.isFinite(elapsed) || elapsed < 0) return null;
+  if (elapsed > 0 && state.dailyUseBbl === null) return null;
   const bblPerFoot = config.tankCount * config.bblPerFootPerTank;
-  return round(Math.max(0, state.levelFeet - state.dailyUseBbl * elapsed / dayMs / bblPerFoot));
+  return round(Math.max(0, state.levelFeet - (state.dailyUseBbl || 0) * elapsed / dayMs / bblPerFoot));
 }
 
 export type FreshWaterDecision =
   | { ok: true; duplicate: boolean; state: FreshWaterState }
-  | { ok: false; reason: 'invalid_config' | 'invalid_delivery' | 'id_collision' | 'initial_level_required' | 'stale_delivery' | 'tank_overflow' };
+  | { ok: false; reason: 'invalid_config' | 'invalid_delivery' | 'id_collision' | 'initial_level_required'
+    | 'stale_delivery' | 'tank_overflow' | 'equalization_unverified' | 'usage_rate_unknown' };
 
 export function applyFreshWaterDelivery(current: FreshWaterState | null, config: FreshWaterConfig,
   delivery: FreshWaterDelivery): FreshWaterDecision {
   if (!validFreshWaterConfig(config)) return { ok: false, reason: 'invalid_config' };
+  if (!supportsSharedFreshWaterLevel(config)) return { ok: false, reason: 'equalization_unverified' };
   const atMs = Date.parse(delivery.deliveredAtUTC);
   if (!delivery.deliveryId || !delivery.driverId || !Number.isFinite(atMs)
     || !Number.isFinite(delivery.deliveredBbl) || delivery.deliveredBbl <= 0
@@ -97,25 +112,20 @@ export function applyFreshWaterDelivery(current: FreshWaterState | null, config:
     Date.parse(a.deliveredAtUTC) - Date.parse(b.deliveredAtUTC) || a.deliveryId.localeCompare(b.deliveryId));
   let levelFeet = seedLevelFeet;
   let asOfUTC = seedAtUTC;
-  let rate = seedDailyUseBbl;
+  const rate = seedDailyUseBbl;
   let lastMeasuredFeet: number | undefined = seedLevelFeet;
   let lastMeasuredAtUTC: string | undefined = seedAtUTC;
   let deliveredSinceMeasurementBbl = 0;
   for (const event of ordered) {
+    if (Date.parse(event.deliveredAtUTC) < Date.parse(asOfUTC)) return { ok: false, reason: 'stale_delivery' };
     const projected = projectFreshWaterFeet({ levelFeet, asOfUTC, dailyUseBbl: rate }, config, event.deliveredAtUTC);
-    if (projected === null) return { ok: false, reason: 'stale_delivery' };
-    const before = event.measuredBeforeFeet ?? projected;
+    if (projected === null && event.measuredBeforeFeet === undefined) {
+      return { ok: false, reason: rate === null ? 'usage_rate_unknown' : 'stale_delivery' };
+    }
+    const before = event.measuredBeforeFeet ?? projected!;
     const after = before + event.deliveredBbl / bblPerFoot;
     if (after > config.tankHeightFeet + 0.000001) return { ok: false, reason: 'tank_overflow' };
-    if (event.measuredBeforeFeet !== undefined && lastMeasuredAtUTC && lastMeasuredFeet !== undefined) {
-      const days = (Date.parse(event.deliveredAtUTC) - Date.parse(lastMeasuredAtUTC)) / dayMs;
-      if (days >= 0.5) {
-        const consumed = lastMeasuredFeet * bblPerFoot + deliveredSinceMeasurementBbl - before * bblPerFoot;
-        if (consumed >= 0 && Number.isFinite(consumed)) {
-          const observed = consumed / days;
-          rate = round(rate === 0 ? observed : 0.7 * rate + 0.3 * observed);
-        }
-      }
+    if (event.measuredBeforeFeet !== undefined) {
       lastMeasuredFeet = before;
       lastMeasuredAtUTC = event.deliveredAtUTC;
       deliveredSinceMeasurementBbl = 0;

@@ -17,6 +17,7 @@ import {
 import { commitCanonicalAssignmentWrite } from './operational/assignmentApplyTransaction';
 import {
   assignmentDigest,
+  knownFreshWaterRouteNames,
   knownRouteNames,
   parseScopeList,
   previewContextDigest,
@@ -29,6 +30,7 @@ const ALLOWED = new Set([
   'driverId',
   'assignedRoutes',
   'assignedWells',
+  'assignedFreshWaterRoutes',
   'mode',
   'expectedAssignmentDigest',
   'expectedProposedDigest',
@@ -70,10 +72,14 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
     if (!routesParsed.ok) throw new httpsV2.HttpsError('invalid-argument', routesParsed.reason);
     const wellsParsed = parseScopeList(raw.assignedWells, 'assignedWells');
     if (!wellsParsed.ok) throw new httpsV2.HttpsError('invalid-argument', wellsParsed.reason);
-
     const rtdb = admin.database();
     const profSnap = await rtdb.ref(`drivers/profiles/${driverId}`).once('value');
     const profile = profSnap.exists() ? (profSnap.val() as Record<string, unknown>) : null;
+    const freshRoutesParsed = parseScopeList(
+      raw.assignedFreshWaterRoutes === undefined ? (profile?.assignedFreshWaterRoutes ?? []) : raw.assignedFreshWaterRoutes,
+      'assignedFreshWaterRoutes',
+    );
+    if (!freshRoutesParsed.ok) throw new httpsV2.HttpsError('invalid-argument', freshRoutesParsed.reason);
 
     const decided = evaluateStaffWriteDriverAssignment({
       driverId,
@@ -85,7 +91,10 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       throw new httpsV2.HttpsError('failed-precondition', decided.reason);
     }
 
-    const wellSnap = await rtdb.ref('well_config').once('value');
+    const [wellSnap, freshGroupsSnap] = await Promise.all([
+      rtdb.ref('well_config').once('value'),
+      rtdb.ref(`fresh_water_groups/${decided.companyId}`).once('value'),
+    ]);
     const wellConfig = wellSnap.exists() ? (wellSnap.val() as Record<string, unknown>) : {};
     const routesOk = validateAssignedRoutesAgainstCatalog(
       routesParsed.values,
@@ -98,26 +107,35 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       decided.companyId,
     );
     if (!wellsOk.ok) throw new httpsV2.HttpsError('failed-precondition', wellsOk.reason);
+    const freshRoutesOk = validateAssignedRoutesAgainstCatalog(
+      freshRoutesParsed.values,
+      knownFreshWaterRouteNames(freshGroupsSnap.val() || {}),
+    );
+    if (!freshRoutesOk.ok) throw new httpsV2.HttpsError('failed-precondition', 'nonexistent_fresh_water_route');
 
     const before = {
       assignedRoutes: profile?.assignedRoutes ?? null,
       assignedWells: profile?.assignedWells ?? null,
+      assignedFreshWaterRoutes: profile?.assignedFreshWaterRoutes ?? null,
       assignmentRevision: profile?.assignmentRevision ?? null,
     };
     const after = {
       assignedRoutes: routesParsed.values,
       assignedWells: wellsParsed.values,
+      assignedFreshWaterRoutes: freshRoutesParsed.values,
     };
-    const currentDigest = assignmentDigest(before.assignedRoutes, before.assignedWells);
-    const proposedDigest = assignmentDigest(after.assignedRoutes, after.assignedWells);
+    const currentDigest = assignmentDigest(before.assignedRoutes, before.assignedWells, before.assignedFreshWaterRoutes);
+    const proposedDigest = assignmentDigest(after.assignedRoutes, after.assignedWells, after.assignedFreshWaterRoutes);
     const contextDigest = previewContextDigest({
       driverId,
       companyId: decided.companyId,
       assignmentRevision: revisionNumber(before.assignmentRevision),
       currentRoutes: before.assignedRoutes,
       currentWells: before.assignedWells,
+      currentFreshWaterRoutes: before.assignedFreshWaterRoutes,
       proposedRoutes: after.assignedRoutes,
       proposedWells: after.assignedWells,
+      proposedFreshWaterRoutes: after.assignedFreshWaterRoutes,
     });
     const preview = {
       ok: true as const,
@@ -132,6 +150,8 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       changedFields: [
         ...(JSON.stringify(before.assignedRoutes) === JSON.stringify(after.assignedRoutes) ? [] : ['assignedRoutes']),
         ...(JSON.stringify(before.assignedWells) === JSON.stringify(after.assignedWells) ? [] : ['assignedWells']),
+        ...(JSON.stringify(before.assignedFreshWaterRoutes) === JSON.stringify(after.assignedFreshWaterRoutes)
+          ? [] : ['assignedFreshWaterRoutes']),
       ],
     };
     if (mode !== 'apply') return preview;
@@ -149,6 +169,7 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       expectedPreviewContextDigest: expectedContext,
       proposedRoutes: after.assignedRoutes,
       proposedWells: after.assignedWells,
+      proposedFreshWaterRoutes: after.assignedFreshWaterRoutes,
       callerCompanyId: access.companyId,
       isPlatformAdmin: access.isPlatformAdmin,
       callerUid: access.uid,

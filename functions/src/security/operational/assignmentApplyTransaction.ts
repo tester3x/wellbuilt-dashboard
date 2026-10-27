@@ -38,6 +38,7 @@ export async function commitCanonicalAssignmentWrite(input: {
   expectedPreviewContextDigest: string;
   proposedRoutes: string[];
   proposedWells: string[];
+  proposedFreshWaterRoutes?: string[];
   callerCompanyId?: string;
   isPlatformAdmin: boolean;
   callerUid: string;
@@ -61,6 +62,7 @@ export async function commitCanonicalAssignmentWrite(input: {
         expectedPreviewContextDigest: input.expectedPreviewContextDigest,
         proposedRoutes: input.proposedRoutes,
         proposedWells: input.proposedWells,
+        proposedFreshWaterRoutes: input.proposedFreshWaterRoutes ?? [],
         callerCompanyId: input.callerCompanyId,
         isPlatformAdmin: input.isPlatformAdmin,
       });
@@ -76,6 +78,7 @@ export async function commitCanonicalAssignmentWrite(input: {
         ...rec,
         assignedRoutes: input.proposedRoutes,
         assignedWells: input.proposedWells,
+        assignedFreshWaterRoutes: input.proposedFreshWaterRoutes ?? [],
         assignmentRevision: gate.nextRevision,
         assignmentUpdatedAt: input.nowMs,
         assignmentUpdatedBy: input.callerUid,

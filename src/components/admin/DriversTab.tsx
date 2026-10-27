@@ -76,6 +76,7 @@ interface CanonicalWbmDriver {
   companyName?: string;
   assignedRoutes: string[] | null;
   assignedWells: string[] | null;
+  assignedFreshWaterRoutes: string[] | null;
   assignmentRevision: number | null;
   usualShift?: 'day' | 'night';
   weeklyDaysOff?: number[];
@@ -185,8 +186,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     setPrimaryError('');
   }, [routeTarget?.driverId, routeTarget?.primaryRouteRevision]);
   const [selectedRoutes, setSelectedRoutes] = useState<string[]>([]);
+  const [selectedFreshWaterRoutes, setSelectedFreshWaterRoutes] = useState<string[]>([]);
   const [selectedWells, setSelectedWells] = useState<string[]>([]);
   const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
+  const [availableFreshWaterRoutes, setAvailableFreshWaterRoutes] = useState<string[]>([]);
   const [assignmentPreview, setAssignmentPreview] = useState<BoundAssignmentPreview | null>(null);
   const [assignmentRequestGeneration, setAssignmentRequestGeneration] = useState(0);
   const assignmentGenRef = useRef(0);
@@ -312,6 +315,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             companyName: typeof val.companyName === 'string' ? val.companyName : undefined,
             assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : null,
             assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : null,
+            assignedFreshWaterRoutes: Array.isArray(val.assignedFreshWaterRoutes) ? val.assignedFreshWaterRoutes : null,
             primaryRoutes: primaryAssignments[id]?.primaryRoutes || [],
             primaryAllRoutes: primaryAssignments[id]?.primaryAllRoutes === true,
             primaryRouteRevision: primaryAssignments[id]?.primaryRouteRevision || 0,
@@ -509,6 +513,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             })()
           : await fetchRouteNames();
         setAvailableRoutes(routes);
+        const fresh = await httpsCallable<Record<string, never>, { groups?: { routeName?: string }[] }>(
+          getFirebaseFunctions(), 'staffListFreshWaterTankGroups')({});
+        setAvailableFreshWaterRoutes([...new Set((fresh.data.groups || [])
+          .map(group => group.routeName?.trim()).filter((name): name is string => !!name))].sort());
       } catch (err) {
         console.error('Failed to load routes:', err);
       }
@@ -588,6 +596,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         driverId: routeTarget.driverId,
         assignedRoutes: selectedRoutes,
         assignedWells: selectedWells,
+        assignedFreshWaterRoutes: selectedFreshWaterRoutes,
         mode,
         expectedPreviewContextDigest: mode === 'apply' ? assignmentPreview?.previewContextDigest : undefined,
       });
@@ -609,7 +618,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           beforeRevision: result.before.assignmentRevision ?? null,
           assignedRoutes: result.after.assignedRoutes,
           assignedWells: result.after.assignedWells,
-          before: { assignedRoutes: result.before.assignedRoutes, assignedWells: result.before.assignedWells },
+          assignedFreshWaterRoutes: result.after.assignedFreshWaterRoutes,
+          before: { assignedRoutes: result.before.assignedRoutes, assignedWells: result.before.assignedWells,
+            assignedFreshWaterRoutes: result.before.assignedFreshWaterRoutes },
           generation: capturedGeneration,
         });
         setMessage(`Preview ready for canonical ${result.driverId}. No write performed.`);
@@ -1591,6 +1602,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           bumpAssignmentGeneration();
           setRouteTarget(canonical);
           setSelectedRoutes(canonical.assignedRoutes || []);
+          setSelectedFreshWaterRoutes(canonical.assignedFreshWaterRoutes || []);
           setSelectedWells(canonical.assignedWells || []);
           setShowRoutesModal(true);
         }}
@@ -2117,6 +2129,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             </p>
             <p className="text-gray-500 text-xs font-mono mb-4">{routeTarget.driverId}</p>
 
+            <h4 className="text-cyan-300 text-sm font-semibold mb-2">Produced Water Routes</h4>
             {availableRoutes.length === 0 ? (
               <p className="text-yellow-400 text-sm">No routes found in well_config.</p>
             ) : (
@@ -2141,6 +2154,18 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 ))}
               </div>
             )}
+            <h4 className="text-cyan-300 text-sm font-semibold mt-5 mb-2">Freshwater Routes</h4>
+            {availableFreshWaterRoutes.length === 0 ? <p className="text-gray-500 text-sm">No freshwater routes configured.</p> :
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {availableFreshWaterRoutes.map(route => <label key={route} className="flex items-center gap-3 cursor-pointer hover:bg-gray-700 rounded p-2">
+                  <input type="checkbox" checked={selectedFreshWaterRoutes.includes(route)}
+                    onChange={e => {
+                      setAssignmentPreview(null);
+                      setSelectedFreshWaterRoutes(current => e.target.checked ? [...current, route] : current.filter(item => item !== route));
+                    }} className="w-4 h-4 rounded" />
+                  <span className="text-white text-sm">{route}</span>
+                </label>)}
+              </div>}
 
             <section className="mt-4 border-t border-gray-600 pt-4" aria-label="Primary route access">
               <h4 className="font-medium text-blue-300">Primary route driver · tank info editing</h4>
@@ -2175,6 +2200,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   after: {
                     assignedRoutes: assignmentPreview.assignedRoutes,
                     assignedWells: assignmentPreview.assignedWells,
+                    assignedFreshWaterRoutes: assignmentPreview.assignedFreshWaterRoutes,
                   },
                 }, null, 2)}
               </pre>
@@ -2188,7 +2214,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               </button>
               <button
                 onClick={() => assignDriverRoutes('apply')}
-                disabled={!applyEnabled(assignmentPreview, selectedRoutes, selectedWells, routeTarget, assignmentRequestGeneration)}
+                disabled={!applyEnabled(assignmentPreview, selectedRoutes, selectedWells,
+                  routeTarget, assignmentRequestGeneration, selectedFreshWaterRoutes)}
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded disabled:opacity-30"
               >
                 Apply canonical
@@ -2199,6 +2226,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   setShowRoutesModal(false);
                   setRouteTarget(null);
                   setSelectedRoutes([]);
+                  setSelectedFreshWaterRoutes([]);
                   setSelectedWells([]);
                 }}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"

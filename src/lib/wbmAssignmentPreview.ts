@@ -11,7 +11,8 @@ export type BoundAssignmentPreview = {
   beforeRevision: unknown;
   assignedRoutes: string[];
   assignedWells: string[];
-  before: { assignedRoutes: unknown; assignedWells: unknown };
+  assignedFreshWaterRoutes?: string[];
+  before: { assignedRoutes: unknown; assignedWells: unknown; assignedFreshWaterRoutes?: unknown };
   generation: number;
 };
 
@@ -38,10 +39,12 @@ export function selectionsMatchPreview(
   preview: BoundAssignmentPreview | null,
   selectedRoutes: string[],
   selectedWells: string[],
+  selectedFreshWaterRoutes: string[] = [],
 ): boolean {
   if (!preview) return false;
   return listsEqual(preview.assignedRoutes, selectedRoutes)
-    && listsEqual(preview.assignedWells, selectedWells);
+    && listsEqual(preview.assignedWells, selectedWells)
+    && listsEqual(preview.assignedFreshWaterRoutes || [], selectedFreshWaterRoutes);
 }
 
 export function applyEnabled(
@@ -50,8 +53,9 @@ export function applyEnabled(
   selectedWells: string[],
   routeTarget?: { driverId: string; companyId?: string } | null,
   currentGeneration?: number,
+  selectedFreshWaterRoutes: string[] = [],
 ): boolean {
-  if (!selectionsMatchPreview(preview, selectedRoutes, selectedWells) || !preview) return false;
+  if (!selectionsMatchPreview(preview, selectedRoutes, selectedWells, selectedFreshWaterRoutes) || !preview) return false;
   if (routeTarget && preview.driverId !== routeTarget.driverId) return false;
   if (routeTarget && preview.companyId !== (routeTarget.companyId || '')) return false;
   if (currentGeneration !== undefined && preview.generation !== currentGeneration) return false;

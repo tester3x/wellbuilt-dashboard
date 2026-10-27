@@ -10,20 +10,21 @@ Staff with `manageWells` configures physical tank groups through the Dashboard F
 
 ```json
 {
-  "name": "Gabriel 1, 4, 5, 6",
+  "routeName": "Gabriel's FW",
+  "name": "Gabriel 1 / 4 / 5 / 6",
   "wellNames": ["Gabriel 1", "Gabriel 4", "Gabriel 5", "Gabriel 6"],
   "config": {
     "enabled": true,
-    "tankCount": 2,
+    "tankCount": 3,
     "tankHeightFeet": 20,
     "bblPerFootPerTank": 20,
-    "dailyUseBbl": 3
-  },
-  "initialLevelFeet": 10
+    "equalization": "unverified",
+    "dailyUseBbl": null
+  }
 }
 ```
 
-The optional initial reading seeds inventory once. An active group's membership, geometry, and starting use rate cannot be silently changed; that requires a deliberate inventory migration. Tanks in one group are modeled as connected, equalized, and the same size. Each group has its own height, capacity per foot, and usage rate; the values above are examples, not field measurements.
+The optional initial reading seeds inventory once, but it is refused for an unverified multi-tank group. An active group's membership or geometry cannot be silently changed; that requires a deliberate inventory migration. The Gabriel values above are the authorized test configuration; the equalization fact, usage rate, and starting level remain unknown.
 
 ## WB-M calls
 
@@ -41,9 +42,11 @@ The optional initial reading seeds inventory once. An active group's membership,
 }
 ```
 
-`measuredBeforeFeet` is optional after a group has a starting level. A pumper or driver reading can correct the estimate; the driver does not need to send a top/bottom message to WhatsApp. The server derives driver and company from secure authentication, checks scope for every linked well, and records a load exactly once by `deliveryId`. Repeating the same load ID and values returns `duplicate: true`; changing them returns a collision error. Offline loads can arrive out of order after the starting reading; the ledger replays them in delivery-time order. The endpoint refuses a load that would exceed tank height.
+`measuredBeforeFeet` is optional only when the server can project a level from a known starting level and known use rate. A pumper or driver reading can correct the estimate; the driver does not need to send a top/bottom message to WhatsApp. The server derives driver and company from secure authentication, checks the separate freshwater-route assignment, and records a load exactly once by `deliveryId`. Repeating the same load ID and values returns `duplicate: true`; changing them returns a collision error. Offline loads can arrive out of order after the starting reading when the use rate is known; the ledger replays them in delivery-time order. The endpoint refuses a load that would exceed tank height.
 
-The calculation is `newLevelFeet = levelBeforeFeet + deliveredBbl / (tankCount × bblPerFootPerTank)`. Between deliveries, the projected level falls by the group's `dailyUseBbl`. Two measured readings at least 12 hours apart can update the rate after accounting for intervening deliveries. The server stores group definitions under `fresh_water_groups/{companyId}/{groupId}` and inventory with the idempotency ledger under `fresh_water_supply/{companyId}/{groupId}`. It does not modify PW `packets/processed`, `packets/outgoing`, or the PW production-rate calculation.
+For a single tank or a multi-tank group whose equalization has been explicitly verified, the calculation is `newLevelFeet = levelBeforeFeet + deliveredBbl / (tankCount × bblPerFootPerTank)`. A configured use rate subtracts inventory over time. When use is unknown, the server does not project a current level and requires a new gauge before a later delivery. An unverified multi-tank group cannot use one shared gauge or accept a delivery because overflow cannot be validated safely.
+
+The server stores group definitions under `fresh_water_groups/{companyId}/{groupId}` and inventory with the idempotency ledger under `fresh_water_supply/{companyId}/{groupId}`. It does not modify PW `packets/processed`, `packets/outgoing`, or the PW production-rate calculation. Produced-water assignments remain in `assignedRoutes`; freshwater visibility uses the separate `assignedFreshWaterRoutes` field.
 
 ## WB-T ticket
 
