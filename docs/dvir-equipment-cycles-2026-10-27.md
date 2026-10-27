@@ -9,3 +9,9 @@ The response adds acknowledgedCompletion so Equipment can confirm historical rep
 Validation: 11 pure-ledger tests pass, including prior ownership/recovery/immutability cases and new cycle progression/replay/conflict cases. Functions TypeScript build passes. Companion Equipment source publishes archived cycles before current pairs, ignores local equipment groups for driver-shift authority and retains all signed forms in weekly export. Suite checks cached receipts against current server equipment proofs and archives verified superseded receipts.
 
 Deployment pending. Release only recordDriverDvirCompletion from an exact committed snapshot; do not deploy unrelated Functions, Hosting or rules. No live DVIR, driver shift or customer record has been manually edited.
+
+## Targeted release
+
+Deployed only dashboard:recordDriverDvirCompletion in us-central1 to wellbuilt-sync from an exact git archive of 7b73f5f1. The clean exported snapshot compiled successfully; unrelated SSO working-copy edits were excluded. Firebase reported Successful update operation and Deploy complete. The first unqualified function filter matched nothing and aborted without changes; the codebase-qualified retry succeeded. No other Functions, Hosting, rules or customer/shift records were deployed/edited. Companion local builds: Equipment98 (db502b0), Suite100 (185465f), existing Tickets274 (72c7e884). S24 entry checks passed; genuine signed physical acceptance and ZFold rollout remain pending.
+
+Observed deployment prerequisite: Firebase warns Node.js 20 is decommissioned 2026-10-30. Runtime was not changed in this targeted release; schedule a tested server-runtime upgrade as a separate substantive batch before that deadline.
