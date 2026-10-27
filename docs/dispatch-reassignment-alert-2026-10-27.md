@@ -8,6 +8,12 @@ The submit handler now reads the current dispatch from the server before ownersh
 
 This is frontend validation and honest error presentation, not a new server permission or an atomic reassignment implementation. The existing server remains authoritative if state changes after the preflight read. No authentication, backend rule, active-job state or load-history changes are included.
 
-Validation: 57 focused tests passed, including actual submit-handler execution with a stale pending modal and a newly started server job, zero mutation calls for blocked jobs, normal pending reassignment and persistent server-refusal handling. Additional mandatory Hosting checks and deployment verification remain pending at this checkpoint. No real assignment was submitted during these tests. The owner's requested phone-to-phone reassignment test remains for the owner; the empty test job was left assigned as instructed.
+Validation: 57 focused tests passed, including actual submit-handler execution with a stale pending modal and a newly started server job, zero mutation calls for blocked jobs, normal pending reassignment and persistent server-refusal handling. No real assignment was submitted during these tests. The owner's requested phone-to-phone reassignment test remains for the owner; the empty test job was left assigned as instructed.
 
 No Expo/EAS build or APK installation is part of this change.
+
+## Live acceptance
+
+Deployed exact source `10cbd27c23022b0b129acfff3b8a83d4ed210afa` through `npm run deploy:hosting`. Clean Next build/TypeScript passed, all 482 library tests passed (one existing skip), and all mandatory retained-behavior/browser/layout checks passed. The postdeploy hook verified all 381 live artifacts byte-for-byte and advanced the shared approved checkpoint normally at 2026-10-27 14:44:19 UTC. The shared Hosting lock was released by that hook. No Functions or security rules deployment.
+
+Final readback of the owner's empty test job confirms its existing driver assignment, open pre-pickup state, zero barrels and zero tickets are retained. No cancellation or reassignment was sent. Refresh the Dispatch page to load the published handler; a real phone-to-phone reassignment has deliberately not been performed on the owner's behalf.
