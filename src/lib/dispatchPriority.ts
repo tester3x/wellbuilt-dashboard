@@ -1,4 +1,4 @@
-import { urgency } from '@tester3x/water-hauling';
+import { thresholdTime, urgency } from '@tester3x/water-hauling';
 import { projectWellLevel } from './wellLevelProjection';
 /**
  * Firebase-free PW-queue priority + prediction helpers for the Dispatch board.
@@ -263,12 +263,14 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
     const projection=projectWellLevel(well,nowMs);
     const threshold=well.bottomLevel ?? null;
     const low=urgency('freshwater',projection.estFeet,threshold);
-    return {state:low === 'urgent' ? 'pull-now' : 'verify',label:low === 'urgent' ? 'LOW FRESHWATER' : 'NEEDS DATA',
+    const at=projection.estFeet == null || threshold == null ? null : thresholdTime('freshwater',projection.estFeet,new Date(nowMs).toISOString(),well.inventoryDailyBbl,well.bblPerFoot || 0,threshold,well.isDown);
+    const hours=at ? (Date.parse(at)-nowMs)/3600000 : null;
+    return {state:well.isDown ? 'down' : low === 'urgent' ? 'pull-now' : at ? 'approaching' : 'verify',label:well.isDown ? 'DOWN' : low === 'urgent' ? 'LOW FRESHWATER' : at ? 'TO MINIMUM' : 'NEEDS DATA',
       color:low === 'urgent' ? 'bg-red-600' : 'bg-gray-500',textColor:'text-white',sortOrder:low === 'urgent' ? 1 : 50,
       targetInches:threshold == null ? null : threshold*12,lastLevel:null,lastLevelInches:null,lastLevelAgeHours:null,
-      estInches:projection.estFeet == null ? null : projection.estFeet*12,remainingInches:null,ttpHours:null,
-      gainValid:projection.hasFlow,fresh:projection.available,reason:projection.available ? 'missing_target' : 'missing_baseline',
-      estFeet:projection.estFeet,estDisplay:projection.estDisplay,readyFeet:threshold,predictedReadyAtMs:null,
+      estInches:projection.estFeet == null ? null : projection.estFeet*12,remainingInches:projection.estFeet == null || threshold == null ? null : (projection.estFeet-threshold)*12,ttpHours:hours,
+      gainValid:projection.hasFlow,fresh:projection.available,reason:at ? undefined : projection.available ? 'missing_target_or_rate' : 'missing_baseline',
+      estFeet:projection.estFeet,estDisplay:projection.estDisplay,readyFeet:threshold,predictedReadyAtMs:at ? Date.parse(at) : null,
       hasFlow:projection.hasFlow,availableLoads:0};
   }
   // Level inputs come from the ONE shared resolver so Dispatch, the aggregate

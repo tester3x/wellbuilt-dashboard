@@ -7,7 +7,7 @@ import { loadCanonicalDriverAuthority, productionCanonicalDriverReaders } from '
 import { assertWbmWriter } from './viewerWriteGuard';
 import { wellBelongsToDriverCompany } from './wbmWellScope';
 import { evaluateFreshWaterRouteScope } from './freshWaterRouteScope';
-import { applyFreshWaterDelivery, projectFreshWaterFeet, validFreshWaterConfig,
+import { applyFreshWaterDelivery, freshWaterAt, projectFreshWaterFeet, validFreshWaterConfig,
   type FreshWaterConfig, type FreshWaterDelivery,
   type FreshWaterState } from './freshWaterSupplyCore';
 
@@ -59,21 +59,22 @@ export const ingestWbmFreshWaterGroupDelivery = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false }, async request => {
     const data = request.data as Record<string, unknown> | null;
     if (!data || typeof data !== 'object' || Array.isArray(data)
-      || Object.keys(data).some(key => !['groupId', 'deliveryId', 'deliveredAtUTC', 'deliveredBbl', 'measuredBeforeFeet'].includes(key)))
+      || Object.keys(data).some(key => !['groupId', 'deliveryId', 'deliveredAtUTC', 'deliveredBbl', 'measuredBeforeFeet', 'wellDown'].includes(key)))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_delivery');
-    const { groupId, deliveryId, deliveredAtUTC, deliveredBbl, measuredBeforeFeet } = data;
+    const { groupId, deliveryId, deliveredAtUTC, deliveredBbl, measuredBeforeFeet, wellDown } = data;
     if (!validKey(groupId) || !validKey(deliveryId) || deliveryId.length > 128
       || typeof deliveredAtUTC !== 'string' || !Number.isFinite(Date.parse(deliveredAtUTC))
       || Date.parse(deliveredAtUTC) > Date.now() + 3_600_000
       || Date.parse(deliveredAtUTC) < Date.now() - 30 * 86_400_000
-      || typeof deliveredBbl !== 'number' || !Number.isFinite(deliveredBbl) || deliveredBbl <= 0 || deliveredBbl > 500
+      || typeof deliveredBbl !== 'number' || !Number.isFinite(deliveredBbl) || deliveredBbl < 0 || deliveredBbl > 500
+      || (wellDown !== undefined && typeof wellDown !== 'boolean')
       || (measuredBeforeFeet !== undefined && (typeof measuredBeforeFeet !== 'number' || !Number.isFinite(measuredBeforeFeet))))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_delivery');
     const context = await authorizedGroups(request, true);
     const group = context.groups.find(item => item.groupId === groupId);
     if (!group) throw new httpsV2.HttpsError('permission-denied', 'tank_group_out_of_scope');
     const delivery: FreshWaterDelivery = { deliveryId, driverId: context.driver.driverId,
-      deliveredAtUTC, deliveredBbl, ...(measuredBeforeFeet === undefined ? {} : { measuredBeforeFeet }) };
+      deliveredAtUTC, deliveredBbl, ...(wellDown === undefined ? {} : {wellDown: wellDown as boolean}), ...(measuredBeforeFeet === undefined ? {} : { measuredBeforeFeet }) };
     let reason = '';
     let duplicate = false;
     const result = await admin.database().ref(statePath(context.companyId, groupId)).transaction(current => {
@@ -93,17 +94,20 @@ export const getWbmFreshWaterTankGroups = httpsV2.onCall(
   { timeoutSeconds: 20, memory: '256MiB', enforceAppCheck: false }, async request => {
     const data = request.data as Record<string, unknown> | null;
     if (!data || typeof data !== 'object' || Array.isArray(data)
-      || Object.keys(data).some(key => key !== 'groupId'))
+      || Object.keys(data).some(key => !['groupId','atUTC'].includes(key))
+      || (data.atUTC !== undefined && (typeof data.atUTC !== 'string' || !Number.isFinite(Date.parse(data.atUTC)))))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_request');
     const context = await authorizedGroups(request, false);
     if (data.groupId === undefined) return { ok: true, groups: context.groups };
     const group = context.groups.find(item => item.groupId === data.groupId);
     if (!group) throw new httpsV2.HttpsError('permission-denied', 'tank_group_out_of_scope');
     const snap = await admin.database().ref(statePath(context.companyId, group.groupId)).once('value');
-    const state = snap.exists() ? snap.val() as FreshWaterState : null;
+    const rawState = snap.exists() ? snap.val() as FreshWaterState : null;
+    const atUTC = typeof data.atUTC === 'string' ? data.atUTC : new Date().toISOString();
+    const state = rawState ? freshWaterAt(rawState,group.config,atUTC) : null;
     return { ok: true, ...group, status: state ? {
-      levelFeet: state.levelFeet, asOfUTC: state.asOfUTC, dailyUseBbl: state.dailyUseBbl ?? null,
-      projectedFeet: projectFreshWaterFeet(state, group.config, new Date().toISOString()),
+      isDown: state.isDown === true, levelFeet: state.levelFeet, asOfUTC: state.asOfUTC, dailyUseBbl: state.dailyUseBbl ?? null,
+      projectedFeet: state.projectedFeet,
       lastMeasuredFeet: state.lastMeasuredFeet ?? null,
       lastMeasuredAtUTC: state.lastMeasuredAtUTC ?? null,
     } : null };

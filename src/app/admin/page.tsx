@@ -114,8 +114,8 @@ export default function AdminPage() {
   const [newEqualization, setNewEqualization] = useState<'single-tank' | 'verified-equalized' | 'unverified'>('single-tank');
   const [editEqualization, setEditEqualization] = useState<'single-tank' | 'verified-equalized' | 'unverified'>('single-tank');
   const typeForRoute = (route: string) => Object.values(configs).find(c => c.route === route)?.routeType || stagedRouteTypes[route] || 'produced-water';
-  const freshConfig = (route:string,tanks:string,capacity:string,height:string,members:string,equalization:string) => ({
-    routeType:'freshwater', route, tanks:Number(tanks), numTanks:Number(tanks), tankCapacity:Number(capacity),
+  const freshConfig = (route:string,tanks:string,capacity:string,height:string,members:string,equalization:string,bottom:string) => ({
+    routeType:'freshwater', route, ...(bottom.trim() ? {bottomLevel:parseLevelToFeet(bottom),allowedBottom:parseLevelToFeet(bottom)} : {}), tanks:Number(tanks), numTanks:Number(tanks), tankCapacity:Number(capacity),
     tankHeight:Number(height), bblPerFoot:Number(tanks)*Number(capacity)/Number(height), equalization,
     suppliesWells:members.split(',').map(n=>n.trim()).filter(Boolean),
   });
@@ -353,7 +353,7 @@ export default function AdminPage() {
       setEditWellRoute(config.route || 'Unrouted');
       setEditMembers((config.suppliesWells || []).join(', '));
       setEditEqualization(config.equalization || 'single-tank');
-      setEditWellBottom(String(config.bottomLevel || 3));
+      setEditWellBottom(String(config.bottomLevel ?? (config.routeType === 'freshwater' ? '' : 3)));
       setEditWellTanks(String(config.tanks || config.numTanks || 1));
       setEditWellPullBbls(String(config.pullBbls || 140));
       setEditWellTankCapacity(String(config.tankCapacity || 400));
@@ -773,7 +773,7 @@ export default function AdminPage() {
       if (isAddingWell || addWellInflightRef.current) return;
       setIsAddingWell(true); addWellInflightRef.current=true;
       try {
-        const result=await staffCreateWellConfig({wellName:newWellName.trim(), config:freshConfig(newWellRoute,newWellTanks,newWellTankCapacity,newWellTankHeight,newMembers,newEqualization) as any});
+        const result=await staffCreateWellConfig({wellName:newWellName.trim(), config:freshConfig(newWellRoute,newWellTanks,newWellTankCapacity,newWellTankHeight,newMembers,newEqualization,newWellBottom) as any});
         applyWellCatalog({...configs,[result.wellName]:result.config as WellConfig});
         showMessage('Freshwater tank group saved. Level and usage remain unknown until measured.');
       } catch(error) { showMessage(classifyAddWellError(error).message); }
@@ -881,7 +881,7 @@ export default function AdminPage() {
       if (isUpdatingWell) return;
       setIsUpdatingWell(true);
       try {
-        const result=await staffUpdateWellConfig({wellName:selectedWell, config:freshConfig(editWellRoute,editWellTanks,editWellTankCapacity,editWellTankHeight,editMembers,editEqualization) as any});
+        const result=await staffUpdateWellConfig({wellName:selectedWell, config:freshConfig(editWellRoute,editWellTanks,editWellTankCapacity,editWellTankHeight,editMembers,editEqualization,editWellBottom) as any});
         applyWellCatalog({...configs,[result.wellName]:result.config as WellConfig});
         showMessage('Freshwater tank group saved. Existing inventory and delivery history preserved.');
       } catch(error) { showMessage(classifyUpdateWellError(error).message); }
@@ -1415,8 +1415,8 @@ export default function AdminPage() {
                       </select>
                     </div>}
                   <div className="grid grid-cols-3 gap-2">
-                    {typeForRoute(newWellRoute) !== 'freshwater' && <div>
-                      <label className="text-gray-400 text-sm">Bottom (ft)</label>
+                    {<div>
+                      <label className="text-gray-400 text-sm">Bottom / minimum (ft)</label>
                       <input
                         type="text"
                         value={newWellBottom}
@@ -1709,8 +1709,8 @@ export default function AdminPage() {
                       </div>}
                     </div>
                     <div className="grid grid-cols-3 gap-2">
-                      {configs[selectedWell]?.routeType !== 'freshwater' && <div>
-                        <label className="text-gray-400 text-sm">Bottom (ft)</label>
+                      {<div>
+                        <label className="text-gray-400 text-sm">Bottom / minimum (ft)</label>
                         <input
                           type="text"
                           value={editWellBottom}

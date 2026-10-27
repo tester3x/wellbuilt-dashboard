@@ -148,7 +148,7 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
       tanks,
       pullBbls,
       tankAtLevel: config.routeType === 'freshwater' ? `${tanks} @ --` : tankAtLevel,
-      bottomLevel: config.routeType === 'freshwater' ? undefined : bottomLevelFeet,
+      bottomLevel: config.routeType === 'freshwater' ? (typeof config.bottomLevel === 'number' ? config.bottomLevel : undefined) : bottomLevelFeet,
       maxLevel: typeof config.maxLevel === 'number' ? config.maxLevel : undefined,
       bblPerFoot,
       bbls24hrs: isDemoSurvey && typeof config.demoRealMinutesPerFoot === 'number'

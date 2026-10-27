@@ -75,10 +75,10 @@ export interface WellLevelProjection {
 export function projectWellLevel(well: WellResponse, asOfMs: number): WellLevelProjection {
   if (well.routeType === 'freshwater') {
     const estFeet = well.inventoryLevelFeet == null || !well.inventoryAsOfUTC ? null : projectedLevel('freshwater',
-      well.inventoryLevelFeet, well.inventoryAsOfUTC, new Date(asOfMs).toISOString(), well.inventoryDailyBbl,
+      well.inventoryLevelFeet, well.inventoryAsOfUTC, new Date(asOfMs).toISOString(), well.isDown ? 0 : well.inventoryDailyBbl,
       well.bblPerFoot || 0, well.tankHeight || 0);
     return { estFeet, estDisplay: estFeet == null ? '--' : formatFeetWBM(estFeet), hasFlow: (well.inventoryDailyBbl || 0) > 0,
-      frozen: false, capped: estFeet === well.tankHeight, wellDown: false, available: estFeet != null };
+      frozen: well.isDown === true, capped: estFeet === well.tankHeight, wellDown: well.isDown === true, available: estFeet != null };
   }
   const inputs = wbmInputsFromWell(well);
   const wellDown = inputs.wellDown;

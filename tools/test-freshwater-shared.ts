@@ -37,7 +37,11 @@ assert.deepEqual(applyFreshWaterDelivery(second.state,config,{deliveryId:'stable
 const live=mergeWellPool(canonical,{[KEYS[0]]:{inventoryLevelFeet:10,inventoryAsOfUTC:'2026-10-26T12:00:00Z',inventoryDailyBbl:120}})[0];
 assert.equal(projectWellLevel(live,now).estFeet,8);
 assert.equal(classifyWell({...live,bottomLevel:9},now).label,'LOW FRESHWATER');
-assert.equal(classifyWell({...live,bottomLevel:7},now).state,'verify');
+const forecast=classifyWell({...live,bottomLevel:7},now);
+assert.equal(forecast.state,'approaching');assert.equal(forecast.ttpHours,12);
+assert.equal(forecast.predictedReadyAtMs,now+12*3600000);
+const paused=projectWellLevel({...live,isDown:true},now);assert.equal(paused.estFeet,10);assert.equal(paused.wellDown,true);
+assert.equal(classifyWell({...live,bottomLevel:7,isDown:true},now).predictedReadyAtMs,null);
 console.log('Shared freshwater regression passed: identity, atomic plan, companies, unknowns, inference, stable retries and low-level urgency.');
 
 for (const key of KEYS) {

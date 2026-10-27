@@ -1,4 +1,4 @@
-import { applyFreshWaterDelivery, overlappingFreshWaterGroup, projectFreshWaterFeet,
+import { freshWaterAt, seedFreshWaterBaseline, applyFreshWaterDelivery, overlappingFreshWaterGroup, projectFreshWaterFeet,
   validFreshWaterConfig, type FreshWaterConfig } from '../freshWaterSupplyCore';
 
 describe('shared fresh-water tank groups', () => {
@@ -103,4 +103,28 @@ describe('fresh-water supply inventory', () => {
     expect(applyFreshWaterDelivery(initial.state, config, { ...first, deliveryId: 'earlier', deliveredAtUTC: '2026-10-19T12:00:00.000Z' }))
       .toEqual({ ok: false, reason: 'stale_delivery' });
   });
+});
+
+describe('supplied Gabriel baseline and consumption pause',()=>{
+ const cfg:FreshWaterConfig={enabled:true,tankCount:3,tankHeightFeet:20,bblPerFootPerTank:20,equalization:'verified-equalized'};
+ const seed=()=>seedFreshWaterBaseline(null,cfg,{levelFeet:13.5,atUTC:'2026-10-27T19:45:00Z',dailyUseBbl:72,
+  provenance:{levelSource:'user approximate reading',timeSource:'user approximate time, not photo EXIF',rateSource:'programmed cycles estimate, not measured'}});
+ it('never replaces an existing inventory',()=>{expect(()=>seedFreshWaterBaseline(seed(),cfg,{levelFeet:13.5,atUTC:'2026-10-27T19:45:00Z',dailyUseBbl:72,provenance:seed().seedProvenance!})).toThrow('inventory_already_initialized');});
+ it('pauses consumption and resumes the retained rate without counting downtime',()=>{
+  let state=seed();
+  const events=[{deliveryId:'down',driverId:'mike',deliveredAtUTC:'2026-10-28T19:45:00Z',deliveredBbl:0,wellDown:true},
+   {deliveryId:'up',driverId:'mike',deliveredAtUTC:'2026-10-29T19:45:00Z',deliveredBbl:0,wellDown:false}];
+  for(const event of events){const d=applyFreshWaterDelivery(state,cfg,event);if(!d.ok)throw Error(d.reason);state=d.state;}
+  expect(state.levelFeet).toBe(12.3);expect(state.dailyUseBbl).toBe(72);
+  expect(projectFreshWaterFeet(state,cfg,'2026-10-30T19:45:00Z')).toBeCloseTo(11.1);
+  expect(freshWaterAt(state,cfg,'2026-10-29T07:45:00Z')?.projectedFeet).toBe(12.3);
+  const read=applyFreshWaterDelivery(state,cfg,{deliveryId:'read',driverId:'mike',deliveredAtUTC:'2026-10-30T19:45:00Z',deliveredBbl:0,measuredBeforeFeet:11.1});
+  if(!read.ok)throw Error(read.reason);expect(read.state.dailyUseBbl).toBeCloseTo(72);
+ });
+ it('late observation projection excludes later deliveries and retains all history',()=>{
+  const d=applyFreshWaterDelivery(seed(),cfg,{deliveryId:'fill',driverId:'mike',deliveredAtUTC:'2026-10-28T19:45:00Z',deliveredBbl:200});
+  if(!d.ok)throw Error(d.reason);
+  expect(freshWaterAt(d.state,cfg,'2026-10-28T07:45:00Z')?.projectedFeet).toBeCloseTo(12.9);
+  expect(Object.keys(d.state.deliveries)).toEqual(['fill']);
+ });
 });

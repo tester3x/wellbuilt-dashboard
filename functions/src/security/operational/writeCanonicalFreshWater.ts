@@ -6,8 +6,9 @@ import { validFreshWaterConfig } from './freshWaterSupplyCore';
 export async function writeCanonicalFreshWater(companyId: string, op: string, wellName: string, config: Record<string, unknown>) {
  if (!wellName || wellName.length > 80 || /[.#$\[\]\/]/.test(wellName)) throw new https.HttpsError('invalid-argument', 'invalid_name');
  if (op !== 'create' && op !== 'update') throw new https.HttpsError('failed-precondition', 'Inventory identity cannot be renamed or deleted through an ordinary edit.');
- const allowed = ['routeType','route','tanks','numTanks','tankCapacity','tankHeight','bblPerFoot','equalization','suppliesWells','displayName'];
- if (Object.keys(config).some(k => !allowed.includes(k)) || config.routeType !== 'freshwater'
+ const allowed = ['routeType','route','tanks','numTanks','tankCapacity','tankHeight','bblPerFoot','equalization','suppliesWells','displayName','bottomLevel','allowedBottom'];
+ if ((config.bottomLevel !== undefined && (typeof config.bottomLevel !== 'number' || !Number.isFinite(config.bottomLevel) || config.bottomLevel < 0 || config.bottomLevel > Number(config.tankHeight)))
+  || config.allowedBottom !== config.bottomLevel || Object.keys(config).some(k => !allowed.includes(k)) || config.routeType !== 'freshwater'
   || typeof config.route !== 'string' || !config.route.trim() || config.route.length > 100
   || !Array.isArray(config.suppliesWells) || !config.suppliesWells.length || config.suppliesWells.some(n => typeof n !== 'string')
   || typeof config.tankCapacity !== 'number' || typeof config.bblPerFoot !== 'number'

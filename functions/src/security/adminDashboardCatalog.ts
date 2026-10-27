@@ -190,7 +190,7 @@ export const adminGetWellPool = httpsV2.onCall(
       if (c.routeType !== 'freshwater' || c.companyId !== caller.companyId) continue;
       const state=inventory[String(c.inventoryGroupId)] as FreshWaterState | undefined;
       full.wellStatus[key] = { inventoryLevelFeet: state?.levelFeet ?? null,
-        inventoryAsOfUTC: state?.asOfUTC ?? null, inventoryDailyBbl: state?.dailyUseBbl ?? null };
+        isDown: state?.isDown === true, inventoryAsOfUTC: state?.asOfUTC ?? null, inventoryDailyBbl: state?.dailyUseBbl ?? null };
     }
     return {
       ok: true as const,

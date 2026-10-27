@@ -1,3 +1,4 @@
+import { thresholdTime } from '@tester3x/water-hauling';
 'use client';
 import { useDashboardViewState } from '@/lib/useDashboardViewState';
 
@@ -852,6 +853,7 @@ function WellRow({ well }: { well: WellResponse }) {
   // Down wells FREEZE at their baseline (estimator handles it; the status column
   // flags DOWN separately). Genuinely unavailable → '--', never zero.
   const levelDisplay = proj.estDisplay;
+  const minimumAt = well.routeType === 'freshwater' && proj.estFeet != null && well.bottomLevel != null ? thresholdTime('freshwater',proj.estFeet,new Date(asOfMs).toISOString(),well.inventoryDailyBbl,well.bblPerFoot || 0,well.bottomLevel,isDown) : null;
 
   // Format tank @ level — target height when ready to pull (from VBA formula)
   const formatTankLevel = () => {
@@ -863,6 +865,7 @@ function WellRow({ well }: { well: WellResponse }) {
 
   // Format next pull datetime
   const formatNextPull = () => {
+    if (well.routeType === 'freshwater') return minimumAt ? new Date(minimumAt).toLocaleString('en-US',{month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}) : '--';
     if (!well.nextPullTime) return '--';
     try {
       const date = new Date(well.nextPullTime);
@@ -893,7 +896,7 @@ function WellRow({ well }: { well: WellResponse }) {
       <td className="px-4 py-3 text-white font-mono text-sm">{formatNextPull()}</td>
       <td className="px-4 py-3 text-white font-mono">{levelDisplay}</td>
       <td className="px-4 py-3 text-white font-mono">{well.routeType === 'freshwater' ? (well.inventoryDailyBbl == null ? '--' : `${well.inventoryDailyBbl.toFixed(1)} BBL/day`) : well.flowRate || '--'}</td>
-      <td className="px-4 py-3 text-white font-mono">{well.timeTillPull || well.etaToMax || '--'}</td>
+      <td className="px-4 py-3 text-white font-mono">{well.routeType === 'freshwater' ? minimumAt ? ((Date.parse(minimumAt)-asOfMs)/3600000).toFixed(1)+'h' : '--' : well.timeTillPull || well.etaToMax || '--'}</td>
       <td className="px-4 py-3">
         {isDown ? (
           <span className="px-2 py-1 bg-red-600 text-white text-xs font-bold rounded">X</span>
