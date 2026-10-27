@@ -1,8 +1,8 @@
 {
-  "capturedAt": "2026-10-15",
+  "capturedAt": "2026-10-26",
   "project": "wellbuilt-sync",
-  "source": "firebase functions:list",
-  "count": 217,
+  "source": "Existing deployment inventory plus ACTIVE Cloud Functions v2 metadata verification for staffChat and staffLoadTransfers",
+  "count": 219,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -191,9 +191,11 @@
     "ssoExchangeAuthorizationCode",
     "ssoIssueAuthorizationCode",
     "ssrwellbuiltsync",
+    "staffChat",
     "staffConvertApprovedDriverSecureLogin",
     "staffDeletePull",
     "staffGetPrimaryRouteAssignments",
+    "staffLoadTransfers",
     "staffResolveCompanyDriverShifts",
     "staffWriteDispatch",
     "staffWriteDriverAssignment",

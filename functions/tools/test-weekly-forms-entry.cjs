@@ -1,0 +1,11 @@
+const assert = require('node:assert/strict');
+const { performance } = require('node:perf_hooks');
+const started = performance.now();
+const entry = require('../lib/jsaReceipt/weeklyFormsEntry');
+assert.deepEqual(Object.keys(entry), ['jsaWeeklyForms']);
+assert.equal(typeof entry.jsaWeeklyForms.run, 'function');
+const loaded = Object.keys(require.cache).map(p => p.replaceAll('\\', '/'));
+assert.ok(!loaded.includes(require('node:path').resolve(__dirname, '../lib/index.js').replaceAll('\\', '/')), 'Broad dashboard entry was loaded');
+assert.ok(!loaded.some(p => p.includes('/@anthropic-ai/')), 'Unrelated AI runtime was loaded');
+assert.ok(!loaded.some(p => p.endsWith('/lib/security/operational/driverDispatchCreate.js')), 'Dispatch runtime was loaded');
+console.log('Isolated weekly-forms entry verified in ' + Math.round(performance.now() - started) + ' ms');

@@ -8,24 +8,7 @@ import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
 import { getFirestoreDb } from '@/lib/firebase';
-import {
-  collection,
-  query,
-  where,
-  orderBy,
-  limit,
-  onSnapshot,
-  addDoc,
-  updateDoc,
-  getDocs,
-  getDoc,
-  setDoc,
-  deleteDoc,
-  doc,
-  serverTimestamp,
-  writeBatch,
-} from 'firebase/firestore';
-
+import { watchStaffChat, watchStaffChatCompany, staffChatCall, sendStaffChat, chatIntentId } from '@/lib/staffChatClient';
 import {
   type ChatThread,
   type ChatMessage,
@@ -191,7 +174,7 @@ function ChatPageInner() {
   // → TabletS10" sequence. Firestore thread data is the single source of truth;
   // we only subscribe once authentication has resolved to a real uid.
   const myParticipantId = user?.uid ? userParticipantId(user.uid) : '';
-  const companyId = user?.companyId || '';
+  const [companyId, setChatCompanyId] = useState('');
 
   // --- Capability gates (UI CONTAINED; server rules remain the authority) ---
   // viewChat  → may see the chat surface at all
@@ -233,6 +216,11 @@ function ChatPageInner() {
   const [slotPickerIndex, setSlotPickerIndex] = useState<number | null>(null);
   const [highlightedPane, setHighlightedPane] = useState<number | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  useEffect(() => {
+    setChatCompanyId(''); setThreads([]); setPaneMessages({}); setProfiles([]); setDrivers([]);
+    if (authLoading || !canViewChat || !myParticipantId) return;
+    return watchStaffChatCompany(company => { setChatCompanyId(company); setToastMsg(null); }, error => setToastMsg(error.message));
+  }, [authLoading, canViewChat, myParticipantId]);
   const hasInitializedRef = useRef(false); // Guard for auto-open on initial load
   // Temp slots: threads placed via sidebar click but NOT yet locked to the profile.
   // Map of slot index → SlotAssignment. Not saved to Firestore until user clicks lock.
@@ -323,16 +311,9 @@ function ChatPageInner() {
 
   // --- Load profiles from Firestore ---
   useEffect(() => {
-    const db = getFirestoreDb();
-    if (!db) return;
-    const q = query(collection(db, 'chat_monitors'), orderBy('name'));
-    const unsub = onSnapshot(q, (snap) => {
-      const list: MonitorProfile[] = [];
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() } as MonitorProfile));
-      setProfiles(list);
-    });
-    return () => unsub();
-  }, []);
+    if (authLoading || !canViewChat || !myParticipantId || !companyId) return;
+    return watchStaffChat({ action: 'profiles', companyId }, rows => setProfiles(rows), error => setToastMsg(error.message));
+  }, [authLoading, myParticipantId, companyId, canViewChat]);
 
   // Initialize stack from URL param or legacy localStorage on first profile load
   useEffect(() => {
@@ -365,26 +346,9 @@ function ChatPageInner() {
     // Do not subscribe until auth resolves to a real uid. Subscribing with a
     // 'user:dev' fallback caused three successive snapshot overrides during boot
     // (cache → dev query → real-uid query), each rewriting threads state.
-    if (authLoading || !myParticipantId) return;
-    const db = getFirestoreDb();
-    if (!db) return;
-    const q = query(
-      collection(db, 'chat_threads'),
-      where('participants', 'array-contains', myParticipantId),
-      orderBy('updatedAt', 'desc'),
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const list: ChatThread[] = [];
-      let skipped = 0;
-      snap.forEach((d) => {
-        try {
-          list.push(normalizeThread(d.data(), d.id));
-        } catch (err) {
-          skipped++;
-          console.warn('[ChatPage][threads-snapshot] skipped malformed thread', d.id, err);
-        }
-      });
-      console.log('[ChatPage][threads-snapshot]', { count: list.length, skipped, participantId: myParticipantId });
+    if (authLoading || !canViewChat || !myParticipantId || !companyId) return;
+    const unsub = watchStaffChat({ action: 'threads', companyId, ownOnly: true }, rows => {
+      const list: ChatThread[] = rows.map(row => normalizeThread(row, row.id));
       setThreads(list);
 
       // Auto-open: detect new messages from threads not in any profile's slots
@@ -417,7 +381,7 @@ function ChatPageInner() {
       prevThreadMapRef.current = newMap;
     });
     return () => unsub();
-  }, [myParticipantId, authLoading]);
+  }, [myParticipantId, authLoading, companyId, canViewChat]);
 
   // --- Subscribe to messages for open panes ---
   const activeThreadIds = openPanes.filter(Boolean) as string[];
@@ -430,39 +394,14 @@ function ChatPageInner() {
     // before the promise is even returned, so `.catch(() => {})` does not
     // swallow it. This was the exact cause of the ErrorBoundary trace from
     // the Watford Crew profile crash.
-    if (authLoading || !myParticipantId) return;
-    const db = getFirestoreDb();
-    if (!db) return;
-    const unsubs: (() => void)[] = [];
-    for (const threadId of activeThreadIds) {
-      // Query the 100 NEWEST messages (orderBy desc + limit) then reverse so
-      // render order stays ascending (oldest at top, newest at bottom).
-      // Previous `orderBy('timestamp', 'asc') + limit(100)` returned the 100
-      // OLDEST messages — any thread with >100 messages stopped showing new
-      // incoming messages in the main pane while the sidebar (which reads
-      // `thread.lastMessage` off the parent doc) kept updating.
-      const q = query(
-        collection(db, 'chat_threads', threadId, 'messages'),
-        orderBy('timestamp', 'desc'),
-        limit(100),
-      );
-      const unsub = onSnapshot(q, (snap) => {
-        const msgs: ChatMessage[] = [];
-        snap.forEach((d) => msgs.push({ id: d.id, ...d.data() } as ChatMessage));
-        msgs.reverse();
-        setPaneMessages((prev) => ({ ...prev, [threadId]: msgs }));
-        // Scroll after DOM renders — 50ms is too fast when switching profiles
-        setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 150);
-        // Second pass: catch late renders (images, system cards)
-        setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'auto' }), 500);
-      });
-      unsubs.push(unsub);
-      updateDoc(doc(db, 'chat_threads', threadId), {
-        [`lastRead.${myParticipantId}`]: serverTimestamp(),
-      }).catch(() => {});
-    }
-    return () => unsubs.forEach((u) => u());
-  }, [activeThreadIds.join(','), myParticipantId, authLoading]);
+    if (authLoading || !canViewChat || !myParticipantId || !companyId) return;
+    const unsubs = activeThreadIds.map(threadId => watchStaffChat({ action: 'messages', threadId, companyId }, rows => {
+      setPaneMessages(prev => ({ ...prev, [threadId]: rows }));
+      setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 150);
+    }, error => setToastMsg(error.message), 5000));
+    for (const threadId of activeThreadIds) void staffChatCall({ action: 'read', threadId, companyId }).catch(() => {});
+    return () => unsubs.forEach(stop => stop());
+  }, [activeThreadIds.join(','), myParticipantId, authLoading, companyId, canViewChat]);
 
   // Cross-profile thread index — maps threadId to profile IDs that contain it
   const threadToProfiles = useMemo(() => {
@@ -509,16 +448,17 @@ function ChatPageInner() {
     const layoutObj = GRID_LAYOUTS.find((l) => l.label === layout) || GRID_LAYOUTS[3];
     const slotCount = layoutObj.cols * layoutObj.rows;
     try {
-      const docRef = await addDoc(collection(db, 'chat_monitors'), {
+      const profileId = chatIntentId();
+      await staffChatCall({ action: 'saveProfile', companyId, profileId, record: {
         name: name.trim(),
         companyId: companyId || '',
         gridLayout: layout,
         threadType: 'direct',
         slots: Array(slotCount).fill(null),
         createdBy: myParticipantId,
-      });
+      } });
       // Push new profile onto stack
-      setProfileStack(prev => [...prev.filter(id => id !== docRef.id), docRef.id]);
+      setProfileStack(prev => [...prev.filter(id => id !== profileId), profileId]);
       setNewProfileName('');
       setSetupMode(true);
     } catch (err) {
@@ -536,13 +476,13 @@ function ChatPageInner() {
     const db = getFirestoreDb();
     if (!db) return;
     try {
-      await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { threadType: type });
+      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { threadType: type } });
       // Firestore onSnapshot will update profiles → re-derives activeProfile
     } catch (err) {
       console.error('[ChatPage] saveProfileType failed', err);
       setToastMsg('Could not update profile. Check your access.');
     }
-  }, [activeProfile, user, userCompany]);
+  }, [activeProfile, user, userCompany, companyId]);
 
   const saveProfileSlots = useCallback(async (newSlots: (SlotAssignment | null)[]) => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
@@ -553,12 +493,12 @@ function ChatPageInner() {
     const db = getFirestoreDb();
     if (!db) return;
     try {
-      await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { slots: newSlots });
+      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { slots: newSlots } });
     } catch (err) {
       console.error('[ChatPage] saveProfileSlots failed', err);
       setToastMsg('Could not update profile layout. Check your access.');
     }
-  }, [activeProfile, user, userCompany]);
+  }, [activeProfile, user, userCompany, companyId]);
 
   const saveProfileLayout = useCallback(async (layout: string) => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
@@ -572,12 +512,12 @@ function ChatPageInner() {
     const slotCount = layoutObj.cols * layoutObj.rows;
     const newSlots = Array(slotCount).fill(null).map((_, i) => activeProfile.slots[i] || null);
     try {
-      await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { gridLayout: layout, slots: newSlots });
+      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { gridLayout: layout, slots: newSlots } });
     } catch (err) {
       console.error('[ChatPage] saveProfileLayout failed', err);
       setToastMsg('Could not update profile layout. Check your access.');
     }
-  }, [activeProfile, user, userCompany]);
+  }, [activeProfile, user, userCompany, companyId]);
 
   const toggleProfileLock = useCallback(async () => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
@@ -588,12 +528,12 @@ function ChatPageInner() {
     const db = getFirestoreDb();
     if (!db) return;
     try {
-      await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { locked: !activeProfile.locked });
+      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { locked: !activeProfile.locked } });
     } catch (err) {
       console.error('[ChatPage] toggleProfileLock failed', err);
       setToastMsg('Could not update profile. Check your access.');
     }
-  }, [activeProfile, user, userCompany]);
+  }, [activeProfile, user, userCompany, companyId]);
 
   const deleteProfile = useCallback(async (profileId: string) => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
@@ -603,13 +543,13 @@ function ChatPageInner() {
     const db = getFirestoreDb();
     if (!db) return;
     try {
-      await deleteDoc(doc(db, 'chat_monitors', profileId));
+      await staffChatCall({ action: 'deleteProfile', companyId, profileId });
       setProfileStack(prev => prev.filter(id => id !== profileId));
     } catch (err) {
       console.error('[ChatPage] deleteProfile failed', err);
       setToastMsg('Could not delete profile. Check your access.');
     }
-  }, [user, userCompany]);
+  }, [user, userCompany, companyId]);
 
   // --- Assign driver or thread to slot ---
   const assignSlot = useCallback((index: number, assignment: SlotAssignment | null) => {
@@ -629,12 +569,12 @@ function ChatPageInner() {
     const db = getFirestoreDb();
     if (!db) return;
     try {
-      await updateDoc(doc(db, 'chat_threads', threadId), { status: 'archived' });
+      await staffChatCall({ action: 'archive', companyId, threadId });
     } catch (err) {
       console.error('[ChatPage] archiveThread failed', err);
       setToastMsg('Could not archive chat. Check your access.');
     }
-  }, [user, userCompany]);
+  }, [user, userCompany, companyId]);
 
   // --- Send message ---
   const sendInPane = useCallback(async (threadId: string) => {
@@ -647,24 +587,15 @@ function ChatPageInner() {
     setPaneInputs((prev) => ({ ...prev, [threadId]: '' }));
     const db = getFirestoreDb();
     if (!db) return;
-    const senderName = user?.displayName || 'Dispatch';
-    const batch = writeBatch(db);
-    const msgRef = doc(collection(db, 'chat_threads', threadId, 'messages'));
-    batch.set(msgRef, { text, senderId: myParticipantId, senderName, timestamp: serverTimestamp(), type: 'text' });
-    const threadRef = doc(db, 'chat_threads', threadId);
-    batch.update(threadRef, {
-      lastMessage: { text: text.substring(0, 100), senderId: myParticipantId, senderName, timestamp: serverTimestamp(), type: 'text' },
-      updatedAt: serverTimestamp(),
-    });
     try {
-      await batch.commit();
+      await sendStaffChat(threadId, text, companyId || '');
     } catch (err) {
       console.error('[ChatPage] sendInPane failed', err);
       // Restore the unsent text so it isn't silently lost.
       setPaneInputs((prev) => ({ ...prev, [threadId]: text }));
       setToastMsg('Message failed to send. Check your access.');
     }
-  }, [paneInputs, myParticipantId, user, userCompany]);
+  }, [paneInputs, myParticipantId, user, userCompany, companyId]);
 
   // --- Start chat with driver (creates thread if needed, returns thread ID) ---
   const ensureDriverThread = useCallback(async (driverHash: string, driverName: string, driverCompanyId?: string): Promise<string | null> => {
@@ -674,37 +605,9 @@ function ChatPageInner() {
     }
     const db = getFirestoreDb();
     if (!db) return null;
-    const driverPid = `driver:${driverHash}`;
-    const pair = [myParticipantId, driverPid].sort().join('_');
     try {
-      const existing = await getDocs(query(
-        collection(db, 'chat_threads'),
-        where('type', '==', 'direct'),
-        where('directPair', '==', pair),
-      ));
-      if (!existing.empty) {
-        const existingDoc = existing.docs[0];
-        // Reactivate if archived
-        if (existingDoc.data().status === 'archived') {
-          await updateDoc(doc(db, 'chat_threads', existingDoc.id), { status: 'active', updatedAt: serverTimestamp() });
-        }
-        return existingDoc.id;
-      }
-      const senderName = user?.displayName || 'Dispatch';
-      const now = serverTimestamp();
-      const threadRef = await addDoc(collection(db, 'chat_threads'), {
-        type: 'direct',
-        companyId: companyId || driverCompanyId || '',
-        directPair: pair,
-        title: driverName,
-        participants: [myParticipantId, driverPid],
-        participantNames: { [myParticipantId]: senderName, [driverPid]: driverName },
-        status: 'active',
-        createdAt: now,
-        updatedAt: now,
-        lastRead: {},
-      });
-      return threadRef.id;
+      const result = await staffChatCall({ action: 'direct', companyId, driverId: driverHash });
+      return result.threadId;
     } catch (err) {
       console.error('[ChatPage] ensureDriverThread failed', err);
       setToastMsg('Could not open conversation. Check your access.');
@@ -720,34 +623,9 @@ function ChatPageInner() {
     }
     const db = getFirestoreDb();
     if (!db || !groupName.trim() || groupMembers.length === 0) return;
-    const senderName = user?.displayName || 'Dispatch';
-    const participants = [myParticipantId, ...groupMembers.map((m) => `driver:${m.hash}`)];
-    const participantNames: Record<string, string> = { [myParticipantId]: senderName };
-    groupMembers.forEach((m) => { participantNames[`driver:${m.hash}`] = m.name; });
-    const now = serverTimestamp();
-    const systemText = `${senderName} created "${groupName.trim()}" with ${groupMembers.map((m) => m.name.split(' ')[0]).join(', ')}`;
     try {
-      const threadRef = await addDoc(collection(db, 'chat_threads'), {
-        type: groupType,
-        companyId: companyId || '',
-        title: groupName.trim(),
-        participants,
-        participantNames,
-        broadcast: groupBroadcast,
-        status: 'active',
-        createdAt: now,
-        updatedAt: now,
-        lastRead: {},
-        lastMessage: { text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system' },
-      });
-      // Send system message
-      await addDoc(collection(db, 'chat_threads', threadRef.id, 'messages'), {
-        text: systemText,
-        senderId: 'system',
-        senderName: 'System',
-        timestamp: now,
-        type: 'system',
-      });
+      await staffChatCall({ action: 'group', companyId, requestId: chatIntentId(), type: groupType,
+        title: groupName.trim(), driverIds: groupMembers.map(member => member.hash), broadcast: groupBroadcast });
       setShowGroupCreator(false);
       setGroupName('');
       setGroupMembers([]);
@@ -761,22 +639,10 @@ function ChatPageInner() {
 
   // --- Load drivers ---
   const loadDrivers = useCallback(async () => {
-    const { adminGetDashboardCatalog, classifiedReadFailure } = await import('@/lib/adminDashboardCatalog');
     try {
-      const catalog = await adminGetDashboardCatalog();
-      const all = catalog.approved || {};
-      const list: { hash: string; name: string; companyId?: string }[] = [];
-      for (const [hash, data] of Object.entries(all) as [string, any][]) {
-        if (!data.active && data.active !== undefined) continue;
-        const name = data.legalName || data.displayName || 'Driver';
-        if (companyId && data.companyId && data.companyId !== companyId) continue;
-        list.push({ hash, name, companyId: data.companyId });
-      }
-      list.sort((a, b) => a.name.localeCompare(b.name));
-      setDrivers(list);
-    } catch (err) {
-      console.error(classifiedReadFailure('chat drivers', err));
-    }
+      const result = await staffChatCall({ action: 'directory', companyId });
+      setDrivers(result.drivers.sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)));
+    } catch (err) { setToastMsg(err instanceof Error ? err.message : 'Could not load drivers'); }
   }, [companyId]);
 
   // --- Sidebar filtering — unanswered first, then by updatedAt ---
@@ -1164,7 +1030,7 @@ function ChatPageInner() {
                           const db = getFirestoreDb();
                           if (!db) return;
                           try {
-                            await updateDoc(doc(db, 'chat_threads', thread.id), { broadcast: !(thread as any).broadcast });
+                            await staffChatCall({ action: 'broadcast', companyId, threadId: thread.id, broadcast: !(thread as any).broadcast });
                           } catch (err) {
                             console.error('[ChatPage] broadcast toggle failed', err);
                             setToastMsg('Could not change broadcast. Check your access.');
@@ -1402,29 +1268,10 @@ function ChatPageInner() {
                                   setGroupType(profileType as ThreadType);
                                   const db = getFirestoreDb();
                                   if (!db) return;
-                                  const senderName = user?.displayName || 'Dispatch';
-                                  const participants = [myParticipantId, ...groupMembers.map((m) => `driver:${m.hash}`)];
-                                  const participantNames: Record<string, string> = { [myParticipantId]: senderName };
-                                  groupMembers.forEach((m) => { participantNames[`driver:${m.hash}`] = m.name; });
-                                  const now = serverTimestamp();
-                                  const systemText = `${senderName} created "${groupName.trim()}" with ${groupMembers.map((m) => m.name.split(' ')[0]).join(', ')}`;
                                   try {
-                                    const threadRef = await addDoc(collection(db, 'chat_threads'), {
-                                      type: profileType,
-                                      companyId: companyId || '',
-                                      title: groupName.trim(),
-                                      participants,
-                                      participantNames,
-                                      broadcast: groupBroadcast,
-                                      status: 'active',
-                                      createdAt: now,
-                                      updatedAt: now,
-                                      lastRead: {},
-                                      lastMessage: { text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system' },
-                                    });
-                                    await addDoc(collection(db, 'chat_threads', threadRef.id, 'messages'), {
-                                      text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system',
-                                    });
+                                    const result = await staffChatCall({ action: 'group', companyId, requestId: chatIntentId(), type: profileType,
+                                      title: groupName.trim(), driverIds: groupMembers.map(member => member.hash), broadcast: groupBroadcast });
+                                    const threadRef = { id: result.threadId };
                                     assignSlot(index, { threadId: threadRef.id, threadTitle: groupName.trim() });
                                   } catch (err) {
                                     console.error('[ChatPage] inline createGroup failed', err);
@@ -1593,7 +1440,7 @@ function ChatPageInner() {
                         const db = getFirestoreDb();
                         if (!db) return;
                         try {
-                          await updateDoc(doc(db, 'chat_threads', threadId), { broadcast: !(thread as any).broadcast });
+                          await staffChatCall({ action: 'broadcast', companyId, threadId, broadcast: !(thread as any).broadcast });
                         } catch (err) {
                           console.error('[ChatPage] broadcast toggle failed', err);
                           setToastMsg('Could not change broadcast. Check your access.');
@@ -1640,7 +1487,7 @@ function ChatPageInner() {
                               const newNames = { ...(thread.participantNames || {}) };
                               delete newNames[pid];
                               try {
-                                await updateDoc(doc(db, 'chat_threads', threadId), { participants: newParticipants, participantNames: newNames });
+                                await staffChatCall({ action: 'members', companyId, threadId, driverIds: newParticipants.filter(p => p.startsWith('driver:')).map(p => p.slice(7)) });
                               } catch (err) {
                                 console.error('[ChatPage] remove member failed', err);
                                 setToastMsg('Could not remove member. Check your access.');
@@ -1667,10 +1514,7 @@ function ChatPageInner() {
                       const pid = `driver:${d.hash}`;
                       if ((thread.participants || []).includes(pid)) return;
                       try {
-                        await updateDoc(doc(db, 'chat_threads', threadId), {
-                          participants: [...(thread.participants || []), pid],
-                          [`participantNames.${pid}`]: d.name,
-                        });
+                        await staffChatCall({ action: 'members', companyId, threadId, driverIds: [...(thread.participants || []).filter(p => p.startsWith('driver:')).map(p => p.slice(7)), d.hash] });
                       } catch (err) {
                         console.error('[ChatPage] add member failed', err);
                         setToastMsg('Could not add member. Check your access.');

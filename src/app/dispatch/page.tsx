@@ -49,6 +49,7 @@ import {
 import { adminGetDashboardCatalog, adminGetDemoDriverRoster, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGovernedWellPool, docBelongsToTenant, viewedCompanyId as resolveViewedCompanyId } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
+import { LoadTransferPanel } from '@/components/LoadTransferPanel';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -2907,6 +2908,8 @@ function DispatchPageInner() {
             </button>;
           })}
         </nav>
+
+        {workspaceTab === 'jobs' && <LoadTransferPanel companyId={viewedCompanyId || null} />}
 
         <div className={`dispatch-workspace${queueDetached ? ' is-queue-detached' : ''}${jobsDetached ? ' is-jobs-detached' : ''}`}>
 
