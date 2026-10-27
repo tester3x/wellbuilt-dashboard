@@ -1,3 +1,5 @@
+import {resumeHeldChannel} from './heldChannel';
+import {heldWellLifecycle} from './monitoringHold';
 import {corroborateInferredLevels} from './inferredLevels';
 import {isTimedLevelReporter} from './timedLevelReporter';
 import {historicalResolutionReceipt} from './rejectedResolution';
@@ -35,11 +37,12 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  if(!body||Object.keys(body).some(k=>!['chatId','messageId','chat','rowIndex','review','defaultBbls','senderId'].includes(k))||typeof body.chatId!=='string'||typeof body.messageId!=='string'||typeof body.chat!=='string'||body.chat.length>6000||!Number.isInteger(body.rowIndex)||body.rowIndex<0||body.rowIndex>10)throw Error('invalid_observation');
  const policy=(await admin.firestore().doc('watchdog_v2_config/laptop').get()).data();
  if(!policy?.enabled)throw Error('transport_disabled');
- const channel=policy.channels?.[body.chatId];if(!channel)throw Error('channel_not_allowed');
+ const channel=policy.channels?.[body.chatId]||await resumeHeldChannel(body,policy);if(!channel)throw Error('channel_not_allowed');
  const fallback=Object.prototype.hasOwnProperty.call(body,'defaultBbls')?body.defaultBbls:channel.defaultBbls;
  if(fallback!=null&&fallback!==0&&(!Number.isFinite(fallback)||fallback<=0||fallback>1000))throw Error('invalid_barrel_fallback');
  const rows=parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined,driverDefaultBbls:channel.driverDefaultBbls||{}});
  let row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
+ if(!body.review&&Date.parse(row.postedAt)<=Date.parse(channel.resumeAfterPostedAt)){res.json({ok:true,status:'ignored',issues:['Report predates the armed monitoring resume']});return;}
  const senderKey=body.senderId===undefined?null:watchdogSenderKey(body.senderId);
  const timedLevelReporter=isTimedLevelReporter(channel,senderKey,row);
  // Pumper rounds listing many gauges are not driver load observations.
@@ -221,7 +224,7 @@ export const getWatchdogWellLifecycleV2=https.onRequest(options,async(req,res)=>
  try{await authenticate(req,'getWatchdogWellLifecycleV2');if(Object.keys(req.body||{}).length)throw Error('invalid_request');
  const policy=(await admin.firestore().doc('watchdog_v2_config/laptop').get()).data();if(!policy?.enabled)throw Error('transport_disabled');
  const names=[...new Set<string>(Object.values(policy.channels||{}).flatMap((c:any)=>c.wells||[]))];
- const wells=await Promise.all(names.map(async wellName=>{const archive=policy.archivedWells?.[wellName]||null;let confirmed=false;if(archive){const db=admin.database();const [done,down]=await Promise.all([db.ref('packets/processed/'+archive.packetId).once('value'),db.ref('wells/'+wellName+'/status/isDown').once('value')]);confirmed=done.val()?.noLevel===true&&down.val()===true;}return {wellName,channels:Object.entries(policy.channels||{}).filter(([,c]:any)=>c.wells?.includes(wellName)).map(([id])=>id),archive,state:archive?(confirmed?'archived':'stopping'):'watching'};}));res.json({ok:true,wells});
+ const wells=await Promise.all(names.map(async wellName=>{const archive=policy.archivedWells?.[wellName]||null;let confirmed=false;if(archive){const db=admin.database();const [done,down]=await Promise.all([db.ref('packets/processed/'+archive.packetId).once('value'),db.ref('wells/'+wellName+'/status/isDown').once('value')]);confirmed=done.val()?.noLevel===true&&down.val()===true;}return {wellName,channels:Object.entries(policy.channels||{}).filter(([,c]:any)=>c.wells?.includes(wellName)).map(([id])=>id),archive,state:archive?(confirmed?'archived':'stopping'):'watching'};}));res.json({ok:true,wells:[...wells,...heldWellLifecycle(policy)]});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });
 export const stopWatchdogWellV2=https.onRequest(options,async(req,res)=>{

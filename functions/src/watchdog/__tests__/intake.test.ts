@@ -13,6 +13,30 @@ async function call(endpoint:any,name:string,body:any,tampered=false){const rawB
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});database.set('packets/outgoing/response_existing',{wellName:'Kahuna 5',wellDown:false,currentLevel:'12',lastPullPacketId:'actual-pull',flowRate:'1:00:00'});});
 const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
 
+test('armed hold resumes through signed intake once, preserves first report and rejects old backlog',async()=>{
+ const policy=documents.get('watchdog_v2_config/laptop'),channel=policy.channels.group;
+ policy.heldWells={'Kahuna 5':{state:'on_hold',effectiveAt:new Date(Date.now()-86400000).toISOString(),channels:{group:channel},autoResume:{mode:'next_load_or_level',armedAt:new Date(Date.now()-600000).toISOString()}}};
+ delete policy.channels.group;
+ database.set('well_config/Kahuna 5',database.get('well_config')['Kahuna 5']);
+ const configBefore=JSON.stringify(database.get('well_config'));
+ expect((await call(getWatchdogWellLifecycleV2,'getWatchdogWellLifecycleV2',{})).result.wells).toMatchObject([{wellName:'Kahuna 5',state:'held'}]);
+ expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chat:observation().chat.replace(/Driver:[\s\S]*/,'Driver: Just checking in')})).result.error).toBe('channel_not_allowed');
+ expect(documents.get('watchdog_v2_config/laptop').heldWells['Kahuna 5'].state).toBe('on_hold');
+ const body={...observation(),chat:observation().chat.replace(/Top[\s\S]*$/,'Top 12\u2032 0\u2033\nBottom 10\u2032 0\u2033\n165 bbl')};
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ expect(first.result.status).toBe('queued');
+ const resumed=documents.get('watchdog_v2_config/laptop');
+ expect(resumed.heldWells['Kahuna 5'].state).toBe('resumed');
+ expect(resumed.channels.group.wells).toEqual(channel.wells);
+ const retry=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ expect(retry.result).toMatchObject({identity:first.result.identity,packetId:first.result.packetId,status:'queued'});
+ expect([...database.keys()].filter(k=>k.startsWith('packets/incoming/'))).toHaveLength(1);
+ const old={...body,messageId:'old',chat:body.chat.replace(/^\[[^\]]+\]/,'[10/01/2026, 12:00:00]')};
+ expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',old)).result.status).toBe('ignored');
+ expect([...database.keys()].filter(k=>k.startsWith('packets/incoming/'))).toHaveLength(1);
+ expect(JSON.stringify(database.get('well_config'))).toBe(configBefore);
+});
+
 test('confirmed fixed-load intake preserves actual reported bottom and ordinary defaults remain provisional',async()=>{
  const c=documents.get('watchdog_v2_config/laptop').channels.group;
  c.driverDefaultBbls={'123456789@lid':165};c.driverDefaultModes={'123456789@lid':'confirmed_fixed_load'};
