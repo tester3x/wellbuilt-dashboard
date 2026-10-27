@@ -7,6 +7,7 @@ import { AppHeader } from '@/components/AppHeader';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFirebaseFunctions } from '@/lib/firebase';
 import { hasCapability } from '@/lib/auth';
+import packetDraft from '../../../../release/pw-fieldtest/pw-revision-5-fresh-water-tank-refill.json';
 
 type Config = { enabled: true; tankCount: number; tankHeightFeet: number; bblPerFootPerTank: number; dailyUseBbl: number };
 type Pad = { wellName: string; route: string; operator: string; config: Config | null;
@@ -15,6 +16,7 @@ type Pad = { wellName: string; route: string; operator: string; config: Config |
 export default function FreshWaterDispatchPage() {
   const { user, userCompany } = useAuth();
   const canManageWells = hasCapability(user, 'manageWells', userCompany);
+  const canPublish = hasCapability(user, 'manageDrivers', userCompany);
   const [pads, setPads] = useState<Pad[]>([]);
   const [selected, setSelected] = useState('');
   const [tankCount, setTankCount] = useState('2');
@@ -69,6 +71,19 @@ export default function FreshWaterDispatchPage() {
     } catch (e) { setMessage(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
+  const publish = async () => {
+    setBusy(true);
+    try {
+      const result = await httpsCallable<Record<string, unknown>, { revision: number }>(
+        getFirebaseFunctions(), 'publishJobPacketRevision')({
+          requestId: 'fresh-water-tank-refill-water-hauling-revision-5',
+          expectedLatestRevision: 4,
+          packetDraft,
+        });
+      setMessage(`Water-hauling packet revision ${result.data.revision} published for this company.`);
+    } catch (e) { setMessage(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
 
   return <div className="min-h-screen bg-gray-900 text-white"><AppHeader />
     <main className="max-w-6xl mx-auto p-4 space-y-5">
@@ -79,6 +94,11 @@ export default function FreshWaterDispatchPage() {
         <button className="rounded bg-slate-700 px-3 py-2 text-sm" onClick={() => refresh().catch(e => setMessage(e.message || String(e)))}>Refresh levels</button>
       </div>
       {message && <div role="status" className="rounded bg-slate-800 px-3 py-2 text-sm">{message}</div>}
+      {canPublish && <section className="rounded border border-cyan-900 bg-slate-800 p-4">
+        <h2 className="font-semibold">Activate the refill ticket type</h2>
+        <p className="text-xs text-slate-400 mb-3">Publish the immutable water-hauling revision 5 for this company. Existing tickets keep their pinned revision.</p>
+        <button disabled={busy} onClick={publish} className="rounded bg-cyan-700 px-3 py-2 text-sm disabled:opacity-50">Publish revision 5</button>
+      </section>}
       <section className="rounded border border-slate-700 bg-slate-800 p-4">
         <h2 className="font-semibold mb-2">Refill queue</h2>
         <p className="text-xs text-slate-400 mb-3">Estimated from each pad&apos;s measured level, deliveries, and daily use. Confirm actual level before dispatch.</p>
