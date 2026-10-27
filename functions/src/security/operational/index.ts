@@ -1,4 +1,5 @@
 export { ingestDriverPacket } from './packetIngest';
+export { ingestWbmFreshWaterDelivery, getWbmFreshWaterSupply, staffConfigureFreshWaterPad, staffListFreshWaterPads } from './freshWaterSupplyCallable';
 export { reconcileDriverPacket } from './reconcileDriverPacket';
 export { ingestWbmPull } from './ingestWbmPull';
 export { ingestWbmEdit } from './ingestWbmEdit';

@@ -523,6 +523,7 @@ export const CUSTOM_JOB_TYPE_LIFECYCLES: { value: CustomJobTypeLifecycle; label:
 export const JOB_TYPES = [
   'Production Water',
   'Fresh Water',
+  'Fresh Water Tank Refill',
   'Flowback Water',
   'Pit Water',
   'Invert',

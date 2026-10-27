@@ -9,6 +9,7 @@ export const CANONICAL_BUILTIN_JOB_TYPE_IDS: readonly string[] = Object.freeze([
   'pw',
   'service-work',
   'fresh-water',
+  'fresh-water-tank-refill',
   'flowback-water',
 ]);
 

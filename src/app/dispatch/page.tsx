@@ -681,7 +681,7 @@ function DispatchPageInner() {
   const [projectWellSearch, setProjectWellSearch] = useState('');
 
   // Dynamic service types from job packages (falls back to hardcoded)
-  const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Rig Move', 'Other'];
+  const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Fresh Water Tank Refill', 'Rig Move', 'Other'];
   const [dynamicServiceTypes, setDynamicServiceTypes] = useState<string[]>(FALLBACK_SERVICE_TYPES);
   // Map job type label → packageId (for stamping dispatch docs)
   const [jobTypeToPackageId, setJobTypeToPackageId] = useState<Record<string, string>>({});
@@ -1739,6 +1739,10 @@ function DispatchPageInner() {
 
   async function submitServiceWork() {
     if (!swWellName.trim() || !swServiceType.trim() || swDriverHashes.size === 0) return;
+    if (swServiceType === 'Fresh Water Tank Refill' && swSplitTicket) {
+      setSwError('Fresh water tank refills are single-load jobs. Turn off Split Ticket.');
+      return;
+    }
     if (swOnsiteByDraft && !swOnsiteBy) {
       setSwError('Enter a valid Be onsite by date and time, or clear the field.');
       return;
@@ -2886,6 +2890,7 @@ function DispatchPageInner() {
         </div>}
 
         <nav aria-label="Dispatch workspace" className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-2">
+          <a href="/dispatch/fresh-water" className="inline-flex items-center rounded px-4 py-2 text-sm font-medium text-cyan-300 hover:bg-gray-800">Fresh Water Tanks</a>
           {([
             ['jobs', 'Jobs'],
             ['build', 'Job Builder'],
@@ -3164,7 +3169,7 @@ function DispatchPageInner() {
                     {/* Decide the load before choosing its pickup well. */}
                     <div className="flex items-center gap-4 flex-shrink-0 flex-wrap rounded border border-purple-700/40 bg-gray-900/60 px-3 py-2">
                       <label className="flex items-center gap-2 cursor-pointer group">
-                        <input type="checkbox" checked={swSplitTicket} disabled={user?.role === 'demo_viewer'} onChange={(e) => {
+                        <input type="checkbox" checked={swSplitTicket} disabled={user?.role === 'demo_viewer' || swServiceType === 'Fresh Water Tank Refill'} onChange={(e) => {
                           const checked = e.target.checked;
                           setSwSplitTicket(checked);
                           if (!checked) {
@@ -3252,7 +3257,15 @@ function DispatchPageInner() {
                       <div className={`${swSplitTicket ? 'w-full grid grid-cols-1 sm:grid-cols-2 gap-3 sm:items-start' : 'flex-1 space-y-2'}`}>
                         <div>
                           <label className="block text-xs text-gray-400 mb-1">Service Type</label>
-                          <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
+                          <select value={swServiceType} onChange={(e) => {
+                            setSwServiceType(e.target.value);
+                            if (e.target.value === 'Fresh Water Tank Refill') {
+                              setSwSplitTicket(false);
+                              setSwExtraSplitLegs([]);
+                              setSwSplitLoadCount(1);
+                              setSwSplitLoadPlans([]);
+                            }
+                          }}
                             className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
                             <option value="">Select type...</option>
                             {user?.role === 'demo_viewer' && <option value="Hot Oiler">Hot Oiler</option>}

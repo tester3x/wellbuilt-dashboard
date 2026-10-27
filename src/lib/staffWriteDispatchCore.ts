@@ -653,6 +653,7 @@ export function canonicalJobTypeIdForServiceType(
   if (norm === 'freshwater' || norm === 'fresh' || norm === 'fw') {
     return 'fresh-water';
   }
+  if (norm === 'freshwatertankrefill') return 'fresh-water-tank-refill';
   if (norm === 'flowbackwater' || norm === 'flowback') {
     return 'flowback-water';
   }

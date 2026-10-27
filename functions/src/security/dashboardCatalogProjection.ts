@@ -129,6 +129,7 @@ export const WELL_CONFIG_ALLOWLIST = [
   'demoInitialLevelInches',
   'demoInitialAsOfUTC',
   'demoInitialTriggerInches',
+  'freshWaterSupply',
 ] as const;
 
 /** Bounded live-status fields from packets/outgoing. Never a raw packet tree. */

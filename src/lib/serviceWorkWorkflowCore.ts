@@ -139,6 +139,7 @@ export function canonicalJobTypeIdForServiceType(
   if (norm === 'freshwater' || norm === 'fresh' || norm === 'fw') {
     return 'fresh-water';
   }
+  if (norm === 'freshwatertankrefill') return 'fresh-water-tank-refill';
   if (norm === 'flowbackwater' || norm === 'flowback') {
     return 'flowback-water';
   }
@@ -305,7 +306,7 @@ export async function executeServiceWorkWorkflow(
             ? 'service-work'
             : canonicalJobTypeIdForServiceType(serviceType, customJobTypes),
           packageId: resolvedPackageId,
-          packetRevision: 4,
+          packetRevision: serviceType.trim().toLowerCase() === 'fresh water tank refill' ? 5 : 4,
           status: 'pending',
           notes: notes || '',
           priority: 5,
