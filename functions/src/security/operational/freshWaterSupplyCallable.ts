@@ -119,6 +119,11 @@ export const staffConfigureFreshWaterPad = httpsV2.onCall(
   async request => {
     const staff = await requireTrustedCompanyCapability(request.auth?.uid, 'manageWells');
     const data = request.data as Record<string, unknown> | null;
+    // The legacy per-well setup cannot represent shared physical tanks.
+    // Older clients fail safely instead of creating duplicate inventories.
+    if (data && typeof data === 'object' && 'wellName' in data) {
+      throw new httpsV2.HttpsError('failed-precondition', 'use_tank_group_setup');
+    }
     if (!data || typeof data !== 'object' || Array.isArray(data)
       || Object.keys(data).some(key => !['wellName', 'config', 'initialLevelFeet'].includes(key))) {
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_request');

@@ -9,6 +9,17 @@ export type FreshWaterConfig = {
   dailyUseBbl: number;
 };
 
+/** A well's fresh-water demand belongs to exactly one physical tank group. */
+export function overlappingFreshWaterGroup(
+  groups: Record<string, { wellNames?: string[] }>, targetId: string, wellNames: string[],
+): string | null {
+  const members = new Set(wellNames);
+  for (const [id, group] of Object.entries(groups)) {
+    if (id !== targetId && group?.wellNames?.some(name => members.has(name))) return id;
+  }
+  return null;
+}
+
 export type FreshWaterDelivery = {
   deliveryId: string;
   driverId: string;

@@ -1,4 +1,18 @@
-import { applyFreshWaterDelivery, projectFreshWaterFeet, type FreshWaterConfig } from '../freshWaterSupplyCore';
+import { applyFreshWaterDelivery, overlappingFreshWaterGroup, projectFreshWaterFeet, type FreshWaterConfig } from '../freshWaterSupplyCore';
+
+describe('shared fresh-water tank groups', () => {
+  const groups = {
+    gabrielNorth: { wellNames: ['Gabriel 1', 'Gabriel 4', 'Gabriel 5', 'Gabriel 6'] },
+    gabrielSouth: { wellNames: ['Gabriel 3', 'Gabriel 7'] },
+    gabrielTwo: { wellNames: ['Gabriel 2'] },
+  };
+  it('keeps the Gabriel supplies separate and blocks duplicate well membership', () => {
+    expect(overlappingFreshWaterGroup(groups, 'gabrielNorth', ['Gabriel 1', 'Gabriel 4', 'Gabriel 5', 'Gabriel 6'])).toBeNull();
+    expect(overlappingFreshWaterGroup(groups, 'newGroup', ['Gabriel 4'])).toBe('gabrielNorth');
+    expect(overlappingFreshWaterGroup(groups, 'newGroup', ['Gabriel 2'])).toBe('gabrielTwo');
+    expect(overlappingFreshWaterGroup(groups, 'newGroup', ['Unlinked well'])).toBeNull();
+  });
+});
 
 const config: FreshWaterConfig = {
   enabled: true, tankCount: 2, tankHeightFeet: 20, bblPerFootPerTank: 20, dailyUseBbl: 3,
