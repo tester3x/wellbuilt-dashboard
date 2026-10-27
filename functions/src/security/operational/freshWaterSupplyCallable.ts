@@ -206,7 +206,7 @@ export const staffListFreshWaterPads = httpsV2.onCall(
       const status = states[wellName];
       const projectedFeet = status && config ? projectFreshWaterFeet(status, config, now) : null;
       const usableBbl = projectedFeet === null || !config ? null : projectedFeet * config.tankCount * config.bblPerFootPerTank;
-      const daysRemaining = usableBbl === null || status.dailyUseBbl === null || status.dailyUseBbl <= 0
+      const daysRemaining = usableBbl === null || status.dailyUseBbl == null || status.dailyUseBbl <= 0
         ? null : usableBbl / status.dailyUseBbl;
       return [{ wellName, route: typeof well.route === 'string' ? well.route : '',
         operator: typeof well.operator === 'string' ? well.operator : '',

@@ -8,7 +8,7 @@ export type FreshWaterConfig = {
   tankHeightFeet: number;
   bblPerFootPerTank: number;
   equalization: 'single-tank' | 'verified-equalized' | 'unverified';
-  dailyUseBbl: number | null;
+  dailyUseBbl?: number | null;
 };
 
 export function supportsSharedFreshWaterLevel(config: FreshWaterConfig): boolean {
@@ -40,10 +40,10 @@ export type FreshWaterDelivery = {
 export type FreshWaterState = {
   seedLevelFeet: number;
   seedAtUTC: string;
-  seedDailyUseBbl: number | null;
+  seedDailyUseBbl?: number | null;
   levelFeet: number;
   asOfUTC: string;
-  dailyUseBbl: number | null;
+  dailyUseBbl?: number | null;
   lastMeasuredFeet?: number;
   lastMeasuredAtUTC?: string;
   deliveredSinceMeasurementBbl: number;
@@ -63,7 +63,7 @@ export function validFreshWaterConfig(value: unknown): value is FreshWaterConfig
     && (config.equalization === 'single-tank' || config.equalization === 'verified-equalized'
       || config.equalization === 'unverified')
     && (config.tankCount === 1 ? config.equalization === 'single-tank' : config.equalization !== 'single-tank')
-    && (config.dailyUseBbl === null || (typeof config.dailyUseBbl === 'number'
+    && (config.dailyUseBbl == null || (typeof config.dailyUseBbl === 'number'
       && Number.isFinite(config.dailyUseBbl) && config.dailyUseBbl >= 0));
 }
 
@@ -71,9 +71,10 @@ export function projectFreshWaterFeet(state: Pick<FreshWaterState, 'levelFeet' |
   config: FreshWaterConfig, atUTC: string): number | null {
   const elapsed = Date.parse(atUTC) - Date.parse(state.asOfUTC);
   if (!Number.isFinite(elapsed) || elapsed < 0) return null;
-  if (elapsed > 0 && state.dailyUseBbl === null) return null;
+  const dailyUseBbl = state.dailyUseBbl ?? null;
+  if (elapsed > 0 && dailyUseBbl === null) return null;
   const bblPerFoot = config.tankCount * config.bblPerFootPerTank;
-  return round(Math.max(0, state.levelFeet - (state.dailyUseBbl || 0) * elapsed / dayMs / bblPerFoot));
+  return round(Math.max(0, state.levelFeet - (dailyUseBbl || 0) * elapsed / dayMs / bblPerFoot));
 }
 
 export type FreshWaterDecision =
@@ -105,7 +106,7 @@ export function applyFreshWaterDelivery(current: FreshWaterState | null, config:
   const bblPerFoot = config.tankCount * config.bblPerFootPerTank;
   const seedAtUTC = current?.seedAtUTC ?? delivery.deliveredAtUTC;
   const seedLevelFeet = current?.seedLevelFeet ?? delivery.measuredBeforeFeet!;
-  const seedDailyUseBbl = current?.seedDailyUseBbl ?? config.dailyUseBbl;
+  const seedDailyUseBbl = current?.seedDailyUseBbl ?? config.dailyUseBbl ?? null;
   if (atMs < Date.parse(seedAtUTC)) return { ok: false, reason: 'stale_delivery' };
   const deliveries = { ...(current?.deliveries || {}), [delivery.deliveryId]: delivery };
   const ordered = Object.values(deliveries).sort((a, b) =>

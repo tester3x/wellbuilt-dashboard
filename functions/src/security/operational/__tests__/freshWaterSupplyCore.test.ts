@@ -1,4 +1,5 @@
-import { applyFreshWaterDelivery, overlappingFreshWaterGroup, projectFreshWaterFeet, type FreshWaterConfig } from '../freshWaterSupplyCore';
+import { applyFreshWaterDelivery, overlappingFreshWaterGroup, projectFreshWaterFeet,
+  validFreshWaterConfig, type FreshWaterConfig } from '../freshWaterSupplyCore';
 
 describe('shared fresh-water tank groups', () => {
   const groups = {
@@ -24,6 +25,11 @@ const first = {
 };
 
 describe('fresh-water supply inventory', () => {
+  it('treats an RTDB-omitted null use rate as unknown', () => {
+    const { dailyUseBbl: _removed, ...storedConfig } = config;
+    expect(validFreshWaterConfig(storedConfig)).toBe(true);
+  });
+
   it('raises two equalized tanks from 10 to 13 feet with one 120 BBL load', () => {
     const result = applyFreshWaterDelivery(null, config, first);
     expect(result.ok).toBe(true);

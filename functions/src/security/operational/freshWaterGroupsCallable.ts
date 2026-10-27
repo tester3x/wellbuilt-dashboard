@@ -84,7 +84,7 @@ export const ingestWbmFreshWaterGroupDelivery = httpsV2.onCall(
     if (!result.committed) throw new httpsV2.HttpsError('failed-precondition', reason || 'delivery_conflict');
     const state = result.snapshot.val() as FreshWaterState;
     return { ok: true, duplicate, groupId, deliveryId, levelFeet: state.levelFeet,
-      asOfUTC: state.asOfUTC, dailyUseBbl: state.dailyUseBbl };
+      asOfUTC: state.asOfUTC, dailyUseBbl: state.dailyUseBbl ?? null };
   });
 
 /** Empty request lists groups; groupId reads that group's current level. */
@@ -101,7 +101,7 @@ export const getWbmFreshWaterTankGroups = httpsV2.onCall(
     const snap = await admin.database().ref(statePath(context.companyId, group.groupId)).once('value');
     const state = snap.exists() ? snap.val() as FreshWaterState : null;
     return { ok: true, ...group, status: state ? {
-      levelFeet: state.levelFeet, asOfUTC: state.asOfUTC, dailyUseBbl: state.dailyUseBbl,
+      levelFeet: state.levelFeet, asOfUTC: state.asOfUTC, dailyUseBbl: state.dailyUseBbl ?? null,
       projectedFeet: projectFreshWaterFeet(state, group.config, new Date().toISOString()),
       lastMeasuredFeet: state.lastMeasuredFeet ?? null,
       lastMeasuredAtUTC: state.lastMeasuredAtUTC ?? null,
@@ -149,7 +149,7 @@ export const staffConfigureFreshWaterTankGroup = httpsV2.onCall(
       || existing.config.tankHeightFeet !== config.tankHeightFeet
       || existing.config.bblPerFootPerTank !== config.bblPerFootPerTank
       || existing.config.equalization !== config.equalization
-      || existing.config.dailyUseBbl !== config.dailyUseBbl
+      || (existing.config.dailyUseBbl ?? null) !== (config.dailyUseBbl ?? null)
       || existing.routeName !== routeName
       || [...existing.wellNames].sort().join('\u0000') !== [...wellNames].sort().join('\u0000')))
       throw new httpsV2.HttpsError('failed-precondition', 'active_group_config_requires_migration');
@@ -203,13 +203,13 @@ export const staffListFreshWaterTankGroups = httpsV2.onCall(
       const status = states[groupId];
       const projectedFeet = status ? projectFreshWaterFeet(status, group.config, now) : null;
       const usableBbl = projectedFeet === null ? null : projectedFeet * group.config.tankCount * group.config.bblPerFootPerTank;
-      const daysRemaining = usableBbl === null || status.dailyUseBbl === null || status.dailyUseBbl <= 0
+      const daysRemaining = usableBbl === null || status.dailyUseBbl == null || status.dailyUseBbl <= 0
         ? null : usableBbl / status.dailyUseBbl;
       return [{ groupId, routeName: group.routeName, name: group.name, wellNames: group.wellNames,
         producedWaterRoute: String(wells[group.wellNames[0]].route || ''),
         operator: String(wells[group.wellNames[0]].operator || ''),
         config: group.config, status: status ? { levelFeet: status.levelFeet, asOfUTC: status.asOfUTC,
-          projectedFeet, dailyUseBbl: status.dailyUseBbl, daysRemaining } : null }];
+          projectedFeet, dailyUseBbl: status.dailyUseBbl ?? null, daysRemaining } : null }];
     });
     return { ok: true, asOfUTC: now, wells: availableWells, groups: tankGroups };
   });
