@@ -199,6 +199,7 @@ try {
 }
 
 execSync('npx tsx tools/test-freshwater-shared.ts', { stdio: 'inherit' });
+execSync('node tools/test-freshwater-dashboard-display.cjs', { stdio: 'inherit' });
 console.log('\n================================================================');
 console.log('✅ [ALL PREFLIGHT SAFETY GATES PASSED] Hosting Release Certified.');
 console.log('================================================================\n');

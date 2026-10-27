@@ -1,3 +1,4 @@
+import { freshWaterRateDisplay } from './freshWaterRateDisplay';
 import type { WellResponse } from './wellPoolCore.ts';
 import { projectWellLevel, wbmInputsFromWell } from './wellLevelProjection.ts';
 import { predictedReadyAtMs, readyLevelFeet, WBM_DEFAULT_LOAD_BBLS } from './wbmLevelEstimator.ts';
@@ -41,7 +42,7 @@ export function sortMobileSummaryWells(
     });
     const ready = level.estFeet != null && target != null && level.estFeet >= target;
     const readyAt = level.available ? predictedReadyAtMs(inputs, target) : null;
-    return { well, level, ready, readyAt, flow: inputs.flowMinutesPerFoot };
+    return { well, level, ready, readyAt, flow: well.routeType === 'freshwater' ? freshWaterRateDisplay(well).minutesPerFoot : inputs.flowMinutesPerFoot };
   }).sort((a, b) => {
     if (a.level.wellDown !== b.level.wellDown) return a.level.wellDown ? 1 : -1;
     const nameOrder = a.well.wellName.localeCompare(b.well.wellName, undefined, { numeric: true });

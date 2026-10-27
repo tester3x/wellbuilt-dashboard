@@ -1,4 +1,5 @@
 'use client';
+import { FreshWaterRate } from '@/components/FreshWaterRate';
 
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -636,16 +637,16 @@ function WellDetailPage() {
                 </div>
               </div>
               <div className="text-center">
-                <div className="text-xs text-gray-400">1&quot; Flow Rate</div>
-                <div className="text-xl font-mono text-white">{formatOneInchFlowRate(parseFlowRateToMinutes(wellStatus.flowRate))}</div>
+                <div className="text-xs text-gray-400">{wellStatus.routeType === 'freshwater' ? '1" Consumption Rate' : '1" Flow Rate'}</div>
+                <div className="text-xl font-mono text-white">{wellStatus.routeType === 'freshwater' ? <FreshWaterRate well={wellStatus} unit="inch"/> : formatOneInchFlowRate(parseFlowRateToMinutes(wellStatus.flowRate))}</div>
               </div>
               <div className="text-center">
-                <div className="text-xs text-gray-400">1&apos; Flow Rate</div>
-                <div className="text-xl font-mono text-white">{wellStatus.flowRate || '--'}</div>
+                <div className="text-xs text-gray-400">{wellStatus.routeType === 'freshwater' ? "1' Consumption Rate" : "1' Flow Rate"}</div>
+                <div className="text-xl font-mono text-white">{wellStatus.routeType === 'freshwater' ? <FreshWaterRate well={wellStatus}/> : wellStatus.flowRate || '--'}</div>
               </div>
               <div className="text-center">
                 <div className="text-xs text-gray-400">BBLs / 24hrs</div>
-                <div className="text-xl font-mono text-white">{wellStatus.windowBblsDay || wellStatus.bbls24hrs || '--'}</div>
+                <div className="text-xl font-mono text-white">{wellStatus.routeType === 'freshwater' ? <FreshWaterRate well={wellStatus} unit="day"/> : wellStatus.windowBblsDay || wellStatus.bbls24hrs || '--'}</div>
               </div>
               <div className="text-center">
                 <div className="text-xs text-gray-400">Time Till Pull</div>

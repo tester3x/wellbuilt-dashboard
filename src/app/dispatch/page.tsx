@@ -1,4 +1,5 @@
 'use client';
+import { FreshWaterRate } from '@/components/FreshWaterRate';
 
 import { useEffect, useState, useMemo, useCallback, useRef, Suspense, type ReactNode } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
@@ -4014,7 +4015,7 @@ function DispatchPageInner() {
                                 );
                               })()}
                             </td>
-                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.flowRate || '--'}</td>
+                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.routeType === 'freshwater' ? <FreshWaterRate well={well}/> : well.flowRate || '--'}</td>
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well, asOfMs)}</td>
                             <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
@@ -4429,7 +4430,7 @@ function DispatchPageInner() {
               })()}
               <div>
                 <span className="text-gray-500">Flow Rate:</span>
-                <span className="text-white ml-2 font-mono">{reassignJob.flowRate || '--'}</span>
+                <span className="text-white ml-2 font-mono">{(() => {const live=wells.find(w=>w.wellName===reassignJob.wellName);return live?.routeType === 'freshwater' ? <FreshWaterRate well={live}/> : reassignJob.flowRate || '--';})()}</span>
               </div>
               {reassignJob.disposal && (
                 <div className="col-span-2">
