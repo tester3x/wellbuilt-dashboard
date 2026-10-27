@@ -17,3 +17,9 @@ Source checkpoint `848acfe94cdc2c5bf3e84217834e71d2c54fdf72` committed and pushe
 The Dashboard was released through its normal certified Hosting path. Clean compilation, 484 library tests (one existing skip) and all retained-behavior/browser/layout checks passed. The postdeploy hook verified all 381 live artifacts against exact source `848acfe94cdc2c5bf3e84217834e71d2c54fdf72` at 2026-10-27 15:04:13 UTC, advanced the shared approved checkpoint and released its lock. No other Functions or rules deployment.
 
 Both phones remained running during the successful queued-job reassignment test. The target stays queued on the S24; it was not accepted, started or moved back. The separate driver-built active job stayed with its original builder.
+
+## Physical queued driver-built refusal test
+
+Created one genuine pending job through the installed S24 Job Planner using an existing synthetic test well; no job was started and no load was submitted. Server readback confirmed the server-owned driver provenance and original S24 assignment before testing. In live Well Queue, selected the ZFold as recipient and submitted Reassign once. The modal stayed open with a persistent explanation that the original builder owns the job and Dispatch cannot reassign it even while queued.
+
+After the blocked attempt, the complete test dispatch document was unchanged, total dispatch document count stayed 265, no new dispatch IDs appeared, and exactly one active card for the test well remained assigned to its original builder. The running S24 drawer visibly retained that queued card. The ZFold was being used in WhatsApp, so its screen was left untouched; server readback confirms no assignment to it. The test card remains queued on S24 for inspection. Private server snapshots and screenshots are outside Git. No build, install or deployment was needed for this acceptance test.
