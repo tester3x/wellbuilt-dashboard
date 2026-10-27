@@ -55,3 +55,12 @@ test('current locations include recorded stops linked to the same read, never un
  expect(out.coveredJobs?.[1]).toMatchObject({jobType:'Service Work',dropOff:'Disposal'});
  await expect(readSavedJobJsa(deps({linkedStops:async()=>[{...linked,companyId:'foreign'}]}),auth,body)).rejects.toThrow('scope_or_size');
 });
+
+test('saved acknowledged job displays its signed document number without rewriting its receipt',async()=>{
+ const numberedRead={...read,jsaNumber:'JSA-20261018-180000-000042'};
+ const oldAck={...ack,fullReadId:id,jsaNumber:'JSA-20261018-190000-100001'};
+ const before=JSON.stringify(oldAck);
+ const out=await readSavedJobJsa(deps({request:async()=>numberedRead,list:async c=>c==='jsa_job_acknowledgments'?[oldAck]:[],artifact:async()=>({...numberedRead,snapshot})}),auth,body);
+ expect(out.jsaNumber).toBe(numberedRead.jsaNumber);expect(out.fullRead?.requestId).toBe(id);
+ expect(out.acknowledgement).toMatchObject({method:'acknowledged'});expect(JSON.stringify(oldAck)).toBe(before);
+});

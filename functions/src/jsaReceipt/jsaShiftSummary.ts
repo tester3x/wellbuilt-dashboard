@@ -1,4 +1,4 @@
-import {jsaNumber} from './jsaNumber';
+import {signedReadJsaNumber} from './jsaNumber';
 import {parseArtifactInput} from './jsaArtifactCore';
 
 type Row=Record<string,any>;
@@ -40,7 +40,7 @@ export async function readShiftJsaSummary(deps:ShiftJsaSummaryDeps,subject:{comp
     verified.set(r.requestId,r);
   }));
   const jobs=new Set<string>(),numbers=new Set<string>();
-  for(const r of verified.values()){if(r.jobRef)jobs.add(r.jobRef);numbers.add(jsaNumber('JSA-'+r.requestId,r.completedAtMs,r.jsaNumber));}
+  for(const r of verified.values()){if(r.jobRef)jobs.add(r.jobRef);numbers.add(signedReadJsaNumber(r));}
   const ackJobs=new Set<string>(),coveredJobs=new Set<string>();
   for(const [rows,method,target] of [[acks,'acknowledged',ackJobs],[coverage,'scope_read',coveredJobs]] as const){
     const latest=new Map<string,Row>();
@@ -57,7 +57,7 @@ export async function readShiftJsaSummary(deps:ShiftJsaSummaryDeps,subject:{comp
       // contexts happen to have been attached to the same HOS shift.
       if(r.requirementKey?.startsWith('jsa:')&&read.binding?.jsaPeriodId!==r.requirementKey.slice(4)){issues++;continue;}
       target.add(r.jobRef);jobs.add(r.jobRef);
-      if(typeof r.jsaNumber==='string'&&r.jsaNumber.length<=160)numbers.add(jsaNumber(r.jsaNumber,r.jsaNumber==='JSA-'+read.requestId?read.completedAtMs:r.recordedAtMs,r.jsaNumber));
+      numbers.add(signedReadJsaNumber(read));
     }
   }
   const first=[...verified.values()].sort((a,b)=>a.completedAtMs-b.completedAtMs)[0];

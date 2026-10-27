@@ -1,4 +1,4 @@
-import {jsaNumber} from './jsaNumber';
+import {signedReadJsaNumber} from './jsaNumber';
 /**
  * Thin callable wrappers. Auth identity from request.auth only.
  */
@@ -415,7 +415,8 @@ export const jsaAcknowledgeJobShift=httpsV2.onCall(OPTIONS,async request=>{
    const old=(await tx.get(ref)).data();
    if(old){if(old.companyId!==p.companyId||old.driverId!==p.driverId||old.jobRef!==jobRef||old.policyDay!==day||old.method!=='acknowledged')throw new JsaReceiptError('failed-precondition','binding_mismatch','ack');return 'already_recorded';}
    const firstRead=scope.rows.filter(r=>r.state==='completed'&&(r.action==='read_and_acknowledged'||!scope.binding.jsaPeriodId&&scope.style!=='read_and_acknowledge'&&r.action==='read_completed')).sort((a,b)=>(a.completedAtMs||0)-(b.completedAtMs||0)||a.requestId.localeCompare(b.requestId))[0];
-   tx.create(ref,{job:jobStopSnapshot(job),jsaNumber:scope.mode==='per_job'?jsaNumber('JSA-'+ref.id.toUpperCase(),Date.now()):jsaNumber('JSA-'+String(firstRead?.requestId||''),firstRead!.completedAtMs!,firstRead?.jsaNumber),requirementKey:scope.requirementKey,fullReadId:firstRead?.requestId||null,schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,policyDay:day,periodId:scope.binding.associatedPeriodId||null,method:'acknowledged',recordedAtMs:Date.now()});return 'recorded';
+   if(!firstRead)throw new JsaReceiptError('failed-precondition','no_qualifying_read','full_read_required');
+   tx.create(ref,{job:jobStopSnapshot(job),jsaNumber:signedReadJsaNumber(firstRead),requirementKey:scope.requirementKey,fullReadId:firstRead.requestId,schemaVersion:1,companyId:p.companyId,driverId:p.driverId,jobRef,policyDay:day,periodId:scope.binding.associatedPeriodId||null,method:'acknowledged',recordedAtMs:Date.now()});return 'recorded';
   });return {protocolVersion:1,state,policyDay:day};
  }catch(e){throw toHttps(e);}
 });

@@ -37,3 +37,11 @@ test('overnight acknowledgement retains the server-selected full read even when 
  const out=await readWeeklyJsaForms(deps({list:async c=>c==='jsa_governed_requests'?[{...scope,requestId:'night-read',state:'completed',action:'read_and_acknowledged',completedAtMs:ms-1000,jobRef:'job1',binding:{shiftState:'independent',policyDay:'2026-10-11',associatedPeriodId:'2026-10-11_210000'}}]:c==='jsa_job_acknowledgments'?[{...scope,id:'night-ack',recordedAtMs:ms,policyDay:'2026-10-12',periodId:'2026-10-11_210000',fullReadId:'night-read',jobRef:'job2',method:'acknowledged'}]:[],artifact:async()=>({...scope,requestId:'night-read',jobRef:'job1',action:'read_and_acknowledged',snapshot:{signature:{data:'example'}}})}),auth,body);
  expect(out.records.find(r=>r.id==='night-ack')).toMatchObject({fullReadId:'night-read'});
 });
+
+test('weekly acknowledgement keeps its own receipt and time but shares the signed JSA number',async()=>{
+ const numberedRead={...scope,requestId:'r1',jobRef:'job1',state:'completed',action:'read_and_acknowledged',completedAtMs:ms,binding:{periodId:'2026-10-12_080000'},jsaNumber:'JSA-20261012-100000-000042'};
+ const oldAck={...scope,id:'ack2',jobRef:'job2',fullReadId:'r1',method:'acknowledged',periodId:'2026-10-12_080000',recordedAtMs:ms+1000,jsaNumber:'JSA-20261012-100001-100001'};
+ const out=await readWeeklyJsaForms(deps({list:async c=>c==='jsa_governed_requests'?[numberedRead]:c==='jsa_job_acknowledgments'?[oldAck]:[]}),auth,body);
+ expect(out.records).toHaveLength(2);expect(out.records.every(r=>r.record.jsaNumber===numberedRead.jsaNumber)).toBe(true);
+ expect(out.records.find(r=>r.id==='ack2')).toMatchObject({kind:'jsa_ack',jobRef:'job2',fullReadId:'r1',completedAt:new Date(ms+1000).toISOString()});
+});
