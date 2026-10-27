@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { isActiveDispatchCard, isCancelledDispatchCard } from '@/lib/dispatchActiveVisibility';
-import { reassignmentBlockedReason, reassignmentFailureMessage } from '@/lib/dispatchReassignmentNotice';
+import { isDriverBuiltDispatch, reassignmentBlockedReason, reassignmentFailureMessage } from '@/lib/dispatchReassignmentNotice';
 import { operationalDriverName } from '@/lib/operationalDriverName';
 import { preferredDropoff } from '@/lib/preferredDropoff';
 import { WaterOrderBuilder } from '@/components/WaterOrderBuilder';
@@ -5226,7 +5226,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
             <button
               onClick={(e) => { e.stopPropagation(); onReassign(job); }}
               className="text-blue-400/60 hover:text-blue-300 text-xs transition-colors p-1"
-              title="Reassign to another driver"
+              title={isDriverBuiltDispatch(job) ? 'Driver-built job: the builder owns reassignment' : 'Reassign to another driver'}
             >👯</button>
           )}
           <button

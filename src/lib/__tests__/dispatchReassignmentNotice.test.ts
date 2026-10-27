@@ -22,6 +22,14 @@ test('network and authorization errors explain themselves without claiming the d
   assert.doesNotMatch(reassignmentFailureMessage({ code: 'functions/unavailable' }), /has already started/);
 });
 
+test('queued driver-built jobs explain builder ownership before lifecycle state', () => {
+  for (const origin of [{ source: 'driver' }, { assignedBy: 'driver' }, { assignedBy: 'driver:original' }]) {
+    const message = reassignmentBlockedReason({ ...origin, wellName: 'Example 5', driverName: 'Original Driver', status: 'pending' })!;
+    assert.match(message, /Original Driver/); assert.match(message, /builder owns/); assert.match(message, /even while it is queued/);
+  }
+  assert.match(reassignmentFailureMessage(Error('driver_built_job_owned_by_builder')), /original job builder owns/);
+});
+
 // Execute the actual screen handler, including its catch/finally. A stale modal
 // is modeled separately from the current server snapshot; no production writes.
 const source = readFileSync('src/app/dispatch/page.tsx', 'utf8');
@@ -33,7 +41,7 @@ function visit(node: ts.Node) {
 }
 visit(ast); assert.ok(handler);
 const js = ts.transpileModule(handler + '\nsubmitReassign;', { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
-function harness(status: string, mode = 'in_place', failure?: unknown) {
+function harness(status: string, mode = 'in_place', failure?: unknown, origin: Record<string, string> = {}) {
   const writes: string[] = [], errors: string[] = [], messages: string[] = [], busy: boolean[] = [];
   let finish!: (value: unknown) => void;
   const read = new Promise(resolve => { finish = resolve; });
@@ -52,7 +60,7 @@ function harness(status: string, mode = 'in_place', failure?: unknown) {
     finalizeAction: () => {}, setTimeout: () => 0,
   };
   const invoke = runInNewContext(js, scope) as () => Promise<void>;
-  return { writes, errors, messages, busy, invoke, finish: () => finish({ id: original.id, exists: () => true, data: () => ({ ...original, status }) }) };
+  return { writes, errors, messages, busy, invoke, finish: () => finish({ id: original.id, exists: () => true, data: () => ({ ...original, ...origin, status }) }) };
 }
 
 test('a driver starting after the modal opened blocks both reassignment paths before any write', async () => {
@@ -66,6 +74,12 @@ test('a driver starting after the modal opened blocks both reassignment paths be
 test('pending reassignment still uses the existing dispatch and completes after server verification', async () => {
   const h = harness('pending'), work = h.invoke(); assert.deepEqual(h.writes, []);
   h.finish(); await work; assert.deepEqual(h.writes, ['update']); assert.match(h.messages[0], /Reassigned/);
+});
+test('driver-owned queued jobs cannot create a replacement or change ownership through either UI path', async () => {
+  for (const mode of ['in_place', 'declined']) {
+    const h = harness('pending', mode, undefined, { source: 'driver' }), work = h.invoke();
+    h.finish(); await work; assert.deepEqual(h.writes, []); assert.match(h.errors.at(-1)!, /builder owns/);
+  }
 });
 test('a server refusal stays in the modal instead of an expiring page banner', async () => {
   const h = harness('pending', 'in_place', Error('invalid_transition:in_progress->pending')), work = h.invoke();
