@@ -1,3 +1,4 @@
+import { evaluateWbtWellLookup } from '../functions/src/security/operational/wbtWellConfigAuthorize.ts';
 import assert from 'node:assert/strict';
 import { mergeWellPool } from '../src/lib/wellPoolCore.ts';
 import { projectWellLevel } from '../src/lib/wellLevelProjection.ts';
@@ -38,3 +39,10 @@ assert.equal(projectWellLevel(live,now).estFeet,8);
 assert.equal(classifyWell({...live,bottomLevel:9},now).label,'LOW FRESHWATER');
 assert.equal(classifyWell({...live,bottomLevel:7},now).state,'verify');
 console.log('Shared freshwater regression passed: identity, atomic plan, companies, unknowns, inference, stable retries and low-level urgency.');
+
+for (const key of KEYS) {
+ const lookup=evaluateWbtWellLookup({wellConfigKey:key,companyId:'liquid-gold',wellConfig:canonical});
+ assert.ok(lookup.ok);if(lookup.ok){assert.equal(lookup.config.routeType,'freshwater');assert.equal(lookup.config.inventoryGroupId,canonical[key].inventoryGroupId);}
+ assert.equal(evaluateWbtWellLookup({wellConfigKey:key,companyId:'other-company',wellConfig:canonical}).ok,false);
+}
+const production=evaluateWbtWellLookup({wellConfigKey:'Gabriel 1',companyId:'liquid-gold',wellConfig:wells});assert.ok(production.ok);if(production.ok)assert.equal(production.config.route,'Production');

@@ -4158,3 +4158,6 @@ export { reportDriverSyncAlert, adminListSyncAlerts } from './security/officeSyn
 
 export { staffLoadTransfers } from './security/staffLoadTransfers';
 export { staffChat } from './security/staffChat';
+
+// Keep the deployed scoped WB-T resolver on the canonical shared field projection.
+export { resolveWbtWellConfig } from './security/operational/resolveWbtWellConfig';
