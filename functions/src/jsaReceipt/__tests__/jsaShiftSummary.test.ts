@@ -54,3 +54,20 @@ test('production store queries only exact owner + shift/context and deduplicates
  for(const q of queries){expect(q.filters).toContainEqual(['companyId','==','c']);expect(q.filters).toContainEqual(['driverId','==','d']);expect(q.filters.length).toBe(3);}
  expect(queries.map(q=>q.filters[2])).toContainEqual(['binding.jsaPeriodId','==',period]);
 });
+
+test('one signed read has one document number across acknowledgements, including old per-job numbers',async()=>{
+ const numberedRead={...read,jsaNumber:'JSA-20261018-180000-000042'};
+ const acks=['second','third','fourth'].map((jobRef,i)=>({...subject,jobRef,requirementKey:'jsa:'+period,fullReadId:id,method:'acknowledged',recordedAtMs:200+i,jsaNumber:`JSA-20261018-190000-10000${i}`}));
+ const rows={...base,jsa_governed_requests:[numberedRead],jsa_job_acknowledgments:acks};
+ const before=JSON.stringify(rows);
+ const out=await readShiftJsaSummary(deps(rows,{...numberedRead,snapshot}),subject,shift);
+ expect(out.jsaNumbers).toEqual([numberedRead.jsaNumber]);
+ expect(out.fullReadCount).toBe(1);expect(out.acknowledgementCount).toBe(3);expect(out.jobCount).toBe(4);
+ expect(JSON.stringify(rows)).toBe(before);
+});
+
+test('separately signed read-every-job documents keep separate numbers',async()=>{
+ const reads=[{...read,jsaNumber:'JSA-20261018-180000-000042'},{...read,requestId:'B'.repeat(43),jobRef:'second',completedAtMs:150,jsaNumber:'JSA-20261018-190000-000043'}];
+ const out=await readShiftJsaSummary({list:async c=>c==='jsa_work_periods'?base.jsa_work_periods:c==='jsa_governed_requests'?reads:[],artifact:async requestId=>({...reads.find(r=>r.requestId===requestId),snapshot})},subject,shift);
+ expect(out.jsaNumbers).toEqual(reads.map(r=>r.jsaNumber));expect(out.fullReadCount).toBe(2);expect(out.jobCount).toBe(2);
+});
