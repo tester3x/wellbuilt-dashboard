@@ -14,6 +14,8 @@ export interface DvirLedger extends DvirSubject {
   postTrip: DvirCompletion | null;
   postTripPending: boolean;
   postTripStarted: boolean;
+  /** Earlier vehicles used during this same driver shift. Signed proofs are immutable. */
+  equipmentCycles?: Array<{ preTrip: DvirCompletion | null; postTrip: DvirCompletion | null }>;
   origin?: 'shift_authority' | 'legacy_local_recovery';
 }
 
@@ -50,6 +52,25 @@ export function parseCompletion(data: Record<string, unknown>, nowMs: number): D
 
 export function recordCompletion(ledger: DvirLedger, completion: DvirCompletion): DvirLedger {
   const key = completion.phase === 'pre_trip' ? 'preTrip' : 'postTrip';
+  const identical = (old: DvirCompletion) => old.inspectionId === completion.inspectionId
+    && old.completedAt === completion.completedAt && old.reportDigest === completion.reportDigest;
+  for (const cycle of ledger.equipmentCycles || []) {
+    const archived = cycle[key];
+    if (archived?.inspectionId === completion.inspectionId) {
+      if (!identical(archived)) throw new Error('dvir_completion_conflict');
+      return ledger; // Replaying an older truck cannot make it current again.
+    }
+  }
+  const currentId = ledger.preTrip?.inspectionId || ledger.postTrip?.inspectionId;
+  if (completion.phase === 'pre_trip' && ledger.postTrip && currentId !== completion.inspectionId) {
+    if (Date.parse(completion.completedAt) < Date.parse(ledger.postTrip.completedAt)
+        || completion.inspectionId === ledger.postTrip.inspectionId
+        || (ledger.equipmentCycles || []).some(c => c.preTrip?.inspectionId === completion.inspectionId || c.postTrip?.inspectionId === completion.inspectionId)
+        || (ledger.equipmentCycles?.length || 0) >= 32) throw new Error('dvir_completion_conflict');
+    return { ...ledger, equipmentCycles: [...(ledger.equipmentCycles || []),
+      { preTrip: ledger.preTrip, postTrip: ledger.postTrip }], preTrip: completion, postTrip: null,
+      postTripPending: true, postTripStarted: false };
+  }
   const existing = ledger[key];
   if (existing) {
     if (existing.inspectionId !== completion.inspectionId
@@ -59,6 +80,8 @@ export function recordCompletion(ledger: DvirLedger, completion: DvirCompletion)
     }
     return ledger;
   }
+  if (completion.phase === 'post_trip' && ledger.equipmentCycles?.length && ledger.preTrip
+      && ledger.preTrip.inspectionId !== completion.inspectionId) throw new Error('dvir_completion_conflict');
   const next = { ...ledger, [key]: completion };
   next.postTripPending = next.postTrip === null;
   return next;

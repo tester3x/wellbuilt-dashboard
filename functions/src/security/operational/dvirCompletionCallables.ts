@@ -79,7 +79,7 @@ export const recordDriverDvirCompletion = https.onCall(SHIFT_AUTHORITY_OPTIONS, 
     try { next = recordCompletion(old, completion); }
     catch { throw new https.HttpsError('already-exists', 'dvir_completion_conflict'); }
     if (next !== old) tx.set(ref, { ...next, updatedAt: FieldValue.serverTimestamp() });
-    return { protocolVersion: 1, ...next, created: next !== old };
+    return { protocolVersion: 1, ...next, acknowledgedCompletion: completion, created: next !== old };
   });
 });
 

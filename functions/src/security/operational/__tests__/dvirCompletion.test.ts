@@ -8,6 +8,27 @@ const pre = { inspectionId: 'inspection-old', phase: 'pre_trip' as const,
   completedAt: '2026-08-23T23:30:00.000Z', reportDigest: 'a'.repeat(64) };
 const pending = recordCompletion(emptyLedger(who, oldShift), pre);
 
+test('equipment cycles retain prior proofs while requiring the replacement post-trip', () => {
+  const firstPost = { ...pre, phase: 'post_trip' as const, completedAt: '2026-08-23T23:40:00.000Z', reportDigest: 'b'.repeat(64) };
+  const closed = recordCompletion(pending, firstPost);
+  const replacement = { ...pre, inspectionId: 'replacement-truck', completedAt: '2026-08-23T23:50:00.000Z', reportDigest: 'c'.repeat(64) };
+  const active = recordCompletion(closed, replacement);
+  expect(active.shiftId).toBe(oldShift);
+  expect(active.preTrip).toEqual(replacement);
+  expect(active.postTrip).toBeNull();
+  expect(active.postTripPending).toBe(true);
+  expect(active.equipmentCycles).toEqual([{ preTrip: pre, postTrip: firstPost }]);
+  expect(recordCompletion(active, firstPost)).toBe(active);
+  expect(recordCompletion(active, pre)).toBe(active);
+  expect(() => recordCompletion(active, { ...firstPost, reportDigest: 'd'.repeat(64) })).toThrow();
+  expect(() => recordCompletion(pending, replacement)).toThrow();
+  expect(() => recordCompletion(closed, { ...replacement, completedAt: pre.completedAt })).toThrow();
+  expect(() => recordCompletion(active, { ...replacement, phase: 'post_trip', inspectionId: 'wrong-truck' })).toThrow();
+  const done = recordCompletion(active, { ...replacement, phase: 'post_trip', completedAt: '2026-08-24T00:10:00.000Z', reportDigest: 'd'.repeat(64) });
+  expect(done.postTripPending).toBe(false);
+  expect(done.equipmentCycles).toEqual(active.equipmentCycles);
+});
+
 test('old open DVIR routes to its Post-Trip instead of blocking the current request', () => {
   expect(selectDvirEntry([pending], who, current)).toEqual({
     binding: { shiftId: oldShift, phase: 'post_trip' }, recovery: true,
