@@ -10,7 +10,7 @@ export function reassignmentBlockedReason(job: Job | null): string | null {
   const well = job.ndicWellName || job.wellName || 'This job';
   const driver = job.driverName || job.driverFirstName || 'The assigned driver';
   if (isDriverBuiltDispatch(job)) {
-    return `${well} was built by ${driver}. The job builder owns this job, so Dispatch cannot reassign it, even while it is queued. Ask the builder to manage it in WB T or use the load-transfer workflow when appropriate.`;
+    return `${well} was built by ${driver}. The job builder owns this job, so Dispatch cannot reassign it, even while it is queued. Create a separate job for the other driver. An actual load handoff uses Load Transfer under the company's approval settings.`;
   }
   if (job.status === 'in_progress' || job.status === 'paused') {
     const stages: Record<string, string> = {
@@ -32,7 +32,7 @@ export function reassignmentBlockedReason(job: Job | null): string | null {
 export function reassignmentFailureMessage(error: unknown): string {
   const code = String((error as { code?: unknown })?.code || '');
   const message = error instanceof Error ? error.message : String(error || 'Unknown error');
-  if (message.includes('driver_built_job_owned_by_builder')) return 'Dispatch cannot reassign a driver-built job. The original job builder owns it, including while it is queued. Ask the builder to manage it in WB T.';
+  if (message.includes('driver_built_job_owned_by_builder')) return 'Dispatch cannot reassign a driver-built job. The original job builder owns it, including while it is queued. Create a separate job for the other driver. An actual load handoff uses Load Transfer under the company\'s approval settings.';
   if (/permission-denied|unauthenticated/.test(code)) return 'Reassignment was not confirmed. Your account could not authorize this change. Sign in again or contact your administrator.';
   if (/unavailable|deadline-exceeded/.test(code)) return 'Reassignment was not confirmed by the server. Check your connection and retry; your selection is still here.';
   if (/invalid_transition/.test(message)) return 'The job changed state while you were reassigning it. Refresh Dispatch and check whether the driver has started it. An empty started job must be cancelled or returned to the queue first; a loaded job needs Load Transfer.';

@@ -26,6 +26,7 @@ test('queued driver-built jobs explain builder ownership before lifecycle state'
   for (const origin of [{ source: 'driver' }, { assignedBy: 'driver' }, { assignedBy: 'driver:original' }]) {
     const message = reassignmentBlockedReason({ ...origin, wellName: 'Example 5', driverName: 'Original Driver', status: 'pending' })!;
     assert.match(message, /Original Driver/); assert.match(message, /builder owns/); assert.match(message, /even while it is queued/);
+    assert.match(message, /Create a separate job/); assert.doesNotMatch(message, /Ask the builder to manage/);
   }
   assert.match(reassignmentFailureMessage(Error('driver_built_job_owned_by_builder')), /original job builder owns/);
 });
