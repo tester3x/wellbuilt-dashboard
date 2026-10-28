@@ -1,4 +1,5 @@
 'use client';
+import { FreshWaterRate } from '@/components/FreshWaterRate';
 
 import { useEffect, useState, useMemo, useCallback, useRef, Suspense, type ReactNode } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
@@ -6,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { isActiveDispatchCard, isCancelledDispatchCard } from '@/lib/dispatchActiveVisibility';
+import { isDriverBuiltDispatch, reassignmentBlockedReason, reassignmentFailureMessage } from '@/lib/dispatchReassignmentNotice';
 import { operationalDriverName } from '@/lib/operationalDriverName';
 import { preferredDropoff } from '@/lib/preferredDropoff';
 import { WaterOrderBuilder } from '@/components/WaterOrderBuilder';
@@ -54,7 +56,7 @@ import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
 import { AddPullModal } from '@/components/AddPullModal';
-import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, getDoc, getDocFromServer, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
@@ -625,6 +627,7 @@ function DispatchPageInner() {
   const [reassignJob, setReassignJob] = useState<DispatchJob | null>(null);
   const [reassignDriverHash, setReassignDriverHash] = useState('');
   const [reassigning, setReassigning] = useState(false);
+  const [reassignError, setReassignError] = useState('');
   const [reassignLoads, setReassignLoads] = useState(0); // 0 = all loads
   // 'declined' = classic reassign of a declined/cancelled job (new dispatch);
   // 'in_place' = reassign an assigned-but-not-started dispatch by UPDATING the
@@ -682,7 +685,7 @@ function DispatchPageInner() {
   const [projectWellSearch, setProjectWellSearch] = useState('');
 
   // Dynamic service types from job packages (falls back to hardcoded)
-  const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Rig Move', 'Other'];
+  const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Fresh Water Tank Refill', 'Rig Move', 'Other'];
   const [dynamicServiceTypes, setDynamicServiceTypes] = useState<string[]>(FALLBACK_SERVICE_TYPES);
   // Map job type label → packageId (for stamping dispatch docs)
   const [jobTypeToPackageId, setJobTypeToPackageId] = useState<Record<string, string>>({});
@@ -1740,6 +1743,10 @@ function DispatchPageInner() {
 
   async function submitServiceWork() {
     if (!swWellName.trim() || !swServiceType.trim() || swDriverHashes.size === 0) return;
+    if (swServiceType === 'Fresh Water Tank Refill' && swSplitTicket) {
+      setSwError('Fresh water tank refills are single-load jobs. Turn off Split Ticket.');
+      return;
+    }
     if (swOnsiteByDraft && !swOnsiteBy) {
       setSwError('Enter a valid Be onsite by date and time, or clear the field.');
       return;
@@ -2282,12 +2289,14 @@ function DispatchPageInner() {
       if (!ok) return;
     }
     setReassignMode('in_place');
+    setReassignError('');
     setReassignJob(job);
     setReassignDriverHash('');
     setReassignLoads(0);
   }
 
   function openReassignModal(job: DispatchJob) {
+    setReassignError('');
     setReassignMode('declined');
     setReassignJob(job);
     setReassignDriverHash('');
@@ -2297,11 +2306,26 @@ function DispatchPageInner() {
   async function submitReassign() {
     if (!reassignJob || !reassignDriverHash) return;
     setReassigning(true);
+    setReassignError('');
     try {
       const driver = drivers.find(d => d.key === reassignDriverHash);
       if (!driver) throw new Error('Driver not found');
 
       const firestore = getFirestoreDb();
+      // A driver may have started the job after this modal opened. Confirm the
+      // live server state before creating a replacement or changing ownership.
+      const latest = reassignJob.id ? await getDocFromServer(doc(firestore, 'dispatches', reassignJob.id)) : null;
+      const currentJob = latest?.exists() ? { ...latest.data(), id: latest.id } as DispatchJob : null;
+      const assignedDriver = currentJob ? resolveDispatchDriver(currentJob, drivers) : null;
+      const blocked = reassignmentBlockedReason(currentJob && {
+        ...currentJob,
+        driverName: assignedDriver ? operationalDriverName(assignedDriver) : currentJob.driverName,
+      });
+      if (blocked) {
+        if (currentJob) setReassignJob(currentJob);
+        setReassignError(blocked);
+        return;
+      }
       const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
 
       // ── In-place reassign (assigned-but-not-started): update the SAME dispatch
@@ -2394,9 +2418,10 @@ function DispatchPageInner() {
       setReassignDriverHash('');
       finalizeAction(actionId);
       setTimeout(() => setMessage(''), 4000);
-    } catch (err: any) {
-      setMessage(`Error: ${err.message}`);
-      setTimeout(() => setMessage(''), 5000);
+    } catch (err: unknown) {
+      // Keep the failure in the open modal until dispatch acts on it. The page
+      // banner is behind this overlay and used to disappear after five seconds.
+      setReassignError(reassignmentFailureMessage(err));
     } finally {
       setReassigning(false);
     }
@@ -2887,6 +2912,7 @@ function DispatchPageInner() {
         </div>}
 
         <nav aria-label="Dispatch workspace" className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-2">
+          <a href="/dispatch/fresh-water" className="inline-flex items-center rounded px-4 py-2 text-sm font-medium text-cyan-300 hover:bg-gray-800">Fresh Water Tanks</a>
           {([
             ['jobs', 'Jobs'],
             ['build', 'Job Builder'],
@@ -3167,7 +3193,7 @@ function DispatchPageInner() {
                     {/* Decide the load before choosing its pickup well. */}
                     <div className="flex items-center gap-4 flex-shrink-0 flex-wrap rounded border border-purple-700/40 bg-gray-900/60 px-3 py-2">
                       <label className="flex items-center gap-2 cursor-pointer group">
-                        <input type="checkbox" checked={swSplitTicket} disabled={user?.role === 'demo_viewer'} onChange={(e) => {
+                        <input type="checkbox" checked={swSplitTicket} disabled={user?.role === 'demo_viewer' || swServiceType === 'Fresh Water Tank Refill'} onChange={(e) => {
                           const checked = e.target.checked;
                           setSwSplitTicket(checked);
                           if (!checked) {
@@ -3255,7 +3281,15 @@ function DispatchPageInner() {
                       <div className={`${swSplitTicket ? 'w-full grid grid-cols-1 sm:grid-cols-2 gap-3 sm:items-start' : 'flex-1 space-y-2'}`}>
                         <div>
                           <label className="block text-xs text-gray-400 mb-1">Service Type</label>
-                          <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
+                          <select value={swServiceType} onChange={(e) => {
+                            setSwServiceType(e.target.value);
+                            if (e.target.value === 'Fresh Water Tank Refill') {
+                              setSwSplitTicket(false);
+                              setSwExtraSplitLegs([]);
+                              setSwSplitLoadCount(1);
+                              setSwSplitLoadPlans([]);
+                            }
+                          }}
                             className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
                             <option value="">Select type...</option>
                             {user?.role === 'demo_viewer' && <option value="Hot Oiler">Hot Oiler</option>}
@@ -3981,7 +4015,7 @@ function DispatchPageInner() {
                                 );
                               })()}
                             </td>
-                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.flowRate || '--'}</td>
+                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.routeType === 'freshwater' ? <FreshWaterRate well={well}/> : well.flowRate || '--'}</td>
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well, asOfMs)}</td>
                             <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
@@ -4339,8 +4373,14 @@ function DispatchPageInner() {
 
       {reassignJob && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700 max-h-[90dvh] overflow-y-auto">
             <h3 className="text-lg font-semibold text-white mb-1">Reassign Job</h3>
+            {reassignError && (
+              <div role="alert" aria-live="assertive" className="bg-red-950 border border-red-500 rounded-lg p-3 my-3 text-sm text-white">
+                <p className="font-semibold mb-1">Reassignment not completed</p>
+                <p>{reassignError}</p>
+              </div>
+            )}
             <p className="text-gray-400 text-sm mb-4 flex items-center gap-2 flex-wrap">
               <JobTypeBadge type={reassignJob.jobType} serviceType={reassignJob.serviceType} />
               <span className="text-white font-medium">{reassignJob.ndicWellName || reassignJob.wellName}</span>
@@ -4390,7 +4430,7 @@ function DispatchPageInner() {
               })()}
               <div>
                 <span className="text-gray-500">Flow Rate:</span>
-                <span className="text-white ml-2 font-mono">{reassignJob.flowRate || '--'}</span>
+                <span className="text-white ml-2 font-mono">{(() => {const live=wells.find(w=>w.wellName===reassignJob.wellName);return live?.routeType === 'freshwater' ? <FreshWaterRate well={live}/> : reassignJob.flowRate || '--';})()}</span>
               </div>
               {reassignJob.disposal && (
                 <div className="col-span-2">
@@ -5187,7 +5227,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
             <button
               onClick={(e) => { e.stopPropagation(); onReassign(job); }}
               className="text-blue-400/60 hover:text-blue-300 text-xs transition-colors p-1"
-              title="Reassign to another driver"
+              title={isDriverBuiltDispatch(job) ? 'Driver-built job: the builder owns reassignment' : 'Reassign to another driver'}
             >👯</button>
           )}
           <button

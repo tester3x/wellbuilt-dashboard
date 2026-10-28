@@ -1,0 +1,41 @@
+{
+  "gabriel-1-4-5-6": {
+    "routeName": "Gabriel's FW",
+    "name": "Gabriel 1 / 4 / 5 / 6",
+    "wellNames": ["Gabriel 1", "Gabriel 4", "Gabriel 5", "Gabriel 6"],
+    "config": {
+      "enabled": true,
+      "tankCount": 3,
+      "tankHeightFeet": 20,
+      "bblPerFootPerTank": 20,
+      "equalization": "unverified",
+      "dailyUseBbl": null
+    }
+  },
+  "gabriel-3-7": {
+    "routeName": "Gabriel's FW",
+    "name": "Gabriel 3 / 7",
+    "wellNames": ["Gabriel 3", "Gabriel 7"],
+    "config": {
+      "enabled": true,
+      "tankCount": 1,
+      "tankHeightFeet": 20,
+      "bblPerFootPerTank": 20,
+      "equalization": "single-tank",
+      "dailyUseBbl": null
+    }
+  },
+  "gabriel-2": {
+    "routeName": "Gabriel's FW",
+    "name": "Gabriel 2",
+    "wellNames": ["Gabriel 2"],
+    "config": {
+      "enabled": true,
+      "tankCount": 1,
+      "tankHeightFeet": 20,
+      "bblPerFootPerTank": 20,
+      "equalization": "single-tank",
+      "dailyUseBbl": null
+    }
+  }
+}

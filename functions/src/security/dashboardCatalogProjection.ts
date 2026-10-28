@@ -26,6 +26,7 @@ export const APPROVED_ALLOWLIST = [
   'assignedCustomers',
   'assignedRoutes',
   'assignedWells',
+  'assignedFreshWaterRoutes',
   'defaultPackageId',
   'dashboardUid',
   'dashboardRole',
@@ -59,6 +60,7 @@ export const CANONICAL_PROFILE_ALLOWLIST = [
   'isViewer',
   'assignedRoutes',
   'assignedWells',
+  'assignedFreshWaterRoutes',
   'assignmentRevision',
   'assignmentUpdatedAt',
   'mustUseSecureAuth',
@@ -94,6 +96,7 @@ export const PENDING_ALLOWLIST = [
  * Operational display/edit fields must not be silently dropped.
  */
 export const WELL_CONFIG_ALLOWLIST = [
+  'routeType', 'inventoryGroupId', 'displayName', 'suppliesWells', 'equalization',
   'route',
   'operator',
   'routeColor',
@@ -129,6 +132,7 @@ export const WELL_CONFIG_ALLOWLIST = [
   'demoInitialLevelInches',
   'demoInitialAsOfUTC',
   'demoInitialTriggerInches',
+  'freshWaterSupply',
 ] as const;
 
 /** Bounded live-status fields from packets/outgoing. Never a raw packet tree. */

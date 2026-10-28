@@ -1,3 +1,4 @@
+import { writeCanonicalFreshWater } from './operational/writeCanonicalFreshWater';
 /**
  * Staff create/update/rename/delete for RTDB well_config.
  * Client identity writes are denied. GPS route/routeRecording/routeGroupWell
@@ -80,6 +81,15 @@ export const staffWriteWellConfig = httpsV2.onCall(
     const existingByName = existingNameKey
       ? ((all[existingNameKey] as Record<string, unknown>) || null)
       : null;
+    if (config.routeType === 'freshwater' || existingByName?.routeType === 'freshwater') {
+      const result = await writeCanonicalFreshWater(caller.companyId, op, wellName, config);
+      await writeSecurityAudit({action:'staffWriteWellConfig',actorUid:caller.uid,detail:{op,wellName,routeType:'freshwater'}});
+      return result;
+    }
+    if (typeof config.route === 'string' && Object.values(all).some(row => {
+      const well = row as Record<string, unknown>;
+      return well.route === config.route && well.routeType === 'freshwater';
+    })) throw new httpsV2.HttpsError('failed-precondition', 'mixed_route_types');
     const requestedApi = typeof config.ndicApiNo === 'string' ? config.ndicApiNo : '';
     const duplicateApiWell = op === 'create' ? findDuplicateApiWell(all, requestedApi, wellName) : null;
 

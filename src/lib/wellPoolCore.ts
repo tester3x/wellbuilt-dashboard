@@ -16,6 +16,14 @@
  */
 
 export interface WellResponse {
+  routeType?: 'produced-water' | 'freshwater';
+  displayName?: string;
+  inventoryGroupId?: string;
+  suppliesWells?: string[];
+  equalization?: string;
+  inventoryLevelFeet?: number | null;
+  inventoryAsOfUTC?: string | null;
+  inventoryDailyBbl?: number | null;
   wellName: string;
   currentLevel: string;
   etaToMax: string;
@@ -123,6 +131,11 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
     const { tankAtLevel } = calcTankAtLevel(tanks, pullBbls, bottomInches, bblPerFootPerTank);
     return {
       wellName,
+      routeType: config.routeType === 'freshwater' ? 'freshwater' : 'produced-water',
+      displayName: typeof config.displayName === 'string' ? config.displayName : undefined,
+      inventoryGroupId: typeof config.inventoryGroupId === 'string' ? config.inventoryGroupId : undefined,
+      suppliesWells: Array.isArray(config.suppliesWells) ? config.suppliesWells : undefined,
+      equalization: typeof config.equalization === 'string' ? config.equalization : undefined,
       currentLevel: isDemoSurvey
         ? `${Math.floor((config.demoInitialLevelInches as number) / 12)}'${(config.demoInitialLevelInches as number) % 12}"`
         : '--',
@@ -134,8 +147,8 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
       operator: typeof config.operator === 'string' ? config.operator : undefined,
       tanks,
       pullBbls,
-      tankAtLevel,
-      bottomLevel: bottomLevelFeet,
+      tankAtLevel: config.routeType === 'freshwater' ? `${tanks} @ --` : tankAtLevel,
+      bottomLevel: config.routeType === 'freshwater' ? (typeof config.bottomLevel === 'number' ? config.bottomLevel : undefined) : bottomLevelFeet,
       maxLevel: typeof config.maxLevel === 'number' ? config.maxLevel : undefined,
       bblPerFoot,
       bbls24hrs: isDemoSurvey && typeof config.demoRealMinutesPerFoot === 'number'
@@ -182,6 +195,9 @@ export function mergeWellPool(
     const lastPullBottomLevel = asStr(st.lastPullBottomLevel);
     return {
       ...well,
+      inventoryLevelFeet: typeof st.inventoryLevelFeet === 'number' ? st.inventoryLevelFeet : null,
+      inventoryAsOfUTC: typeof st.inventoryAsOfUTC === 'string' ? st.inventoryAsOfUTC : null,
+      inventoryDailyBbl: typeof st.inventoryDailyBbl === 'number' ? st.inventoryDailyBbl : null,
       currentLevel,
       // Numeric level for the height-first classifier (governed path has no
       // precomputed estimate; parse the reported reading).

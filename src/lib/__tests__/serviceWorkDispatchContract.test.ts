@@ -21,8 +21,32 @@ test('SW dispatch contract: canonicalJobTypeIdForServiceType maps standard servi
   // Built-in package types stay themselves
   assert.equal(canonicalJobTypeIdForServiceType('pw'), 'pw');
   assert.equal(canonicalJobTypeIdForServiceType('fresh-water'), 'fresh-water');
+  assert.equal(canonicalJobTypeIdForServiceType('Fresh Water Tank Refill'), 'fresh-water-tank-refill');
   assert.equal(canonicalJobTypeIdForServiceType('flowback-water'), 'flowback-water');
   assert.equal(canonicalJobTypeIdForServiceType('service-work'), 'service-work');
+});
+
+test('fresh-water tank refill dispatch binds revision 5 as one hourly service load', async () => {
+  const created: Record<string, unknown>[] = [];
+  await executeServiceWorkWorkflow({
+    workflow: createServiceWorkWorkflow(),
+    coordinator: new DispatchCreationCoordinator(),
+    invoke: async (payload: Record<string, unknown>) => { created.push(payload); return { ok: true, dispatchId: 'fw-1' }; },
+    selectedDrivers: [{ key: 'driver-1', id: 'driver-1', displayName: 'Driver One' }],
+    wellName: 'Pad 1',
+    serviceType: 'Fresh Water Tank Refill',
+    packageId: 'water-hauling',
+    isSplitTicket: false,
+    isHeavyWater: false,
+    assignedBy: 'dispatch@example.com',
+  });
+  assert.equal(created.length, 1);
+  const sent = created[0];
+  assert.deepEqual(sent.packetRef, { packageId: 'water-hauling', revision: 5 });
+  const record = sent.record as Record<string, unknown>;
+  assert.equal(record.jobTypeId, 'fresh-water-tank-refill');
+  assert.equal(record.serviceType, 'Fresh Water Tank Refill');
+  assert.equal(record.splitGroupId, undefined);
 });
 
 test('SW dispatch contract: custom job types from company configuration are respected', () => {

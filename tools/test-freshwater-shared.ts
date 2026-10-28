@@ -1,0 +1,52 @@
+import { evaluateWbtWellLookup } from '../functions/src/security/operational/wbtWellConfigAuthorize.ts';
+import assert from 'node:assert/strict';
+import { mergeWellPool } from '../src/lib/wellPoolCore.ts';
+import { projectWellLevel } from '../src/lib/wellLevelProjection.ts';
+import { classifyWell } from '../src/lib/dispatchPriority.ts';
+import { canonicalFreshWaterGroups } from '../functions/src/security/operational/canonicalFreshWater.ts';
+import { applyFreshWaterDelivery } from '../functions/src/security/operational/freshWaterSupplyCore.ts';
+import { createRequire } from 'node:module';
+const require=createRequire(import.meta.url);
+const {plan,IDS,KEYS,DRIVERS,ROUTE}=require('./migrate-gabriel-shared-20261027.cjs');
+const members=[['Gabriel 1','Gabriel 4','Gabriel 5','Gabriel 6'],['Gabriel 2'],['Gabriel 3','Gabriel 7']];
+const wells=Object.fromEntries(members.flat().map(name=>[name,{route:'Production',tanks:1,companyId:'liquid-gold'}]));
+const groups=Object.fromEntries(IDS.map((id:string,i:number)=>[id,{routeName:"Gabriel's FW",name:id,wellNames:members[i],config:{enabled:true,tankCount:i===0?3:1,tankHeightFeet:20,bblPerFootPerTank:20,equalization:i===0?'verified-equalized':'single-tank'}}]));
+const profiles=Object.fromEntries(DRIVERS.map((id:string)=>[id,{companyId:'liquid-gold',active:true,assignedRoutes:['Production'],assignedFreshWaterRoutes:["Gabriel's FW"],assignedWells:['Preserved well'],assignmentRevision:3}]));
+const before=JSON.stringify({wells,groups,profiles});
+const patch=plan(wells,groups,profiles);
+assert.equal(JSON.stringify({wells,groups,profiles}),before);
+assert.equal(Object.keys(patch).filter(k=>k.startsWith('well_config/')).length,3);
+assert.ok(!Object.keys(patch).some(k=>k.startsWith('fresh_water_supply/')||k.startsWith('packets/')));
+for(const key of Object.keys(wells))assert.ok(!Object.hasOwn(patch,'well_config/'+key));
+for(const id of DRIVERS)assert.deepEqual(patch['drivers/profiles/'+id+'/assignedRoutes'],['Production',ROUTE]);
+const canonical=Object.fromEntries(KEYS.map((key:string)=>[key,patch['well_config/'+key]]));
+assert.equal(Object.keys(canonicalFreshWaterGroups(canonical,'liquid-gold')).length,3);
+assert.equal(Object.keys(canonicalFreshWaterGroups(canonical,'other-company')).length,0);
+const rows=mergeWellPool(canonical,{});assert.equal(rows.length,3);
+assert.equal(rows[0].tanks,3);assert.equal(rows[0].bblPerFoot,60);assert.equal(rows[0].bottomLevel,undefined);
+const now=Date.parse('2026-10-27T12:00:00Z');
+assert.equal(projectWellLevel(rows[0],now).available,false);
+assert.equal(classifyWell(rows[0],now).state,'verify');
+const config=groups[IDS[0]].config;
+const first=applyFreshWaterDelivery(null,config,{deliveryId:'stable-1',driverId:'driver',deliveredAtUTC:'2026-10-25T12:00:00Z',deliveredBbl:120,measuredBeforeFeet:10});
+assert.ok(first.ok);if(!first.ok)throw Error('first failed');assert.equal(first.state.levelFeet,12);assert.equal(first.state.dailyUseBbl,null);
+const second=applyFreshWaterDelivery(first.state,config,{deliveryId:'stable-2',driverId:'driver',deliveredAtUTC:'2026-10-26T12:00:00Z',deliveredBbl:120,measuredBeforeFeet:10});
+assert.ok(second.ok);if(!second.ok)throw Error('second failed');assert.equal(second.state.dailyUseBbl,120);
+const dup=applyFreshWaterDelivery(second.state,config,{deliveryId:'stable-2',driverId:'driver',deliveredAtUTC:'2026-10-26T12:00:00Z',deliveredBbl:120,measuredBeforeFeet:10});assert.ok(dup.ok && dup.duplicate);
+assert.deepEqual(applyFreshWaterDelivery(second.state,config,{deliveryId:'stable-2',driverId:'other',deliveredAtUTC:'2026-10-26T12:00:00Z',deliveredBbl:120,measuredBeforeFeet:10}),{ok:false,reason:'id_collision'});
+const live=mergeWellPool(canonical,{[KEYS[0]]:{inventoryLevelFeet:10,inventoryAsOfUTC:'2026-10-26T12:00:00Z',inventoryDailyBbl:120}})[0];
+assert.equal(projectWellLevel(live,now).estFeet,8);
+assert.equal(classifyWell({...live,bottomLevel:9},now).label,'LOW FRESHWATER');
+const forecast=classifyWell({...live,bottomLevel:7},now);
+assert.equal(forecast.state,'approaching');assert.equal(forecast.ttpHours,12);
+assert.equal(forecast.predictedReadyAtMs,now+12*3600000);
+const paused=projectWellLevel({...live,isDown:true},now);assert.equal(paused.estFeet,10);assert.equal(paused.wellDown,true);
+assert.equal(classifyWell({...live,bottomLevel:7,isDown:true},now).predictedReadyAtMs,null);
+console.log('Shared freshwater regression passed: identity, atomic plan, companies, unknowns, inference, stable retries and low-level urgency.');
+
+for (const key of KEYS) {
+ const lookup=evaluateWbtWellLookup({wellConfigKey:key,companyId:'liquid-gold',wellConfig:canonical});
+ assert.ok(lookup.ok);if(lookup.ok){assert.equal(lookup.config.routeType,'freshwater');assert.equal(lookup.config.inventoryGroupId,canonical[key].inventoryGroupId);}
+ assert.equal(evaluateWbtWellLookup({wellConfigKey:key,companyId:'other-company',wellConfig:canonical}).ok,false);
+}
+const production=evaluateWbtWellLookup({wellConfigKey:'Gabriel 1',companyId:'liquid-gold',wellConfig:wells});assert.ok(production.ok);if(production.ok)assert.equal(production.config.route,'Production');

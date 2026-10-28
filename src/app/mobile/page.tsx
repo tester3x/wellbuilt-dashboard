@@ -1,4 +1,7 @@
 'use client';
+import { FreshWaterRate } from '@/components/FreshWaterRate';
+import { waterRouteFamilies, familyRouteKey, type WaterFamily } from '@/lib/waterRouteFamilies';
+import { freshWaterMinimumForecast } from '@/lib/freshWaterMinimumForecast';
 import { useDashboardViewState } from '@/lib/useDashboardViewState';
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
@@ -48,7 +51,7 @@ export default function MobilePage() {
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem('wellbuilt-expanded-routes');
-        if (saved) return new Set(JSON.parse(saved));
+        if (saved) return new Set((JSON.parse(saved) as string[]).map(key=>key.startsWith('["') ? key : familyRouteKey('produced-water',key)));
       } catch {}
     }
     return new Set();
@@ -82,7 +85,10 @@ export default function MobilePage() {
   const [showAddPull, setShowAddPull] = useState(false);
   const [addPullDrivers, setAddPullDrivers] = useState<ApprovedDriver[]>([]);
   const [addPullDisposals, setAddPullDisposals] = useState<NdicWell[]>([]);
-
+  const [producedWaterExpanded, setProducedWaterExpanded] = useState(true);
+  const [freshWaterExpanded, setFreshWaterExpanded] = useState(true);
+  const familyGroups = useMemo(()=>waterRouteFamilies(wells,wellSearch),[wells,wellSearch]);
+  const freshWaterRoutes = familyGroups.freshwater.map(group=>group.route);
   // Redirect to login if not authenticated
   useEffect(() => {
     if (!loading && !user) {
@@ -192,8 +198,9 @@ export default function MobilePage() {
 
   // Expand all / Collapse all
   const expandAll = () => {
-    setExpandedRoutes(new Set(routes));
-    localStorage.setItem('wellbuilt-expanded-routes', JSON.stringify(routes));
+    const keys=Object.values(familyGroups).flatMap(groups=>groups.map(group=>group.key));
+    setExpandedRoutes(new Set(keys));
+    localStorage.setItem('wellbuilt-expanded-routes', JSON.stringify(keys));
   };
   const collapseAll = () => {
     setExpandedRoutes(new Set());
@@ -214,18 +221,15 @@ export default function MobilePage() {
 
   // Filter wells by search (routes auto-hide when they have no matching wells)
   const wellSearchTerm = wellSearch.trim().toLowerCase();
-  const filteredRoutes = routes;
+  const filteredRoutes = familyGroups['produced-water'].map(group=>group.route);
 
   // Compute unique colors for all routes (collision-free)
   const routeColorMap = useMemo(() => assignRouteColors(routes), [routes]);
 
   // Group wells by route with sorting + pullBbls override
-  const getWellsForRoute = (route: string, paginate = true): WellResponse[] => {
-    let routeWells = wells.filter((w) => w.route === route);
-    if (wellSearchTerm) {
-      routeWells = routeWells.filter(w => w.wellName.toLowerCase().includes(wellSearchTerm));
-    }
-    const overrideBbls = routePullBbls[route];
+  const getWellsForRoute = (route: string, paginate = true, family: WaterFamily = 'produced-water'): WellResponse[] => {
+    let routeWells = (familyGroups[family].find(group=>group.route===route)?.wells || []);
+    const overrideBbls = family === 'produced-water' ? routePullBbls[familyRouteKey(family,route)] : undefined;
 
     // Apply pullBbls override if set (recalculates Tank @ Level and Time Till Pull).
     // The recompute anchors on the LIVE projected level (shared projection), never
@@ -238,7 +242,7 @@ export default function MobilePage() {
         })
       : routeWells;
 
-    const sortState = routeSorts[route] || DEFAULT_SUMMARY_SORT;
+    const sortState = routeSorts[familyRouteKey(family,route)] || DEFAULT_SUMMARY_SORT;
     const sorted = sortMobileSummaryWells(adjustedWells, sortState, asOfMs);
 
     // Paginate Unrouted group to prevent massive lists
@@ -250,7 +254,7 @@ export default function MobilePage() {
   };
 
   // Total unrouted wells (for "show more" button)
-  const totalUnroutedWells = wells.filter((w) => w.route === 'Unrouted').length;
+  const totalUnroutedWells = getWellsForRoute('Unrouted',false).length;
 
   if (loading) {
     return (
@@ -408,7 +412,13 @@ export default function MobilePage() {
           </div>
         </div>
 
-        {dataLoading ? (
+        <section className="rounded-lg border border-slate-700 bg-slate-900/40 overflow-hidden">
+          <button onClick={() => setProducedWaterExpanded(value => !value)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-slate-800 text-left">
+            <span className="text-lg font-semibold text-white">Produced Water Routes</span>
+            <span className="text-slate-400">{producedWaterExpanded ? '▾' : '▸'}</span>
+          </button>
+          {producedWaterExpanded && <div className="p-3">{dataLoading ? (
           <div className="text-gray-400">Loading well data...</div>
         ) : statusUnavailable ? (
           <div className="rounded-lg border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 text-yellow-300">
@@ -424,14 +434,14 @@ export default function MobilePage() {
                 <RouteSection
                   route={route}
                   wells={getWellsForRoute(route)}
-                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
-                  onToggle={() => toggleRoute(route)}
-                  pullBbls={routePullBbls[route] || 140}
-                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
-                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(familyRouteKey('produced-water',route))}
+                  onToggle={() => toggleRoute(familyRouteKey('produced-water',route))}
+                  pullBbls={routePullBbls[familyRouteKey('produced-water',route)] || 140}
+                  defaultPullBbls={getWellsForRoute(route,false)[0]?.pullBbls || 140}
+                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [familyRouteKey('produced-water',route)]: val }))}
                   routeColor={routeColorMap.get(route) || '#888888'}
                 />
-                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
+                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(familyRouteKey('produced-water',route)) && (
                   <button
                     onClick={() => setUnroutedShowAll(true)}
                     className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
@@ -450,16 +460,16 @@ export default function MobilePage() {
                 <RouteTable
                   route={route}
                   wells={getWellsForRoute(route)}
-                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
-                  onToggle={() => toggleRoute(route)}
-                  sortState={routeSorts[route] || DEFAULT_SUMMARY_SORT}
-                  onSort={(field) => handleRouteSort(route, field)}
-                  pullBbls={routePullBbls[route] || 140}
-                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
-                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(familyRouteKey('produced-water',route))}
+                  onToggle={() => toggleRoute(familyRouteKey('produced-water',route))}
+                  sortState={routeSorts[familyRouteKey('produced-water',route)] || DEFAULT_SUMMARY_SORT}
+                  onSort={(field) => handleRouteSort(familyRouteKey('produced-water',route), field)}
+                  pullBbls={routePullBbls[familyRouteKey('produced-water',route)] || 140}
+                  defaultPullBbls={getWellsForRoute(route,false)[0]?.pullBbls || 140}
+                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [familyRouteKey('produced-water',route)]: val }))}
                   routeColor={routeColorMap.get(route) || '#888888'}
                 />
-                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
+                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(familyRouteKey('produced-water',route)) && (
                   <button
                     onClick={() => setUnroutedShowAll(true)}
                     className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
@@ -470,7 +480,29 @@ export default function MobilePage() {
               </div>
             ))}
           </div>
-        )}
+        )}</div>}
+        </section>
+
+        <section className="mt-5 rounded-lg border border-cyan-900 bg-slate-900/40 overflow-hidden">
+          <button onClick={() => setFreshWaterExpanded(value => !value)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-cyan-950/40 text-left">
+            <span className="text-lg font-semibold text-cyan-100">Freshwater Routes</span>
+            <span className="text-cyan-400">{freshWaterExpanded ? '▾' : '▸'}</span>
+          </button>
+          {freshWaterExpanded && <div className="p-3 space-y-4">
+            {freshWaterRoutes.map(route => {
+              const props={route,wells:getWellsForRoute(route,false,'freshwater'),
+                isExpanded:!!wellSearchTerm || expandedRoutes.has(familyRouteKey('freshwater',route)),
+                onToggle:()=>toggleRoute(familyRouteKey('freshwater',route)),
+                pullBbls:140,defaultPullBbls:140,onPullBblsChange:()=>{},routeColor:routeColorMap.get(route)||'#22d3ee'};
+              return viewMode==='cards' ? <RouteSection key={familyRouteKey('freshwater',route)} {...props}/> :
+                <RouteTable key={familyRouteKey('freshwater',route)} {...props}
+                  sortState={routeSorts[familyRouteKey('freshwater',route)]||DEFAULT_SUMMARY_SORT}
+                  onSort={field=>handleRouteSort(familyRouteKey('freshwater',route),field)}/>;
+            })}
+            {!freshWaterRoutes.length && <p className="text-gray-400 text-sm">No freshwater routes configured.</p>}
+          </div>}
+        </section>
 
         {/* Worked tickets are available below all well routes, collapsed by default. */}
         <section className="mt-6 bg-yellow-900/20 rounded-lg border border-yellow-700/50 overflow-hidden">
@@ -577,7 +609,7 @@ export default function MobilePage() {
 
       {showAddPull && (
         <AddPullModal
-          wells={wells}
+          wells={wells.filter(w=>w.routeType !== 'freshwater')}
           drivers={addPullDrivers}
           allDisposals={addPullDisposals}
           onClose={() => setShowAddPull(false)}
@@ -757,6 +789,7 @@ function RouteTable({
   onPullBblsChange: (value: number) => void;
   routeColor: string;
 }) {
+  const freshwater = wells[0]?.routeType === 'freshwater';
   const downCount = wells.filter((w) => w.isDown || w.currentLevel === 'DOWN').length;
 
   return (
@@ -777,7 +810,7 @@ function RouteTable({
               {downCount} DOWN
             </span>
           )}
-          {isExpanded && (
+          {isExpanded && !freshwater && (
             <PullBblsSlider
               value={pullBbls}
               defaultValue={defaultPullBbls}
@@ -796,10 +829,10 @@ function RouteTable({
                 <SortHeader label="Well" field="wellName" sortState={sortState} onSort={onSort} />
                 <th className="px-4 py-2 text-left text-sm font-medium text-gray-400">Operator</th>
                 <SortHeader label="Tank @ Level" field="tanks" sortState={sortState} onSort={onSort} />
-                <SortHeader label="Next Pull" field="nextPull" sortState={sortState} onSort={onSort} />
+                <SortHeader label={freshwater ? "Next Delivery" : "Next Pull"} field="nextPull" sortState={sortState} onSort={onSort} />
                 <SortHeader label="Current Level (Est.)" field="level" sortState={sortState} onSort={onSort} />
-                <SortHeader label="Flow Rate" field="flowRate" sortState={sortState} onSort={onSort} />
-                <SortHeader label="Time Till Pull" field="timeTillPull" sortState={sortState} onSort={onSort} />
+                <SortHeader label={freshwater ? "Usage Rate" : "Flow Rate"} field="flowRate" sortState={sortState} onSort={onSort} />
+                <SortHeader label={freshwater ? "Time Till Delivery" : "Time Till Pull"} field="timeTillPull" sortState={sortState} onSort={onSort} />
                 <SortHeader label="Down" field="status" sortState={sortState} onSort={onSort} />
               </tr>
             </thead>
@@ -824,6 +857,7 @@ function WellRow({ well }: { well: WellResponse }) {
   // Down wells FREEZE at their baseline (estimator handles it; the status column
   // flags DOWN separately). Genuinely unavailable → '--', never zero.
   const levelDisplay = proj.estDisplay;
+  const minimumForecast = freshWaterMinimumForecast(well, proj.estFeet, asOfMs);
 
   // Format tank @ level — target height when ready to pull (from VBA formula)
   const formatTankLevel = () => {
@@ -835,6 +869,7 @@ function WellRow({ well }: { well: WellResponse }) {
 
   // Format next pull datetime
   const formatNextPull = () => {
+    if (well.routeType === 'freshwater') return minimumForecast ? new Date(minimumForecast.at).toLocaleString('en-US',{month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}) : '--';
     if (!well.nextPullTime) return '--';
     try {
       const date = new Date(well.nextPullTime);
@@ -855,17 +890,17 @@ function WellRow({ well }: { well: WellResponse }) {
     <tr className={`hover:bg-gray-750 ${isDown ? 'bg-red-900/20' : ''}`}>
       <td className="px-4 py-3">
         <Link href={`/well?name=${encodeURIComponent(well.wellName)}`} className="text-blue-400 hover:text-blue-300 font-medium">
-          {well.wellName}
+          {well.displayName || well.wellName}
         </Link>
       </td>
       <td className="px-4 py-3 text-xs leading-tight text-gray-300 min-w-36 max-w-72" title={well.operator || undefined}>
         {well.operator || '—'}
       </td>
-      <td className="px-4 py-3 text-white font-mono">{formatTankLevel()}</td>
+      <td className="px-4 py-3 text-white font-mono">{formatTankLevel()}{well.routeType === 'freshwater' && <div className="text-xs text-gray-400">{well.tanks} × {well.bblPerFoot && well.tankHeight ? well.bblPerFoot / (well.tanks || 1) * well.tankHeight : '--'} BBL · {well.tankHeight} ft</div>}</td>
       <td className="px-4 py-3 text-white font-mono text-sm">{formatNextPull()}</td>
       <td className="px-4 py-3 text-white font-mono">{levelDisplay}</td>
-      <td className="px-4 py-3 text-white font-mono">{well.flowRate || '--'}</td>
-      <td className="px-4 py-3 text-white font-mono">{well.timeTillPull || well.etaToMax || '--'}</td>
+      <td className="px-4 py-3 text-white font-mono">{well.routeType === 'freshwater' ? <FreshWaterRate well={well}/> : well.flowRate || '--'}</td>
+      <td className="px-4 py-3 text-white font-mono">{well.routeType === 'freshwater' ? minimumForecast ? minimumForecast.hoursRemaining.toFixed(1)+'h' : '--' : well.timeTillPull || well.etaToMax || '--'}</td>
       <td className="px-4 py-3">
         {isDown ? (
           <span className="px-2 py-1 bg-red-600 text-white text-xs font-bold rounded">X</span>
@@ -918,7 +953,7 @@ function RouteSection({
               {downCount} DOWN
             </span>
           )}
-          {isExpanded && (
+          {isExpanded && wells[0]?.routeType !== 'freshwater' && (
             <PullBblsSlider
               value={pullBbls}
               defaultValue={defaultPullBbls}
@@ -975,7 +1010,7 @@ function WellCard({ well }: { well: WellResponse }) {
         }`}
       >
         <div className="flex justify-between items-start mb-3">
-          <h3 className="text-lg font-semibold text-white">{well.wellName}</h3>
+          <h3 className="text-lg font-semibold text-white">{well.displayName || well.wellName}</h3>
           {isDown && (
             <span className="px-2 py-1 bg-red-600 text-white text-xs font-bold rounded">
               DOWN
@@ -1012,9 +1047,9 @@ function WellCard({ well }: { well: WellResponse }) {
             </span>
           </div>
           <div className="flex justify-between text-sm">
-            <span className="text-gray-400">Flow Rate</span>
+            <span className="text-gray-400">{well.routeType === 'freshwater' ? 'Consumption Rate' : 'Flow Rate'}</span>
             <span className={`font-mono ${isDown ? 'text-red-300/50' : 'text-white'}`}>
-              {isDown ? '--' : (well.flowRate || '--')}
+              {well.routeType === 'freshwater' ? <FreshWaterRate well={well}/> : isDown ? '--' : (well.flowRate || '--')}
             </span>
           </div>
         </div>

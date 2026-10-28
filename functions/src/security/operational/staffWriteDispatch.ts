@@ -151,6 +151,15 @@ function asString(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
 }
 
+/** Driver birth stamps are server-owned; returning to the queue retains ownership. */
+export function isDriverBuiltDispatch(job: Record<string, unknown> | null): boolean {
+  const assignedBy = asString(job?.assignedBy);
+  return asString(job?.source) === 'driver' || assignedBy === 'driver' || assignedBy.startsWith('driver:');
+}
+
+const ASSIGNMENT_FIELDS = ['driverId', 'driverHash', 'driverName', 'driverFirstName',
+  'assignedDrivers', 'intendedDriverHash', 'intendedDriverName', 'reassignedTo', 'assignedBy'] as const;
+
 function jobCompany(job: Record<string, unknown> | null): string {
   return job ? asString(job.companyId) : '';
 }
@@ -284,6 +293,12 @@ export function evaluateStaffWriteDispatch(input: {
   }
   const resolvedCompany = companyId || (input.callerCompanyId || LEGACY_WELL_POOL_COMPANY_ID);
   const current = asString(input.job.status);
+
+  if (input.op === 'update' && isDriverBuiltDispatch(input.job)
+      && ASSIGNMENT_FIELDS.some(key => record[key] !== undefined
+        && JSON.stringify(record[key]) !== JSON.stringify(input.job![key]))) {
+    return { ok: false, reason: 'driver_built_job_owned_by_builder' };
+  }
 
   if (input.op === 'cancel') {
     if (current === 'cancelled') {

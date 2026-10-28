@@ -174,6 +174,7 @@ export function evaluateWbmPull(input: {
   if (!wellBelongsToDriverCompany(well, input.companyId)) {
     return { ok: false, reason: 'cross_company_well' };
   }
+  if (well.routeType === 'freshwater') return { ok: false, reason: 'well_out_of_scope' };
   if (!wellMatchesWbmScope(wellName.value, well, scope)) {
     return { ok: false, reason: 'well_out_of_scope' };
   }
