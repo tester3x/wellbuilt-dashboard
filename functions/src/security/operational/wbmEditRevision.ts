@@ -14,6 +14,19 @@ export function wbmEditRevisionKey(legacyKey: string, payload: Record<string, un
   return `${legacyKey}_r_${canonicalPayloadDigest(body)}`;
 }
 
+export function completedEditRevision(input: {
+  outbox: any; key: string; payload: Record<string, unknown>; driverId: string; companyId: string;
+}): boolean {
+  const { outbox: o, payload: p } = input;
+  return !!o && o.completed === true && o.stage === 'done'
+    && o.eventId === input.key && o.originalPacketId === p.originalPacketId
+    && o.driverId === input.driverId && o.companyId === input.companyId
+    && o.measurements?.tankLevelFeet === p.tankLevelFeet
+    && o.measurements?.bblsTaken === p.bblsTaken
+    && (!p.dateTimeUTC || o.measurements?.dateTimeUTC === p.dateTimeUTC)
+    && (p.wellDownIsAuthoritative !== true || o.measurements?.wellDown === p.wellDown);
+}
+
 /** Operator recovery receipts acknowledge only an exact stale request after
  * its explicitly reviewed replacement finished the existing edit outbox. */
 export function verifiedEditRecovery(input: {

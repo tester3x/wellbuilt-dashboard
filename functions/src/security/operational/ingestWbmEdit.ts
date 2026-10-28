@@ -19,7 +19,7 @@ import {
   wbmEditIncomingPath,
 } from './wbmEditAuthorize';
 import { legacyIdemStorageKey, selectProcessedPullParent } from './packetReconcileCore';
-import { preserveOriginalGaugePrecision, verifiedEditRecovery, wbmEditRevisionKey } from './wbmEditRevision';
+import { completedEditRevision, preserveOriginalGaugePrecision, verifiedEditRecovery, wbmEditRevisionKey } from './wbmEditRevision';
 import { canonicalPayloadDigest } from './wbmPullAuthorize';
 
 const ARG = new Set([
@@ -124,8 +124,11 @@ export const ingestWbmEdit = httpsV2.onCall(
     const recovery = await admin.database()
       .ref(`packets/editRecoveryReceipts/${driver.driverId}/${decided.payloadDigest}`).once('value');
     const recoveryRecord = recovery.val();
-    if (recoveryRecord && typeof recoveryRecord.appliedEventId === 'string'
-      && /^[A-Za-z0-9_-]{1,300}$/.test(recoveryRecord.appliedEventId)) {
+    if (recoveryRecord) {
+      if (typeof recoveryRecord.appliedEventId !== 'string'
+        || !/^[A-Za-z0-9_-]{1,300}$/.test(recoveryRecord.appliedEventId)) {
+        throw new httpsV2.HttpsError('failed-precondition', 'edit_recovery_confirmation_pending');
+      }
       const completed = await admin.database().ref(`packets/editOutbox/${recoveryRecord.appliedEventId}`).once('value');
       if (verifiedEditRecovery({ receipt: recoveryRecord, original, outbox: completed.val(),
         driverId: driver.driverId, companyId: authority.companyId,
@@ -154,6 +157,21 @@ export const ingestWbmEdit = httpsV2.onCall(
 
     const key = wbmEditRevisionKey(decided.idempotencyKey, payload);
     const ref = admin.database().ref(wbmEditIncomingPath(key));
+    const applied = await admin.database().ref(`packets/editOutbox/${key}`).once('value');
+    if (completedEditRevision({ outbox: applied.val(), key, payload,
+      driverId: driver.driverId, companyId: authority.companyId })) {
+      // The processor retains completed outboxes as immutable receipts. Do not
+      // recreate an incoming request that its completed state cannot consume.
+      const cleanup = await ref.transaction(current => {
+        if (!current) return null;
+        if (current.driverId === driver.driverId && current.companyId === authority.companyId
+          && current.payloadDigest === payloadDigest) return null;
+        return undefined;
+      });
+      if (!cleanup.committed) throw new httpsV2.HttpsError('failed-precondition', 'idempotency_payload_conflict');
+      return { ok: true, key, packetId: decided.originalPacketId, idempotencyKey: decided.idempotencyKey,
+        duplicate: true, queued: false, committed: true };
+    }
     const box: { outcome: 'write' | 'duplicate' | 'abort'; abortReason: string } = {
       outcome: 'write',
       abortReason: 'ingest_conflict',

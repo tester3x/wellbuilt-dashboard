@@ -1,4 +1,4 @@
-import { preserveOriginalGaugePrecision, verifiedEditRecovery, wbmEditRevisionKey } from '../wbmEditRevision';
+import { completedEditRevision, preserveOriginalGaugePrecision, verifiedEditRecovery, wbmEditRevisionKey } from '../wbmEditRevision';
 
 it('deduplicates a retry but separates changed corrections without changing the parent pull', () => {
   const body = { originalPacketId: 'pull', tankLevelFeet: 9, bblsTaken: 80, idempotencyKey: 'edit' };
@@ -35,4 +35,16 @@ it('verifies a historical correction without replacing a newer last-load signal'
   expect(verifiedEditRecovery(historical)).toBe(true);
   expect(verifiedEditRecovery({ ...historical, original: { ...historical.original, activeEditEventId: 'different' } })).toBe(false);
   expect(verifiedEditRecovery({ ...historical, outbox: { ...historical.outbox, completed: false } })).toBe(false);
+});
+
+it('acknowledges only an exactly completed revision; a replay must not recreate incoming or apply it again', () => {
+  const payload = { originalPacketId: 'p', tankLevelFeet: 9 + 8 / 12, bblsTaken: 80 };
+  const done = { ...outbox, measurements: { ...outbox.measurements, tankLevelFeet: 9 + 8 / 12 } };
+  const call = { outbox: done, key: done.eventId, payload, driverId: 'd', companyId: 'c' };
+  expect(completedEditRevision(call)).toBe(true);
+  for (const patch of [{ key: 'other' }, { driverId: 'other' }, { companyId: 'other' },
+    { payload: { ...payload, originalPacketId: 'different' } }, { payload: { ...payload, bblsTaken: 81 } },
+    { outbox: { ...done, completed: false } }, { outbox: { ...done, stage: 'prepared' } }]) {
+    expect(completedEditRevision({ ...call, ...patch })).toBe(false);
+  }
 });
