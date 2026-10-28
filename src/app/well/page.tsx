@@ -8,6 +8,8 @@ import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import { useGovernedWellPool } from '@/lib/useGovernedWellPool';
 import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
+import { formatFeetWBM } from '@/lib/wbmLevelEstimator';
+import { freshWaterMinimumForecast } from '@/lib/freshWaterMinimumForecast';
 import { WellPoolEmptyState } from '@/components/WellPoolEmptyState';
 import { canEditPull, canDeletePull } from '@/lib/auth';
 import {
@@ -121,6 +123,9 @@ function WellDetailPage() {
   // The shared WB-M projection — identical inputs/formula to /mobile and Dispatch, so
   // the same governed response yields the same current level at the same instant.
   const levelProjection = wellStatus ? projectWellLevel(wellStatus, asOfMs) : null;
+  const isFreshWater = wellStatus?.routeType === 'freshwater';
+  const minimumForecast = wellStatus
+    ? freshWaterMinimumForecast(wellStatus, levelProjection?.estFeet ?? null, asOfMs) : null;
 
   // Edit modal state
   const [editingPull, setEditingPull] = useState<PullPacket | null>(null);
@@ -216,10 +221,18 @@ function WellDetailPage() {
     }
   }, [user, loading, router]);
 
-  // Fetch well history (once on mount, manual refresh via button)
+  // Produced-water pull packets are not freshwater delivery history.
   useEffect(() => {
+    if (poolLoading) return;
+    if (isFreshWater) {
+      setPulls([]);
+      setDataLoading(false);
+      setError('');
+      return;
+    }
     if (!wellName || !canViewGlobalWellPool(user, operatingCompanyId)) {
       setPulls([]);
+      setDataLoading(false);
       return;
     }
 
@@ -254,13 +267,18 @@ function WellDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [wellName, user, operatingCompanyId]);
+  }, [wellName, user, operatingCompanyId, poolLoading, isFreshWater]);
 
   // Manual refresh button handler - updates BOTH Well History and Current Status
   const handleRefresh = async () => {
     if (dataLoading) return; // Prevent overlapping / duplicate fetches on rapid clicks
     try {
       setDataLoading(true);
+      if (isFreshWater) {
+        await refreshWellPool();
+        setError('');
+        return;
+      }
       const [history] = await Promise.all([
         fetchWellHistoryUnified(wellName),
         refreshWellPool(),
@@ -546,7 +564,7 @@ function WellDetailPage() {
               <span className={dataLoading ? 'animate-spin' : ''}>⟳</span>
               Refresh
             </button>
-            <button
+            {!isFreshWater && <button
               onClick={async () => {
                 setShowAddPull(true);
                 if (addPullDrivers.length === 0) {
@@ -582,14 +600,15 @@ function WellDetailPage() {
               className="px-3 py-2 text-sm font-medium rounded transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700 shrink-0 ml-4"
             >
               <span className="text-sm">+</span> Add Pull
-            </button>
+            </button>}
+            {isFreshWater && <span className="ml-4 text-xs text-gray-400">Record loads in WB-M or WB-T</span>}
           </div>
         </div>
       </div>
 
       {/* Main Content - full width for table */}
       <main className="mx-auto px-4 py-8">
-        <h1 className="text-2xl font-bold text-white mb-6">Well History</h1>
+        <h1 className="text-2xl font-bold text-white mb-6">{isFreshWater ? 'Freshwater Tank' : 'Well History'}</h1>
         {error && (
           <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded mb-6">
             {error}
@@ -623,17 +642,17 @@ function WellDetailPage() {
                 </div>
               </div>
               <div className="text-center">
-                <div className="text-xs text-gray-400">Last Pull</div>
+                <div className="text-xs text-gray-400">{isFreshWater ? 'Last Tank Update' : 'Last Pull'}</div>
                 <div className="text-lg font-mono text-white">
-                  {wellStatus.lastPullDateTimeUTC
+                  {isFreshWater ? (wellStatus.inventoryAsOfUTC ? formatDateTime(wellStatus.inventoryAsOfUTC) : '--') : wellStatus.lastPullDateTimeUTC
                     ? formatDateTime(wellStatus.lastPullDateTimeUTC)
                     : wellStatus.lastPullDateTime || wellStatus.timestamp || '--'}
                 </div>
               </div>
               <div className="text-center">
-                <div className="text-xs text-gray-400">Last Pull Level</div>
+                <div className="text-xs text-gray-400">{isFreshWater ? 'Level at Update' : 'Last Pull Level'}</div>
                 <div className="text-lg font-mono text-white">
-                  {wellStatus.lastPullBottomLevel || '--'}
+                  {isFreshWater ? formatFeetWBM(wellStatus.inventoryLevelFeet ?? null) : wellStatus.lastPullBottomLevel || '--'}
                 </div>
               </div>
               <div className="text-center">
@@ -649,12 +668,12 @@ function WellDetailPage() {
                 <div className="text-xl font-mono text-white">{wellStatus.routeType === 'freshwater' ? <FreshWaterRate well={wellStatus} unit="day"/> : wellStatus.windowBblsDay || wellStatus.bbls24hrs || '--'}</div>
               </div>
               <div className="text-center">
-                <div className="text-xs text-gray-400">Time Till Pull</div>
-                <div className="text-xl font-mono text-white">{wellStatus.timeTillPull || wellStatus.etaToMax || '--'}</div>
+                <div className="text-xs text-gray-400">{isFreshWater ? 'Time Till Delivery' : 'Time Till Pull'}</div>
+                <div className="text-xl font-mono text-white">{isFreshWater ? minimumForecast ? minimumForecast.hoursRemaining.toFixed(1) + 'h' : '--' : wellStatus.timeTillPull || wellStatus.etaToMax || '--'}</div>
               </div>
               <div className="text-center">
-                <div className="text-xs text-gray-400">Next Pull Time</div>
-                <div className="text-lg font-mono text-white">{wellStatus.nextPullTime || '--'}</div>
+                <div className="text-xs text-gray-400">{isFreshWater ? 'Next Delivery' : 'Next Pull Time'}</div>
+                <div className="text-lg font-mono text-white">{isFreshWater ? minimumForecast ? formatDateTime(minimumForecast.at) : '--' : wellStatus.nextPullTime || '--'}</div>
               </div>
             </div>
             {(wellStatus.isDown || wellStatus.wellDown) && (
@@ -663,6 +682,13 @@ function WellDetailPage() {
           </div>
         )}
 
+        {/* The pull packet table is only a produced-water history source. */}
+        {isFreshWater ? (
+          <section aria-label="Freshwater load history" className="text-gray-400">
+            <h2 className="text-lg font-semibold text-white mb-3">Load History</h2>
+            <p>Freshwater deliveries are recorded as loads in WB-M or WB-T. This page does not list those records yet.</p>
+          </section>
+        ) : <>
         {/* Pull History Table */}
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-4">
@@ -882,6 +908,7 @@ function WellDetailPage() {
             </table>
           </div>
         )}
+        </>}
       </main>
 
       {/* Edit Modal */}
