@@ -1,5 +1,12 @@
 import { canonicalPayloadDigest } from './wbmPullAuthorize';
 
+export function preserveOriginalGaugePrecision(payload: Record<string, unknown>, original: Record<string, unknown>): Record<string, unknown> {
+  const requested = Date.parse(String(payload.dateTimeUTC || ''));
+  const saved = Date.parse(String(original.dateTimeUTC || ''));
+  return Number.isFinite(requested) && Number.isFinite(saved) && Math.abs(requested - saved) < 1000
+    ? { ...payload, dateTimeUTC: original.dateTimeUTC } : payload;
+}
+
 /** An edit is a revision of one pull, never a new pull. Legacy clients reuse
  * their edit key, so the server must distinguish immutable correction bodies. */
 export function wbmEditRevisionKey(legacyKey: string, payload: Record<string, unknown>): string {
@@ -24,6 +31,11 @@ export function verifiedEditRecovery(input: {
     && Number.isFinite(r.topInches) && Number.isFinite(r.bbls)
     && o.measurements?.tankTopInches === r.topInches && o.measurements?.bblsTaken === r.bbls
     && p.tankTopInches === r.topInches && p.bblsTaken === r.bbls
-    && p.lastPullDeliveredEventId === r.appliedEventId
-    && p.lastPullDeliveredRevision === r.appliedRevision;
+    && (o.isLatestPull === false
+      // Historical corrections update that load's history; they must not
+      // replace the current well's newer last-load signal.
+      ? p.activeEditEventId === r.appliedEventId && p.editCount === o.sequence
+        && Number.isInteger(o.sequence) && o.sequence > 0
+      : p.lastPullDeliveredEventId === r.appliedEventId
+        && p.lastPullDeliveredRevision === r.appliedRevision);
 }

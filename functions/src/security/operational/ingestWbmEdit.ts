@@ -19,7 +19,8 @@ import {
   wbmEditIncomingPath,
 } from './wbmEditAuthorize';
 import { legacyIdemStorageKey, selectProcessedPullParent } from './packetReconcileCore';
-import { verifiedEditRecovery, wbmEditRevisionKey } from './wbmEditRevision';
+import { preserveOriginalGaugePrecision, verifiedEditRecovery, wbmEditRevisionKey } from './wbmEditRevision';
+import { canonicalPayloadDigest } from './wbmPullAuthorize';
 
 const ARG = new Set([
   'packet_required', 'packet_too_large', 'unsupported_request_type', 'unexpected_field',
@@ -138,18 +139,20 @@ export const ingestWbmEdit = httpsV2.onCall(
       throw new httpsV2.HttpsError('failed-precondition', 'edit_recovery_confirmation_pending');
     }
 
+    const payload = preserveOriginalGaugePrecision(decided.payload, original!);
+    const payloadDigest = canonicalPayloadDigest(payload);
     const stamped: Record<string, unknown> = {
-      ...decided.payload,
+      ...payload,
       driverId: driver.driverId,
       driverName: driver.displayName || null,
       companyId: authority.companyId,
       ingestedAt: Date.now(),
       ingestedBy: driver.uid,
       authSource: driver.authSource,
-      payloadDigest: decided.payloadDigest,
+      payloadDigest,
     };
 
-    const key = wbmEditRevisionKey(decided.idempotencyKey, decided.payload);
+    const key = wbmEditRevisionKey(decided.idempotencyKey, payload);
     const ref = admin.database().ref(wbmEditIncomingPath(key));
     const box: { outcome: 'write' | 'duplicate' | 'abort'; abortReason: string } = {
       outcome: 'write',
@@ -162,7 +165,7 @@ export const ingestWbmEdit = httpsV2.onCall(
       const gate = decideWbmEditTransaction({
         existing,
         driverId: driver.driverId,
-        payloadDigest: decided.payloadDigest,
+        payloadDigest,
       });
       if (gate.action === 'write') {
         box.outcome = 'write';
