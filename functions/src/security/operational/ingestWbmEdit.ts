@@ -19,6 +19,7 @@ import {
   wbmEditIncomingPath,
 } from './wbmEditAuthorize';
 import { legacyIdemStorageKey, selectProcessedPullParent } from './packetReconcileCore';
+import { verifiedEditRecovery, wbmEditRevisionKey } from './wbmEditRevision';
 
 const ARG = new Set([
   'packet_required', 'packet_too_large', 'unsupported_request_type', 'unexpected_field',
@@ -119,6 +120,24 @@ export const ingestWbmEdit = httpsV2.onCall(
       throw new httpsV2.HttpsError('resource-exhausted', 'Packet rate limit');
     }
 
+    const recovery = await admin.database()
+      .ref(`packets/editRecoveryReceipts/${driver.driverId}/${decided.payloadDigest}`).once('value');
+    const recoveryRecord = recovery.val();
+    if (recoveryRecord && typeof recoveryRecord.appliedEventId === 'string'
+      && /^[A-Za-z0-9_-]{1,300}$/.test(recoveryRecord.appliedEventId)) {
+      const completed = await admin.database().ref(`packets/editOutbox/${recoveryRecord.appliedEventId}`).once('value');
+      if (verifiedEditRecovery({ receipt: recoveryRecord, original, outbox: completed.val(),
+        driverId: driver.driverId, companyId: authority.companyId,
+        originalPacketId: decided.originalPacketId, payloadDigest: decided.payloadDigest })) {
+        await writeSecurityAudit({ action: 'ingestWbmEdit_recovery_confirmed', actorUid: driver.uid,
+          driverId: driver.driverId, detail: { packetId: decided.originalPacketId, eventId: recoveryRecord.appliedEventId } });
+        return { ok: true, key: decided.idempotencyKey, packetId: decided.originalPacketId,
+          idempotencyKey: decided.idempotencyKey, duplicate: true, superseded: true, queued: false, committed: true };
+      }
+      // A reviewed stale body must never fall through and overwrite its replacement.
+      throw new httpsV2.HttpsError('failed-precondition', 'edit_recovery_confirmation_pending');
+    }
+
     const stamped: Record<string, unknown> = {
       ...decided.payload,
       driverId: driver.driverId,
@@ -130,7 +149,7 @@ export const ingestWbmEdit = httpsV2.onCall(
       payloadDigest: decided.payloadDigest,
     };
 
-    const key = decided.idempotencyKey;
+    const key = wbmEditRevisionKey(decided.idempotencyKey, decided.payload);
     const ref = admin.database().ref(wbmEditIncomingPath(key));
     const box: { outcome: 'write' | 'duplicate' | 'abort'; abortReason: string } = {
       outcome: 'write',
