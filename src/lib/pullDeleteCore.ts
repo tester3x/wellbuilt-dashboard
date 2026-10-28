@@ -48,7 +48,8 @@ export async function runDeletePull(
  * surfaces raw exception/transport text.
  */
 export function describeDeleteError(err: unknown): string {
-  const code = (err as FunctionsError | undefined)?.code;
+  const sdkCode = (err as FunctionsError | undefined)?.code;
+  const code = typeof sdkCode === 'string' ? sdkCode.replace(/^(functions|auth)\//, '') : '';
   const rawMessage = typeof (err as Error | undefined)?.message === 'string'
     ? (err as Error).message
     : '';
@@ -68,10 +69,12 @@ export function describeDeleteError(err: unknown): string {
     default:
       break;
   }
-  if (code === 'unauthenticated') return 'Your session expired. Sign in again and retry.';
+  if (['unauthenticated', 'user-token-expired', 'id-token-expired', 'user-disabled'].includes(code)) return 'Your session expired. Sign in again and retry.';
   if (code === 'permission-denied') return 'You do not have permission to delete pulls.';
-  if (code === 'unavailable' || code === 'internal' || code === 'deadline-exceeded') {
-    return 'The delete service is unavailable right now. The pull was not deleted — try again.';
+  if (['unavailable', 'internal', 'deadline-exceeded', 'network-request-failed'].includes(code) ||
+      (err instanceof TypeError && /failed to fetch|load failed|networkerror/i.test(rawMessage))) {
+    // A lost response can follow a committed delete. Never assert unchanged.
+    return 'The connection or delete service was interrupted. Refresh to confirm whether the pull was deleted, then retry if it remains.';
   }
-  return 'Could not delete the pull. It was not changed — try again.';
+  return 'Could not confirm the delete. Refresh the history, then retry if the pull remains.';
 }
