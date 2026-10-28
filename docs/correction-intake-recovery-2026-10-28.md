@@ -1,0 +1,9 @@
+# Correction intake recovery
+
+Runtime commit `1afedd2b` on `codex/wbt-correction-receipts-20261028` was deployed only to `ingestWbmEdit`. Active deployed source and compiled intake/revision helper byte-match the committed source. No Hosting, processor, database rules, authorization grants or APK were deployed.
+
+Different corrections from legacy clients now receive distinct immutable edit event keys while retaining their original pull parent. Exact completed revision receipts prevent recreation/reapplication; tenant and payload mismatches remain failures. Reviewed stale-request recovery acknowledgements require completed outbox and canonical measurement evidence, including the separate historical-load path that must not overwrite a newer current-well signal. Existing timestamp precision is preserved for subsecond differences caused by packet-ID reconstruction.
+
+Validation: 26 tests across revision, edit authorization, callable contract and edit-outbox lifecycle suites; Functions TypeScript compilation; active deployed byte comparison. On-device WB T275 delivered the corrected existing record and cleared its pending badge without restart. WB M refreshed that same history identity without increasing the history count. Exact server queries confirmed one job, one ticket and one processed load, preserved original quantities/date/time, completed correction outbox and absence of the duplicate incoming request. Shared-photo references were repaired only after verifying the existing sibling object's identity and storage metadata. Private backups, device captures and customer records remain outside Git.
+
+Companion WB T queued scheduler fix is commit `047bb608` on both active ticket branches. It has source tests and typecheck coverage but no new APK; the installed VC275 remains the existing desktop artifact.
