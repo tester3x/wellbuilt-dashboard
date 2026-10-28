@@ -9,6 +9,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver, assertSameCompany } from '../requireDriverAuth';
 import { writeSecurityAudit } from '../audit';
 import { evaluateExistingDispatchDriverUpdate } from './dispatchPacketPin';
+import { promoteDriverInvoiceStart } from './invoiceStartPromotion';
 
 const MAX_JSON = 400_000;
 
@@ -32,12 +33,18 @@ export const upsertDriverInvoice = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB', enforceAppCheck: false },
   async (request) => {
     const data = (request.data || {}) as {
+      intent?: string;
       invoiceId?: string;
       invoice?: Record<string, unknown>;
       merge?: boolean;
       driverHash?: string;
       idempotencyKey?: string;
     };
+    if (data.intent === 'start') {
+      const driver = await requireSecureDriver(request, { allowLegacyHash: false });
+      return promoteDriverInvoiceStart({ request, driver, firestore: admin.firestore(),
+        HttpsError: httpsV2.HttpsError, serverTimestamp: () => FieldValue.serverTimestamp(), writeSecurityAudit });
+    }
     if (!data.invoice || typeof data.invoice !== 'object') {
       throw new httpsV2.HttpsError('invalid-argument', 'invoice required');
     }
