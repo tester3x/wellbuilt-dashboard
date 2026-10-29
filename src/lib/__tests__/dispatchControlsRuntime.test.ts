@@ -85,8 +85,8 @@ test('Pull Delete: a rejected invoker propagates (handler surfaces via describeD
   await assert.rejects(() => runDeletePull(boom as never, 'pk_1', 'W'), /well_mismatch/);
   assert.match(describeDeleteError(new Error('well_mismatch: x')), /already changed elsewhere/i);
   assert.match(describeDeleteError({ code: 'permission-denied', message: 'x' }), /do not have permission/i);
-  assert.match(describeDeleteError({ code: 'unavailable', message: 'x' }), /was not deleted/i);
-  assert.match(describeDeleteError(new Error('weird')), /was not changed/i);
+  assert.match(describeDeleteError({ code: 'unavailable', message: 'x' }), /confirm whether the pull was deleted/i);
+  assert.match(describeDeleteError(new Error('weird')), /could not confirm/i);
 });
 
 // ── Wire Contracts ───────────────────────────────────────────────────────────
