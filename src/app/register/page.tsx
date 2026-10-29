@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { registerOwnerWithEmail } from '@/lib/auth';
 import {
   decodeDemoBridgeQuery,
@@ -51,7 +51,6 @@ function RegisterForm(): React.ReactElement {
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
 
   // Mirror the demo payload into sessionStorage so a future post-
   // registration onboarding flow can resume where the demo left off.

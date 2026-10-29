@@ -12,7 +12,7 @@ import { parseTrustedStaffAuthorityRecord } from './trustedStaffAuthority';
 import { CONTRACT_VERSION, type PlanDefinition } from '@tester3x/wellbuilt-contracts';
 
 export function ownerFreePlan(companyId: string): PlanDefinition {
-  return { contractVersion: CONTRACT_VERSION, planId: `free_${companyId}`, displayName: 'Standalone JSA & DVIR',
+  return { contractVersion: CONTRACT_VERSION, planId: `free-${companyId.replace(/_/g, '-')}`, displayName: 'Standalone JSA & DVIR',
     status: 'active', capabilities: ['jsa', 'dvir', 'companyDefinedWorkPeriod'], apps: {
       'wellbuilt-jsa': { included: true, requiresActiveShift: false },
       'wellbuilt-equipment': { included: true, requiresActiveShift: false },
@@ -113,10 +113,11 @@ export const createOwnerCompany = onCall({ region: 'us-central1', timeoutSeconds
     if (rows.some(row => row.exists)) return refuse();
     const codeRef = fs().collection('company_join_codes').doc(createHash('sha256').update(proposed.joinCode).digest('hex'));
     if ((await tx.get(codeRef)).exists) throw new HttpsError('aborted', 'Please retry company setup');
-    tx.create(journalRef, { ...proposed, createdAt: stamp() });
     const plan = ownerFreePlan(companyId);
     const planRef = fs().collection('plans').doc(plan.planId);
     if ((await tx.get(planRef)).exists) return refuse();
+    // Firestore transactions require every read before the first write.
+    tx.create(journalRef, { ...proposed, createdAt: stamp() });
     tx.create(refs[0], { name: fields.companyName, status: 'provisioning', ownerUid: uid, createdAt: stamp(), createdBy: uid,
       timeZone: 'America/Chicago', wellbuiltContract: { contractVersion: CONTRACT_VERSION, configurationVersion: 1,
         planId: plan.planId, entitlementOverrides: [], contractEnforced: true,
@@ -157,7 +158,8 @@ export const createOwnerCompany = onCall({ region: 'us-central1', timeoutSeconds
       tx.get(fs().collection('driver_name_index').doc(j.nameNorm)), tx.get(credentialRef),
       tx.get(fs().collection('companies').doc(companyId)),
     ]);
-    if (index.data()?.driverId !== j.driverId || cred.data()?.ownerSignupUid !== uid || company.data()?.ownerUid !== uid) return refuse();
+    if (index.data()?.driverId !== j.driverId || cred.data()?.ownerSignupUid !== uid || cred.data()?.active !== false
+      || company.data()?.ownerUid !== uid || company.data()?.status !== 'provisioning') return refuse();
     authorityRefs.forEach((ref, index) => tx.create(ref, { schemaVersion: 1, uid: index === 0 ? uid : appUid,
       companyId, active: true, capabilities: [...OWNER_CAPABILITIES] }));
     tx.update(credentialRef, { active: true, updatedAt: stamp() });
@@ -168,6 +170,10 @@ export const createOwnerCompany = onCall({ region: 'us-central1', timeoutSeconds
   // A retry must not undo a later revocation.
   const authority = parseTrustedStaffAuthorityRecord((await fs().collection('trusted_staff_authority').doc(uid).get()).data(), uid);
   if (!authority.ok || authority.companyId !== companyId || !authority.capabilities.includes('manageCompany')) return refuse();
+  const appAuthority = parseTrustedStaffAuthorityRecord((await fs().collection('trusted_staff_authority').doc(appUid).get()).data(), appUid);
+  if (!appAuthority.ok || appAuthority.companyId !== companyId
+    || (await credentialRef.get()).data()?.active !== true
+    || (await fs().collection('companies').doc(companyId).get()).data()?.status !== 'active') return refuse();
   const activated = await profileRef.transaction(prior => {
     if (!prior || prior.ownerSignupUid !== uid || prior.companyId !== companyId) return;
     if (prior.ownerSignupState === 'ready') return prior.active === true ? prior : undefined;

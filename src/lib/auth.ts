@@ -310,9 +310,16 @@ export async function registerOwnerWithEmail(email: string, password: string, co
   if (auth.currentUser?.email?.toLowerCase() === address.toLowerCase()) {
     await reauthenticateWithCredential(auth.currentUser, EmailAuthProvider.credential(address, password));
   } else {
-    await createUserWithEmailAndPassword(auth, address, password);
+    try {
+      await createUserWithEmailAndPassword(auth, address, password);
+    } catch (error) {
+      // A prior attempt may have created Auth before company provisioning
+      // failed. Prove the same password before resuming its server journal.
+      if ((error as { code?: string }).code !== 'auth/email-already-in-use') throw error;
+      await signInWithEmailAndPassword(auth, address, password);
+    }
   }
-  const result = await httpsCallable(getFirebaseFunctions(), 'createOwnerCompany')({
+  const result = await httpsCallable(getFirebaseFunctions(), 'createOwnerCompany', { timeout: 120000 })({
     schemaVersion: 1, companyName: requested, displayName: name, passcode: password,
   });
   const value = result.data as { ok?: boolean; companyId?: string; displayName?: string };

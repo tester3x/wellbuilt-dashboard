@@ -1,5 +1,9 @@
 # Owner signup investigation — not a release
 
+## User decision
+
+Mike subsequently directed the laptop to continue the NEW self-service owner/company signup, without spending time upgrading the legacy approval code. Existing platform approval guards stay parked and unchanged. This supersedes the earlier design pause below. Release readiness is tracked in the subsequent signup release receipt, not inferred from this historical WIP note.
+
 User requested investigation of an existing WB invitation after consultation and authorized reusing/moving existing registration code if appropriate.
 
 Evidence in current source and Git history:
