@@ -68,10 +68,17 @@ export function reportDocumentId(companyId: string, driverId: string, report: Va
 export type ValidReport = {
   inspectionId: string; reportId: string; inspectionType: 'pre_trip' | 'post_trip' | 'periodic';
   version: number; companyId: string; driverHash: string; raw: Obj;
+  evidence: SignedEvidence[];
+};
+
+export type SignedEvidence = {
+  issueId: string; areaId: string; itemId: string; localEvidenceId: string;
+  sha256: string; byteLength: number; contentType: 'image/jpeg';
 };
 
 /** Validate the immutable graph before accepting the signed full report. */
-export function validateFullReport(value: unknown, companyId: string): ValidReport {
+export function validateFullReport(value: unknown, companyId: string,
+  options: { allowOwnedEvidence?: boolean } = {}): ValidReport {
   const row = object(value, 'report');
   if (row.schemaVersion !== 'dvir-report/2' || row.companyId !== companyId) fail('Report identity mismatch');
   const inspectionId = reportId(row.inspectionId, 'inspectionId');
@@ -160,6 +167,8 @@ export function validateFullReport(value: unknown, companyId: string): ValidRepo
   }
   const issues = list(row.issues, 'issues').map(issue => object(issue, 'issue'));
   const issueIds = new Set<string>();
+  const signedEvidence: SignedEvidence[] = [];
+  let evidenceBytes = 0;
   for (const issue of issues) {
     const issueId = reportId(issue.issueId, 'issueId');
     const item = items.get(reportId(issue.itemId, 'issue itemId'));
@@ -169,12 +178,27 @@ export function validateFullReport(value: unknown, companyId: string): ValidRepo
     issueIds.add(issueId);
     const section = sections.find(entry => entry.assetId === issue.assetId);
     if (!section || !(section.issueIds as unknown[]).includes(issueId)) fail('Issue section mismatch');
-    for (const evidenceRaw of list(issue.evidence, 'evidence', 50)) {
+    for (const evidenceRaw of list(issue.evidence, 'evidence', 1)) {
       const evidence = object(evidenceRaw, 'evidence');
-      if (evidence.localDraftRef !== undefined || evidence.remoteEvidenceId !== undefined)
-        fail('Defect media transport is not available');
+      if (evidence.localDraftRef === undefined && evidence.remoteEvidenceId === undefined) continue;
+      if (!options.allowOwnedEvidence) fail('Defect media transport is not available');
+      if (evidence.remoteEvidenceId !== undefined || evidence.localDraftRef === undefined
+        || Object.keys(evidence).some(key => !['localDraftRef', 'sha256', 'byteLength', 'contentType', 'caption'].includes(key)))
+        fail('Invalid signed defect evidence');
+      const localEvidenceId = reportId(evidence.localDraftRef, 'localEvidenceId');
+      if (typeof evidence.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(evidence.sha256)
+        || !Number.isSafeInteger(evidence.byteLength) || (evidence.byteLength as number) < 1
+        || (evidence.byteLength as number) > 8 * 1024 * 1024 || evidence.contentType !== 'image/jpeg')
+        fail('Invalid signed defect evidence');
+      evidenceBytes += evidence.byteLength as number;
+      signedEvidence.push({ issueId, areaId: issue.areaId as string, itemId: issue.itemId as string,
+        localEvidenceId, sha256: evidence.sha256 as string, byteLength: evidence.byteLength as number,
+        contentType: 'image/jpeg' });
     }
   }
+  if (signedEvidence.length > 20 || evidenceBytes > 80 * 1024 * 1024
+    || new Set(signedEvidence.map(item => item.localEvidenceId)).size !== signedEvidence.length)
+    fail('Defect evidence limit or identity mismatch');
   for (const section of sections) {
     const expected = issues.filter(issue => issue.assetId === section.assetId).map(issue => issue.issueId);
     const actual = section.issueIds as unknown[];
@@ -189,5 +213,5 @@ export function validateFullReport(value: unknown, companyId: string): ValidRepo
   if (summary.issuesFound !== issues.length) fail('Summary issue count mismatch');
   if (summary.overallResult !== (issues.length ? 'needs_attention' : 'pass')) fail('Summary result mismatch');
   return { inspectionId, reportId: id, inspectionType: inspectionType as ValidReport['inspectionType'],
-    version: version as number, companyId, driverHash, raw: row };
+    version: version as number, companyId, driverHash, raw: row, evidence: signedEvidence };
 }

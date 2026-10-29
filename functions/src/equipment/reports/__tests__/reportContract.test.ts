@@ -27,6 +27,18 @@ describe('complete DVIR report contract', () => {
     expect(() => validateFullReport(row, 'acme')).toThrow();
     expect(() => canonicalReportJson({ huge: 'x'.repeat(800_000) })).toThrow();
   });
+  it('accepts only bounded signed local evidence with an explicit sidecar gate', () => {
+    const row = fixture();
+    const photo = { localDraftRef: 'photo1', sha256: 'a'.repeat(64), byteLength: 123,
+      contentType: 'image/jpeg' };
+    (row.issues[0].evidence as object[]).push(photo);
+    expect(() => validateFullReport(row, 'acme')).toThrow();
+    expect(validateFullReport(row, 'acme', { allowOwnedEvidence: true }).evidence)
+      .toEqual([{ issueId: 'issue1', areaId: 'tank', itemId: 'valves',
+        localEvidenceId: 'photo1', sha256: 'a'.repeat(64), byteLength: 123, contentType: 'image/jpeg' }]);
+    (row.issues[0].evidence as object[]).push(photo);
+    expect(() => validateFullReport(row, 'acme', { allowOwnedEvidence: true })).toThrow();
+  });
   it('does not let a driver self-certify repair or next-driver review', () => {
     const repaired = fixture(); repaired.repairCertification.status = 'repaired' as never;
     expect(() => validateFullReport(repaired, 'acme')).toThrow();

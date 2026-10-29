@@ -6,6 +6,8 @@ import { isCanonicalDriverId } from '../assignmentIdentity';
 import { loadInspectionProfileProvenance } from '../inspectionProfiles/provenance';
 import { requireDashboardDvirRead } from '../auth/requireDashboardEQuipment';
 import { canonicalReportJson, digestReport, reportDocumentId, validateFullReport } from './reportContract';
+import { beginEvidenceUpload, enabled as evidenceEnabled, finalizeEvidenceUpload,
+  readEvidenceUrl, verifiedEvidenceForReport } from './evidence';
 
 const options = { region: 'us-central1', timeoutSeconds: 60, memory: '512MiB' as const };
 type Request = httpsV2.CallableRequest<unknown>;
@@ -41,11 +43,14 @@ export async function getCapabilities(request: Request) {
   input(request, []);
   const actor = await subject(request);
   return { schemaVersion: 1, companyId: actor.companyId, enabled: enabled(),
-    reportSchemaVersion: 'dvir-report/2', supportsCombinedAssets: true, supportsProfileProvenance: true };
+    reportSchemaVersion: 'dvir-report/2', supportsCombinedAssets: true, supportsProfileProvenance: true,
+    ...(evidenceEnabled() ? { defectEvidence: { schemaVersion: 1, mode: 'owned-sidecar',
+      maxPhotosPerReport: 20, maxTotalBytes: 80 * 1024 * 1024, maxPhotoBytes: 8 * 1024 * 1024,
+      contentTypes: ['image/jpeg'] } } : {}) };
 }
 
 export async function submitFullReport(request: Request) {
-  const data = input(request, ['report', 'reportDigest']);
+  const data = input(request, ['report', 'reportDigest', 'evidenceReceiptIds']);
   const actor = await subject(request);
   if (!enabled()) return fail('failed-precondition', 'Full report ingestion is disabled');
   if (typeof data.reportDigest !== 'string' || !/^[a-f0-9]{64}$/.test(data.reportDigest))
@@ -53,7 +58,14 @@ export async function submitFullReport(request: Request) {
   // Clone using the phone's canonical JSON rules. This also strips undefined
   // object fields before Firestore storage and enforces the 800000-byte bound.
   const report = JSON.parse(canonicalReportJson(data.report)) as Record<string, unknown>;
-  const parsed = validateFullReport(report, actor.companyId);
+  const hasReceipts = data.evidenceReceiptIds !== undefined;
+  if (hasReceipts && !evidenceEnabled()) return fail('failed-precondition', 'Defect evidence is disabled');
+  const receiptIds = hasReceipts && Array.isArray(data.evidenceReceiptIds)
+    && data.evidenceReceiptIds.length <= 20
+    && data.evidenceReceiptIds.every(id => typeof id === 'string' && /^e_[a-f0-9]{64}$/.test(id))
+    ? data.evidenceReceiptIds as string[] : hasReceipts ? fail('invalid-argument', 'Invalid evidenceReceiptIds') : [];
+  const parsed = validateFullReport(report, actor.companyId, { allowOwnedEvidence: hasReceipts && evidenceEnabled() });
+  if (parsed.evidence.length !== receiptIds.length) return fail('invalid-argument', 'Evidence receipts do not cover signed report');
   const digest = digestReport(report);
   if (digest !== data.reportDigest) return fail('invalid-argument', 'Report digest mismatch');
   if (parsed.driverHash.toLowerCase() !== actor.driverHash.toLowerCase()
@@ -76,12 +88,15 @@ export async function submitFullReport(request: Request) {
     inspectionId: parsed.inspectionId, reportId: parsed.reportId,
     inspectionType: parsed.inspectionType, version: parsed.version, reportDigest: digest, storagePath };
   await admin.firestore().runTransaction(async tx => {
+    const verifiedEvidence = await verifiedEvidenceForReport(tx, actor, parsed, digest, receiptIds);
     const current = await tx.get(ref);
     if (current.exists) {
-      if (current.data()?.reportDigest !== digest) fail('already-exists', 'Signed report identity conflict');
+      if (current.data()?.reportDigest !== digest
+        || canonicalReportJson(current.data()?.verifiedEvidence || []) !== canonicalReportJson(verifiedEvidence))
+        fail('already-exists', 'Signed report identity conflict');
       return;
     }
-    tx.create(ref, { ...receipt, driverId: actor.driverId, report,
+    tx.create(ref, { ...receipt, driverId: actor.driverId, report, verifiedEvidence,
       createdAt: admin.firestore.FieldValue.serverTimestamp() });
   });
   return receipt;
@@ -89,6 +104,16 @@ export async function submitFullReport(request: Request) {
 
 export const getEquipmentInspectionReportCapabilities = httpsV2.onCall(options, getCapabilities);
 export const submitEquipmentInspectionReport = httpsV2.onCall(options, submitFullReport);
+
+export const beginEquipmentInspectionEvidenceUpload = httpsV2.onCall(options, async request => {
+  const data = input(request, ['reportIdentity', 'reportDigest', 'issueId', 'areaId', 'itemId',
+    'localEvidenceId', 'sha256', 'byteLength', 'contentType']);
+  return beginEvidenceUpload(await subject(request), data);
+});
+export const finalizeEquipmentInspectionEvidence = httpsV2.onCall(options, async request => {
+  const data = input(request, ['evidenceId']);
+  return finalizeEvidenceUpload(await subject(request), data.evidenceId as string);
+});
 
 async function dashboardCompany(request: Request, keys: string[]): Promise<string> {
   const data = input(request, ['companyId', ...keys]);
@@ -126,5 +151,12 @@ export const getEquipmentInspectionReport = httpsV2.onCall(options, async reques
   if (!snap.exists) return fail('not-found', 'Report not found');
   const row = snap.data()!;
   return { schemaVersion: 1, companyId, documentId: snap.id,
-    reportDigest: row.reportDigest, storagePath: snap.ref.path, report: row.report };
+    reportDigest: row.reportDigest, storagePath: snap.ref.path, report: row.report,
+    verifiedEvidence: row.verifiedEvidence || [] };
+});
+
+export const getEquipmentInspectionEvidenceReadUrl = httpsV2.onCall(options, async request => {
+  const data = input(request, ['companyId', 'documentId', 'evidenceId']);
+  const companyId = await dashboardCompany(request, ['documentId', 'evidenceId']);
+  return readEvidenceUrl(companyId, data.documentId as string, data.evidenceId as string);
 });
