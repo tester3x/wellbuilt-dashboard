@@ -31,6 +31,7 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { parseReturnAttempt, returnAttemptState, type ReturnEventType } from './returnAttemptContract';
+import { assertNoUnfinishedTicketJobs } from './ticketWaterCustody';
 import {
   loadCanonicalDriverAuthority,
   productionCanonicalDriverReaders,
@@ -305,6 +306,11 @@ export const closeDriverShift = httpsV2.onCall(
       const record = snap.exists ? readRecord(snap.data()) : null;
       const decision = decideClose(record, requestedPeriodId, who);
       if (decision.action !== 'close') return decision;
+
+      // Query under the authenticated subject, inside the close transaction.
+      // Queued jobs do not block; started/paused jobs must be resolved in WB T.
+      // Read failures propagate before authority, logout, or odometer writes.
+      await assertNoUnfinishedTicketJobs(tx, db(), who);
 
       tx.set(authorityRef, {
         ...recordAfterClose(record as ShiftAuthorityRecord, decision.periodId),
