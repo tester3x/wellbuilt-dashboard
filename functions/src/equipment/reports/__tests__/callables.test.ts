@@ -14,8 +14,10 @@ import { loadCanonicalDriverAuthority } from '../../../security/canonicalDriverA
 import { driverAuthUid } from '../../../security/tokenMint';
 import { digestReport } from '../reportContract';
 import { getCapabilities, submitFullReport } from '../callables';
+import { getEquipmentInspectionEvidenceReadUrl } from '../callables';
 import { beginEvidenceUpload, bindingFor, evidenceIdFor, finalizeEvidenceUpload } from '../evidence';
 import { validateFullReport } from '../reportContract';
+import { requireDashboardDvirRead } from '../../auth/requireDashboardEQuipment';
 import { fixture } from './reportFixture';
 import { createHash } from 'crypto';
 
@@ -155,4 +157,29 @@ test('evidence begin is idempotent and finalize verifies real bytes before recei
   expect(receipt).toMatchObject({ state: 'verified', receiptId: first.evidenceId });
   await expect(finalizeEvidenceUpload(actor, first.evidenceId)).resolves.toEqual(receipt);
   expect(txUpdate).toHaveBeenCalledTimes(1);
+});
+
+test('Dashboard photo read requires current company role and verified attached receipt', async () => {
+  const actor = { companyId: 'acme', driverId };
+  const binding = bindingFor(actor, { inspectionId: 'inspection1', inspectionType: 'pre_trip',
+    reportId: 'inspection1', version: 1 }, { issueId: 'issue1', areaId: 'tank', itemId: 'valves',
+    localEvidenceId: 'photo1', sha256: imageHash, byteLength: imageBytes.length,
+    contentType: 'image/jpeg' }, 'a'.repeat(64));
+  const evidenceId = evidenceIdFor(binding), documentId = `r_${'1'.repeat(64)}`;
+  const storagePath = `companies/acme/equipment-inspection-evidence/${driverId}/${evidenceId}.jpg`;
+  records.set(`companies/acme/equipment_inspection_reports/${documentId}`, {
+    driverId, reportDigest: binding.reportDigest,
+    verifiedEvidence: [{ evidenceId, storagePath, binding }],
+  });
+  records.set(`companies/acme/equipment_inspection_evidence/${evidenceId}`, {
+    state: 'verified', generation: '1', storagePath, binding,
+  });
+  const request = { auth: { uid: 'dashboard-admin' }, data: { schemaVersion: 1, companyId: 'acme', documentId, evidenceId } };
+  (requireDashboardDvirRead as jest.Mock).mockRejectedValueOnce({ code: 'permission-denied' });
+  await expect(getEquipmentInspectionEvidenceReadUrl.run(request as never)).rejects.toMatchObject({ code: 'permission-denied' });
+  expect(fileMock.getSignedUrl).not.toHaveBeenCalled();
+  await expect(getEquipmentInspectionEvidenceReadUrl.run(request as never)).resolves
+    .toMatchObject({ companyId: 'acme', evidenceId, url: 'https://signed.example/temporary' });
+  records.delete(`companies/acme/equipment_inspection_evidence/${evidenceId}`);
+  await expect(getEquipmentInspectionEvidenceReadUrl.run(request as never)).rejects.toMatchObject({ code: 'failed-precondition' });
 });

@@ -164,9 +164,20 @@ export async function readEvidenceUrl(companyId: string, documentId: string, evi
     return fail('invalid-argument', 'Invalid report or evidence ID');
   const report = await reportRef(companyId, documentId).get();
   if (!report.exists) return fail('not-found', 'Report not found');
-  const attached = (report.data()?.verifiedEvidence || []) as Array<{ evidenceId: string; storagePath: string }>;
+  const attached = (report.data()?.verifiedEvidence || []) as Array<{
+    evidenceId: string; storagePath: string; binding: EvidenceBinding }>;
   const item = attached.find(entry => entry.evidenceId === evidenceId);
   if (!item) return fail('not-found', 'Verified evidence not attached to report');
+  const reservation = await evidenceRef(companyId, evidenceId).get();
+  const record = reservation.data();
+  if (!reservation.exists || record?.state !== 'verified' || !record.generation
+    || record.storagePath !== item.storagePath
+    || canonicalReportJson(record.binding) !== canonicalReportJson(item.binding)
+    || item.binding.companyId !== companyId || item.binding.driverId !== report.data()?.driverId
+    || item.binding.reportDigest !== report.data()?.reportDigest
+    || !item.storagePath.startsWith(`companies/${companyId}/equipment-inspection-evidence/`)
+    || !item.storagePath.endsWith(`/${evidenceId}.jpg`))
+    return fail('failed-precondition', 'Verified evidence is unavailable');
   const expiresAt = new Date(Date.now() + 10 * 60_000);
   const [url] = await bucket().file(item.storagePath).getSignedUrl({ action: 'read', expires: expiresAt }) as [string];
   return { schemaVersion: 1, companyId, documentId, evidenceId, url, expiresAt: expiresAt.toISOString() };
