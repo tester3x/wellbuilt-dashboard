@@ -29,6 +29,9 @@ const deployedSet = new Set(DEPLOYED.names);
  * deploys one, this list must shrink (a test below enforces that).
  */
 const KNOWN_BLOCKED_MISSING: Record<string, string> = {
+  listEquipmentInspectionReports: 'BLOCKED: full DVIR viewer is disabled by NEXT_PUBLIC_DVIR_FULL_REPORTS_ENABLED; backend rollout is pending.',
+  getEquipmentInspectionReport: 'BLOCKED: full DVIR viewer is disabled by NEXT_PUBLIC_DVIR_FULL_REPORTS_ENABLED; backend rollout is pending.',
+  getEquipmentInspectionEvidenceReadUrl: 'BLOCKED: full DVIR viewer is disabled by NEXT_PUBLIC_DVIR_FULL_REPORTS_ENABLED; evidence rollout is pending.',
   listWatchdogReviews: 'BLOCKED: tested remote review endpoint awaits explicit production deployment approval.',
   decideWatchdogReview: 'BLOCKED: tested remote review decision endpoint awaits explicit production deployment approval.',
   staffIngestDashboardPull: 'BLOCKED: exported in source, but absent from the 2026-09-23 production Functions inventory; deploy and verify this named callable before treating +Add Pull as working.',
@@ -39,7 +42,7 @@ const KNOWN_BLOCKED_MISSING: Record<string, string> = {
 };
 
 /** Callable names reached via a constant/adapter, not a string literal in the httpsCallable call. */
-const KNOWN_INDIRECT_CALLABLES = ['adminSubmitPullEdit'];
+const KNOWN_INDIRECT_CALLABLES = ['adminSubmitPullEdit', 'createOwnerCompany'];
 
 function walkTsx(dir: string): string[] {
   const out: string[] = [];
