@@ -43,6 +43,33 @@ test('rejects duplicate item IDs and arbitrary image paths', () => {
   expect(() => validateManifest(foreign, { ownerCompanyId: 'acme' })).toThrow('Invalid image storagePath');
 });
 
+test('item IDs are globally unique across areas', () => {
+  const value = manifest();
+  value.catalog.areas.push({ areaId: 'pump', label: 'Pump', assetRole: 'truck', sortOrder: 20,
+    items: [{ itemId: 'burner', componentLabel: 'Another component' }] });
+  expect(() => validateManifest(value, { ownerCompanyId: 'acme' })).toThrow('Duplicate itemId');
+});
+
+test('rejects object prototype keys as profile, area, item, and image IDs', () => {
+  const makers = [
+    () => { const value = manifest(); value.profileId = '__proto__'; value.catalog.catalogId = '__proto__'; return value; },
+    () => { const value = manifest(); value.catalog.areas[0].areaId = 'constructor'; return value; },
+    () => { const value = manifest(); value.catalog.areas[0].items[0].itemId = 'prototype'; return value; },
+    () => { const value = manifest(); value.images[0].imageId = '__proto__'; return value; },
+  ];
+  for (const make of makers) expect(() => validateManifest(make(), { ownerCompanyId: 'acme' })).toThrow(/Invalid/);
+});
+
+test('every supported mode retains applicable truck and trailer coverage', () => {
+  const truckMissing = manifest();
+  truckMissing.supportedModes = ['truck_only', 'tractor_tanker'];
+  truckMissing.catalog.areas[0].assetRole = 'trailer';
+  expect(() => validateManifest(truckMissing, { ownerCompanyId: 'acme' })).toThrow('Truck checklist');
+  const trailerMissing = manifest();
+  trailerMissing.supportedModes = ['tractor_tanker'];
+  expect(() => validateManifest(trailerMissing, { ownerCompanyId: 'acme' })).toThrow('Tractor/tanker checklist');
+});
+
 test('rejects baked hotspot coordinates in profile rows', () => {
   const value = manifest();
   (value.catalog.areas[0].items[0] as Record<string, unknown>).hotspotId = 'old_number_1';

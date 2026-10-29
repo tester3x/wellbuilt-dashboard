@@ -8,7 +8,9 @@ import { type ImageRef, type ProfileManifest, safeId, safeText, validateManifest
 type Request = { auth?: { uid: string; token: Record<string, unknown> } | null; data: unknown };
 type Actor = { companyId: string; canManage: boolean; uid: string };
 const fs = () => admin.firestore();
-const bucket = () => admin.storage().bucket();
+// The canonical wellbuilt-sync Storage bucket is the Firebase-era .firebasestorage.app
+// bucket. The older .appspot.com name does not exist in this project.
+const bucket = () => admin.storage().bucket('wellbuilt-sync.firebasestorage.app');
 const companyRoot = (companyId: string) => fs().collection('equipment_inspection_companies').doc(companyId);
 const companyProfiles = (companyId: string) => companyRoot(companyId).collection('profiles');
 const defaults = () => fs().collection('equipment_inspection_defaults');

@@ -15,7 +15,7 @@ async function main() {
   if (publish && (process.env.WB_DVIR_PROFILE_PUBLISH !== '1' || process.env.GOOGLE_CLOUD_PROJECT !== 'wellbuilt-sync'))
     throw new Error('Publishing requires WB_DVIR_PROFILE_PUBLISH=1 and GOOGLE_CLOUD_PROJECT=wellbuilt-sync');
   const admin = publish ? require('../functions/node_modules/firebase-admin') : null;
-  if (admin) admin.initializeApp({ projectId: 'wellbuilt-sync', storageBucket: 'wellbuilt-sync.appspot.com' });
+  if (admin) admin.initializeApp({ projectId: 'wellbuilt-sync', storageBucket: 'wellbuilt-sync.firebasestorage.app' });
   for (const profileId of ['hot-oiler-v1', 'tractor-tanker-v1']) {
     const root = path.join(__dirname, '../docs/dvir-profile-defaults');
     const manifest = JSON.parse(fs.readFileSync(path.join(root, `${profileId}.20261029_candidate1.review.json`), 'utf8'));

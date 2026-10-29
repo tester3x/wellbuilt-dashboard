@@ -5,6 +5,7 @@
 
 import * as admin from 'firebase-admin';
 import { ActorRef } from './actor';
+import type { InspectionProfileProvenance } from '../inspectionProfiles/provenance';
 
 export const PRE_TRIP_CATEGORY_IDS = [
   'lights',
@@ -36,6 +37,8 @@ export interface InspectionCategoryRecord {
 }
 
 export interface PreTripInspectionRecord {
+  /** Optional immutable profile reference for inspections made with a published DVIR profile. */
+  inspectionProfile?: InspectionProfileProvenance;
   inspectionId: string;
   companyId: string;
   equipmentId: string;

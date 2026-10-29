@@ -2,7 +2,8 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 
 const fail = (message: string): never => { throw new httpsV2.HttpsError('invalid-argument', message); };
 const id = (value: unknown, label: string): string => {
-  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) return fail(`Invalid ${label}`);
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value)
+    || value === '__proto__' || value === 'prototype' || value === 'constructor') return fail(`Invalid ${label}`);
   return value;
 };
 const label = (value: unknown, name: string, max = 200): string => {
@@ -59,8 +60,11 @@ export function validateManifest(input: unknown, options: { ownerCompanyId?: str
   const areas = array(catalog.areas, 'areas', 100);
   if (!areas.length) fail('At least one area required');
   const areaIds = new Set<string>();
+  const itemIds = new Set<string>();
   const orders = new Set<number>();
   let totalItems = 0;
+  let truckAreas = 0;
+  let trailerAreas = 0;
   for (const entry of areas) {
     const area = object(entry, 'area');
     onlyKeys(area, ['areaId', 'label', 'assetRole', 'sortOrder', 'items'], 'area');
@@ -70,12 +74,13 @@ export function validateManifest(input: unknown, options: { ownerCompanyId?: str
     areaIds.add(areaId);
     if (area.assetRole !== 'truck' && area.assetRole !== 'trailer') fail('Invalid assetRole');
     if (area.assetRole === 'trailer' && !modes.includes('tractor_tanker')) fail('Trailer area requires tractor_tanker mode');
+    if (area.assetRole === 'truck') truckAreas++;
+    else trailerAreas++;
     if (typeof area.sortOrder !== 'number' || !Number.isFinite(area.sortOrder) || orders.has(area.sortOrder as number)) fail('Invalid sortOrder');
     orders.add(area.sortOrder as number);
     const items = array(area.items, 'items', 100);
     if (!items.length) fail('Area requires items');
     totalItems += items.length;
-    const itemIds = new Set<string>();
     for (const raw of items) {
       const item = object(raw, 'item');
       onlyKeys(item, ['itemId', 'componentLabel', 'description', 'legacyCategoryId', 'federalCategoryIds'], 'item');
@@ -90,6 +95,8 @@ export function validateManifest(input: unknown, options: { ownerCompanyId?: str
       }
     }
   }
+  if (!truckAreas) fail('Truck checklist requires a truck area');
+  if (modes.includes('tractor_tanker') && !trailerAreas) fail('Tractor/tanker checklist requires a trailer area');
   if (totalItems > 2000) fail('Too many items');
   const images = array(m.images, 'images', 100);
   const imageIds = new Set<string>();

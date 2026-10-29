@@ -21,6 +21,8 @@
  *   Shop remains authority for safety and repair decisions.
  */
 
+import type { ProfileImage } from './inspectionProfiles';
+
 /** Driver-initiated entry point from Equipment Profile. */
 export interface StartInspectionIntent {
   companyId: string;
@@ -65,6 +67,10 @@ export interface InspectionCategoryResult {
 
 /** Persisted pre-trip inspection — companies/{companyId}/dvir_inspections/{inspectionId} */
 export interface PreTripInspectionRecord {
+  inspectionProfile?: {
+    schemaVersion: 1; companyId: string; profileId: string; revision: string;
+    areaImages: Record<string, string>; images: ProfileImage[];
+  };
   inspectionId: string;
   companyId: string;
   equipmentId: string;

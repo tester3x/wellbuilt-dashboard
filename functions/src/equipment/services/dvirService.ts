@@ -9,6 +9,7 @@ import {
 import { isCanonicalDriverId } from '../assignmentIdentity';
 import { ActorRef, DriverActor, DriverProfile, DashboardProfile } from '../types/actor';
 import { buildMetadata } from '../types/metadata';
+import { loadInspectionProfileProvenance } from '../inspectionProfiles/provenance';
 import { Assignment, assignmentsCollection } from '../types/assignment';
 import {
   InspectionCategoryRecord,
@@ -227,12 +228,16 @@ async function submitPreTrip(ctx: ServiceContext): Promise<ServiceResult> {
   const overallResult = computeOverallResult(categories);
 
   await assertDriverCustody(ctx, equipmentId, assignmentId, assignmentSource);
+  const inspectionProfile = ctx.payload.inspectionProfile === undefined
+    ? undefined
+    : await loadInspectionProfileProvenance(ctx.payload.inspectionProfile, ctx.companyId);
 
   const inspectionId = reserveInspectionId(ctx.companyId);
   const submittedAt = new Date().toISOString();
   const meta = buildMetadata(ctx.actorRef);
 
   const record: PreTripInspectionRecord = {
+    ...(inspectionProfile ? { inspectionProfile } : {}),
     inspectionId,
     companyId: ctx.companyId,
     equipmentId,
