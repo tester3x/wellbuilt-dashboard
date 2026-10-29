@@ -4006,6 +4006,12 @@ export {
   publishEquipmentInspectionProfile,
   beginEquipmentInspectionPhotoUpload,
 } from './equipment/inspectionProfiles/callables';
+export {
+  getEquipmentInspectionReportCapabilities,
+  submitEquipmentInspectionReport,
+  listEquipmentInspectionReports,
+  getEquipmentInspectionReport,
+} from './equipment/reports/callables';
 
 // Security containment — driver identity (dual-run; rules enforcement is separate stage)
 export {

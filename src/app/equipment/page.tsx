@@ -33,9 +33,11 @@ import {
 } from '@/lib/equipment/assignmentTypes';
 import type { PreTripInspectionRecord } from '@/lib/equipment/dvirContracts';
 import { InspectionProfilesPanel } from '@/components/equipment/InspectionProfilesPanel';
+import { FullReportsPanel } from '@/components/equipment/FullReportsPanel';
 
 type Section = 'overview' | 'equipment' | 'assignments' | 'dvir' | 'documents' | 'profiles';
 const INSPECTION_PROFILES_ENABLED = process.env.NEXT_PUBLIC_DVIR_PROFILES_ENABLED === 'true';
+const FULL_REPORTS_ENABLED = process.env.NEXT_PUBLIC_DVIR_FULL_REPORTS_ENABLED === 'true';
 
 const SECTIONS: { id: Section; label: string; cap: Capability }[] = [
   { id: 'overview', label: 'Overview', cap: 'viewEQuipment' },
@@ -350,6 +352,7 @@ export default function EquipmentPage() {
         )}
 
         {!dataLoading && section === 'dvir' && (
+          <div>
           <div className="overflow-x-auto rounded-lg border border-gray-700">
             <table className="w-full text-sm">
               <thead className="bg-gray-800 text-gray-400">
@@ -377,6 +380,8 @@ export default function EquipmentPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+          {FULL_REPORTS_ENABLED && <FullReportsPanel companyId={effectiveCompanyId} />}
           </div>
         )}
 
