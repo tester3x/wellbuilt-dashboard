@@ -4033,6 +4033,8 @@ export {
   // selector when approved: --only functions:adminBindDriverCompany
   adminBindDriverCompany,
   requestCompanyOnboarding,
+  createOwnerCompany,
+  getOwnerCompanySetup,
   adminListCompanyOnboardingRequests,
   adminApproveCompanyOnboarding,
   adminCreateCompanyWithJoinCode,

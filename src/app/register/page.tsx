@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { registerWithEmail } from '@/lib/auth';
+import { registerOwnerWithEmail } from '@/lib/auth';
 import {
   decodeDemoBridgeQuery,
   DEMO_BRIDGE_STORAGE_KEY,
@@ -41,6 +41,7 @@ function RegisterForm(): React.ReactElement {
   );
 
   const [email, setEmail] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [company, setCompany] = useState<string>(
@@ -84,12 +85,11 @@ function RegisterForm(): React.ReactElement {
 
     setLoading(true);
     try {
-      await registerWithEmail(email, password, company);
+      await registerOwnerWithEmail(email, password, company, displayName);
       // createUserWithEmailAndPassword auto-signs the user in; onAuthStateChanged
       // in AuthContext will populate user shortly after routing.
-      router.push('/');
+      window.location.assign('/welcome/');
     } catch (err) {
-      console.error('Register error:', err);
       const code = (err as { code?: string })?.code;
       const message = (err as { message?: string })?.message;
       if (code === 'auth/email-already-in-use') {
@@ -123,7 +123,8 @@ function RegisterForm(): React.ReactElement {
       <div className="bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-md">
         <div className="text-center mb-6">
           <h1 className="text-3xl font-bold text-white">WellBuilt</h1>
-          <p className="text-gray-400 mt-2">Create Dashboard Account</p>
+          <p className="text-gray-400 mt-2">Create your account and company</p>
+          <p className="text-sm text-gray-400 mt-3">For owner-operators and company owners. Includes standalone JSA and DVIR, with your company settings.</p>
         </div>
 
         {demoPayload && (
@@ -166,19 +167,27 @@ function RegisterForm(): React.ReactElement {
               className="block text-sm font-medium text-gray-300 mb-2"
             >
               Company name{' '}
-              <span className="text-xs text-gray-500 font-normal">
-                (optional — you can set this after sign-up)
-              </span>
             </label>
             <input
               id="company"
               type="text"
+              required
+              minLength={2}
+              maxLength={120}
               value={company}
               onChange={(e) => setCompany(e.target.value)}
               autoComplete="organization"
               className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="Acme Hauling Co."
             />
+          </div>
+
+          <div>
+            <label htmlFor="app-name" className="block text-sm font-medium text-gray-300 mb-2">App sign-in name</label>
+            <input id="app-name" value={displayName} onChange={e => setDisplayName(e.target.value)} required minLength={2} maxLength={64}
+              autoComplete="username" placeholder="Your name or a unique sign-in name"
+              className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <p className="text-xs text-gray-400 mt-2">Use this name and the same password in WB JSA and WB e. Use your email for the Dashboard.</p>
           </div>
 
           <div>
@@ -290,9 +299,7 @@ function RegisterForm(): React.ReactElement {
           </div>
 
           <div className="text-center text-xs text-gray-500 border-t border-gray-700 pt-4">
-            New accounts start with viewer-level access. A WellBuilt admin must
-            promote your role in RTDB (<span className="font-mono">users/{'{uid}'}.role</span>) to grant
-            admin or IT page access.
+            You become the administrator of your new company. Joining an existing company? Use New Employee Registration in your WellBuilt app with its company code.
           </div>
         </form>
       </div>
