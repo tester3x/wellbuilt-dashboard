@@ -1,0 +1,14 @@
+{
+  "tractor_cab_controls": "assets/dvir/tractor-tanker-consistent-v2/tractor_cab_controls.jpg",
+  "tractor_engine_steering": "assets/dvir/tractor-tanker-consistent-v2/tractor_engine_steering.jpg",
+  "tractor_front": "assets/dvir/tractor-tanker-consistent-v2/tractor_front.jpg",
+  "tractor_driver_side": "assets/dvir/tractor-tanker-consistent-v2/tractor_driver_side.jpg",
+  "tractor_coupling": "assets/dvir/tractor-tanker-consistent-v2/tractor_coupling-v4-cylindrical-pump.png",
+  "tanker_front": "assets/dvir/tractor-tanker-consistent-v2/tanker_front.jpg",
+  "tanker_driver_side": "assets/dvir/tractor-tanker-consistent-v2/tanker_driver_side.jpg",
+  "tanker_rear": "assets/dvir/tractor-tanker-consistent-v2/tanker_rear.jpg",
+  "tanker_passenger_side": "assets/dvir/tractor-tanker-consistent-v2/tanker_passenger_side.jpg",
+  "tanker_top_fittings": "assets/dvir/tractor-tanker-consistent-v2/tanker_top_fittings.jpg",
+  "tanker_vacuum_pump": "assets/dvir/tractor-tanker-consistent-v2/tanker_vacuum_pump.jpg",
+  "tractor_passenger_side": "assets/dvir/tractor-tanker-consistent-v2/tractor_passenger_side.jpg"
+}

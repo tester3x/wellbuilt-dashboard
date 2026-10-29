@@ -1,0 +1,868 @@
+{
+  "schemaVersion": 1,
+  "profileId": "tractor-tanker-v1",
+  "revision": "20261029_candidate1",
+  "title": "Water Hauler Tractor and Tanker",
+  "equipmentType": "tractor_tanker",
+  "source": "wellbuilt",
+  "supportedModes": [
+    "tractor_tanker"
+  ],
+  "catalog": {
+    "catalogId": "tractor-tanker-v1",
+    "version": "20261029_candidate1",
+    "label": "Water Hauler Tractor and Tanker",
+    "areas": [
+      {
+        "areaId": "tractor_cab_controls",
+        "label": "Cab, Controls & Emergency Equipment",
+        "assetRole": "truck",
+        "sortOrder": 10,
+        "items": [
+          {
+            "itemId": "cab_horn",
+            "componentLabel": "Horn",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "horn"
+            ]
+          },
+          {
+            "itemId": "cab_parking_brake",
+            "componentLabel": "Parking Brake",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "parking_brake"
+            ]
+          },
+          {
+            "itemId": "cab_service_brake_check",
+            "componentLabel": "Service / Air Brake Functional Check",
+            "description": "In-cab representation of service-brake / air-brake application and response check",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "cab_steering_play",
+            "componentLabel": "Steering Control / Play Check",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "steering_mechanism"
+            ]
+          },
+          {
+            "itemId": "cab_emergency_equipment",
+            "componentLabel": "Emergency Equipment",
+            "description": "Fire extinguisher, warning devices, and other required emergency kit items as company equips",
+            "legacyCategoryId": "emergency_equipment",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "cab_dash_indicators",
+            "componentLabel": "Dashboard Warning Indicators",
+            "description": "ABS / brake / air-pressure and related warning indicators",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "cab_seat_belt",
+            "componentLabel": "Seat Belt",
+            "description": "Company safety coverage — not counted as a federal §392.7 minimum category in the matrix",
+            "legacyCategoryId": "miscellaneous"
+          }
+        ]
+      },
+      {
+        "areaId": "tractor_engine_steering",
+        "label": "Engine Compartment, Fluids & Steering",
+        "assetRole": "truck",
+        "sortOrder": 20,
+        "items": [
+          {
+            "itemId": "engine_fluid_levels",
+            "componentLabel": "Fluid Levels",
+            "legacyCategoryId": "fluid_leaks",
+            "federalCategoryIds": [
+              "steering_mechanism"
+            ]
+          },
+          {
+            "itemId": "engine_visible_leaks",
+            "componentLabel": "Visible Fluid Leaks",
+            "legacyCategoryId": "fluid_leaks",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "engine_belts_hoses",
+            "componentLabel": "Belts / Hoses (Visible)",
+            "legacyCategoryId": "hoses",
+            "federalCategoryIds": [
+              "steering_mechanism"
+            ]
+          },
+          {
+            "itemId": "engine_steering_components",
+            "componentLabel": "Visible Steering Components",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "steering_mechanism"
+            ]
+          },
+          {
+            "itemId": "engine_battery_area",
+            "componentLabel": "Battery Area (If Accessible)",
+            "legacyCategoryId": "emergency_equipment",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tractor_front",
+        "label": "Tractor Front",
+        "assetRole": "truck",
+        "sortOrder": 30,
+        "items": [
+          {
+            "itemId": "tractor_front_headlights",
+            "componentLabel": "Headlights",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          },
+          {
+            "itemId": "tractor_front_turn_signals",
+            "componentLabel": "Front Turn Signals",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          },
+          {
+            "itemId": "tractor_front_markers",
+            "componentLabel": "Clearance / Marker Lights",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          },
+          {
+            "itemId": "tractor_front_windshield",
+            "componentLabel": "Windshield",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "windshield_wipers"
+            ]
+          },
+          {
+            "itemId": "tractor_front_wipers",
+            "componentLabel": "Windshield Wipers",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "windshield_wipers"
+            ]
+          },
+          {
+            "itemId": "tractor_front_mirrors",
+            "componentLabel": "Exterior / Rear-Vision Mirrors",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "rear_vision_mirrors"
+            ]
+          },
+          {
+            "itemId": "tractor_front_bumper",
+            "componentLabel": "Bumper / Front End",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tractor_driver_side",
+        "label": "Tractor Driver Side",
+        "assetRole": "truck",
+        "sortOrder": 40,
+        "items": [
+          {
+            "itemId": "tractor_ds_steer_tire",
+            "componentLabel": "Steer Tire (Driver Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "tires"
+            ]
+          },
+          {
+            "itemId": "tractor_ds_steer_wheel_lugs",
+            "componentLabel": "Steer Wheel / Rim / Lugs (Driver Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "wheels_rims_lugs"
+            ]
+          },
+          {
+            "itemId": "tractor_ds_drive_tires",
+            "componentLabel": "Drive Tires (Driver Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "tires"
+            ]
+          },
+          {
+            "itemId": "tractor_ds_drive_wheel_lugs",
+            "componentLabel": "Drive Wheels / Rims / Lugs (Driver Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "wheels_rims_lugs"
+            ]
+          },
+          {
+            "itemId": "tractor_ds_visible_brakes",
+            "componentLabel": "Visible Brake Components (Driver Side)",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "tractor_ds_suspension",
+            "componentLabel": "Suspension / Air Bags (Driver Side)",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "tractor_ds_fuel_tank",
+            "componentLabel": "Fuel Tank / Straps",
+            "legacyCategoryId": "fluid_leaks",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tractor_ds_side_markers",
+            "componentLabel": "Side Marker Lights / Reflectors",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          },
+          {
+            "itemId": "tractor_ds_steps_door",
+            "componentLabel": "Steps / Door",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tractor_coupling",
+        "label": "Fifth Wheel & Connections",
+        "assetRole": "truck",
+        "sortOrder": 50,
+        "items": [
+          {
+            "itemId": "tractor_coupling_fifth_wheel",
+            "componentLabel": "Fifth Wheel / Locking Engagement",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tractor_coupling_trailer_brakes",
+            "componentLabel": "Trailer Brake Connections (Glad Hands)",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes",
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tractor_coupling_air_lines",
+            "componentLabel": "Air Lines",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes",
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tractor_coupling_electrical",
+            "componentLabel": "Electrical Lines / Pigtail",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors",
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tractor_coupling_deck",
+            "componentLabel": "Catwalk / Deck",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tractor_coupling_mudflaps",
+            "componentLabel": "Rear Mud Flaps",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tanker_front",
+        "label": "Tanker Front / Landing Gear",
+        "assetRole": "trailer",
+        "sortOrder": 60,
+        "items": [
+          {
+            "itemId": "tanker_front_kingpin",
+            "componentLabel": "Kingpin / Upper Coupler",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tanker_front_landing_gear",
+            "componentLabel": "Landing Gear",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tanker_front_bulkhead",
+            "componentLabel": "Front Bulkhead / Shell",
+            "legacyCategoryId": "tank",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tanker_front_brake_connections",
+            "componentLabel": "Front Air / Brake Connections",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes",
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tanker_front_lights",
+            "componentLabel": "Front Clearance Lights",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tanker_driver_side",
+        "label": "Tanker Driver Side",
+        "assetRole": "trailer",
+        "sortOrder": 70,
+        "items": [
+          {
+            "itemId": "tanker_ds_shell",
+            "componentLabel": "Tank Shell (Driver Side)",
+            "legacyCategoryId": "tank",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tanker_ds_tires",
+            "componentLabel": "Tires (Driver Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "tires"
+            ]
+          },
+          {
+            "itemId": "tanker_ds_wheel_lugs",
+            "componentLabel": "Wheels / Rims / Lugs (Driver Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "wheels_rims_lugs"
+            ]
+          },
+          {
+            "itemId": "tanker_ds_visible_brakes",
+            "componentLabel": "Visible Brake Components (Driver Side)",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "tanker_ds_suspension",
+            "componentLabel": "Suspension (Driver Side)",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "tanker_ds_fenders",
+            "componentLabel": "Fenders / Mud Flaps",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "tires"
+            ]
+          },
+          {
+            "itemId": "tanker_ds_markers",
+            "componentLabel": "Side Markers / Reflective",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          },
+          {
+            "itemId": "tanker_ds_hose_storage",
+            "componentLabel": "Hose Tray / Storage",
+            "legacyCategoryId": "hoses",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tanker_rear",
+        "label": "Tanker Rear",
+        "assetRole": "trailer",
+        "sortOrder": 80,
+        "items": [
+          {
+            "itemId": "tanker_rear_lights",
+            "componentLabel": "Stop / Tail / Turn Lights",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          },
+          {
+            "itemId": "tanker_rear_reflectors",
+            "componentLabel": "Reflectors / DOT Tape",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          },
+          {
+            "itemId": "tanker_rear_bumper",
+            "componentLabel": "Rear Bumper / Underride",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tanker_rear_discharge",
+            "componentLabel": "Discharge Valves / Caps",
+            "legacyCategoryId": "hoses",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_rear_hose_connect",
+            "componentLabel": "Vacuum / Hose Connection",
+            "legacyCategoryId": "hoses",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_rear_license_marker",
+            "componentLabel": "License / Marker Light Area",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tanker_passenger_side",
+        "label": "Tanker Passenger Side",
+        "assetRole": "trailer",
+        "sortOrder": 90,
+        "items": [
+          {
+            "itemId": "tanker_ps_shell",
+            "componentLabel": "Tank Shell (Passenger Side)",
+            "legacyCategoryId": "tank",
+            "federalCategoryIds": [
+              "coupling_devices"
+            ]
+          },
+          {
+            "itemId": "tanker_ps_tires",
+            "componentLabel": "Tires (Passenger Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "tires"
+            ]
+          },
+          {
+            "itemId": "tanker_ps_wheel_lugs",
+            "componentLabel": "Wheels / Rims / Lugs (Passenger Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "wheels_rims_lugs"
+            ]
+          },
+          {
+            "itemId": "tanker_ps_visible_brakes",
+            "componentLabel": "Visible Brake Components (Passenger Side)",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "tanker_ps_suspension",
+            "componentLabel": "Suspension (Passenger Side)",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "tanker_ps_valves",
+            "componentLabel": "Side Valves / Piping",
+            "legacyCategoryId": "hoses",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_ps_fenders",
+            "componentLabel": "Fenders / Mud Flaps",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "tires"
+            ]
+          },
+          {
+            "itemId": "tanker_ps_markers",
+            "componentLabel": "Side Markers / Reflective",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tanker_top_fittings",
+        "label": "Tank Top Fittings & Manways",
+        "assetRole": "trailer",
+        "sortOrder": 100,
+        "items": [
+          {
+            "itemId": "tanker_top_access",
+            "componentLabel": "Ladder / Access Condition (Visual)",
+            "description": "Visual condition only; work-at-height procedure remains company-controlled",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_top_manways",
+            "componentLabel": "Manway Covers / Clamps",
+            "legacyCategoryId": "tank",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_top_pv_relief",
+            "componentLabel": "Pressure / Vacuum Relief",
+            "legacyCategoryId": "tank",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_top_vents",
+            "componentLabel": "Vents / Flame Arrestor (If Equipped)",
+            "legacyCategoryId": "tank",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_top_valves",
+            "componentLabel": "Top Valves / Piping",
+            "legacyCategoryId": "hoses",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_top_walkway",
+            "componentLabel": "Top Walkway / Safety Rail",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tanker_vacuum_pump",
+        "label": "Vacuum Pump / PTO Drive",
+        "assetRole": "trailer",
+        "sortOrder": 110,
+        "items": [
+          {
+            "itemId": "tanker_pump_unit",
+            "componentLabel": "Vacuum Pump Unit",
+            "legacyCategoryId": "pto",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_pump_guards",
+            "componentLabel": "Guards / Shields",
+            "legacyCategoryId": "pto",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_pump_drive",
+            "componentLabel": "PTO / Drive / Hydraulics",
+            "legacyCategoryId": "pto",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tanker_pump_oil",
+            "componentLabel": "Pump Oil Level / Leaks",
+            "legacyCategoryId": "fluid_leaks",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "tanker_pump_hoses",
+            "componentLabel": "Pump Hoses / Fittings",
+            "legacyCategoryId": "hoses",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          }
+        ]
+      },
+      {
+        "areaId": "tractor_passenger_side",
+        "label": "Tractor Passenger Side",
+        "assetRole": "truck",
+        "sortOrder": 120,
+        "items": [
+          {
+            "itemId": "tractor_ps_steer_tire",
+            "componentLabel": "Steer Tire (Passenger Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "tires"
+            ]
+          },
+          {
+            "itemId": "tractor_ps_steer_wheel_lugs",
+            "componentLabel": "Steer Wheel / Rim / Lugs (Passenger Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "wheels_rims_lugs"
+            ]
+          },
+          {
+            "itemId": "tractor_ps_drive_tires",
+            "componentLabel": "Drive Tires (Passenger Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "tires"
+            ]
+          },
+          {
+            "itemId": "tractor_ps_drive_wheel_lugs",
+            "componentLabel": "Drive Wheels / Rims / Lugs (Passenger Side)",
+            "legacyCategoryId": "tires",
+            "federalCategoryIds": [
+              "wheels_rims_lugs"
+            ]
+          },
+          {
+            "itemId": "tractor_ps_visible_brakes",
+            "componentLabel": "Visible Brake Components (Passenger Side)",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "tractor_ps_suspension",
+            "componentLabel": "Suspension / Air Bags (Passenger Side)",
+            "legacyCategoryId": "brakes",
+            "federalCategoryIds": [
+              "service_brakes"
+            ]
+          },
+          {
+            "itemId": "tractor_ps_exhaust",
+            "componentLabel": "Exhaust Path / Stack Base",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          },
+          {
+            "itemId": "tractor_ps_side_markers",
+            "componentLabel": "Side Marker Lights / Reflectors",
+            "legacyCategoryId": "lights",
+            "federalCategoryIds": [
+              "lighting_devices_reflectors"
+            ]
+          },
+          {
+            "itemId": "tractor_ps_steps",
+            "componentLabel": "Steps / Cab Side",
+            "legacyCategoryId": "miscellaneous",
+            "federalCategoryIds": [
+              "emergency_equipment"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "areaImages": {
+    "tractor_cab_controls": "tractor_cab_controls",
+    "tractor_engine_steering": "tractor_engine_steering",
+    "tractor_front": "tractor_front",
+    "tractor_driver_side": "tractor_driver_side",
+    "tractor_coupling": "tractor_coupling",
+    "tanker_front": "tanker_front",
+    "tanker_driver_side": "tanker_driver_side",
+    "tanker_rear": "tanker_rear",
+    "tanker_passenger_side": "tanker_passenger_side",
+    "tanker_top_fittings": "tanker_top_fittings",
+    "tanker_vacuum_pump": "tanker_vacuum_pump",
+    "tractor_passenger_side": "tractor_passenger_side"
+  },
+  "images": [
+    {
+      "imageId": "tractor_cab_controls",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tractor_cab_controls.jpg",
+      "sha256": "9642e59d0e66e40c95520f207958f8a292b601d01e6106030fbc89f97b318af1",
+      "byteLength": 287080,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tractor_engine_steering",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tractor_engine_steering.jpg",
+      "sha256": "7fd4846301e50740fd2613248b94c1f77f5ad963f763499c5ee3abea1eebb6e2",
+      "byteLength": 379679,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tractor_front",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tractor_front.jpg",
+      "sha256": "072156425c706503ffecb2baaa9050a3f5c7113349f42f6e22cf06e5920d5764",
+      "byteLength": 369713,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tractor_driver_side",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tractor_driver_side.jpg",
+      "sha256": "b8ea729a80a97db8c426448f77bdf01a46f1433d7d9511243fd805b033073486",
+      "byteLength": 314186,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tractor_coupling",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tractor_coupling.png",
+      "sha256": "7c23d0618fa7be38e77310b00d446c31ae20608bc6d28a6fd026b3d9ac80f679",
+      "byteLength": 2394219,
+      "contentType": "image/png"
+    },
+    {
+      "imageId": "tanker_front",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tanker_front.jpg",
+      "sha256": "22fb60a9318665e3730d52f2efb4c1c2fcdf747fbbbe08c45db876075479d2f4",
+      "byteLength": 306849,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tanker_driver_side",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tanker_driver_side.jpg",
+      "sha256": "d7c1d253fd77af766b3f241dfb74cf51181f304c3c51117d538a4ae8d031e384",
+      "byteLength": 351864,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tanker_rear",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tanker_rear.jpg",
+      "sha256": "56fbedb8cf6fbca617aac6502fe0d9f83c49f856bb7d0817f87ab43fb69e51f3",
+      "byteLength": 365799,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tanker_passenger_side",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tanker_passenger_side.jpg",
+      "sha256": "71090a5c9af106b41b083b9f4124eeb51f8fca27a05042b0ee9100f595186a62",
+      "byteLength": 359444,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tanker_top_fittings",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tanker_top_fittings.jpg",
+      "sha256": "d652ebeed05c7bf532dac8a37f8ece1bdb9719617cd8d2fa4f6eec5c85a5269e",
+      "byteLength": 351448,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tanker_vacuum_pump",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tanker_vacuum_pump.jpg",
+      "sha256": "f0fbe852f10c0cb9e631ef60bc18335d073a721f8355a58d62a5aa4a3597d665",
+      "byteLength": 316793,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "tractor_passenger_side",
+      "storagePath": "equipment-inspection-defaults/tractor-tanker-v1/20261029_candidate1/tractor_passenger_side.jpg",
+      "sha256": "5432d01c3c332ed65b33bf6a9e165894d0704bec4a3ec60fe0317f1947a971fb",
+      "byteLength": 346505,
+      "contentType": "image/jpeg"
+    }
+  ]
+}

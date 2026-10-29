@@ -3998,6 +3998,14 @@ export {
 export { recoverRejectedPull } from './recoverRejectedPullCallable';
 
 export { eQuipmentDocuments, eQuipmentEquipment, eQuipmentAssignments, eQuipmentDVIR } from './equipment';
+export {
+  listEquipmentInspectionProfiles,
+  getEquipmentInspectionProfile,
+  saveEquipmentInspectionSettings,
+  saveEquipmentInspectionDraft,
+  publishEquipmentInspectionProfile,
+  beginEquipmentInspectionPhotoUpload,
+} from './equipment/inspectionProfiles/callables';
 
 // Security containment — driver identity (dual-run; rules enforcement is separate stage)
 export {

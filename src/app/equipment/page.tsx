@@ -32,8 +32,10 @@ import {
   type Assignment,
 } from '@/lib/equipment/assignmentTypes';
 import type { PreTripInspectionRecord } from '@/lib/equipment/dvirContracts';
+import { InspectionProfilesPanel } from '@/components/equipment/InspectionProfilesPanel';
 
-type Section = 'overview' | 'equipment' | 'assignments' | 'dvir' | 'documents';
+type Section = 'overview' | 'equipment' | 'assignments' | 'dvir' | 'documents' | 'profiles';
+const INSPECTION_PROFILES_ENABLED = process.env.NEXT_PUBLIC_DVIR_PROFILES_ENABLED === 'true';
 
 const SECTIONS: { id: Section; label: string; cap: Capability }[] = [
   { id: 'overview', label: 'Overview', cap: 'viewEQuipment' },
@@ -41,6 +43,7 @@ const SECTIONS: { id: Section; label: string; cap: Capability }[] = [
   { id: 'assignments', label: 'Assignments', cap: 'viewEQuipment' },
   { id: 'dvir', label: 'DVIR', cap: 'viewDVIR' },
   { id: 'documents', label: 'Documents', cap: 'viewEquipmentDocuments' },
+  { id: 'profiles', label: 'Inspection Profiles', cap: 'viewEQuipment' },
 ];
 
 function formatDateTime(iso?: string): string {
@@ -60,7 +63,7 @@ function resultBadge(result: string) {
 export default function EquipmentPage() {
   const { user, userCompany, loading, authResolved } = useAuth();
   const router = useRouter();
-  const [section, setSection] = useDashboardViewState<Section>('section', 'overview', ['overview', 'equipment', 'assignments', 'dvir', 'documents']);
+  const [section, setSection] = useDashboardViewState<Section>('section', 'overview', ['overview', 'equipment', 'assignments', 'dvir', 'documents', 'profiles']);
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
   const [dataLoading, setDataLoading] = useState(true);
@@ -79,6 +82,10 @@ export default function EquipmentPage() {
 
   const effectiveCompanyId = selectedCompanyId || user?.companyId || '';
 
+  useEffect(() => {
+    if (!INSPECTION_PROFILES_ENABLED && section === 'profiles') setSection('overview');
+  }, [section, setSection]);
+
   const visibleSections = useMemo(() => {
     if (!hasEQuipmentAccess(user, userCompany)) return [];
     return SECTIONS.filter((s) => {
@@ -93,6 +100,9 @@ export default function EquipmentPage() {
       if (s.id === 'documents') {
         return hasCapability(user, 'viewEquipmentDocuments', userCompany)
           || hasCapability(user, 'manageEquipmentDocuments', userCompany);
+      }
+      if (s.id === 'profiles') {
+        return INSPECTION_PROFILES_ENABLED && (hasCapability(user, 'viewEQuipment', userCompany) || hasCapability(user, 'manageEquipment', userCompany));
       }
       return true;
     });
@@ -240,6 +250,12 @@ export default function EquipmentPage() {
 
         {dataLoading && <div className="text-gray-400 py-8 text-center">Loading platform data...</div>}
 
+        {!dataLoading && INSPECTION_PROFILES_ENABLED && section === 'profiles' && effectiveCompanyId && (
+          <InspectionProfilesPanel companyId={effectiveCompanyId}
+            units={[...new Set(equipment.filter(item => item.active && item.equipmentTypeId === 'truck').map(item => item.unitNumber))].sort()}
+            canEdit={hasCapability(user, 'manageEquipment', userCompany)} />
+        )}
+
         {!dataLoading && section === 'overview' && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {[
@@ -280,7 +296,13 @@ export default function EquipmentPage() {
                   const assignment = assignmentByEquipment.get(item.equipmentId);
                   return (
                     <tr key={item.equipmentId} className="border-t border-gray-700 hover:bg-gray-800/50">
-                      <td className="p-3 font-medium">{item.unitNumber}</td>
+                      <td className="p-3 font-medium">{item.unitNumber}
+                        {INSPECTION_PROFILES_ENABLED && item.equipmentTypeId === 'truck' && hasCapability(user, 'manageEquipment', userCompany) && (
+                          <button type="button" className="ml-2 text-xs text-cyan-300 underline" onClick={() => setSection('profiles')}>
+                            Inspection photos
+                          </button>
+                        )}
+                      </td>
                       <td className="p-3">{item.equipmentTypeId}</td>
                       <td className="p-3">{EQUIPMENT_STATUS_LABELS[item.status] || item.status}</td>
                       <td className="p-3">{item.active ? 'Active' : 'Retired'}</td>

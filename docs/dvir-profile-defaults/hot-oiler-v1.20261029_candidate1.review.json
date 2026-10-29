@@ -1,0 +1,296 @@
+{
+  "schemaVersion": 1,
+  "profileId": "hot-oiler-v1",
+  "revision": "20261029_candidate1",
+  "title": "Hot Oiler Truck",
+  "equipmentType": "hot_oiler",
+  "source": "wellbuilt",
+  "supportedModes": [
+    "truck_only"
+  ],
+  "catalog": {
+    "catalogId": "hot-oiler-v1",
+    "version": "20261029_candidate1",
+    "label": "Hot Oiler Truck",
+    "areas": [
+      {
+        "areaId": "ho_cab",
+        "label": "Road vehicle · cab and safety equipment",
+        "assetRole": "truck",
+        "sortOrder": 10,
+        "items": [
+          {
+            "itemId": "ho_cab_brakes",
+            "componentLabel": "Service and parking brakes",
+            "description": "Check operation and any visible or reported defects under the carrier procedure."
+          },
+          {
+            "itemId": "ho_cab_controls",
+            "componentLabel": "Steering, horn and indicators",
+            "description": "Check operation and visible condition."
+          },
+          {
+            "itemId": "ho_cab_visibility",
+            "componentLabel": "Windshield, mirrors and wipers",
+            "description": "Check visibility, mounting, and operation."
+          },
+          {
+            "itemId": "ho_cab_seatbelt",
+            "componentLabel": "Seat belt and warning devices",
+            "description": "Check seat belt condition and required emergency equipment."
+          }
+        ]
+      },
+      {
+        "areaId": "ho_vehicle_front",
+        "label": "Road vehicle · front and engine",
+        "assetRole": "truck",
+        "sortOrder": 20,
+        "items": [
+          {
+            "itemId": "ho_front_lighting",
+            "componentLabel": "Headlights and front signals",
+            "description": "Check operation, lenses, and mounting."
+          },
+          {
+            "itemId": "ho_front_tires",
+            "componentLabel": "Front tires and wheels",
+            "description": "Check condition, inflation, and visible wheel defects."
+          },
+          {
+            "itemId": "ho_engine",
+            "componentLabel": "Engine and fluid leaks",
+            "description": "Check for visible leaks, loose components, and unsafe condition."
+          }
+        ]
+      },
+      {
+        "areaId": "ho_vehicle_sides_rear",
+        "label": "Road vehicle · sides and rear",
+        "assetRole": "truck",
+        "sortOrder": 30,
+        "items": [
+          {
+            "itemId": "ho_rear_lighting",
+            "componentLabel": "Rear lights, signals and reflectors",
+            "description": "Check operation, visibility, and mounting."
+          },
+          {
+            "itemId": "ho_rear_tires",
+            "componentLabel": "Rear tires and wheels",
+            "description": "Check condition, inflation, and visible wheel defects."
+          },
+          {
+            "itemId": "ho_chassis",
+            "componentLabel": "Frame, suspension and underbody",
+            "description": "Check visible mounting, leaks, and damage."
+          },
+          {
+            "itemId": "ho_body",
+            "componentLabel": "Body, steps and access",
+            "description": "Check doors, steps, handholds, and secure equipment."
+          }
+        ]
+      },
+      {
+        "areaId": "ho_control_station",
+        "label": "Hot-oil unit · operator controls",
+        "assetRole": "truck",
+        "sortOrder": 40,
+        "items": [
+          {
+            "itemId": "ho_panel",
+            "componentLabel": "Control panel and gauges",
+            "description": "Check legibility, mounting, damage, and abnormal indications."
+          },
+          {
+            "itemId": "ho_shutdown",
+            "componentLabel": "Emergency shutdown and protective controls",
+            "description": "Locate and check the installed shutdown controls under the unit procedure; report any fault."
+          },
+          {
+            "itemId": "ho_panel_lines",
+            "componentLabel": "Control wiring and air or hydraulic lines",
+            "description": "Check visible damage, leaks, and unsupported lines."
+          }
+        ]
+      },
+      {
+        "areaId": "ho_piping",
+        "label": "Hot-oil unit · valve and piping bay",
+        "assetRole": "truck",
+        "sortOrder": 50,
+        "items": [
+          {
+            "itemId": "ho_manifold",
+            "componentLabel": "Manifold, valves and fittings",
+            "description": "Check visible leaks, damage, corrosion, support, and identification. Use the unit procedure for valve position."
+          },
+          {
+            "itemId": "ho_pressure",
+            "componentLabel": "Pressure components and markings",
+            "description": "Check visible condition and legibility of installed ratings and gauges; do not infer a universal pressure limit."
+          },
+          {
+            "itemId": "ho_bay_access",
+            "componentLabel": "Bay access and guards",
+            "description": "Check that access, guards, and escape path are unobstructed."
+          }
+        ]
+      },
+      {
+        "areaId": "ho_heater",
+        "label": "Hot-oil unit · heater and burner",
+        "assetRole": "truck",
+        "sortOrder": 60,
+        "items": [
+          {
+            "itemId": "ho_burner",
+            "componentLabel": "Burner and enclosure",
+            "description": "Check obvious damage, leakage, and missing guards."
+          },
+          {
+            "itemId": "ho_fuel",
+            "componentLabel": "Fuel and air connections",
+            "description": "Check visible leaks, line condition, and mounting."
+          },
+          {
+            "itemId": "ho_exhaust",
+            "componentLabel": "Stack and exhaust",
+            "description": "Check secure mounting, damage, and nearby combustible exposure."
+          }
+        ]
+      },
+      {
+        "areaId": "ho_pump",
+        "label": "Hot-oil unit · pump and drive",
+        "assetRole": "truck",
+        "sortOrder": 70,
+        "items": [
+          {
+            "itemId": "ho_pump_body",
+            "componentLabel": "Pump, seals and mounts",
+            "description": "Check visible leaks, damage, and mounting."
+          },
+          {
+            "itemId": "ho_drive",
+            "componentLabel": "Drive, PTO or hydraulics",
+            "description": "Check visible lines, guards, and abnormal condition for the installed drive."
+          }
+        ]
+      },
+      {
+        "areaId": "ho_hoses",
+        "label": "Hot-oil unit · hoses and connections",
+        "assetRole": "truck",
+        "sortOrder": 80,
+        "items": [
+          {
+            "itemId": "ho_hose_body",
+            "componentLabel": "Hose bodies and ratings",
+            "description": "Check damage, wear, kinks, and legible ratings where fitted."
+          },
+          {
+            "itemId": "ho_hose_ends",
+            "componentLabel": "Couplings, restraints and storage",
+            "description": "Check ends, restraints, caps, and secure storage; follow the company connection procedure."
+          }
+        ]
+      },
+      {
+        "areaId": "ho_tank_fire",
+        "label": "Hot-oil unit · tank and fire equipment",
+        "assetRole": "truck",
+        "sortOrder": 90,
+        "items": [
+          {
+            "itemId": "ho_tank",
+            "componentLabel": "Service tank and mounts",
+            "description": "Check shell, mounts, valves, level indication, and visible leaks."
+          },
+          {
+            "itemId": "ho_fire",
+            "componentLabel": "Fire and spill equipment",
+            "description": "Check required extinguishers and spill supplies are present, accessible, and in service."
+          }
+        ]
+      }
+    ]
+  },
+  "areaImages": {
+    "ho_cab": "ho_cab",
+    "ho_vehicle_front": "ho_vehicle_front",
+    "ho_vehicle_sides_rear": "ho_vehicle_sides_rear",
+    "ho_control_station": "ho_control_station",
+    "ho_piping": "ho_piping",
+    "ho_heater": "ho_heater",
+    "ho_pump": "ho_pump",
+    "ho_hoses": "ho_hoses",
+    "ho_tank_fire": "ho_tank_fire"
+  },
+  "images": [
+    {
+      "imageId": "ho_cab",
+      "storagePath": "equipment-inspection-defaults/hot-oiler-v1/20261029_candidate1/ho_cab.jpg",
+      "sha256": "e0268b5c0d411794843b72474aec56f4acef9a441a4d449d25f594d1165f6637",
+      "byteLength": 338468,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "ho_vehicle_front",
+      "storagePath": "equipment-inspection-defaults/hot-oiler-v1/20261029_candidate1/ho_vehicle_front.png",
+      "sha256": "a42c72b03614b2ba787f70f55f498bad58d7d1d994d4d836ea6b5f67b2405f4f",
+      "byteLength": 2569085,
+      "contentType": "image/png"
+    },
+    {
+      "imageId": "ho_vehicle_sides_rear",
+      "storagePath": "equipment-inspection-defaults/hot-oiler-v1/20261029_candidate1/ho_vehicle_sides_rear.jpg",
+      "sha256": "872d677bca99c2a80cbfbe0403e48f636b7ef66f2faea259af677bfe8931701a",
+      "byteLength": 345491,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "ho_control_station",
+      "storagePath": "equipment-inspection-defaults/hot-oiler-v1/20261029_candidate1/ho_control_station.png",
+      "sha256": "45594c1bbf34a1674759a7db0a8b8ea2f386fa3ad4c9ceec480aca1388ed94e8",
+      "byteLength": 2158773,
+      "contentType": "image/png"
+    },
+    {
+      "imageId": "ho_piping",
+      "storagePath": "equipment-inspection-defaults/hot-oiler-v1/20261029_candidate1/ho_piping.png",
+      "sha256": "078a4790d205551013cffff17d1701efe6456ad63066eba7a4f521c0ae6f8c46",
+      "byteLength": 2172831,
+      "contentType": "image/png"
+    },
+    {
+      "imageId": "ho_heater",
+      "storagePath": "equipment-inspection-defaults/hot-oiler-v1/20261029_candidate1/ho_heater.png",
+      "sha256": "6dee9245332df301663e045064c5b59cbe5b6eebfb2a1551f1f48f0f0f58d7e0",
+      "byteLength": 2009289,
+      "contentType": "image/png"
+    },
+    {
+      "imageId": "ho_pump",
+      "storagePath": "equipment-inspection-defaults/hot-oiler-v1/20261029_candidate1/ho_pump.png",
+      "sha256": "6eed11039e693020205d04932a0e1e573c97d27e65ef5833e637d5f081d6314b",
+      "byteLength": 2288596,
+      "contentType": "image/png"
+    },
+    {
+      "imageId": "ho_hoses",
+      "storagePath": "equipment-inspection-defaults/hot-oiler-v1/20261029_candidate1/ho_hoses.jpg",
+      "sha256": "8f2e1605e1ce6b78bdeaff7748c929c63e40f1885c9740e64e2e287918a8d4ed",
+      "byteLength": 348941,
+      "contentType": "image/jpeg"
+    },
+    {
+      "imageId": "ho_tank_fire",
+      "storagePath": "equipment-inspection-defaults/hot-oiler-v1/20261029_candidate1/ho_tank_fire.jpg",
+      "sha256": "9a8dd0570a054297511fa1d308d0c33a55c44d0098c730771ec6f4b72056987c",
+      "byteLength": 329089,
+      "contentType": "image/jpeg"
+    }
+  ]
+}

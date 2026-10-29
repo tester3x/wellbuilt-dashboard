@@ -612,6 +612,16 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // DVIR inspection profile pointers, immutable manifests, company settings,
+    // drafts, and upload receipts are served only by authenticated callables.
+    // A signed-in driver never gets direct Firestore access to another company.
+    match /equipment_inspection_defaults/{profileId}/{document=**} {
+      allow read, write: if false;
+    }
+    match /equipment_inspection_companies/{companyId}/{document=**} {
+      allow read, write: if false;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;
