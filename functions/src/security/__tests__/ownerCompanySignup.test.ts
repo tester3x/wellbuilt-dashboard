@@ -11,6 +11,7 @@ let mockFailurePath = '';
 let mockProvider = 'password';
 let mockDisabled = false;
 let mockRateAllowed = true;
+let mockColdCache = false;
 const clone = (value: any) => value == null ? value : JSON.parse(JSON.stringify(value));
 const snapshot = (path: string) => ({ exists: mockDocuments.has(path), data: () => clone(mockDocuments.get(path)) });
 const reference = (path: string): any => ({ path, id: path.split('/').pop(), get: async () => snapshot(path),
@@ -39,9 +40,15 @@ jest.mock('firebase-admin', () => ({
     get: async () => ({ val: () => clone(mockRealtime.get(path)) }),
     transaction: async (fn: any) => {
       if (path.startsWith(mockFailurePath) && mockFailurePath) { mockFailurePath = ''; throw Error('temporary outage'); }
-      const next = fn(clone(mockRealtime.get(path)));
+      // RTDB invokes the callback with null before fetching the server value.
+      // Returning undefined at that point aborts without a compare-and-retry.
+      const cached = mockColdCache ? null : clone(mockRealtime.get(path));
+      let next = fn(cached);
       if (next === undefined) return { committed: false };
-      mockRealtime.set(path, clone(next)); return { committed: true };
+      if (mockColdCache && mockRealtime.has(path)) next = fn(clone(mockRealtime.get(path)));
+      if (next === undefined) return { committed: false };
+      if (next === null) mockRealtime.delete(path); else mockRealtime.set(path, clone(next));
+      return { committed: true, snapshot: { val: () => clone(next) } };
     },
   }) }),
   auth: () => ({ getUser: async () => ({ email: 'owner@example.test', disabled: mockDisabled,
@@ -58,7 +65,7 @@ jest.mock('../operational/ensureEmptyShiftAuthority', () => ({
 const input = { schemaVersion: 1, companyName: 'Hots Oiler LLC', displayName: 'Owner One', passcode: 'test-password-only' };
 const request = (data: any = input, uid = 'owner-one'): any => ({ data, auth: { uid }, rawRequest: { ip: '127.0.0.1' } });
 const signup = (data?: any, uid?: string): Promise<any> => createOwnerCompany.run(request(data, uid));
-beforeEach(() => { mockDocuments.clear(); mockRealtime.clear(); mockFailurePath = ''; mockProvider = 'password'; mockDisabled = false; mockRateAllowed = true; });
+beforeEach(() => { mockDocuments.clear(); mockRealtime.clear(); mockFailurePath = ''; mockProvider = 'password'; mockDisabled = false; mockRateAllowed = true; mockColdCache = false; });
 
 test('creates an isolated owner and company with hashed app credentials and only free entitlements', async () => {
   const result = await signup();
@@ -90,6 +97,20 @@ test('creates an isolated owner and company with hashed app credentials and only
 test('repeated signup returns the same company, driver and join code', async () => {
   const first = await signup(); const count = mockDocuments.size;
   expect(await signup()).toEqual(first); expect(mockDocuments.size).toBe(count);
+});
+test('activates with a cold RTDB cache instead of aborting the initial null callback', async () => {
+  mockColdCache = true;
+  const result = await signup();
+  expect(mockRealtime.get(`drivers/profiles/${result.driverId}`).active).toBe(true);
+  expect(mockDocuments.get('owner_company_signups/owner-one').state).toBe('complete');
+});
+test('resumes a ready journal with the same driver after a cold-cache activation retry', async () => {
+  mockFailurePath = 'users/'; await expect(signup()).rejects.toThrow();
+  const reserved = clone(mockDocuments.get('owner_company_signups/owner-one'));
+  mockRealtime.get(`drivers/profiles/${reserved.driverId}`).active = false;
+  mockRealtime.get(`drivers/profiles/${reserved.driverId}`).ownerSignupState = 'preparing';
+  mockColdCache = true;
+  const result = await signup(); expect(result.driverId).toBe(reserved.driverId);
 });
 test.each(['drivers/profiles/', 'users/'])('resumes the same setup after an outage at %s', async path => {
   mockFailurePath = path; await expect(signup()).rejects.toThrow('temporary outage');

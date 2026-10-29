@@ -175,11 +175,18 @@ export const createOwnerCompany = onCall({ region: 'us-central1', timeoutSeconds
     || (await credentialRef.get()).data()?.active !== true
     || (await fs().collection('companies').doc(companyId).get()).data()?.status !== 'active') return refuse();
   const activated = await profileRef.transaction(prior => {
+    // RTDB can initially call this with null even when the server has the
+    // profile. Undefined aborts locally and never fetches that server value.
+    // A null candidate makes RTDB compare-and-retry; if truly absent it
+    // remains absent, and the committed snapshot check below refuses it.
+    if (prior === null) return null;
     if (!prior || prior.ownerSignupUid !== uid || prior.companyId !== companyId) return;
     if (prior.ownerSignupState === 'ready') return prior.active === true ? prior : undefined;
     return { ...prior, active: true, ownerSignupState: 'ready', approvedAt: Date.now() };
   });
-  if (!activated.committed) return refuse();
+  const activeProfile = activated.snapshot.val();
+  if (!activated.committed || !activeProfile || activeProfile.active !== true
+    || activeProfile.ownerSignupUid !== uid || activeProfile.companyId !== companyId) return refuse();
   const bound = await admin.database().ref(`users/${uid}`).transaction(prior => {
     if (prior?.companyId && prior.companyId !== companyId) return;
     if (!prior?.companyId && ['admin', 'it'].includes(prior?.role)) return;

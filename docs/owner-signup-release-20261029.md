@@ -27,3 +27,11 @@ Source reconciles desktop `a8c1b6f93b9ae3668566491fc0a7c160a1d5d06c`, original l
 Mike was given `https://wellbuilt-sync.web.app/register/` to register Hots Oiler LLC with a separate email from Liquid Gold and a private chosen password. No company or account was pre-created and no safety acknowledgement/signature was fabricated. Successful real signup, Dashboard owner access and JSA/WB e app sign-in remain unverified until that round trip occurs.
 
 Hot-oiler profile publication and the new DVIR media/report rollout are separate pending work. Their Dashboard flags remain OFF; this signup release does not make those profiles/photos available. No APK was built or installed.
+
+## First real signup: cold-cache activation repair
+
+The first real signup reached journal `ready`, with the company and credentials reserved, but the RTDB profile remained `preparing`/inactive and the Dashboard user binding had not yet been written. Trusted authority records parsed correctly. No duplicate company/name conflict existed.
+
+Cause: RTDB transaction callbacks can receive an initial null from their local cache even when the remote profile exists. Returning undefined aborted without fetching the server value. Activation now returns a null candidate for that first callback, allowing compare-and-retry, and validates the committed snapshot's active flag, company and owner. A genuinely missing profile remains absent and cannot be accepted as activated.
+
+The two new regressions first failed against the released implementation, then passed after the fix; 58 focused tests passed and Functions TypeScript compiled. A real RTDB probe, seeded outside the SDK cache under a unique isolated security test path, observed `initial-null -> server-value` and verified activation. The temporary record was deleted in finally cleanup. No company/customer records were modified by that probe. The pending real signup is preserved for a same-details authenticated retry; no password was read or requested.
