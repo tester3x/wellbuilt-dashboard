@@ -20,6 +20,7 @@ Source reconciles desktop `a8c1b6f93b9ae3668566491fc0a7c160a1d5d06c`, original l
 - Focused server tests: 56 passed across owner signup, prior onboarding identifiers/lineage and empty shift authority. Owner signup has 23 tests including real contract parsing/entitlement decisions, interruption recovery, password hashing, name collisions, reserved privileges and revocation protection.
 - Actual web auth wrapper tests passed for new signup, same-account reauthentication, existing-account password proof, interrupted retry and validation. Dashboard TypeScript and production compilation passed. Certified retained-behavior checks passed, including the 500-test frontend suite (499 passed, one skipped), header/photo contracts, forgot-password and all 28 responsive routes.
 - Marketing navigation tested in Chromium at 360/768/1280px. The signup entry is visible and within the viewport, including the mobile menu.
+- GitHub Pages subsequently reported `7a9ecd0e1ebe18954377457e86da59d0d051bc8d` built. Live `https://wellbuiltsuite.com/` HTML matched that committed source after CRLF/LF normalization; normalized SHA-256 `4e0258ec35d5a630ae0493f4a4a54aa7b2d70361772a31028025392cf7f88734`.
 
 ## Still requires real user verification
 
