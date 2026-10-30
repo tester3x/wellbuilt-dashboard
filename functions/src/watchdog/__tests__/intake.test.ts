@@ -5,12 +5,38 @@ const doc=(key:string)=>({key,get:async()=>({exists:documents.has(key),data:()=>
 jest.mock('firebase-functions/v2/https',()=>({onRequest:(_opts:any,fn:any)=>fn}));
 jest.mock('firebase-admin',()=>({
  firestore:()=>({doc,collection:(p:string)=>({doc:(id:string)=>doc(p+'/'+id)}),runTransaction:async(fn:any)=>fn({get:(ref:any)=>ref.get(),set:(ref:any,value:any)=>documents.set(ref.key,value),create:(ref:any,value:any)=>{if(documents.has(ref.key))throw Error('exists');documents.set(ref.key,value);}})}),
- database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),set:async(value:any)=>{database.set(key,value);},orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
+ database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),set:async(value:any)=>{database.set(key,value);},update:async(values:any)=>{const data=database.get(key)||{};for(const [path,value]of Object.entries(values)){const parts=path.split('/');let parent=data;for(const name of parts.slice(0,-1))parent=parent[name]??={};parent[parts[parts.length-1]]=value;}database.set(key,data);},orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
 }));
-import {ingestWatchdogPullV2,getWatchdogPullReceiptV2,stopWatchdogWellV2,getWatchdogWellLifecycleV2} from '../intake';
+import {ingestWatchdogPullV2,getWatchdogPullReceiptV2,stopWatchdogWellV2,getWatchdogWellLifecycleV2,reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from '../intake';
 async function call(endpoint:any,name:string,body:any,tampered=false){const rawBody=Buffer.from(JSON.stringify(body)),timestamp=String(Date.now()),nonce=randomBytes(16).toString('hex');const signature=createHmac('sha256','synthetic-only-key').update(`v1:${name}:POST:${timestamp}:${nonce}:${createHash('sha256').update(rawBody).digest('hex')}`).digest('hex');const req={method:'POST',body,rawBody,headers:{'x-watchdog-key-id':'V1','x-watchdog-timestamp':timestamp,'x-watchdog-nonce':nonce,'x-watchdog-signature':tampered?'0'.repeat(64):signature}};let code=200,result:any;const res={status:(n:number)=>{code=n;return res;},json:(v:any)=>{result=v;return res;}};await (endpoint as any)(req,res);return {code,result};}
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});database.set('packets/outgoing/response_existing',{wellName:'Kahuna 5',wellDown:false,currentLevel:'12',lastPullPacketId:'actual-pull',flowRate:'1:00:00'});});
 const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
+test('top-only requires an explicitly enabled canonical sender and keeps zero removal',async()=>{
+ const body={...observation(),senderId:'123456789@lid',chat:observation().chat.replace('Top 12.5\nBottom 11.125\n165 bbl', '@ 6\u2032 5\u2033 off')};
+ const {watchdogSenderKey}=require('../senderOwnership');const policy=documents.get('watchdog_v2_config/laptop');
+ expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body)).result.status).toBe('ignored');
+ policy.senderBindings={[watchdogSenderKey(body.senderId)]:{enabled:true,companyId:'liquid-gold',driverId:'driver-test-123'}};
+ database.set('drivers/profiles/driver-test-123',{active:true,companyId:'liquid-gold',displayName:'Driver',assignedWells:['Kahuna 5']});
+ expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body)).result.status).toBe('ignored');
+ policy.topOnlyDriverStarts={'driver-test-123':new Date(Date.now()+86400000).toISOString()};
+ expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body)).result.status).toBe('ignored');
+ policy.topOnlyDriverStarts['driver-test-123']=new Date(Date.now()-3600000).toISOString();
+ const response=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(response.result.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+response.result.packetId);
+ expect(packet).toMatchObject({requestType:'pull',bblsTaken:0,tankLevelFeet:6+5/12,bottomLevelFeet:6+5/12,driverId:'driver-test-123',wellDownIsAuthoritative:false});
+ expect(packet.wellDown).toBeUndefined();expect(packet.watchdogProvenance).toMatchObject({reportedBottomFeet:null,observationKind:'top_only',measurementTimeSource:'posted'});
+ database.set('packets/processed/'+response.result.packetId,{...packet,tankAfterInches:77,canonicalProcessingComplete:true});
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:response.result.identity})).result.status).toBe('complete');
+});
+test('admin multiwell top-only batch is ignored without creating pulls or timing reviews',async()=>{
+ const wells=['Matilda 2','Renn 1','Blackdog','Bootleg 4','Ironbank 5','Coopers'];
+ documents.get('watchdog_v2_config/laptop').channels.group.wells=wells;
+ const chat=observation().chat.split('Driver:')[0]+"ClintJ: Matilda 2 12'1\n\nRenn 1 8ft\n\nBlackdog 12'7\n\nBootleg 4 10'5\n\nIronbank 5 7'8\n\nCoopers 11'0";
+ const {parsePullChat}=require('../../imports/pullParser');const rows=parsePullChat(chat,{wellNames:wells,levelNotation:'feet_inches'});
+ expect(rows).toHaveLength(6);expect(rows.every((r:any)=>r.levelOnly&&r.bblsTaken===0)).toBe(true);
+ for(let rowIndex=0;rowIndex<rows.length;rowIndex++)expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chat,rowIndex,senderId:'987654321@lid'})).result.status).toBe('ignored');
+ expect([...database.keys()].some(k=>k.startsWith('packets/incoming/'))).toBe(false);
+});
 test('rejects invalid signature and unconfigured channel',async()=>{expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation(),true)).code).toBe(400);expect(database.size).toBe(2);expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chatId:'other'})).result.error).toBe('channel_not_allowed');});
 test('queues once, retries preserve packet, and receipt requires exact bottom and completion',async()=>{const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(first.result.status).toBe('queued');const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.driverId).toBeNull();const again=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(again.result.packetId).toBe(first.result.packetId);const receipt={identity:first.result.identity};database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('complete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:140,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');});
 test('accepts missing bottom and suppresses activation history',async()=>{expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chat:observation().chat.replace('Bottom 11.125\n','')})).result.status).toBe('queued');documents.get('watchdog_v2_config/laptop').enabledAt=Date.now()+1000;expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation())).result.status).toBe('before_activation');});
@@ -110,3 +136,55 @@ test('separator candidate passes only corroborated historical recovery, otherwis
  database.set('packets/processed/previous',{...prior,tankAfterInches:12});database.delete('packets/incoming/'+result.result.packetId);
  const held=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,messageId:'other'});expect(held.result.status).toBe('review');
 });
+
+test('missing barrels send a provisional estimate immediately, retain bottom, and remain reviewable',async()=>{
+ const channel=documents.get('watchdog_v2_config/laptop').channels.group;channel.maxLoadBbls=185;channel.wellLoadLimits={'Kahuna 5':140};
+ database.set('wells/Kahuna 5/status',{isDown:false,calculated:{flowRateMinutes:120},lastPull:{dateTimeUTC:new Date(Date.now()-3600000).toISOString()}});
+ const body={...observation(),chat:observation().chat.replace('165 bbl','')};
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ expect(first.result).toMatchObject({status:'queued',needsReview:true,barrelSource:'estimated'});
+ const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.bblsTaken).toBe(140);expect(packet.bottomLevelFeet).toBe(11.125);expect(packet.watchdogProvenance.barrels.status).toBe('provisional');
+ database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5,canonicalProcessingBottomInches:133.5,canonicalProcessingComplete:true});
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity})).result).toMatchObject({status:'complete',needsReview:true});
+ // Changing AFR must not re-identify and duplicate this already delivered observation.
+ database.get('wells/Kahuna 5/status').calculated.flowRateMinutes=60;
+ const again=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(again.result.packetId).toBe(first.result.packetId);
+});
+test('review creates an edit of the same provisional packet, and receipt finalizes only completed corrections',async()=>{
+ const body={...observation(),chat:observation().chat.replace('165 bbl','')};
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body),packet=database.get('packets/incoming/'+first.result.packetId);
+ const path='packets/processed/'+first.result.packetId;database.set(path,{...packet,tankAfterInches:133.5,canonicalProcessingComplete:true});
+ database.set('well_config/Kahuna 5',database.get('well_config')['Kahuna 5']);
+ const review={confirmed:true,dateTimeUTC:packet.dateTimeUTC,tankLevelFeet:12.5,bottomLevelFeet:11.125,bblsTaken:140,reason:'Driver confirmed partial load'};
+ const result=await call(reviewWatchdogDeliveredPullV2,'reviewWatchdogDeliveredPullV2',{identity:first.result.identity,decision:'confirm',review});expect(result.result.correctionPending).toBe(true);
+ const entry=documents.get('watchdog_v2_deliveries/'+first.result.identity),event=entry.pendingReview.eventId,edit=database.get('packets/incoming/'+event);
+ expect(edit.requestType).toBe('edit');expect(edit.originalPacketId).toBe(first.result.packetId);expect(edit.bblsTaken).toBe(140);
+ // Retry the same correction after a lost response, without another pull or edit.
+ expect((await call(reviewWatchdogDeliveredPullV2,'reviewWatchdogDeliveredPullV2',{identity:first.result.identity,decision:'confirm',review})).result.packetId).toBe(first.result.packetId);
+ database.set('packets/editOutbox/'+event,{completed:true,originalPacketId:first.result.packetId});
+ database.set(path,{...packet,bblsTaken:140,tankAfterInches:133.5,canonicalProcessingComplete:true,outgoingCommittedEventId:event});
+ const final=await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity});expect(final.result).toMatchObject({status:'complete',needsReview:false});expect(database.get(path).watchdogProvenance.barrels.status).toBe('confirmed');
+});
+test('load policy cannot escape watched wells or accept invalid capacities',async()=>{
+ const policy={channel:'group',maxLoadBbls:185,driverCapacities:{Driver:165},wellLoadLimits:{'Kahuna 5':120}};
+ expect((await call(setWatchdogBarrelPolicyV2,'setWatchdogBarrelPolicyV2',policy)).code).toBe(200);
+ expect((await call(setWatchdogBarrelPolicyV2,'setWatchdogBarrelPolicyV2',{...policy,wellLoadLimits:{Other:120}})).code).toBe(400);
+ expect((await call(setWatchdogBarrelPolicyV2,'setWatchdogBarrelPolicyV2',{...policy,driverCapacities:{Driver:0}})).code).toBe(400);
+});
+
+test('unchanged confirmation completes after processor consumes no-op, without another pull',async()=>{
+ const body={...observation(),chat:observation().chat.replace('165 bbl','')};
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body),packet=database.get('packets/incoming/'+first.result.packetId);
+ const path='packets/processed/'+first.result.packetId;database.set(path,{...packet,tankAfterInches:133.5,canonicalProcessingComplete:true});
+ database.set('well_config/Kahuna 5',database.get('well_config')['Kahuna 5']);
+ const entry=documents.get('watchdog_v2_deliveries/'+first.result.identity);
+ const review={confirmed:true,dateTimeUTC:entry.dateTimeUTC,tankLevelFeet:entry.top,bottomLevelFeet:entry.reportedBottomFeet??entry.bottom,bblsTaken:entry.bbl,reason:''};
+ await call(reviewWatchdogDeliveredPullV2,'reviewWatchdogDeliveredPullV2',{identity:first.result.identity,decision:'confirm',review});
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity})).result.correctionPending).toBe(true);
+ const event=documents.get('watchdog_v2_deliveries/'+first.result.identity).pendingReview.eventId;
+ database.delete('packets/incoming/'+event);
+ const final=await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity});
+ expect(final.result).toMatchObject({status:'complete',needsReview:false,correctionPending:false,packetId:first.result.packetId});
+});
+test('owned processor rejection is review rather than queued and never resubmitted',async()=>{const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());const id=first.result.packetId;const packet=database.get('packets/incoming/'+id);database.delete('packets/incoming/'+id);database.set('packets/rejected/'+id,{packetId:id,packet,reason:'STALE_PULL_TIME'});const r=await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity});expect(r.result).toMatchObject({status:'review',needsReview:true,packetId:id});expect(r.result.issues[0]).toContain('STALE_PULL_TIME');expect(database.has('packets/incoming/'+id)).toBe(false);});
+test('pumper multi-well top-only list is ignored without packets or review',async()=>{const body=observation();body.chat=body.chat.slice(0,body.chat.indexOf('Kahuna 5'))+"Kahuna 5 8'1\nGunslinger 3 7'2\nGunslinger 5 6'3";const before=database.size;const r=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(r.result).toMatchObject({status:'ignored',reason:'pumper_gauge_list'});expect(database.size).toBe(before);});

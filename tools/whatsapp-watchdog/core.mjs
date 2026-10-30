@@ -17,7 +17,7 @@ export class Queue{
  if(!id||!channel||typeof chat!=='string'||chat.length>2000000)throw Error('Invalid message');
  const key=hash(channel+'\0'+id),digest=hash(chat+'\0'+deleted+'\0'+JSON.stringify(options)+'\0'+(senderId||''));const previous=this.data.messages[key];
  if(previous?.digest===digest)return {duplicate:true};
- const rows=deleted?[]:parsePullChat(chat,options).map(row=>({...row,id:key+':'+row.id}));
+ const rows=deleted?[]:parsePullChat(chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:key+':'+row.id}));
  const notices=deleted?[]:findPullChatNotices(chat);
  const post=splitChat(chat)[0];let postedAt=rows[0]?.postedAt||'';if(!postedAt&&post)try{postedAt=chatTimestamp(post.date,post.time);}catch{}
  this.data.messages[key]={key,id,channel,chat,digest,senderId:senderId||previous?.senderId||null,rows,notices,deleted,edited:!!previous&&(previous.edited||previous.body!==(post?.body||chat)||previous.postedAt!==postedAt),postedAt,author:post?.author||'',body:post?.body||chat,updatedAt:new Date().toISOString()};this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
@@ -27,7 +27,7 @@ export class Queue{
  for(const message of Object.values(this.data.messages)){
   const options=channelOptions[message.channel];
   if(!options||message.deleted||message.edited||message.id.startsWith('export:'))continue;
-  const rows=parsePullChat(message.chat,options).map(row=>({...row,id:message.key+':'+row.id}));
+  const rows=parsePullChat(message.chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:message.key+':'+row.id})).map(row=>{const d=this.data.deliveries?.[row.id];return d&&(['duplicate','excluded','archived','before_activation'].includes(d.status)||(d.status==='complete'&&!d.needsReview))?message.rows.find(old=>old.id===row.id)||row:row;});
   if(JSON.stringify(rows)!==JSON.stringify(message.rows)){message.rows=rows;changed=true;}
   for(const row of rows){const delivery=this.data.deliveries?.[row.id];
    if(!row.issues.length&&!message.notices.length&&delivery?.status==='review'&&!delivery.identity&&!delivery.review&&delivery.issues?.length===1&&['Missing barrels','Unreadable levels'].includes(delivery.issues[0])){delete this.data.deliveries[row.id];changed=true;}
@@ -35,7 +35,7 @@ export class Queue{
  }
  if(changed)this.save();
  }
- reviewInbox(){return Object.values(this.data.messages).flatMap(post=>post.rows.filter(row=>this.data.deliveries?.[row.id]?.status==='review').map(row=>({post:{...post,rows:[row]},row}))).sort((a,b)=>Date.parse(a.post.postedAt||a.post.updatedAt)-Date.parse(b.post.postedAt||b.post.updatedAt));}
+ reviewInbox(){return Object.values(this.data.messages).flatMap(post=>post.rows.filter(row=>(this.data.deliveries?.[row.id]?.status==='review'||this.data.deliveries?.[row.id]?.needsReview)).map(row=>({post:{...post,rows:[row]},row}))).sort((a,b)=>Date.parse(a.post.postedAt||a.post.updatedAt)-Date.parse(b.post.postedAt||b.post.updatedAt));}
  snapshot(){const messages=Object.values(this.data.messages);return {reviewInbox:this.reviewInbox(),messageCount:messages.length,pullCount:messages.reduce((n,m)=>n+m.rows.length,0),messages:messages.filter(m=>m.rows.length||m.notices.length||m.deleted).slice(-200).reverse()};}
  liveFeed(channels){const selected=new Set(channels),counts=new Map();return Object.values(this.data.messages).filter(m=>selected.has(m.channel)&&!m.id.startsWith('export:')).sort((a,b)=>Date.parse(b.postedAt||b.updatedAt)-Date.parse(a.postedAt||a.updatedAt)).filter(m=>{const count=counts.get(m.channel)||0;counts.set(m.channel,count+1);return count<100;});}
  export(channel){return Object.values(this.data.messages).filter(m=>m.channel===channel&&!m.deleted&&(m.rows.length||m.notices.length)).sort((a,b)=>Date.parse(a.rows[0]?.postedAt||a.updatedAt)-Date.parse(b.rows[0]?.postedAt||b.updatedAt)).map(m=>m.chat).join('\n');}
@@ -43,4 +43,4 @@ export class Queue{
 
 export function newestReceiverMessages(messages,limit=100){const unique=new Map();for(const m of messages)unique.set(m.channel+'\0'+m.id,m);const counts=new Map();return [...unique.values()].sort((a,b)=>b.timestamp-a.timestamp).filter(m=>{const count=counts.get(m.channel)||0;counts.set(m.channel,count+1);return count<limit;});}
 
-export function canReviewPost(post,deliveries){return !post.deleted&&!Object.entries(deliveries||{}).some(([id,d])=>id.startsWith(post.key+':')&&(d.identity||['complete','duplicate','queued','incomplete'].includes(d.status)));}
+export function canReviewPost(post,deliveries,rowId){if(rowId&&deliveries?.[rowId]?.needsReview)return !post.deleted&&deliveries[rowId].status==='complete'&&!deliveries[rowId].correctionPending;if(rowId&&!post.edited){const d=deliveries?.[rowId];return !post.deleted&&!d?.identity&&!['complete','duplicate','queued','incomplete'].includes(d?.status);}return !post.deleted&&!Object.entries(deliveries||{}).some(([id,d])=>id.startsWith(post.key+':')&&(d.identity||['complete','duplicate','queued','incomplete'].includes(d.status)));}

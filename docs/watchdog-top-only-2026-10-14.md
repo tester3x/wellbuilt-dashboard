@@ -1,0 +1,15 @@
+# Top-only driver observations
+
+User confirmed Marcial (Anthony) and Adan currently post on-site top-only readings. Luiz returns October 21; his exact captured sender identity still needs verification. The account owner's readings already arrive through the app. Admin and unverified top-only posts are ignored because their posting time may be hours after measurement. Do not infer measurement times from calculated flow rates.
+
+Parser recognizes a configured well followed by a single top gauge, including `Atlas 1 @ 6' 5" off`. These rows have zero barrels and no reported bottom. Signed intake requires both an explicit canonical-driver start time in server policy and the existing exact-sender binding, active company profile and assigned-well checks. A stated measurement time takes precedence; otherwise the on-site driver's posting time is retained. Provenance distinguishes these observations and their time source. Computed after-level equals top; the word `off` does not change the well's down state. Positive-barrel and estimated loads retain their current path.
+
+Activation is prospective. Existing reviews, delivered packets and historical messages are not replayed. Luiz cannot qualify until his sender is verified, even if his canonical driver start time has arrived.
+
+Validation: Functions TypeScript build passed; 53 existing parser/model/alias regressions, 3 new observation parser tests, 6 ownership tests and the new signed intake/receipt test passed. Local queue/transport tests: 29 passed. The full older intake suite retains pre-existing failures involving decimal gauge fixtures interpreted as feet/inches; an unchanged source baseline also fails. No fix to those unrelated fixtures is included.
+
+Intake source 9814cb9f deployed successfully; HP applied it as b238edde. Marcial and Adan activated prospectively at 2026-10-14T21:55:21.461Z. Adan's unique captured sender was linked to his active canonical Liquid Gold profile. Luiz is date-gated to October 21 midnight Central and still needs a captured, verified sender. Clint's six-well admin batch additionally passes a signed intake regression: six ignored results and no packets.
+
+Flow-window compatibility permits a zero-volume observation only with the verified top-only provenance, matching owner, and identical top/after gauge. It carries zero removal into subsequent recovery. Existing unverified zero-volume observations remain interval breaks. Nine flow/window-average tests pass. To preserve the older deployed packet-processor lane, deployment uses its downloaded live source archive with only the shared flowWindows source/compiled module replaced. The live index and effectiveFlow modules were compared with the checkout. Unrelated differences in parser, intake, catalog and security modules are preserved from the live processor archive, not overwritten by this feature branch.
+
+Receiver verification and final deployment checkpoints are recorded after installation. This change does not deploy Hosting or security rules or recompute historical records.

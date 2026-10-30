@@ -81,3 +81,45 @@ test('bare one oclock resolves to a nearby afternoon post; inferred separator re
  const [r]=parsePullChat('[10/6/26, 1:19:44 PM] Driver: Kahuna 5\n8.8\n7.7\n185\n1:00');expect(r.dateTimeUTC).toBe('2026-10-06T18:00:00.000Z');expect(r.issues).toEqual([]);
  const [typo]=parsePullChat('[10/6/26, 1:19:44 PM] Driver: Kahuna 5- 8.8.6.9\n165 bbls');expect(typo.tankLevelFeet).toBe(8.8);expect(typo.bottomLevelFeet).toBe(6.9);expect(typo.inferredSeparator).toBe(true);
 });
+
+test('clock after T/B levels is time, never barrels; driver default beats group fallback',()=>{
+ const chat='[10/07/2026, 12:52:55] Test Driver: Gunslinger 3\nT 15-1\nB 12-5\n12:22 pm';
+ const [row]=parsePullChat(chat,{defaultBbls:165,driverDefaultBbls:{'Test Driver':185}});
+ expect(row.bblsTaken).toBe(185);expect(row.dateTimeUTC).toBe('2026-10-07T17:22:00.000Z');expect(row.issues).toEqual([]);
+ expect(parsePullChat(chat)[0].bblsTaken).toBeNull();
+ expect(parsePullChat(chat.replace('12:22 pm','170 bbls\n12:22 pm'),{driverDefaultBbls:{'Test Driver':185}})[0].bblsTaken).toBe(170);
+});
+
+ test('Pesek shorthand resolves only to the configured Pesek 10 well',()=>{
+ const chat='[10/09/2026, 10:27:38] Anthony: Pesek\n12’ 3”\n3’ 9”\n170 bbl';
+ const rows=parsePullChat(chat,{wellNames:['Pesek 10']});
+ expect(rows).toHaveLength(1);expect(rows[0].wellName).toBe('Pesek 10');expect(rows[0].tankLevelFeet).toBe(12.25);expect(rows[0].bblsTaken).toBe(170);
+ expect(parsePullChat(chat,{wellNames:['Atlas 1']})[0].issues).toContain('Choose the well for this shorthand message');
+ expect(parsePullChat(chat.replace('Pesek\n','Pesek 12\n'),{wellNames:['Pesek 10']})[0].wellName).toBe('');
+ });
+
+test('double slash keeps Kahuna decimal levels and explicit barrels', () => {
+  for (const [top, bottom] of [[7.3, 6.4], [7.0, 6.1]]) {
+    const [row] = parsePullChat(msg(`Kahuna 5- ${top}//${bottom}\n165 bbls`), { defaultWell: 'Kahuna 5' });
+    expect(row.tankLevelFeet).toBe(top);
+    expect(row.bottomLevelFeet).toBe(bottom);
+    expect(row.bblsTaken).toBe(165);
+    expect(row.issues).toEqual([]);
+  }
+});
+
+// Pump status after the matched well must not displace the first gauge.
+test('leading On annotation preserves gauges, volume and message timestamp', () => {
+ const [row]=parsePullChat(msg('Atlas 1. On\n11’ 5”\n7’ 8”\n150 bbl'),{wellNames:['Atlas 1'],defaultBbls:165});
+ expect(row.wellName).toBe('Atlas 1');
+ expect(row.tankLevelFeet).toBeCloseTo(11+5/12);
+ expect(row.bottomLevelFeet).toBeCloseTo(7+8/12);
+ expect(row.bblsTaken).toBe(150);
+ expect(row.dateTimeUTC).toBe(row.postedAt);
+ expect(row.issues).toEqual([]);
+});
+test('unknown prose and pump-status-only messages do not become fabricated pulls', () => {
+ const [held]=parsePullChat(msg('Atlas 1. Unknown note\n11 5\n7 8\n150 bbl'),{wellNames:['Atlas 1']});
+ expect(held.issues).toContain('Unreadable levels');
+ expect(parsePullChat(msg('Atlas 1. On'),{wellNames:['Atlas 1']})).toEqual([]);
+});
