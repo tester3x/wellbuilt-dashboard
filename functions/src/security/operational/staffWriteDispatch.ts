@@ -153,6 +153,8 @@ function asString(v: unknown): string {
 
 /** Driver birth stamps are server-owned; returning to the queue retains ownership. */
 export function isDriverBuiltDispatch(job: Record<string, unknown> | null): boolean {
+  const birth = job?.builderOwnership as { kind?: string } | undefined;
+  if (birth?.kind) return birth.kind === 'driver';
   const assignedBy = asString(job?.assignedBy);
   return asString(job?.source) === 'driver' || assignedBy === 'driver' || assignedBy.startsWith('driver:');
 }

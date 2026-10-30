@@ -3,12 +3,16 @@ import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver } from '../requireDriverAuth';
 import { splitCancellationPlan } from './ticketWaterCustody';
+import { resolveBuilderCancellation } from './builderCancellation';
 
 /** Cancellation is a transaction, separate from informational stage upserts.
  * Never deletes pull packets, tickets, well history, or assignment ownership. */
 export const resolveDriverJobCancellation = https.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false }, async request => {
     const driver = await requireSecureDriver(request, { allowLegacyHash: false });
+    if (request.data?.action === 'cancel_job') {
+      return resolveBuilderCancellation(admin.firestore(), driver, request.data);
+    }
     const { dispatchId, invoiceDocId, action, reason = '' } = request.data || {};
     if (typeof dispatchId !== 'string' || !dispatchId || dispatchId.includes('/')
       || !['cancel', 'cancel_split', 'cancel_or_cycle', 'return_pending', 'decline'].includes(action)
