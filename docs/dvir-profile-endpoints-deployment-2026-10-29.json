@@ -1,0 +1,160 @@
+{
+  "sourceCommit": "17c9ac85bf5ff4a132511ad085b2faf60e03b3a4",
+  "functions": [
+    {
+      "name": "listEquipmentInspectionProfiles",
+      "state": "ACTIVE",
+      "updateTime": "2026-10-30T01:05:00.689697806Z",
+      "runtime": "nodejs22",
+      "source": {
+        "bucket": "gcf-v2-sources-559487114498-us-central1",
+        "object": "listEquipmentInspectionProfiles/function-source.zip",
+        "generation": "1793322238354402"
+      },
+      "sourceByteMatched": true
+    },
+    {
+      "name": "getEquipmentInspectionProfile",
+      "state": "ACTIVE",
+      "updateTime": "2026-10-30T01:05:29.092537990Z",
+      "runtime": "nodejs22",
+      "source": {
+        "bucket": "gcf-v2-sources-559487114498-us-central1",
+        "object": "getEquipmentInspectionProfile/function-source.zip",
+        "generation": "1793322297195207"
+      },
+      "sourceByteMatched": true
+    },
+    {
+      "name": "saveEquipmentInspectionSettings",
+      "state": "ACTIVE",
+      "updateTime": "2026-10-30T01:05:12.698935502Z",
+      "runtime": "nodejs22",
+      "source": {
+        "bucket": "gcf-v2-sources-559487114498-us-central1",
+        "object": "saveEquipmentInspectionSettings/function-source.zip",
+        "generation": "1793322297443646"
+      },
+      "sourceByteMatched": true
+    },
+    {
+      "name": "saveEquipmentInspectionDraft",
+      "state": "ACTIVE",
+      "updateTime": "2026-10-30T01:05:14.490624033Z",
+      "runtime": "nodejs22",
+      "source": {
+        "bucket": "gcf-v2-sources-559487114498-us-central1",
+        "object": "saveEquipmentInspectionDraft/function-source.zip",
+        "generation": "1793322297459739"
+      },
+      "sourceByteMatched": true
+    },
+    {
+      "name": "publishEquipmentInspectionProfile",
+      "state": "ACTIVE",
+      "updateTime": "2026-10-30T01:05:15.009226802Z",
+      "runtime": "nodejs22",
+      "source": {
+        "bucket": "gcf-v2-sources-559487114498-us-central1",
+        "object": "publishEquipmentInspectionProfile/function-source.zip",
+        "generation": "1793322238348863"
+      },
+      "sourceByteMatched": true
+    },
+    {
+      "name": "beginEquipmentInspectionPhotoUpload",
+      "state": "ACTIVE",
+      "updateTime": "2026-10-30T01:05:19.022993955Z",
+      "runtime": "nodejs22",
+      "source": {
+        "bucket": "gcf-v2-sources-559487114498-us-central1",
+        "object": "beginEquipmentInspectionPhotoUpload/function-source.zip",
+        "generation": "1793322297390290"
+      },
+      "sourceByteMatched": true
+    }
+  ],
+  "atUTC": "2026-10-30T01:06:57.205Z",
+  "verified": [
+    {
+      "file": "lib/index.js",
+      "sha256": "2c6e40d62bdacf4c77b3c7e2ebce9a7ad5fa331e21b9e50a0d130a3f33354905"
+    },
+    {
+      "file": "lib/equipment/inspectionProfiles/callables.js",
+      "sha256": "ae19b001830565f067a5d9054529107ba2a798171597f4e10d5d0927a479268e"
+    },
+    {
+      "file": "lib/equipment/inspectionProfiles/service.js",
+      "sha256": "137983b87920e53a578926f2f642e10de44c1df4f38d5c4b3274695fd3e81aa2"
+    },
+    {
+      "file": "lib/equipment/inspectionProfiles/validation.js",
+      "sha256": "72e86ff7638dee12234a3980019c50eeafe916d845294a720a7cb0a93cbb8c1e"
+    }
+  ],
+  "corsChange": {
+    "before": {
+      "name": "wellbuilt-sync.firebasestorage.app",
+      "metageneration": "3",
+      "cors": [
+        {
+          "origin": [
+            "*"
+          ],
+          "method": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "HEAD"
+          ],
+          "responseHeader": [
+            "Content-Type",
+            "Authorization",
+            "Content-Length",
+            "User-Agent",
+            "x-goog-resumable"
+          ],
+          "maxAgeSeconds": 3600
+        }
+      ]
+    },
+    "after": {
+      "name": "wellbuilt-sync.firebasestorage.app",
+      "cors": [
+        {
+          "origin": [
+            "*"
+          ],
+          "method": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "HEAD"
+          ],
+          "responseHeader": [
+            "Content-Type",
+            "Authorization",
+            "Content-Length",
+            "User-Agent",
+            "x-goog-resumable",
+            "x-goog-if-generation-match",
+            "x-goog-meta-sha256"
+          ],
+          "maxAgeSeconds": 3600
+        }
+      ],
+      "metageneration": "4"
+    },
+    "atUTC": "2026-10-30T01:04:11.506Z"
+  },
+  "deviceAcceptance": {
+    "signedOutRead": "Both list/get return HTTP401 UNAUTHENTICATED",
+    "result": "Live profile discovery succeeds; administrator controls visible; no profiles published or selected",
+    "device": "S24 R5CX15HEGQB",
+    "account": "Hots Oiler LLC",
+    "appVersionCode": 111
+  }
+}
