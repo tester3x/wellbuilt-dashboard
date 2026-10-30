@@ -44,6 +44,8 @@ export const staffWriteUserRoles = httpsV2.onCall(
         return snap.exists() ? (snap.val() as Record<string, unknown>) : null;
       },
       async updateUser(uid: string, fields: Record<string, unknown>) {
+        const { syncEmployeeResponsibilities } = await import('./employeeOnboarding');
+        await syncEmployeeResponsibilities(authority.uid, uid, fields.roles);
         await rtdb.ref(`users/${uid}`).update(fields);
       },
     };

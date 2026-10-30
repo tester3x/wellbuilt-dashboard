@@ -1,0 +1,31 @@
+{
+  "date": "2026-10-30",
+  "task": "Standard employee onboarding for every company",
+  "checkout": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "session": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "scope": [
+    "Public company-code or opaque single-use invitation signup.",
+    "Company-bound pending employee approval and no applicant-selected role.",
+    "Discoverable Admin Employees Invite Employee, copy/email link and role approval.",
+    "One canonical app employee identity linked to web email/password identity; hashed credentials.",
+    "Trusted server capability grants and later role demotion synchronization for this new employee path."
+  ],
+  "state": "WIP checkpoint; typechecks and focused tests passed. Full release/browser checks and scoped deployment remain pending. No actual company employee accounts created or modified.",
+  "deploymentScope": [
+    "createEmployeeInvitation",
+    "getEmployeeInvitation",
+    "requestEmployeeJoin",
+    "getEmployeeJoinStatus",
+    "listEmployeeJoinRequests",
+    "resolveEmployeeJoin",
+    "staffWriteUserRoles",
+    "Hosting via mandatory deploy:hosting gate"
+  ],
+  "limits": [
+    "Owner self-signup remains separate.",
+    "Existing app employee registration screens are preserved; the new shared web path is available without downloading an app.",
+    "No operational data, rules, company plans or existing staff grants are migrated."
+  ]
+}

@@ -11,6 +11,7 @@ import { staffWriteUserRoles, classifyUserRolesError } from '@/lib/staffWriteUse
 import { staffWriteDriverRoster, classifyRosterError } from '@/lib/staffWriteDriverRoster';
 import { mergeEmployees, EmployeeRow } from '@/lib/employees';
 import { EmployeePanel } from './EmployeePanel';
+import { EmployeeOnboardingPanel } from './EmployeeOnboardingPanel';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   companyActionRouteFor,
@@ -1565,6 +1566,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           </div>
         </div>
       )}
+
+      <EmployeeOnboardingPanel />
 
       {/* One directory combines employee access and WB-M profile authority. */}
       <EmployeePanel

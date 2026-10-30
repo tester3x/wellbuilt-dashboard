@@ -490,3 +490,18 @@ export function canEditPull(
 export function canDeletePull(user: WellBuiltUser | null): boolean {
   return hasRole(user, 'admin');
 }
+
+/** Employee signup never creates a company or chooses an access role. */
+export async function registerEmployeeWithEmail(input:{email:string;password:string;displayName:string;legalName:string;companyCode?:string;invitationToken?:string}) {
+ const auth=getFirebaseAuth(),email=input.email.trim();
+ if(auth.currentUser?.email?.toLowerCase()===email.toLowerCase())await reauthenticateWithCredential(auth.currentUser,EmailAuthProvider.credential(email,input.password));
+ else {
+  try{await createUserWithEmailAndPassword(auth,email,input.password);}
+  catch(error){if((error as {code?:string}).code!=='auth/email-already-in-use')throw error;await signInWithEmailAndPassword(auth,email,input.password);}
+ }
+ const response=await httpsCallable(getFirebaseFunctions(),'requestEmployeeJoin',{timeout:120000})({
+  displayName:input.displayName.trim(),legalName:input.legalName.trim(),passcode:input.password,
+  ...(input.invitationToken?{invitationToken:input.invitationToken}:{companyCode:input.companyCode?.trim()}),
+ });
+ return response.data as {ok:boolean;status:string;companyName:string;displayName:string};
+}

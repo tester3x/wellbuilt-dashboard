@@ -8,7 +8,7 @@ export function DashboardReturnState() {
   const { user, operatingCompanyId, authResolved } = useAuth();
   const pathname = usePathname();
   useLayoutEffect(() => {
-    if (!authResolved || !user || pathname === '/login' || pathname === '/live-demo') return;
+    if (!authResolved || !user || pathname === '/login' || pathname === '/live-demo' || pathname === '/join' || pathname.startsWith('/join/') || pathname === '/register' || pathname === '/welcome') return;
     const key = returnKey(user.uid, operatingCompanyId, `scroll:${pathname}`);
     let saved: ReturnSnapshot | null = null;
     try { saved = JSON.parse(sessionStorage.getItem(key) || 'null'); } catch { /* defaults */ }

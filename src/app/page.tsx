@@ -31,7 +31,7 @@ export default function HomePage() {
 
   // Load summary data
   useEffect(() => {
-    if (!user) return;
+    if (!user || user.onboardingStatus === 'pending_employee_approval') return;
 
     // Tenant containment (7/9): the global well pool is Liquid Gold's data —
     // other scoped companies get zero counts, no subscription. See
@@ -72,6 +72,7 @@ export default function HomePage() {
   }
 
   if (!user) return null;
+  if (user.onboardingStatus === 'pending_employee_approval') return <main className="min-h-screen bg-gray-900 p-8 text-white"><h1 className="text-2xl">Waiting for company approval</h1><p>Your employer assigns your responsibilities before you can access company work.</p><Link href="/join/" className="text-cyan-300 underline">Check employee approval</Link></main>;
 
   return (
     <div className="min-h-screen bg-gray-900">

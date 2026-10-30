@@ -4027,3 +4027,5 @@ export { resolveWbtWellConfig } from './security/operational/resolveWbtWellConfi
 export {reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from './watchdog/intake';
 export { getWbmTankInfo, saveWbmTankInfo } from './security/operational/tankInfoCallables';
 export { staffWritePrimaryRouteAssignment, staffGetPrimaryRouteAssignments } from './security/operational/staffWritePrimaryRouteAssignment';
+
+export { createEmployeeInvitation, getEmployeeInvitation, requestEmployeeJoin, getEmployeeJoinStatus, listEmployeeJoinRequests, resolveEmployeeJoin } from "./security/employeeOnboarding";

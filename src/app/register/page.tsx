@@ -153,7 +153,8 @@ function RegisterForm(): React.ReactElement {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <Link href="/join/" className="block mb-4 text-cyan-300 underline">Join an existing company instead</Link>
+          <form onSubmit={handleSubmit} className="space-y-5">
           {error && (
             <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded text-sm">
               {error}
@@ -298,7 +299,7 @@ function RegisterForm(): React.ReactElement {
           </div>
 
           <div className="text-center text-xs text-gray-500 border-t border-gray-700 pt-4">
-            You become the administrator of your new company. Joining an existing company? Use New Employee Registration in your WellBuilt app with its company code.
+            You become the administrator of your new company. Joining an existing company? Use the employee signup link below with its company code.
           </div>
         </form>
       </div>
