@@ -63,7 +63,7 @@ export const addSplitLeg = httpsV2.onCall(
           const snap = await tx.get(
             fs.collection('invoices').where('dispatchSplitGroupId', '==', splitGroupId),
           );
-          return snap.docs.map((d) => ({ id: d.id }));
+          return snap.docs.map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> }));
         },
         applyCreate: (id, data) => {
           tx.create(fs.collection('dispatches').doc(id), {

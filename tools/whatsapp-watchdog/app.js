@@ -84,6 +84,7 @@ function renderWellControls(panel,group,archivedWell){
  for(const w of wells){const option=node('option',w.wellName,select);option.value=w.wellName;}
  const detail=node('div','',box);
  const draw=()=>{detail.replaceChildren();const w=wells.find(w=>w.wellName===select.value);if(!w){select.hidden=true;node('p','No wells configured for WB M delivery in this group yet.',detail);return;}
+ if(w.state==='held'){node('p',w.hold?.autoResume?.mode==='next_load_or_level'?'Monitoring on hold · waiting for a new '+w.wellName+' load/level report':'Monitoring on hold',detail);return;}
  node('p',w.archive?'Monitoring ended Â· '+(w.state==='archived'?'WB M predicted inflow stopped':'WB M confirmation pending'):'Monitoring active',detail);
  if(w.archive){node('p',w.archive.reason,detail);node('p','Archived '+new Date(w.archive.at).toLocaleString('en-US',{timeZone:'America/Chicago'}),detail);}
  const reason=node('input','',detail);reason.placeholder='Reason for ending monitoring';reason.maxLength=300;reason.value=w.archive?.reason||'';reason.hidden=!!w.archive;reason.setAttribute('aria-label','Stop reason for '+w.wellName);

@@ -22,6 +22,13 @@ export function applyReviewCorrections(row:PullImportRow,review:any):PullImportR
   if(typeof n!=='number'||!Number.isFinite(n)||n<0||n>(key==='bblsTaken'?1000:40)||(key==='bblsTaken'&&n===0))throw Error('invalid_review_measurement');value[key]=n;
  }
  if(value.bottomLevelFeet!==null&&(value.tankLevelFeet===null||value.bottomLevelFeet>value.tankLevelFeet))throw Error('invalid_review_bottom');
+ // An explicit review may discard a mistyped reported bottom. WB M derives the
+ // calibrated post-pull level from top and confirmed barrels; retain the raw
+ // observation in originalMeasurements rather than inventing a replacement.
+ if(Object.prototype.hasOwnProperty.call(review,'bottomLevelFeet')&&
+    (value.bottomLevelFeet===null||value.bottomLevelFeet<=value.tankLevelFeet!)){
+  value.issues=value.issues.filter(issue=>issue!=='Labelled bottom exceeds top');
+ }
  value.issues=value.issues.filter(issue=> !(['Unreadable levels','Inferred level separator needs historical validation'].includes(issue)&&value.tankLevelFeet!==null&&Object.prototype.hasOwnProperty.call(review,'tankLevelFeet'))&&!(issue==='Invalid top level'&&value.tankLevelFeet!==null)&&!(issue==='Missing barrels'&&value.bblsTaken!==null)&&!['Pull time lacks AM/PM; confirm','Invalid stated pull time','Stated time is far from the post; confirm the pull date and time','Multiple wells in one message; confirm individual pull times'].includes(issue));
  return value;
 }

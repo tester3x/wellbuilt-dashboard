@@ -6,6 +6,15 @@ No Firebase credential is held by the daemon. Optional review alerts go only to 
 
 State and linked-device browser session are private in %LOCALAPPDATA%/WellBuilt/WhatsAppWatchdog; never share the session folder. Override location using WBC_WATCHDOG_DATA and Chrome path using WBC_CHROME_PATH. Localhost-only listener with host/origin checks and per-process token. Restart requires Connect and Start; saved session normally avoids another QR scan. Pause stops capturing, Stop destroys the connection. No autostart installed.
 
+For an existing Windows installation with the `WellBuilt Watchdog` scheduled task,
+`install-startup-task.ps1` updates only its action, backs up the task XML, and keeps
+its principal/settings/triggers. Startup runs hidden and noninteractively, reuses
+saved bridge configuration, and connects/resumes an existing receiver instead of
+equating an open port with active watching. Run `test-startup.ps1` for the mocked
+startup regression. The browser uses its native identity rather than the library's
+obsolete user-agent override. An unpaired session still requires the owner to link
+the QR; startup cannot bypass WhatsApp authentication.
+
 Receiver checks up to the last 100 currently synced messages in each selected group every four seconds. It does not fetch complete history. Larger or unsynced gaps need an export. Connection state is checked before reading. A successful receiver check exposes its timestamp; authentication alone does not mean the receiver is running. Edits/deletions missed while disconnected may need manual reconciliation. Stable message IDs deduplicate repeats; edits replace old parsed rows and deletion withdraws them. ZIP/TXT sample replay uses one text file and bounded expansion. Repeated samples are idempotent. Test channels do not enable live capture.
 
 Dependency whatsapp-web.js 1.34.7 uses WhatsApp Web, not an official Meta ingestion API; compatibility and authenticated session are required. See https://wwebjs.dev/guide/creating-your-bot/authentication . Automatic WB M transport requires the separately verified scoped ingestion/receipt endpoint; never bypass with driver or admin credentials.
