@@ -15,3 +15,7 @@ Unloaded split A resolves the entire unresolved family in one transaction; every
 Checks: Functions TypeScript passed. Nine focused Functions suites149 tests passed, including18 builder-path tests, legacy cancellation, split water custody, staff authority/ownership/finalization, create split fields and accept behavior. Mock transaction rejects reads after writes and commits no partial changes on refusal. Source tests are not device acceptance or deployment evidence.
 
 Release state at source checkpoint: implementation and tests ready; scoped Functions deployment and T283 build/device verification remain pending. Only resolveDriverJobCancellation, createDriverDispatchIfAbsent and staffWriteDispatch require deployment. Do not deploy database/firestore/storage rules or all Functions. Keep the user's open20985/20986 multi-haul untouched until a driver explicitly chooses its destination in the fixed client.
+
+## Scoped deployment verified
+
+Deployed source 033fcfdb4e2386a942f4f5d9116ee593a195bc77 to wellbuilt-sync, codebase dashboard, Node22: resolveDriverJobCancellation, createDriverDispatchIfAbsent, staffWriteDispatch. All three successful CLI updates and ACTIVE inventory share source hash01cd844e1af2ea9237a960d9fd0c89273cf3d8af. Empty unauthenticated callable probes returned401/403, no operation performed.149 transaction/authority regressions pass. No Hosting, rules, signup endpoint or live operational record mutation. T283 native/device acceptance remains pending. Private deployment receipt C:/dev/tmp/builder-cancellation-deployment-receipt.json.
