@@ -6,4 +6,3 @@ Startup check: real worker restart auto-recovered with source receiver stopped. 
 
 
 Full reboot acceptance complete after owner Windows sign-in: task auto-ran, new worker auto-connected and resumed Tallgrass, Connected/Ready with fresh01:26:09UTCcheck. Laptop remainsStopped connect/watchfalse. No manualConnect/Resume used. Still requiresWindows sign-in afterboot.
-

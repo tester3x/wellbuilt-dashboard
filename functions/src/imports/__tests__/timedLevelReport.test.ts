@@ -13,4 +13,3 @@ test('invalid inches and unknown leading prose are not accepted as clean gauges'
   expect(parsePullChat('[10/06/2026, 17:41:57] Reporter: Gunslinger 3 '+text).some(row=>row.levelOnly&&row.issues.length===0)).toBe(false);
  }
 });
-

@@ -328,4 +328,3 @@ test('explicit fixed driver default reaches intake without re-estimating a gauge
  expect(packet.bottomLevelFeet).toBe(11);
  expect(packet.watchdogProvenance.barrels).toMatchObject({source:'default',needsReview:false,status:'provisional',selectedBbls:185});
 });
-
