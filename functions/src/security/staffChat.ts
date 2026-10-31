@@ -2,6 +2,7 @@ import * as https from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { createHash } from 'crypto';
 import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
+import { chatNameDirectory, realChatName, presentChatThread, presentChatMessage, UNKNOWN_CHAT_NAME } from './chatNames';
 
 const key = (x: unknown): string => {
   if (typeof x !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(x)) throw new https.HttpsError('invalid-argument', 'Invalid chat identifier');
@@ -11,11 +12,13 @@ const serial = (value: any): any => value?.toDate instanceof Function ? value.to
   : Array.isArray(value) ? value.map(serial) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, serial(v)])) : value;
 const time = (value: any): number => value?.toMillis?.() || Date.parse(value || '') || 0;
 const stamp = () => admin.firestore.FieldValue.serverTimestamp();
-async function directory(companyId: string): Promise<{ drivers: { hash: string; name: string }[]; aliases: Map<string, string> }> {
+async function directory(companyId: string): Promise<{ drivers: { hash: string; name: string }[]; aliases: Map<string, string>; names: Map<string, string> }> {
   const rt = admin.database();
-  const [profiles, forward, reverse] = await Promise.all([
+  const [profiles, forward, reverse, approved, users] = await Promise.all([
     rt.ref('drivers/profiles').orderByChild('companyId').equalTo(companyId).once('value'),
     rt.ref('drivers/identityBindings/byDriver').once('value'), rt.ref('drivers/identityBindings/byApproved').once('value'),
+    rt.ref('drivers/approved').orderByChild('companyId').equalTo(companyId).once('value'),
+    rt.ref('users').orderByChild('companyId').equalTo(companyId).once('value'),
   ]);
   const byDriver = forward.val() || {}, byApproved = reverse.val() || {}, aliases = new Map<string, string>(), drivers: { hash: string; name: string }[] = [];
   for (const [id, value] of Object.entries(profiles.val() || {})) {
@@ -24,9 +27,10 @@ async function directory(companyId: string): Promise<{ drivers: { hash: string; 
     aliases.set(`driver:${id}`, `driver:${id}`);
     const binding = byDriver[id], back = byApproved[binding?.approvedKey];
     if (binding?.driverId === id && back?.driverId === id && back.approvedKey === binding.approvedKey && back.opId === binding.opId) aliases.set(`driver:${binding.approvedKey}`, `driver:${id}`);
-    if (row.active !== false) drivers.push({ hash: id, name: row.legalName || row.displayName || 'Driver' });
+    if (row.active !== false) drivers.push({ hash: id, name: '' });
   }
-  return { drivers, aliases };
+  const names = chatNameDirectory(companyId, profiles.val() || {}, approved.val() || {}, users.val() || {}, aliases);
+  return { drivers: drivers.map(row => ({ ...row, name: names.get(`driver:${row.hash}`) || UNKNOWN_CHAT_NAME })), aliases, names };
 }
 
 export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false, invoker: 'public' }, async request => {
@@ -38,16 +42,21 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
   if (data.companyId && data.companyId !== staff.companyId) throw new https.HttpsError('permission-denied', 'Chat outside your company');
   const db = admin.firestore(), participant = `user:${staff.uid}`;
   const profile = (await admin.database().ref(`users/${staff.uid}`).once('value')).val();
-  const name = profile?.displayName || profile?.name || 'Dispatch';
+  const identityDirectory = () => directory(staff.companyId);
+  const senderDirectory = ['send', 'direct', 'group'].includes(action) ? await identityDirectory() : null;
+  const name = realChatName(profile) || senderDirectory?.names.get(participant) || UNKNOWN_CHAT_NAME;
   if (action === 'directory') return { companyId: staff.companyId, drivers: (await directory(staff.companyId)).drivers };
   if (action === 'threads' || action === 'profiles') {
     const collection = action === 'threads' ? 'chat_threads' : 'chat_monitors';
     const snap = await db.collection(collection).where('companyId', '==', staff.companyId).get();
     let rows = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as Record<string, any>));
     if (action === 'threads') {
-      const { aliases } = await directory(staff.companyId);
-      rows = rows.map(row => ({ ...row, participants: [...new Set((row.participants || []).map((id: string) => aliases.get(id) || id))],
-        participantNames: Object.fromEntries(Object.entries(row.participantNames || {}).map(([id, name]) => [aliases.get(id) || id, name])) }));
+      const { aliases, names } = await identityDirectory();
+      rows = rows.map(row => presentChatThread(row, names, aliases));
+    } else {
+      const { names } = await identityDirectory();
+      rows = rows.map(row => ({ ...row, slots: (Array.isArray(row.slots) ? row.slots : []).map((slot: any) => slot?.driverHash
+        ? { ...slot, driverName: names.get(`driver:${slot.driverHash}`) || UNKNOWN_CHAT_NAME } : slot) }));
     }
     if (data.ownOnly && action === 'threads') rows = rows.filter(row => row.participants?.includes(participant));
     rows.sort((a, b) => time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt));
@@ -59,7 +68,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     const profiles = await Promise.all(targets.map(async id => {
       const row = (await admin.database().ref(`drivers/profiles/${id}`).once('value')).val();
       if (!row || row.active === false || row.companyId !== staff.companyId) throw new https.HttpsError('permission-denied', 'Driver outside your company');
-      return { id, name: row.legalName || row.displayName || 'Driver' };
+      return { id, name: senderDirectory!.names.get(`driver:${id}`) || UNKNOWN_CHAT_NAME };
     }));
     const participants = [participant, ...targets.map(id => `driver:${id}`)].sort();
     const title = action === 'direct' ? profiles[0].name : String(data.title || '').trim().slice(0, 120);
@@ -67,7 +76,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     const type = action === 'direct' ? 'direct' : data.type;
     if (!['direct', 'service_group', 'project', 'well'].includes(type)) throw new https.HttpsError('invalid-argument', 'Invalid thread type');
     if (action === 'direct') {
-      const { aliases } = await directory(staff.companyId);
+      const { aliases } = senderDirectory!;
       const old = await db.collection('chat_threads').where('companyId', '==', staff.companyId).where('participants', 'array-contains', participant).get();
       const match = old.docs.find(doc => doc.get('type') === 'direct' && doc.get('participants')?.some((id: string) => (aliases.get(id) || id) === `driver:${targets[0]}`));
       if (match) { await match.ref.update({ status: 'active', updatedAt: stamp() }); return { ok: true, threadId: match.id }; }
@@ -120,7 +129,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     for (const id of ids) {
       const row = (await admin.database().ref(`drivers/profiles/${id}`).once('value')).val();
       if (!row || row.active === false || row.companyId !== staff.companyId) throw new https.HttpsError('permission-denied', 'Driver outside your company');
-      names[`driver:${id}`] = row.legalName || row.displayName || 'Driver';
+      names[`driver:${id}`] = realChatName(row) || UNKNOWN_CHAT_NAME;
     }
     await db.runTransaction(async tx => {
       const latest = await tx.get(ref);
@@ -143,7 +152,8 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
       const row = doc.data(), timestamp = row.timestamp || row.createdAt;
       if (time(timestamp) > cleared) rows.set(doc.id, { ...row, id: doc.id, timestamp, type: row.type || 'text' });
     }
-    return { rows: serial([...rows.values()].sort((a, b) => time(a.timestamp) - time(b.timestamp))) };
+    const { names } = await identityDirectory();
+    return { rows: serial([...rows.values()].sort((a, b) => time(a.timestamp) - time(b.timestamp)).map(row => presentChatMessage(row, names))) };
   }
   const clientId = key(data.clientId), text = String(data.text || '').trim();
   if (!text || text.length > 4000) throw new https.HttpsError('invalid-argument', 'Message must contain 1–4000 characters');
