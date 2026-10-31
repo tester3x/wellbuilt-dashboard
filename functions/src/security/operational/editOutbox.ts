@@ -1,3 +1,4 @@
+import {runningPipeline} from '../../pipelineOperation';
 import {isProvisionalPull,reportedTrackingBottom} from '../../watchdog/barrelDecision';
 import { resolveTankBblPerFoot } from '../../tankCalibration';
 import {effectiveFlow} from '../../effectiveFlow';
@@ -434,6 +435,8 @@ export async function prepareEditOutbox(
   }
 
   if(flowWindow)afr=flowWindow.averageDays;
+  const pipeline=runningPipeline(config);
+  if(pipeline){afr=pipeline.minutesPerFoot/1440;flowRateDays=0;flowRate="";}
   if(isProvisionalPull(origPacket)||previousProvisional){afr=Number(config.avgFlowRateMinutes)/1440||afr;flowRateDays=0;flowRate='';}
   // Determine if latest pull — inspect both outgoing response and relative pull timestamps
   const outgoingSnap = await db.ref('packets/outgoing')

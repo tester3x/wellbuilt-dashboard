@@ -50,6 +50,10 @@ export function wbmInputsFromWell(well: WellResponse): EstimatorInputs {
     ? well.demoClockMultiplier : 1;
   const flowMinutesPerFoot = rawFlowMinutesPerFoot == null ? null : rawFlowMinutesPerFoot / demoMultiplier;
   const wellDown = well.wellDown === true || well.isDown === true || isWbmDownToken(well.currentLevel);
+  const p=well.pipelineOperation;
+  if(!wellDown && p?.mode==='running' && Number.isFinite(p.holdingLevelFeet) && p.holdingLevelFeet>=0
+    && p.holdingLevelFeet<=(well.tankHeight||20) && p.productionMinutesPerFoot>0)
+    return {startingBottomFeet:p.holdingLevelFeet,pullTimeMs,flowMinutesPerFoot:0,wellDown:false};
   return { startingBottomFeet, pullTimeMs, flowMinutesPerFoot, wellDown };
 }
 
@@ -79,6 +83,13 @@ export function projectWellLevel(well: WellResponse, asOfMs: number): WellLevelP
       well.bblPerFoot || 0, well.tankHeight || 0);
     return { estFeet, estDisplay: estFeet == null ? '--' : formatFeetWBM(estFeet), hasFlow: (well.inventoryDailyBbl || 0) > 0,
       frozen: well.isDown === true, capped: estFeet === well.tankHeight, wellDown: well.isDown === true, available: estFeet != null };
+  }
+  const pipeline=well.pipelineOperation;
+  if(pipeline?.mode==='running' && well.isDown!==true && well.wellDown!==true
+    && Number.isFinite(pipeline.holdingLevelFeet) && pipeline.holdingLevelFeet>=0
+    && pipeline.holdingLevelFeet<=(well.tankHeight||20) && pipeline.productionMinutesPerFoot>0){
+    return {estFeet:pipeline.holdingLevelFeet,estDisplay:formatFeetWBM(pipeline.holdingLevelFeet),hasFlow:true,
+      frozen:true,capped:false,wellDown:false,available:true};
   }
   const inputs = wbmInputsFromWell(well);
   const wellDown = inputs.wellDown;

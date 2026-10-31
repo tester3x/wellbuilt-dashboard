@@ -40,7 +40,7 @@ export function calculateInventoryProduction(history:Record<string,any>,bank:num
     const earliest=estimated&&bounded?anchor-4*e.intervalMinutes*60000:time;
     const latest=estimated&&bounded?anchor:time;
     const quantityUnverified=isProvisionalPull(estimated?{...p,watchdogProvenance:{...proof,timeEstimate:undefined}}:p);
-    const bad=quantityUnverified||(estimated&&!bounded)||p.noLevel||p.wellDown===true||p.wellDown==='true'||p.flowIntervalBarrier===true||
+    const bad=quantityUnverified||(estimated&&!bounded)||p.pipelineRunning===true||p.noLevel||p.wellDown===true||p.wellDown==='true'||p.flowIntervalBarrier===true||
       !Number.isFinite(bottom)||bottom<0||!Number.isFinite(top)||top<=0||bottom>top||
       p.bblsTaken==null||!Number.isFinite(bbl)||bbl<0||bbl>1000||(bbl===0&&!topOnly);
     if(bad){valid=[];continue;}

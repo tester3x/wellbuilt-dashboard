@@ -28,6 +28,6 @@ test('delete/rebuild entry point reads canonical historical and edited observati
  delete f.records.b;expect(await f.calculate('Example',0)).toBeCloseTo(120/740);
 });
 test('unconfigured wells retain the legacy AFR route',async()=>{
- const f=fixture();expect(await f.calculate('Example',0.07)).toBe(0.07);
- expect(f.legacy).not.toHaveBeenCalled();
+ const f=fixture();expect(await f.calculate('Example',0.07)).toBe(0.1);
+ expect(f.legacy).toHaveBeenCalledWith([0.07],'Example');
 });

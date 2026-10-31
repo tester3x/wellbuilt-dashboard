@@ -1,3 +1,4 @@
+import {runningPipeline} from './pipelineOperation';
 import { deliverLevelReport } from './levelReportDelivery';
 export { deliverProcessedLevelReport } from './levelReportDelivery';
 import {averageFlowRates} from './flowAverage';
@@ -975,7 +976,10 @@ export const processIncomingPull = functionsV1.database
       typeof (data as any).wellDown === 'boolean';
     const existingIsDownSnap = await db.ref(`wells/${wellName}/status/isDown`).once('value');
     const existingIsDown = existingIsDownSnap.val() === true;
-    const nextIsDown = incomingHasAuthoritativeWellDown
+    const pipeline = incomingHasAuthoritativeWellDown && data.wellDown === true ? null : runningPipeline(config);
+    (data as any).pipelineRunning = !!pipeline;
+    if(pipeline || prevResponse?.pipelineRunning === true)(data as any).flowIntervalBarrier = true;
+    const nextIsDown = pipeline ? false : incomingHasAuthoritativeWellDown
       ? ((data as any).wellDown === true)
       : existingIsDown;
 
@@ -1088,7 +1092,8 @@ export const processIncomingPull = functionsV1.database
     // Demo tickets are sent by the real app, but their accelerated wall clock
     // must never train a physical production rate. Keep the configured real
     // rate in the normal AFR fields and scale only the demo recovery clock.
-    const afr = demoClock
+    if ((data as any).flowIntervalBarrier === true) { flowRateDays=0; flowRate=''; }
+    const afr = pipeline ? pipeline.minutesPerFoot / 1440 : demoClock
       ? demoClock.realMinutesPerFoot / 1440
       : isProvisionalPull(data)?(Number(config.avgFlowRateMinutes)/1440||await calculateAFR(wellName,0)):(windowed&&config.productionRateMode!=='inventory_balance'?windowed.averageDays:await calculateAFR(wellName, flowRateDays, {...data,packetId,tankAfterInches,wellDown:nextIsDown}));
     if (demoClock) {

@@ -1,3 +1,4 @@
+import {refreshPipelineProjection} from './pipelineOperation';
 import {effectiveFlow} from './effectiveFlow';
 import {calculateInventoryProduction} from './inventoryProduction';
 import {resolveTankBblPerFoot} from './tankCalibration';
@@ -36,6 +37,7 @@ async function refreshOvernightProjection(db:any,wellName:string,cfg:any,history
 /** Refresh only derived fields; original measurements, ownership and down state are preserved. */
 export async function refreshFlowWindow(db:any,wellName:string,options:{tankEdit?:boolean}={}):Promise<void>{
  const cfg=(await db.ref('well_config/'+wellName).once('value')).val()||{};
+ if(await refreshPipelineProjection(db,wellName,cfg))return;
  const inventoryMode=cfg.productionRateMode==='inventory_balance';
  let history=(await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value')).val()||{};
  const originalObservations=options.tankEdit?observationSignature(history):'';

@@ -82,6 +82,13 @@ function createPersistentMockRtdb(initialData: Record<string, any> = {}) {
 
       return {
         key: cleanPath.split('/').pop() || null,
+        on: (_event:string,listener:()=>void) => {listener();return listener;},
+        off: () => {},
+        transaction: async (update:(value:any)=>any) => {
+          checkHook(cleanPath);const next=update(getNode(cleanPath));
+          if(next!==undefined)setNode(cleanPath,next);
+          return {committed:next!==undefined,snapshot:{val:()=>getNode(cleanPath)}};
+        },
         once: async (_event: string) => {
           checkHook(cleanPath);
           const val = getNode(cleanPath);

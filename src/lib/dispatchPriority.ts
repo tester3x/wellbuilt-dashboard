@@ -323,6 +323,8 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
     ...common, state: 'verify', label: 'VERIFY', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 50, ...c,
   } as WellClassification);
 
+  if(!wellDown && well.pipelineOperation?.mode==='running' && flowMinutesPerFoot===0)
+    return make({state:'verify',label:'PIPELINE',reason:'pipeline_running',sortOrder:70,availableLoads:0,gainValid:false,predictedReadyAtMs:null});
   // 1. Well Down — freeze at baseline, remain DOWN.
   if (wellDown) return make({ state: 'down', label: 'DOWN', color: 'bg-gray-600', textColor: 'text-gray-300', sortOrder: 90 });
   // 2. Already assigned to a driver.
@@ -347,6 +349,7 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
 /** Human-readable explanation for a verify/no-flow classification reason code. */
 export function verifyReasonText(reason: string | undefined): string {
   switch (reason) {
+    case 'pipeline_running': return 'pipeline running - operating level held; not a fresh tank gauge';
     case 'missing_baseline': return 'no last-pull bottom level or reading available';
     case 'missing_timestamp': return 'no valid pull/observation timestamp';
     case 'missing_target': return 'no configured pull-ready target (bottom / load / bbl-per-ft)';
