@@ -8,6 +8,10 @@ const auth=load('src/lib/auth.ts',{
 });
 const policy=load('functions/src/security/employeeOnboardingPolicy.ts',{'firebase-functions/v2/https':{HttpsError:Error}});
 for(const [role,caps]of Object.entries(policy.EMPLOYEE_ROLE_CAPABILITIES))assert.deepEqual([...caps].sort(),[...auth.DEFAULT_ROLE_CAPABILITIES[role]].sort(),role+' must match displayed permissions');
+const pending={uid:'pending',role:'driver',roles:['driver'],onboardingStatus:'pending_employee_approval'};
+assert.equal(auth.hasCapability(pending,'viewDispatch',{roleCapabilities:{driver:['viewDispatch']}}),false,'company role overrides cannot open work before approval');
+assert.equal(auth.hasRole(pending,'driver'),false,'pending membership cannot pass coarse role gates');
+assert.equal(auth.hasCapability({...pending,role:'dispatch',roles:['dispatch'],onboardingStatus:'active'},'viewDispatch'),true,'approved responsibilities still open their work');
 (async()=>{
  const input={email:'employee@example.test',password:'private-test-password',displayName:'Employee One',legalName:'Person One',companyCode:'VALIDCODE'};
  await auth.registerEmployeeWithEmail(input);assert.equal(calls[0],'create');assert.equal(calls[1].name,'requestEmployeeJoin');assert.equal(calls[1].payload.companyCode,'VALIDCODE');assert.ok(!('roles'in calls[1].payload));assert.ok(!('companyId'in calls[1].payload));

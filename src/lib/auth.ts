@@ -238,7 +238,7 @@ export function hasCapability(
   capability: Capability,
   companyConfig?: RoleConfig | null,
 ): boolean {
-  if (!user) return false;
+  if (!user || user.onboardingStatus === 'pending_employee_approval') return false;
   // Public demo access is a fixed read-only role. Company overrides must not
   // turn the shared account into a writer or widen it to another tenant.
   if (user.role === 'demo_viewer') {
@@ -458,7 +458,7 @@ export function subscribeToAuthState(callback: (user: WellBuiltUser | null) => v
 
 // Check if user has required role level
 export function hasRole(user: WellBuiltUser | null, requiredRole: UserRole): boolean {
-  if (!user) return false;
+  if (!user || user.onboardingStatus === 'pending_employee_approval') return false;
   return ROLE_LEVELS[user.role] >= ROLE_LEVELS[requiredRole];
 }
 
