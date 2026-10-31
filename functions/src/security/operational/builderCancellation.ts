@@ -94,7 +94,10 @@ export async function resolveBuilderCancellation(db: Firestore,
         if (!inv.exists) fail('Linked invoice is missing');
         const record=inv.data()!;
         if (record.companyId !== driver.companyId || record.driverId !== driver.driverId || record.dispatchId !== member.id) fail('Invoice linkage mismatch');
-        if (record.status === 'open') invoices.set(member.id,{ref:invoiceRef,data:record});
+        // Older clients may have committed the invoice cancellation before
+        // delivering the dispatch command. Retain that invoice as custody
+        // evidence and finish the same cancellation; never rewrite its history.
+        if (['open','cancelled','canceled'].includes(record.status)) invoices.set(member.id,{ref:invoiceRef,data:record});
         else if (member.data.status !== 'pending') fail('Linked invoice is already terminal');
       } else if (member.data.status !== 'pending') fail('Started job has no verified invoice');
     }
@@ -132,7 +135,7 @@ export async function resolveBuilderCancellation(db: Firestore,
         driverLat:FieldValue.delete(),driverLng:FieldValue.delete(),driverGpsAt:FieldValue.delete(),updatedAt:FieldValue.serverTimestamp(),
       });
       const inv=invoices.get(member.id);
-      if (inv) tx.update(inv.ref,{status:'cancelled',driverState:'idle',cancelReason:reason,cancelledAt:FieldValue.serverTimestamp()});
+      if (inv?.data.status === 'open') tx.update(inv.ref,{status:'cancelled',driverState:'idle',cancelReason:reason,cancelledAt:FieldValue.serverTimestamp()});
     }
     return receipt;
   });

@@ -25,6 +25,27 @@ test.each(['driver','staff'])('%s-built started and queued jobs resolve by origi
  expect(await call({invoiceDocId:undefined,expectedAssignedAtMs:1000,requestedAtMs:2000})).toMatchObject({result:kind==='driver'?'cancelled':'declined'});
 });
 test('same request replays its receipt without another mutation',async()=>{const r=await call();written=[];expect(await call()).toEqual(r);expect(written).toEqual([])});
+
+test.each(['driver','staff'])('already-cancelled invoice finishes its %s-built dispatch without rewriting cancellation history',async kind=>{
+ Object.assign(rows.get('dispatches/job'),{builderOwnership:{kind,actorId:kind==='driver'?'driver':'office'},driverStage:'at_pickup'});
+ Object.assign(rows.get('invoices/inv'),{status:'cancelled',driverState:'idle',cancelledAt:10000,cancelReason:'Original reason'});
+ const original=structuredClone(rows.get('invoices/inv'));
+ expect(await call()).toMatchObject({result:kind==='driver'?'cancelled':'declined'});
+ expect(rows.get('invoices/inv')).toEqual(original);
+ expect(written).not.toContain('invoices/inv');
+ expect(rows.get('dispatches/job').driverStage).toBeNull();
+ written=[];await call();expect(written).toEqual([]);
+});
+
+test.each([{totalBBL:140},{tickets:['ticket']},{lockedForTransfer:true}])('cancelled invoice with remaining custody still refuses %j',async patch=>{
+ Object.assign(rows.get('invoices/inv'),{status:'cancelled',...patch});
+ await expect(call()).rejects.toThrow('Loaded');expect(written).toEqual([]);
+});
+
+test('completed invoice is not treated as an earlier cancellation',async()=>{
+ rows.get('invoices/inv').status='completed';
+ await expect(call()).rejects.toThrow('already terminal');expect(written).toEqual([]);
+});
 test('queued cancellation cannot cancel a newer assignment or reuse a stale receipt',async()=>{
  Object.assign(rows.get('dispatches/job'),{status:'pending',invoiceDocId:undefined});const request={invoiceDocId:undefined,expectedAssignedAtMs:1000,requestedAtMs:2000};await call(request);written=[];Object.assign(rows.get('dispatches/job'),{status:'pending',assignedAt:3000});await expect(call(request)).rejects.toThrow('Assignment changed');expect(written).toEqual([]);
 });
