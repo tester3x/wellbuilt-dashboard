@@ -7,7 +7,8 @@ import {createHash,randomBytes,randomUUID} from 'crypto';
 import {resolveCompanyJoinCode} from './companyOnboarding';
 import {checkRateLimit,hashIp} from './rateLimit';
 import {validateRegistrationFields,hashPasscodeScrypt,normalizeDisplayName} from './passcode';
-import {requireTrustedCompanyCapability,parseTrustedStaffAuthorityRecord} from './trustedStaffAuthority';
+import {requireTrustedCompanyCapability,parseTrustedStaffAuthorityRecord,TRUSTED_CAPABILITY_ALLOWLIST} from './trustedStaffAuthority';
+import {authorizeAdminCall} from '../admin/authority';
 import {ensureDriverAuthUser,driverAuthUid} from './tokenMint';
 import {ensureInitializedEmptyShiftAuthority,assertEnsureAuthorityOk} from './operational/ensureEmptyShiftAuthority';
 import {employeeRoleGrant,exactEmployeeInput} from './employeeOnboardingPolicy';
@@ -20,11 +21,22 @@ const safe=(row:any)=>({ok:true,status:row.state,companyName:row.companyName,dis
 async function rate(request:any,bucket:string){
  if(!await checkRateLimit({bucket,key:hashIp(request.rawRequest?.ip||'unknown'),limit:30,windowMs:3600000}))throw new HttpsError('resource-exhausted','Too many requests. Please try later.');
 }
-async function actor(request:any){
+async function actor(request:any,viewedCompanyId?:unknown){
+ if(!request.auth?.uid)throw new HttpsError('unauthenticated','Sign in first');
+ if(viewedCompanyId!==undefined&&(typeof viewedCompanyId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(viewedCompanyId)))throw new HttpsError('invalid-argument','Select a company');
+ const platformRecord=await fs().collection('platform_admins').doc(request.auth.uid).get();
+ const platform=authorizeAdminCall(request.auth,platformRecord.exists?platformRecord.data():null);
+ if(platform.ok){
+  if(!viewedCompanyId)throw new HttpsError('failed-precondition','Select a company in the header before managing employee onboarding');
+  const company=(await fs().collection('companies').doc(viewedCompanyId as string).get()).data();
+  if(!company||company.status==='archived')throw new HttpsError('failed-precondition','Company is unavailable');
+  return {uid:platform.actorUid,companyId:viewedCompanyId as string,capabilities:[...TRUSTED_CAPABILITY_ALLOWLIST]};
+ }
  const access=await requireTrustedCompanyCapability(request.auth?.uid,'manageDrivers');
  await requireTrustedCompanyCapability(request.auth?.uid,'manageRolesAndCapabilities');
  const record=parseTrustedStaffAuthorityRecord((await fs().collection('trusted_staff_authority').doc(access.uid).get()).data(),access.uid);
  if(!record.ok||record.companyId!==access.companyId)throw new HttpsError('permission-denied','Company authority is unavailable');
+ if(viewedCompanyId&&viewedCompanyId!==access.companyId)throw new HttpsError('permission-denied','Company scope mismatch');
  return {...access,capabilities:record.capabilities};
 }
 async function invitation(token:unknown){
@@ -36,7 +48,7 @@ async function invitation(token:unknown){
  return {ref,row,companyId:String(row.companyId),companyName:String(company.name)};
 }
 export const createEmployeeInvitation=onCall(options,async request=>{
- exactEmployeeInput(request.data,[]);const access=await actor(request);
+ const data=exactEmployeeInput(request.data,['viewedCompanyId']);const access=await actor(request,data.viewedCompanyId);
  const company=(await fs().collection('companies').doc(access.companyId).get()).data();
  if(!company||company.status==='archived')throw new HttpsError('failed-precondition','Company is unavailable');
  const token=randomBytes(32).toString('hex');const expiresAtMs=Date.now()+7*86400000;
@@ -91,13 +103,13 @@ export const getEmployeeJoinStatus=onCall(options,async request=>{
  const row=(await requests().doc(request.auth.uid).get()).data();return row?safe(row):{ok:true,status:'none'};
 });
 export const listEmployeeJoinRequests=onCall(options,async request=>{
- exactEmployeeInput(request.data,[]);const access=await actor(request);
+ const data=exactEmployeeInput(request.data,['viewedCompanyId']);const access=await actor(request,data.viewedCompanyId);
  const snap=await requests().where('companyId','==',access.companyId).get();
  return {ok:true,requests:snap.docs.map(doc=>doc.data()).filter(r=>['pending','approving','ready'].includes(r.state))
   .map(r=>({uid:r.uid,displayName:r.displayName,legalName:r.legalName,email:r.email,status:r.state,requestedAtMs:r.requestedAtMs,roles:r.grant?.roles||['driver']}))};
 });
 export const resolveEmployeeJoin=onCall(options,async request=>{
- const access=await actor(request);const data=exactEmployeeInput(request.data,['uid','action','roles']);
+ const data=exactEmployeeInput(request.data,['uid','action','roles','viewedCompanyId']);const access=await actor(request,data.viewedCompanyId);
  const uid=String(data.uid||'');if(!/^[A-Za-z0-9_-]{1,128}$/.test(uid)||uid===access.uid)throw new HttpsError('invalid-argument','Choose another employee');
  if(!['approve','reject'].includes(String(data.action)))throw new HttpsError('invalid-argument','Choose approve or reject');
  const grant=data.action==='approve'?employeeRoleGrant(data.roles,access.capabilities):null;

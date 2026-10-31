@@ -8,10 +8,10 @@ import {chromium} from 'playwright';
 
 const stubs = {
   'next/link': `import React from 'react'; export default function Link(p){return React.createElement('a',p,p.children)}`,
-  '@/contexts/AuthContext': `export const useAuth=()=>({user:window.__mode==='admin'?{uid:'owner',companyId:'company-a'}:window.__user,userCompany:{}})`,
+  '@/contexts/AuthContext': `import {useEffect,useState} from 'react';export const useAuth=()=>{const [,refresh]=useState(0);useEffect(()=>{const changed=()=>refresh(n=>n+1);window.addEventListener('auth-fixture-change',changed);return()=>window.removeEventListener('auth-fixture-change',changed)},[]);return {user:window.__mode==='admin'?(window.__adminUser||{uid:'owner',companyId:'company-a'}):window.__user,userCompany:{},operatingCompanyId:window.__company}}`,
   '@/lib/firebase': `export const getFirebaseFunctions=()=>({})`,
   'firebase/functions': `export const httpsCallable=(_,name)=>async payload=>({data:await window.__call(name,payload)})`,
-  '@/lib/auth': `export const hasCapability=()=>window.__allowed!==false;export const DEFAULT_ROLE_LABELS={driver:'Driver',dispatch:'Dispatch',payroll:'Payroll',safety:'Safety',lead:'Lead',manager:'Manager',admin:'Admin',viewer:'Viewer'};export const registerEmployeeWithEmail=payload=>window.__call('registerEmployeeWithEmail',payload)`,
+  '@/lib/auth': `export const isPlatformAdmin=user=>user?.uid==='platform-owner';export const hasCapability=()=>window.__allowed!==false;export const DEFAULT_ROLE_LABELS={driver:'Driver',dispatch:'Dispatch',payroll:'Payroll',safety:'Safety',lead:'Lead',manager:'Manager',admin:'Admin',viewer:'Viewer'};export const registerEmployeeWithEmail=payload=>window.__call('registerEmployeeWithEmail',payload)`,
   './CompanyJoinCodeCard': `export const CompanyJoinCodeCard=()=>null`,
 };
 const bundle = await build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import Join from './src/app/join/page';import {EmployeeOnboardingPanel as Panel} from './src/components/admin/EmployeeOnboardingPanel';createRoot(document.getElementById('root')).render(window.__mode==='admin'?React.createElement(Panel):React.createElement(Join));`,resolveDir:process.cwd(),loader:'tsx'},bundle:true,write:false,jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},plugins:[{name:'mock-external-services',setup(b){b.onResolve({filter:/.*/},a=>Object.hasOwn(stubs,a.path)?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:stubs[a.path],loader:'js',resolveDir:process.cwd()}));}}]});
@@ -23,13 +23,13 @@ async function open(mode='join',extra={},hash=''){
   const page=await browser.newPage({viewport:{width:390,height:844}});
   await page.addInitScript(({mode,extra})=>{
     window.__mode=mode;window.__calls=[];window.__user=extra.user||null;window.__allowed=extra.allowed;
-    window.__status=extra.status||{status:'none'};window.__requests=extra.requests||[];
+    window.__adminUser=extra.adminUser;window.__company=extra.company;window.__readFails=extra.readFails;window.__deferLists=extra.deferLists;window.__pendingLists=[];window.__status=extra.status||{status:'none'};window.__requests=extra.requests||[];
     window.__call=async(name,payload)=>{
       window.__calls.push({name,payload});
       if(name==='getEmployeeInvitation'){if(extra.expired)throw Error('expired');return {companyName:'Employer A'};}
       if(name==='registerEmployeeWithEmail')return {status:'pending',companyName:'Employer A',displayName:payload.displayName};
       if(name==='getEmployeeJoinStatus')return window.__status;
-      if(name==='listEmployeeJoinRequests')return {requests:window.__requests};
+      if(name==='listEmployeeJoinRequests'){if(window.__deferLists)return new Promise(resolve=>window.__pendingLists.push(resolve));if(window.__readFails)throw Object.assign(Error('denied'),{code:'functions/permission-denied'});return {requests:window.__requests};}
       if(name==='createEmployeeInvitation')return {url:'https://wellbuilt-sync.web.app/join/#invite=private-token'};
       if(name==='resolveEmployeeJoin'){window.__requests=[];return {status:payload.action==='approve'?'complete':'rejected'};}
       throw Error('Unexpected callable '+name);
@@ -62,6 +62,23 @@ try{
 
   page=await open('admin',{requests:[{...request,status:'ready',roles:['dispatch']}]});await page.getByRole('checkbox',{name:'Dispatch',exact:true}).waitFor();assert.equal(await page.getByRole('checkbox',{name:'Dispatch',exact:true}).isChecked(),true);assert.equal(await page.getByRole('checkbox',{name:'Dispatch',exact:true}).isDisabled(),true);await page.getByRole('button',{name:'Approve employee'}).click();await page.getByText('Employee approved. They can check approval on the signup page or sign in.').waitFor();await page.close();
 
+  page=await open('admin',{adminUser:{uid:'platform-owner'},company:'company-a',requests:[request]});
+  await page.getByRole('checkbox',{name:'Dispatch',exact:true}).waitFor();
+  assert.deepEqual((await page.evaluate(()=>window.__calls)).find(x=>x.name==='listEmployeeJoinRequests').payload,{viewedCompanyId:'company-a'});
+  await page.getByRole('button',{name:'Invite Employee',exact:true}).click();await page.getByLabel('Private signup link').waitFor();
+  assert.deepEqual((await page.evaluate(()=>window.__calls)).find(x=>x.name==='createEmployeeInvitation').payload,{viewedCompanyId:'company-a'});
+  await page.getByRole('button',{name:'Approve employee'}).click();await page.getByText('Employee approved. They can check approval on the signup page or sign in.').waitFor();
+  assert.equal((await page.evaluate(()=>window.__calls)).find(x=>x.name==='resolveEmployeeJoin').payload.viewedCompanyId,'company-a');await page.close();
+  page=await open('admin',{adminUser:{uid:'platform-owner'}});await page.getByText('Select a company in the header to manage employee onboarding.').waitFor();assert.equal((await page.evaluate(()=>window.__calls)).length,0);assert.equal(await page.getByRole('button',{name:'Invite Employee',exact:true}).isDisabled(),true);await page.close();
+  page=await open('admin',{readFails:true});await page.getByRole('alert').waitFor();await page.getByRole('heading',{name:'New employee requests (unavailable)'}).waitFor();assert.equal(await page.getByRole('heading',{name:'New employee requests (0)'}).count(),0);
+  await page.evaluate(()=>window.__readFails=false);await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByRole('heading',{name:'New employee requests (0)'}).waitFor();assert.equal(await page.getByRole('alert').count(),0);await page.close();
+  page=await open('admin',{adminUser:{uid:'platform-owner'},company:'company-a',deferLists:true});
+  await page.waitForFunction(()=>window.__pendingLists.length===1);
+  await page.evaluate(()=>{window.__company='company-b';window.dispatchEvent(new Event('auth-fixture-change'));});await page.waitForFunction(()=>window.__pendingLists.length===2);
+  await page.evaluate(()=>window.__pendingLists[1]({requests:[]}));await page.getByRole('heading',{name:'New employee requests (0)'}).waitFor();
+  await page.evaluate(request=>window.__pendingLists[0]({requests:[request]}),request);await page.waitForTimeout(100);
+  assert.equal(await page.getByRole('checkbox',{name:'Dispatch',exact:true}).count(),0,'old company results must never replace the selected company');
+  assert.equal(await page.getByRole('heading',{name:'New employee requests (0)'}).count(),1);await page.close();
   page=await open('admin',{allowed:false});assert.equal(await page.getByRole('button',{name:'Invite Employee',exact:true}).count(),0);await page.close();
   console.log('PASS actual React DOM: code/invite signup, pending/approved/declined states, expired-link fallback, no applicant role injection, Invite/Email controls, dispatch approval, retry locked to approved responsibilities, unauthorized controls hidden. No production data or email operations.');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

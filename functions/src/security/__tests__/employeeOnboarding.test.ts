@@ -113,3 +113,34 @@ test('signup reserves a unique sign-in name before approval and rejection releas
  await resolveEmployeeJoin.run(request({uid:'employee',action:'reject'},'employer'));
  expect((await requestEmployeeJoin.run(request({companyCode:'VALIDCODE',displayName:'New Employee',passcode:'private-password'},'second'))).status).toBe('pending');
 });
+
+const platformRequest=(data:any={},token:any={wellbuiltAdmin:true}):any=>({auth:{uid:'platform-owner',token},data});
+function platformFixture(){mockDocs.set('platform_admins/platform-owner',{enabled:true,policyVersion:1});mockDocs.set('companies/company-b',{name:'Company B',status:'active'});}
+test('verified platform owner lists only the explicitly selected company',async()=>{
+ await signup();platformFixture();
+ expect((await listEmployeeJoinRequests.run(platformRequest({viewedCompanyId:'company-a'}))).requests).toHaveLength(1);
+ expect((await listEmployeeJoinRequests.run(platformRequest({viewedCompanyId:'company-b'}))).requests).toHaveLength(0);
+ await expect(listEmployeeJoinRequests.run(platformRequest())).rejects.toThrow('Select a company');
+ await expect(listEmployeeJoinRequests.run(platformRequest({viewedCompanyId:'missing'}))).rejects.toThrow('unavailable');
+});
+test('platform invitation and approval retain exact selected-company containment',async()=>{
+ await signup();platformFixture();
+ const link=await createEmployeeInvitation.run(platformRequest({viewedCompanyId:'company-b'}));
+ const token=link.url.split('#invite=')[1];expect((await getEmployeeInvitation.run(request({invitationToken:token}))).companyName).toBe('Company B');
+ await expect(resolveEmployeeJoin.run(platformRequest({viewedCompanyId:'company-b',uid:'employee',action:'approve',roles:['dispatch']}))).rejects.toThrow('another company');
+ expect((await resolveEmployeeJoin.run(platformRequest({viewedCompanyId:'company-a',uid:'employee',action:'approve',roles:['dispatch']}))).status).toBe('complete');
+ expect(mockDocs.get('trusted_staff_authority/employee').companyId).toBe('company-a');
+});
+test('a claim alone, a platform record alone and a disabled record cannot grant onboarding authority',async()=>{
+ platformFixture();
+ await expect(listEmployeeJoinRequests.run(platformRequest({viewedCompanyId:'company-a'},{}))).rejects.toThrow();
+ mockDocs.delete('platform_admins/platform-owner');await expect(listEmployeeJoinRequests.run(platformRequest({viewedCompanyId:'company-a'}))).rejects.toThrow();
+ platformFixture();mockDocs.get('platform_admins/platform-owner').enabled=false;
+ await expect(listEmployeeJoinRequests.run(platformRequest({viewedCompanyId:'company-a'}))).rejects.toThrow();
+});
+test('ordinary company owners cannot substitute a selected company on any onboarding operation',async()=>{
+ await signup();
+ for(const call of [listEmployeeJoinRequests,createEmployeeInvitation])await expect(call.run(request({viewedCompanyId:'company-b'},'employer'))).rejects.toThrow('scope mismatch');
+ await expect(resolveEmployeeJoin.run(request({viewedCompanyId:'company-b',uid:'employee',action:'reject'},'employer'))).rejects.toThrow('scope mismatch');
+ expect(mockDocs.get('employee_join_requests/employee').state).toBe('pending');
+});
