@@ -1,0 +1,18 @@
+{
+  "home": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "hostingSource": "ae2cd4c8585fba89897410672c7dc33bed230d37",
+  "verifiedAtUtc": "2026-10-31T06:13:24.507Z",
+  "verifiedFiles": 398,
+  "behavior": "While the employee panel is mounted, visible and online, check the existing governed request-list callable every5seconds and on focus/visibility/online return. Background reads retain rows and selected roles, never overlap for a scope, pause during actions and back off30seconds after failures. Explicit refresh remains available. Scope changes, access loss and unmount remove timers/listeners and invalidate stale results. Foreground reads wait for an earlier read before fetching fresh post-action state.",
+  "checks": "Mandatory actual React DOM tests prove a newly added remote fixture request appears on the timer without Refresh; repeated ticks cannot overlap a deferred request; selected responsibilities and existing rows survive; hidden/offline tabs do not poll; visibility/online return triggers a read; access loss cleans up callbacks; approval pauses background reads; errors back off and manual recovery succeeds. Prior invitation, scope containment, late-result and approval scenarios remain passing. Shared join-code25checks and employee auth/role parity pass. Certified Hosting build and all mandatory regressions pass, including499 library tests with one intentional skip.",
+  "deployment": "npm run deploy:hosting completed successfully. All398 live artifacts byte-verified; approved checkpoint advanced normally to source and owned Hosting lock released. Frontend only; no backend, rules, identity or role changes.",
+  "liveVerification": "Loaded the new release in the existing signed-in Liquid Gold employee page. The real offsite employee request is present as one pending request, with responsibility checkboxes and Approve/Decline controls. Auto-update caption visible. Left the request open for the human owner. Did not select responsibilities, approve, decline, create accounts/invitations or send messages. The real request predated this release; timer-based arrival was proved in the actual React browser fixture rather than by creating another live registration.",
+  "privateEvidence": [
+    "C:/dev/tmp/employee-onboarding-auto-dom-private.log",
+    "C:/dev/tmp/employee-onboarding-auto-hosting-private.log",
+    "C:/dev/tmp/employee-onboarding-auto-live-private.png"
+  ]
+}
