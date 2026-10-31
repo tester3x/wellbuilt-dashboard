@@ -135,6 +135,10 @@ export function productionLevelChatDeps(): LevelChatDeps {
 /** Independent of app lifetime and the incoming processor's acknowledgement. */
 export const deliverProcessedLevelReport = functions.runWith({ timeoutSeconds: 120, memory: '256MB', failurePolicy: true })
   .database.ref('packets/processed/{packetId}').onCreate(async (snapshot, context) => {
-    const outcome = await deliverLevelReport(snapshot.val() || {}, context.params.packetId);
+    const packet = snapshot.val() || {};
+    // Safe rolling activation: old in-flight processors still emit random-ID
+    // reports. Only the new producer shares this worker's stable message ID.
+    if (packet.levelReportDeliveryVersion !== 2) return;
+    const outcome = await deliverLevelReport(packet, context.params.packetId);
     console.log('[LevelChatDelivery]', outcome);
   });

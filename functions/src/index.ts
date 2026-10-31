@@ -1163,6 +1163,7 @@ export const processIncomingPull = functionsV1.database
       estDateTimePull,
       processedAt: new Date().toISOString(),
       lastPullRevision: initialRevision,
+      levelReportDeliveryVersion: 2,
     });
     await db.ref(`packets/processed/${packetId}`).set(processedClean);
 

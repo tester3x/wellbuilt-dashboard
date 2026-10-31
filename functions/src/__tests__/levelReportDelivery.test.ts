@@ -88,6 +88,8 @@ test('processed-event worker remains exported and retryable independently of the
   const index = readFileSync(join(__dirname, '../index.ts'), 'utf8');
   expect(worker).toContain('failurePolicy: true');
   expect(worker).toContain(".database.ref('packets/processed/{packetId}').onCreate");
+  expect(worker).toContain('packet.levelReportDeliveryVersion !== 2');
+  expect(index).toContain('levelReportDeliveryVersion: 2');
   expect(index).toContain("export { deliverProcessedLevelReport } from './levelReportDelivery'");
   const fastPath = index.slice(index.indexOf('async function sendLevelToChat('), index.indexOf('// ── onShiftCreate:'));
   expect(fastPath).toContain('await deliverLevelReport(');
