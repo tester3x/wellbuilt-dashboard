@@ -50,7 +50,8 @@ try{
 
   page=await open('join',{},'#invite=opaque');await page.getByText('Invitation to Employer A',{exact:true}).waitFor();assert.equal(await page.getByLabel('Company code',{exact:true}).count(),0);await fill(page);await page.getByRole('button',{name:'Request to join company'}).click();await page.getByRole('heading',{name:'Waiting for company approval'}).waitFor();input=(await page.evaluate(()=>window.__calls)).find(x=>x.name==='registerEmployeeWithEmail').payload;assert.equal(input.invitationToken,'opaque');assert.ok(!('companyCode' in input));await page.close();
 
-  page=await open('join',{expired:true},'#invite=expired');await page.getByRole('alert').waitFor();await page.getByRole('button',{name:'Use a company code instead'}).click();await page.getByLabel('Company code',{exact:true}).waitFor();assert.equal(new URL(page.url()).hash,'');await page.close();
+  page=await open('join',{expired:true},'#invite=expired');await page.getByRole('alert').waitFor();await page.getByRole('button',{name:'Use a company code instead'}).click();await page.getByLabel('Company code',{exact:true}).waitFor();assert.equal(new URL(page.url()).hash,'');
+  await page.evaluate(()=>{location.hash='invite=expired-again';});await page.getByRole('alert').waitFor();assert.equal(await page.getByLabel('Company code',{exact:true}).count(),0,'same-tab invitation hash navigation must be observed');await page.close();
 
   page=await open('join',{user:{uid:'employee'},status:{status:'rejected',companyName:'Employer A',displayName:'New Employee'}});await page.getByRole('heading',{name:'Request declined'}).waitFor();assert.ok((await page.locator('body').innerText()).includes('Contact your employer'));await page.close();
 

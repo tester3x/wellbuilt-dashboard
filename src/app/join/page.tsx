@@ -14,10 +14,15 @@ export default function JoinCompanyPage(){
  const [password,setPassword]=useState(''),[confirm,setConfirm]=useState(''),[code,setCode]=useState('');
  const [status,setStatus]=useState<Status|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  useEffect(()=>{
-  const value=new URLSearchParams(window.location.hash.slice(1)).get('invite');
-  if(!value)return;setToken(value);
-  httpsCallable(getFirebaseFunctions(),'getEmployeeInvitation')({invitationToken:value}).then(r=>setInvitedCompany((r.data as {companyName:string}).companyName)).catch(()=>setError('This invitation is invalid or expired. Ask your employer for a new link, or enter its company code.'));
+  const read=()=>setToken(new URLSearchParams(window.location.hash.slice(1)).get('invite')||'');
+  read();window.addEventListener('hashchange',read);
+  return ()=>window.removeEventListener('hashchange',read);
  },[]);
+ useEffect(()=>{
+  setInvitedCompany('');if(!token)return;let active=true;setError('');
+  httpsCallable(getFirebaseFunctions(),'getEmployeeInvitation')({invitationToken:token}).then(r=>{if(active)setInvitedCompany((r.data as {companyName:string}).companyName);}).catch(()=>{if(active)setError('This invitation is invalid or expired. Ask your employer for a new link, or enter its company code.');});
+  return ()=>{active=false;};
+ },[token]);
  useEffect(()=>{if(!user)return;let active=true;
   httpsCallable(getFirebaseFunctions(),'getEmployeeJoinStatus')({}).then(r=>{const value=r.data as Status;if(active&&value.status!=='none')setStatus(value);}).catch(()=>{});
   return ()=>{active=false;};
