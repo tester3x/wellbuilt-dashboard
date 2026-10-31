@@ -114,6 +114,7 @@ interface DashboardUser {
   companyId?: string;      // '' / undefined = WB staff (spans all companies)
   companyName?: string;
   driverHash?: string;     // linked driver record, if promoted from a driver
+  driverId?: string;       // canonical app identity linked during employee signup
 }
 
 export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProps) {
@@ -450,6 +451,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             companyId: val.companyId || undefined,
             companyName: val.companyName || undefined,
             driverHash: val.driverHash || undefined,
+            driverId: val.driverId || undefined,
           });
         });
       }

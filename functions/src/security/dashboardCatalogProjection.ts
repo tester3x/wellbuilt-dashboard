@@ -68,6 +68,7 @@ export const CANONICAL_PROFILE_ALLOWLIST = [
   'shiftPlan',
   'usualShift',
   'weeklyDaysOff',
+  'dashboardUid',
 ] as const;
 
 export const USER_ALLOWLIST = [
@@ -78,6 +79,7 @@ export const USER_ALLOWLIST = [
   'companyId',
   'companyName',
   'driverHash',
+  'driverId',
 ] as const;
 
 export const PENDING_ALLOWLIST = [
