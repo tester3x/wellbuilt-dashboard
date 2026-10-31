@@ -1,3 +1,5 @@
+import { deliverLevelReport } from './levelReportDelivery';
+export { deliverProcessedLevelReport } from './levelReportDelivery';
 import {averageFlowRates} from './flowAverage';
 import {calculateInventoryProduction} from './inventoryProduction';
 import {previousPullBottomInches} from './previousPullLevel';
@@ -2564,173 +2566,14 @@ async function postSystemMessage(
   });
 }
 
-// ── sendLevelToChat: Fire-and-forget level report to driver's dispatch chat threads ──
-// `computed` lets the caller hand in the already-correct bottom (preferred source of truth).
-// If absent, falls back to reading well_config/{wellName}.tanks (same path the pull processor uses).
+// Compatibility fast path shares the processed-event delivery identity.
+// The independent processed trigger retries transient errors after intake completes.
 async function sendLevelToChat(
   data: PullPacket,
   packetId: string,
   computed?: { tankAfterInches: number; tanks: number; bblPerFoot: number },
 ): Promise<void> {
-  try {
-    const driverHash = data.driverId;
-    if (!driverHash) {
-      console.log('[LevelChat] No driverId on packet, skipping');
-      return;
-    }
-
-    // Get driver info from RTDB
-    const driverSnap = await db.ref(`drivers/approved/${driverHash}`).once('value');
-    if (!driverSnap.exists()) {
-      console.log('[LevelChat] Driver not found in approved:', driverHash.slice(0, 8));
-      return;
-    }
-    const driverData = driverSnap.val();
-    const companyId = driverData.companyId;
-    if (!companyId) {
-      console.log('[LevelChat] No companyId on driver, skipping');
-      return;
-    }
-    const driverName = driverData.legalName || driverData.displayName || data.driverName || 'Driver';
-
-    // Check company config for sendLevelToDispatch toggle
-    const companyDoc = await firestoreDb.collection('companies').doc(companyId).get();
-    if (!companyDoc.exists) {
-      console.log('[LevelChat] Company doc not found:', companyId);
-      return;
-    }
-    const companyConfig = companyDoc.data() || {};
-    if (!companyConfig.sendLevelToDispatch) {
-      return; // Feature not enabled for this company
-    }
-
-    // Build message from template or default
-    const templateStr: string = companyConfig.levelReportTemplate ||
-      '📊 Level Report\nWell: {wellName}\nTop: {top} | Bottom: {bottom}\nBBLs: {bbls}\nTime: {time}';
-
-    // Format levels as feet'inches"
-    const topInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
-    const wellName = data.wellName;
-    const cleanName = wellName ? wellName.replace(/\s/g, '') : '';
-    let tanks = 1;
-    let bblPerFt: number;
-    let bottomInches: number;
-    let sourceUsed: string;
-
-    if (computed && Number.isFinite(computed.tankAfterInches)) {
-      // Caller already computed the correct bottom (uses well_config.tanks). Use it directly.
-      tanks = computed.tanks || 1;
-      bblPerFt = computed.bblPerFoot;
-      bottomInches = computed.tankAfterInches;
-      sourceUsed = `caller.tankAfterInches(tanks=${tanks})`;
-    } else {
-      // Fallback: read well_config/{wellName}.tanks — same path the pull processor uses.
-      try {
-        let configSnap = wellName ? await db.ref(`well_config/${wellName}`).once('value') : null;
-        if (configSnap && !configSnap.exists() && cleanName) {
-          configSnap = await db.ref(`well_config/${cleanName}`).once('value');
-        }
-        const cfg = (configSnap && configSnap.val()) || {};
-        tanks = cfg.tanks || cfg.numTanks || 1;
-        bblPerFt = resolveTankBblPerFoot(cfg);
-      } catch (e) {
-        console.warn('[LevelChat] calibration lookup failed; refusing guessed bottom:', e);
-        return;
-      }
-      const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / bblPerFt!) * 12 : 0;
-      bottomInches = topInches - bblsInInches;
-      sourceUsed = `recompute(well_config.tanks=${tanks})`;
-    }
-
-
-    const topStr = inchesToFeetInches(topInches);
-    const bottomStr = inchesToFeetInches(Math.max(0, bottomInches));
-
-    console.log('[LevelChat] level math:', {
-      wellName,
-      topLevel: topStr,
-      bottomLevel: bottomStr,
-      bbls: data.bblsTaken,
-      tankCount: tanks,
-      bblPerFt,
-      sourceUsed,
-    });
-
-    // Format date + time from packet
-    const fullTimeStr = data.dateTime || (data.dateTimeUTC ? formatLocalDateTime(new Date(data.dateTimeUTC)) : '');
-    // Split into date and time parts: "04/11/2026 9:12 PM" → date="04/11/2026", time="9:12 PM"
-    const timeParts = fullTimeStr.split(' ');
-    const dateStr = timeParts[0] || '';
-    const timeOnlyStr = timeParts.slice(1).join(' ') || fullTimeStr; // fallback to full string
-
-    let message = templateStr;
-    message = message.replace(/\{wellName\}/gi, data.wellName || '');
-    message = message.replace(/\{well\}/gi, data.wellName || ''); // alias for {wellName}
-    message = message.replace(/\{top\}/gi, topStr);
-    message = message.replace(/\{bottom\}/gi, bottomStr);
-    message = message.replace(/\{bbls\}/gi, String(data.bblsTaken || 0));
-    message = message.replace(/\{date\}/gi, dateStr);
-    message = message.replace(/\{time\}/gi, timeOnlyStr);
-    message = message.replace(/\{driverName\}/gi, driverName);
-
-    // Find driver's direct chat threads with dispatch users
-    const driverPid = `driver:${driverHash}`;
-    const threadsSnap = await firestoreDb.collection('chat_threads')
-      .where('type', '==', 'direct')
-      .where('participants', 'array-contains', driverPid)
-      .get();
-
-    if (threadsSnap.empty) {
-      console.log('[LevelChat] No direct threads for driver:', driverHash.slice(0, 8));
-      return;
-    }
-
-    // Filter to threads where the other participant is a Dashboard user (user:*)
-    const dispatchThreads = threadsSnap.docs.filter(d => {
-      const participants: string[] = d.data().participants || [];
-      return participants.some(p => p.startsWith('user:') && p !== driverPid);
-    });
-
-    if (dispatchThreads.length === 0) {
-      console.log('[LevelChat] No dispatch threads for driver:', driverHash.slice(0, 8));
-      return;
-    }
-
-    // Send to each dispatch thread
-    const now = admin.firestore.Timestamp.now();
-    for (const threadDoc of dispatchThreads) {
-      try {
-        const batch = firestoreDb.batch();
-        const msgRef = firestoreDb.collection('chat_threads').doc(threadDoc.id).collection('messages').doc();
-        batch.set(msgRef, {
-          text: message,
-          senderId: driverPid,
-          senderName: driverName,
-          timestamp: now,
-          type: 'level_report',
-          clientId: `level_${Date.now()}_${threadDoc.id.slice(0, 6)}`,
-        });
-        batch.update(firestoreDb.collection('chat_threads').doc(threadDoc.id), {
-          lastMessage: {
-            text: message.length > 100 ? message.substring(0, 100) + '...' : message,
-            senderId: driverPid,
-            senderName: 'Level Report',
-            timestamp: now,
-            type: 'system',
-          },
-          updatedAt: now,
-        });
-        await batch.commit();
-        console.log('[LevelChat] Level sent to thread:', threadDoc.id);
-      } catch (threadErr) {
-        console.warn('[LevelChat] Failed to send to thread', threadDoc.id, threadErr);
-      }
-    }
-
-    console.log(`[LevelChat] Sent level report for ${data.wellName} to ${dispatchThreads.length} thread(s)`);
-  } catch (err) {
-    console.error('[LevelChat] Error (non-blocking):', err);
-  }
+  await deliverLevelReport({ ...data, ...(computed ? { tankAfterInches: computed.tankAfterInches } : {}) }, packetId);
 }
 
 // ── onShiftCreate: Create shift thread when driver starts shift ────────────
