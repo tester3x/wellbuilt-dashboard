@@ -33,7 +33,7 @@ export default function JoinCompanyPage(){
   <h1 className="text-2xl font-bold">Join an existing company</h1>
   {status&&status.status!=='none'?<section aria-live="polite" className="space-y-4">
    <h2 className="text-xl">{status.status==='complete'?'You’re approved':status.status==='rejected'?'Request declined':'Waiting for company approval'}</h2>
-   <p>{status.companyName}{status.status==='complete'?' has approved your account.':' will review your request and assign your responsibilities.'}</p>
+   <p>{status.companyName}{status.status==='complete'?' has approved your account.':status.status==='rejected'?' declined this request. Contact your employer if you need help.':' will review your request and assign your responsibilities.'}</p>
    <p>Your app sign-in name is <strong>{status.displayName}</strong>. Dashboard uses your email. Use the password you chose.</p>
    {status.status==='complete'?<a href="/" className="block rounded bg-cyan-600 p-3 text-center">Open Dashboard</a>:<button disabled={busy} onClick={refresh} className="rounded bg-cyan-600 p-3">{busy?'Checking…':'Check approval'}</button>}
   </section>:<form onSubmit={submit} className="space-y-4">

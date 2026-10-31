@@ -24,6 +24,7 @@ export const AUTH_ROUTES = [
   '/performance/well',
   '/photo-review',
   '/register',
+  '/join',
   '/welcome',
   '/safety',
   '/safety/spills/detail',

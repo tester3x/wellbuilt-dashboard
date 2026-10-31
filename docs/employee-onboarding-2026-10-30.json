@@ -12,7 +12,7 @@
     "One canonical app employee identity linked to web email/password identity; hashed credentials.",
     "Trusted server capability grants and later role demotion synchronization for this new employee path."
   ],
-  "state": "WIP checkpoint; typechecks and focused tests passed. Full release/browser checks and scoped deployment remain pending. No actual company employee accounts created or modified.",
+  "state": "Release preparation: 76 backend tests across6 suites pass; Functions compile; actual shipped React signup/admin browser tests pass. Approval retry preserves original responsibilities; declined requests no longer say waiting. Mandatory Hosting gate now runs retained onboarding DOM test and includes join in responsive routes. Scoped Functions and Hosting deployment pending.",
   "deploymentScope": [
     "createEmployeeInvitation",
     "getEmployeeInvitation",
@@ -27,5 +27,10 @@
     "Owner self-signup remains separate.",
     "Existing app employee registration screens are preserved; the new shared web path is available without downloading an app.",
     "No operational data, rules, company plans or existing staff grants are migrated."
-  ]
+  ],
+  "checks": {
+    "functions": "C:/dev/tmp/employee-onboarding-functions-tests-private.log:6 suites76 tests pass; build log compiles",
+    "browser": "node tools/test-employee-onboarding-dom.mjs: actual React code and invite signup, pending/approved/declined, expired link fallback, administrator private/email invite controls, dispatch-only approval, interrupted approval retry, hidden unauthorized controls; Firebase/Auth mocked, no real data/email operations",
+    "authWrapper": "node tools/test-employee-onboarding.cjs passed actual auth wrapper/retry/no role/company injection/role parity/discoverability"
+  }
 }
