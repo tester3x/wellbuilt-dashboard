@@ -154,9 +154,15 @@ export const resolveEmployeeJoin=onCall(options,async request=>{
    const current=(await tx.get(ref)).data()!;
    const refs=[uid,appUid].map(id=>fs().collection('trusted_staff_authority').doc(id));
    const values=await Promise.all(refs.map(r=>tx.get(r)));
+   const staff=fs().collection('staff').doc(uid),existingStaff=await tx.get(staff);
    if(current.state!=='approving')return;
    if(values.some(r=>r.exists))return refuse();
+   if(existingStaff.exists)return refuse();
    refs.forEach((r,i)=>tx.create(r,{schemaVersion:1,uid:i===0?uid:appUid,companyId:row.companyId,active:true,capabilities:row.grant.capabilities}));
+   // Firestore listeners authorize this server-owned read projection. The
+   // callable capability record alone cannot authorize client reads.
+   tx.create(staff,{companyId:row.companyId,role:row.grant.role,
+    enabled:['admin','manager','dispatch','it'].includes(row.grant.role),employeeJoinUid:uid});
    tx.update(credRef,{active:true});tx.update(ref,{state:'ready'});
   });
  }
@@ -195,9 +201,16 @@ export async function syncEmployeeResponsibilities(actorUid:string,targetUid:str
  await fs().runTransaction(async tx=>{
   const refs=[targetUid,appUid].map(id=>fs().collection('trusted_staff_authority').doc(id));
   const values=await Promise.all(refs.map(r=>tx.get(r)));
+  const staff=fs().collection('staff').doc(targetUid),staffSnap=await tx.get(staff);
+  const priorStaff=staffSnap.data();
   const parsed=values.map((v,i)=>parseTrustedStaffAuthorityRecord(v.data(),i===0?targetUid:appUid));
   if(parsed.some(p=>!p.ok||p.companyId!==access.companyId))return refuse();
+  if(priorStaff&&(priorStaff.companyId!==access.companyId||priorStaff.employeeJoinUid!==targetUid))return refuse();
   refs.forEach(r=>tx.update(r,{capabilities:grant.capabilities}));tx.update(ref,{grant});
+  const readGrant={companyId:access.companyId,role:grant.role,
+   enabled:['admin','manager','dispatch','it'].includes(grant.role)
+    && !(priorStaff?.enabled===false&&['admin','manager','dispatch','it'].includes(priorStaff.role)),employeeJoinUid:targetUid};
+  if(staffSnap.exists)tx.update(staff,readGrant);else tx.create(staff,readGrant);
  });
  await admin.database().ref(`drivers/profiles/${row.driverId}`).update({roles:grant.roles,isAdmin:grant.roles.includes('admin'),isViewer:grant.roles.includes('viewer')});
 }

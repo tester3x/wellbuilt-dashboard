@@ -56,8 +56,12 @@ test('dispatch approval links web/app identity, grants company-scoped dispatch a
  expect(mockRealtime.get('drivers/profiles/'+row.driverId)).toMatchObject({roles:['dispatch'],active:true,dashboardUid:'employee'});
  expect(mockDocs.get('trusted_staff_authority/employee').capabilities).toContain('createDispatch');
  expect(mockDocs.get('trusted_staff_authority/employee').capabilities).not.toContain('viewAllCompanies');
+ expect(mockDocs.get('staff/employee')).toEqual({companyId:'company-a',role:'dispatch',enabled:true,employeeJoinUid:'employee'});
+ expect(mockDocs.has('staff/'+('driver_'+row.driverId.replace(/-/g,'').slice(0,28)))).toBe(false);
+ mockDocs.get('staff/employee').enabled=false;
  mockDocs.get('trusted_staff_authority/employee').active=false;mockDocs.get('driver_credentials/'+row.driverId).active=false;
  await approve();expect(mockDocs.get('trusted_staff_authority/employee').active).toBe(false);expect(mockDocs.get('driver_credentials/'+row.driverId).active).toBe(false);
+ expect(mockDocs.get('staff/employee').enabled).toBe(false);
 });
 test('failed provisioning retries keep one canonical employee and do not report approval early',async()=>{
  await signup();mockFailPath='drivers/profiles/';await expect(approve()).rejects.toThrow('temporary outage');
@@ -87,7 +91,24 @@ test('rejection is terminal, no roles or app credentials are activated',async()=
 test('later role demotion removes dispatch authority for both identities',async()=>{
  await signup();await approve();await syncEmployeeResponsibilities('employer','employee',['driver']);
  expect(mockDocs.get('trusted_staff_authority/employee').capabilities).toEqual([]);
+ expect(mockDocs.get('staff/employee')).toMatchObject({role:'driver',enabled:false,companyId:'company-a'});
  const row=mockDocs.get('employee_join_requests/employee');expect(mockRealtime.get('drivers/profiles/'+row.driverId).roles).toEqual(['driver']);
+});
+
+test('explicit role promotion updates reads, but does not restore an independently disabled staff record',async()=>{
+ await signup();await approve();await syncEmployeeResponsibilities('employer','employee',['driver']);
+ await syncEmployeeResponsibilities('employer','employee',['dispatch']);
+ expect(mockDocs.get('staff/employee')).toMatchObject({role:'dispatch',enabled:true});
+ mockDocs.get('staff/employee').enabled=false;
+ await syncEmployeeResponsibilities('employer','employee',['admin','dispatch']);
+ expect(mockDocs.get('staff/employee')).toMatchObject({role:'admin',enabled:false});
+});
+
+test('foreign staff record cannot be overwritten by employee approval',async()=>{
+ await signup();mockDocs.set('staff/employee',{companyId:'other',role:'admin',enabled:true});
+ await expect(approve()).rejects.toThrow();
+ expect(mockDocs.get('staff/employee').companyId).toBe('other');
+ expect(mockDocs.has('trusted_staff_authority/employee')).toBe(false);
 });
 test('requests are company scoped; inactive accounts and rate limits cannot register',async()=>{
  await signup();expect((await listEmployeeJoinRequests.run(request({},'employer'))).requests).toHaveLength(1);mockCompany='other';mockDocs.get('trusted_staff_authority/employer').companyId='other';expect((await listEmployeeJoinRequests.run(request({},'employer'))).requests).toHaveLength(0);
