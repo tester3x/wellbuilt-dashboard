@@ -12,7 +12,7 @@
     "One canonical app employee identity linked to web email/password identity; hashed credentials.",
     "Trusted server capability grants and later role demotion synchronization for this new employee path."
   ],
-  "state": "Release preparation: 76 backend tests across6 suites pass; Functions compile; actual shipped React signup/admin browser tests pass. Approval retry preserves original responsibilities; declined requests no longer say waiting. Mandatory Hosting gate now runs retained onboarding DOM test and includes join in responsive routes. Scoped Functions and Hosting deployment pending.",
+  "state": "Implemented, pushed, built and deployed. Automated actual React signup/admin tests and focused server approval/security tests pass. Live public signup/navigation/error paths verified. First real employee invitation/signup/approval/sign-in remains a human round trip; no employee account or customer records were created for tests.",
   "deploymentScope": [
     "createEmployeeInvitation",
     "getEmployeeInvitation",
@@ -31,6 +31,107 @@
   "checks": {
     "functions": "C:/dev/tmp/employee-onboarding-functions-tests-private.log:6 suites76 tests pass; build log compiles",
     "browser": "node tools/test-employee-onboarding-dom.mjs: actual React code and invite signup, pending/approved/declined, expired link fallback, administrator private/email invite controls, dispatch-only approval, interrupted approval retry, hidden unauthorized controls; Firebase/Auth mocked, no real data/email operations",
-    "authWrapper": "node tools/test-employee-onboarding.cjs passed actual auth wrapper/retry/no role/company injection/role parity/discoverability"
-  }
+    "authWrapper": "node tools/test-employee-onboarding.cjs passed actual auth wrapper/retry/no role/company injection/role parity/discoverability",
+    "frontend": "500 tests:499 passed,1 intentional skip. Onboarding wrapper/pending-access and actual DOM checks passed. Clean Next build+TypeScript passed. All29 routes at1280/390/344px, retained header/photo/layout/Watchdog/freshwater/forgot-password checks passed.",
+    "liveBrowser": {
+      "checkedAtUtc": "2026-10-31T01:53:12.618Z",
+      "status": "passed",
+      "checks": [
+        "live Login employee/company links",
+        "actual routed join form and credential fields",
+        "no applicant role picker",
+        "344/390/1280px no horizontal overflow",
+        "real deployed invalid-invite error and company-code fallback"
+      ],
+      "mutationScope": "No account or invitation created; no password entered; no email sent; no customer record changed"
+    },
+    "sameTabInvite": "Live check exposed mount-only hash read; listener plus cancelled stale invitation lookups fixed in1ed5ed3d, actual React hash-navigation regression and final live browser check passed."
+  },
+  "functionsDeployment": {
+    "sourceCommit": "d175842b46c05e1aae764ae99e1e09aae985fbc7",
+    "project": "wellbuilt-sync",
+    "codebase": "dashboard",
+    "region": "us-central1",
+    "endpoints": [
+      "createEmployeeInvitation",
+      "getEmployeeInvitation",
+      "requestEmployeeJoin",
+      "getEmployeeJoinStatus",
+      "listEmployeeJoinRequests",
+      "resolveEmployeeJoin",
+      "staffWriteUserRoles"
+    ],
+    "status": "All7 ACTIVE Node22; scoped Firebase CLI successful; no other endpoint redeployed",
+    "functionSourceHash": "01cd844e1af2ea9237a960d9fd0c89273cf3d8af",
+    "liveAuthenticationChecks": [
+      {
+        "name": "createEmployeeInvitation",
+        "httpStatus": 401,
+        "error": "UNAUTHENTICATED"
+      },
+      {
+        "name": "getEmployeeInvitation",
+        "httpStatus": 400,
+        "error": "INVALID_ARGUMENT"
+      },
+      {
+        "name": "requestEmployeeJoin",
+        "httpStatus": 401,
+        "error": "UNAUTHENTICATED"
+      },
+      {
+        "name": "getEmployeeJoinStatus",
+        "httpStatus": 401,
+        "error": "UNAUTHENTICATED"
+      },
+      {
+        "name": "listEmployeeJoinRequests",
+        "httpStatus": 401,
+        "error": "UNAUTHENTICATED"
+      },
+      {
+        "name": "resolveEmployeeJoin",
+        "httpStatus": 401,
+        "error": "UNAUTHENTICATED"
+      },
+      {
+        "name": "staffWriteUserRoles",
+        "httpStatus": 401,
+        "error": "UNAUTHENTICATED"
+      }
+    ],
+    "checkedAtUtc": "2026-10-31T01:42:21.624966+00:00"
+  },
+  "hostingDeployment": {
+    "sourceCommit": "1ed5ed3dc6fa5039399dfbbe3762b32480fd46c5",
+    "approvedBaselineBefore": "1488da6fb472b5e806a5b5909515acfff423af62",
+    "verifiedAtUtc": "2026-10-31T01:53:03.055Z",
+    "liveFilesByteVerified": 398,
+    "retainedSourceHashes": [
+      {
+        "file": "admin/index.html",
+        "sha256": "b9fa7987cc2fac4d94260d9c40d61b92e11b237f8ad3a8ffb39dfd880ce5844e"
+      },
+      {
+        "file": "join/index.html",
+        "sha256": "f48b65745708061a4698796c67bc29d2ee6825eafcc43f5c4687fc7f8aba6955"
+      },
+      {
+        "file": "login/index.html",
+        "sha256": "97ae26d012e98997a475c3cb0b1b41c4cb03e995f9c6f2744f87a0ba413b9412"
+      },
+      {
+        "file": "register/index.html",
+        "sha256": "d12f747eb93c34fffc1d8fcc3113e61aba61424bbe784783e0fd8da1e9f9fee7"
+      }
+    ],
+    "releaseState": "Canonical clean pushed source; mandatory deploy:hosting gate passed; all live bytes matched; remote approved checkpoint fast-forwarded and shared lock released normally."
+  },
+  "operatorSteps": [
+    "Company owner opens https://wellbuilt-sync.web.app/admin/?tab=drivers and chooses Invite Employee.",
+    "Use Email link to open own mail app or Copy link to send privately. No email was sent by the agent.",
+    "Employee opens private link and chooses own email/password/app sign-in name. Alternatively https://wellbuilt-sync.web.app/join/ accepts company code.",
+    "Owner refreshes New employee requests, chooses responsibilities such as Dispatcher, and approves. Employee checks approval then signs into Dashboard with email; apps use app sign-in name and chosen password."
+  ],
+  "preservation": "No APK/cloud builds/installations, rules/bucket/CORS/plan changes or customer-data migrations. Backend cancellation and all approved Dashboard features retained. Existing employee flows left available; no account pre-created and no credentials requested or logged."
 }
