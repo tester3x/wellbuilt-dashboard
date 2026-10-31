@@ -58,7 +58,7 @@ function walkTsx(dir: string): string[] {
 
 function scanCallableLiterals(): Map<string, string[]> {
   const found = new Map<string, string[]>();
-  const re = /httpsCallable\s*(?:<[^>]*>)?\s*\(\s*[^,]+,\s*'([^']+)'\s*\)/g;
+  const re = /httpsCallable\s*(?:<[^>]*>)?\s*\(\s*[^,]+,\s*'([^']+)'\s*(?:\)|,)/g;
   for (const file of walkTsx(SRC)) {
     const body = readFileSync(file, 'utf8');
     let m: RegExpExecArray | null;
