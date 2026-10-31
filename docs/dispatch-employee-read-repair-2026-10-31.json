@@ -1,0 +1,33 @@
+{
+  "sourceCommit": "89476be9c19c0c9d3b6b14a3f79780f95a6d6999",
+  "checkout": "C:/dev/dashboard-current-20261004",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "owner": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "project": "wellbuilt-sync",
+  "functions": [
+    {
+      "name": "projects/wellbuilt-sync/locations/us-central1/functions/resolveEmployeeJoin",
+      "state": "ACTIVE",
+      "updateTime": "2026-10-31T19:39:38.278200979Z",
+      "sourceHash": "a213aec90ddeef73ac2c57ea25e6b52c91cbc9b7"
+    },
+    {
+      "name": "projects/wellbuilt-sync/locations/us-central1/functions/staffWriteUserRoles",
+      "state": "ACTIVE",
+      "updateTime": "2026-10-31T19:40:02.243296389Z",
+      "sourceHash": "a213aec90ddeef73ac2c57ea25e6b52c91cbc9b7"
+    }
+  ],
+  "compiledSourceProof": {
+    "compiledFile": "lib/security/employeeOnboarding.js",
+    "sha256": "63cefa607cc50a68609b19f5a308f66fedda4080b63a205e735e514591fcdcec",
+    "byteMatched": true
+  },
+  "bothFunctionArchivesByteMatched": true,
+  "checks": "71 tests across onboarding, trusted authority, role updates and dispatch catalog passed; Functions TypeScript build passed",
+  "liveAcceptance": "User confirmed both permission errors disappeared and created jobs were visible after a refresh. Two test jobs checked read-only: correct company, assigned drivers and package revisions, pending status.",
+  "repair": "Audited missing staff read projection created from completed employer approval and matching active trusted authority; no existing record overwritten.",
+  "behavior": "New approvals atomically provision a server-owned company staff read projection. Role changes synchronize it, demotion removes reads, mixed-role ordering retains explicitly approved Dispatch reads, replay never reactivates revoked access.",
+  "preserved": "No database/storage rules, jobs, driver shifts, credentials or customer data migrations changed. Earlier Granli pipeline work remains preserved and unactivated. No Hosting deployment needed for this backend-only repair."
+}
