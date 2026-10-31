@@ -3,6 +3,7 @@ import * as admin from 'firebase-admin';
 import { createHash } from 'crypto';
 import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
 import { chatNameDirectory, realChatName, presentChatThread, presentChatMessage, UNKNOWN_CHAT_NAME } from './chatNames';
+import { continuousShiftChats, continuousChatMessages } from './continuousShiftChat';
 
 const key = (x: unknown): string => {
   if (typeof x !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(x)) throw new https.HttpsError('invalid-argument', 'Invalid chat identifier');
@@ -53,6 +54,8 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     if (action === 'threads') {
       const { aliases, names } = await identityDirectory();
       rows = rows.map(row => presentChatThread(row, names, aliases));
+      if (data.ownOnly) rows = rows.filter(row => row.participants?.includes(participant));
+      rows = continuousShiftChats(rows);
     } else {
       const { names } = await identityDirectory();
       rows = rows.map(row => ({ ...row, slots: (Array.isArray(row.slots) ? row.slots : []).map((slot: any) => slot?.driverHash
@@ -120,8 +123,21 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     await ref.set({ ...fields, companyId: staff.companyId, createdBy: staff.uid, updatedAt: stamp(), ...(!old.exists ? { createdAt: stamp() } : {}) }, { merge: true });
     return { ok: true, profileId: id };
   }
-  const threadId = key(data.threadId), ref = db.collection('chat_threads').doc(threadId), snapshot = await ref.get();
+  const requestedId = key(data.threadId);
+  let ref = db.collection('chat_threads').doc(requestedId), snapshot = await ref.get();
   if (!snapshot.exists || snapshot.get('companyId') !== staff.companyId) throw new https.HttpsError('permission-denied', 'Thread outside your company');
+  let sources = [ref];
+  if (snapshot.get('type') === 'shift') {
+    const { aliases, names } = await identityDirectory();
+    const all = await db.collection('chat_threads').where('companyId', '==', staff.companyId).where('type', '==', 'shift').get();
+    const merged = continuousShiftChats(all.docs.map(doc => presentChatThread({ ...doc.data(), id: doc.id }, names, aliases)))
+      .find(row => row.id === requestedId || row.sourceThreadIds?.includes(requestedId));
+    if (merged) {
+      ref = db.collection('chat_threads').doc(merged.id);
+      snapshot = await ref.get();
+      sources = (merged.sourceThreadIds || [merged.id]).map((id: string) => db.collection('chat_threads').doc(id));
+    }
+  }
   if (action === 'members') {
     if (snapshot.get('type') === 'direct' || !Array.isArray(data.driverIds) || data.driverIds.length > 50) throw new https.HttpsError('invalid-argument', 'Invalid group members');
     const ids = [...new Set<string>(data.driverIds.map(key))];
@@ -141,19 +157,24 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     });
     return { ok: true };
   }
-  if (action === 'read') { await ref.update({ [`lastRead.${participant}`]: stamp() }); return { ok: true }; }
-  if (action === 'archive') { await ref.update({ status: data.archived === false ? 'active' : 'archived', updatedAt: stamp() }); return { ok: true }; }
+  if (action === 'read') { await Promise.all(sources.map(source => source.update({ [`lastRead.${participant}`]: stamp() }))); return { ok: true }; }
+  if (action === 'archive') { await Promise.all(sources.map(source => source.update({ status: data.archived === false ? 'active' : 'archived', updatedAt: stamp() }))); return { ok: true }; }
   if (action === 'broadcast') { await ref.update({ broadcast: data.broadcast === true, updatedAt: stamp() }); return { ok: true }; }
-  if (action === 'clear') { await ref.update({ [`clearedBefore.${participant}`]: stamp() }); return { ok: true }; }
+  if (action === 'clear') { await Promise.all(sources.map(source => source.update({ [`clearedBefore.${participant}`]: stamp() }))); return { ok: true }; }
   if (action === 'messages') {
-    const batches = await Promise.all(['timestamp', 'createdAt'].map(field => ref.collection('messages').orderBy(field, 'desc').limit(200).get()));
-    const rows = new Map<string, any>(), cleared = time(snapshot.get('clearedBefore')?.[participant]);
-    for (const batch of batches) for (const doc of batch.docs) {
-      const row = doc.data(), timestamp = row.timestamp || row.createdAt;
-      if (time(timestamp) > cleared) rows.set(doc.id, { ...row, id: doc.id, timestamp, type: row.type || 'text' });
-    }
+    const results = await Promise.all(sources.map(async source => {
+      const current = await source.get(), cleared = time(current.get('clearedBefore')?.[participant]);
+      const batches = await Promise.all(['timestamp', 'createdAt'].map(field => source.collection('messages').orderBy(field, 'desc').limit(200).get()));
+      const rows = new Map<string, any>();
+      for (const batch of batches) for (const doc of batch.docs) {
+        const row = doc.data(), timestamp = row.timestamp || row.createdAt;
+        const id = sources.length > 1 ? `${source.id}:${doc.id}` : doc.id;
+        if (time(timestamp) > cleared) rows.set(id, { ...row, id, timestamp, type: row.type || 'text' });
+      }
+      return [...rows.values()];
+    }));
     const { names } = await identityDirectory();
-    return { rows: serial([...rows.values()].sort((a, b) => time(a.timestamp) - time(b.timestamp)).map(row => presentChatMessage(row, names))) };
+    return { rows: serial(continuousChatMessages(results.flat(), 200).map(row => presentChatMessage(row, names))) };
   }
   const clientId = key(data.clientId), text = String(data.text || '').trim();
   if (!text || text.length > 4000) throw new https.HttpsError('invalid-argument', 'Message must contain 1–4000 characters');
