@@ -1,0 +1,30 @@
+{
+  "recordedAt": "2026-10-31T09:17:57.937285+00:00",
+  "task": "Right-click bubble prepares the native browser Copy menu",
+  "checkout": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "sourceCommit": "6c2a17398e1f0d3543a45182bf2e84d43af95c5a",
+  "behavior": [
+    "Right-click on normal or system bubble selects its message body synchronously",
+    "Sender name and timestamp excluded from automatic whole-message selection",
+    "Existing partial selection inside a message is preserved",
+    "Browser default context menu is not canceled; no alert, replacement menu or automatic clipboard write",
+    "Photo/link and editable-field context behavior unchanged"
+  ],
+  "validation": {
+    "actualBrowserInteraction": "tools/test-chat-text-selection.mjs passed: bubble padding selects full body/newlines, existing word selection preserved, different message selected, default contextmenu uncanceled, photo/link untouched, empty body safe",
+    "mandatoryPreflight": "All gates passed, including the new browser interaction test; library506 passed,1 skipped,0 failures; retained DOM/responsive/route checks passed",
+    "typescript": "npx tsc --noEmit passed",
+    "hosting": {
+      "project": "wellbuilt-sync",
+      "verifiedAt": "2026-10-31T09:16:47.200Z",
+      "liveArtifactsVerified": 398,
+      "sharedCheckpointAdvanced": true,
+      "lockReleased": true
+    },
+    "liveReadOnlyCheck": "Opened pre-existing test history and right-clicked a system-message bubble; only its body visibly selected in the live in-app browser. Native browser chrome menu items are not exposed in this automation surface; Edge native menu contents are not independently asserted. Screenshot outside Git: C:/dev/tmp/chat-native-right-click-live.png"
+  },
+  "scope": "Dashboard sidebar and full chat page only. No backend/rules/account changes, no new chat or sent message, no APK build or install."
+}
