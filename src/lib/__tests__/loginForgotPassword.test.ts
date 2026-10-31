@@ -60,7 +60,8 @@ test('existing sign-in is preserved (still calls signIn + renders the Sign In co
   assert.match(login, /await signIn\(email, password\)/, 'sign-in still calls the auth context signIn');
   assert.match(login, /router\.push\('\/'\)/, 'successful sign-in still navigates home');
   assert.match(login, /\{loading \? 'Signing in\.\.\.' : 'Sign In'\}/, 'Sign In button preserved');
-  assert.match(login, /Need an account\?/, 'register link preserved');
+  assert.match(login, /href="\/register\/"[^>]*>Create a company/, 'company signup remains discoverable');
+  assert.match(login, /href="\/join\/"[^>]*>Join an existing company/, 'employee signup is distinct from company creation');
 });
 
 test('v1 uses Firebase hosted reset (no custom landing page / backend added)', () => {
