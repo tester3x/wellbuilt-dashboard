@@ -120,7 +120,7 @@ execSync('node tools/test-employee-onboarding.cjs', { stdio: 'inherit' });
 execSync('node tools/test-employee-onboarding-dom.mjs', { stdio: 'inherit' });
 console.log('\n--- Running Mandatory Pre-Deploy Test Suites on Fresh Build ---');
 try {
-  for (const test of ['tools/test-dashboardReturnState.cjs', 'tools/test-officeAlertPreferences.cjs', 'tools/test-driver-arrival-panel.mjs', 'tools/test-dispatch-shift-picker.cjs', 'tools/test-water-order-driver-picker.cjs', 'tools/test-water-order-workflow.cjs', 'tools/test-hosting-release-state.cjs', 'tools/test-staffChatDelivery.cjs']) {
+  for (const test of ['tools/test-dashboardReturnState.cjs', 'tools/test-officeAlertPreferences.cjs', 'tools/test-driver-arrival-panel.mjs', 'tools/test-dispatch-shift-picker.cjs', 'tools/test-water-order-driver-picker.cjs', 'tools/test-water-order-workflow.cjs', 'tools/test-hosting-release-state.cjs', 'tools/test-staffChatDelivery.cjs', 'tools/test-chat-text-selection.mjs']) {
     execSync(`node ${test}`, { stdio: 'inherit' });
   }
   execSync('npx tsx --test src/lib/__tests__/*.test.ts', { stdio: 'inherit' });

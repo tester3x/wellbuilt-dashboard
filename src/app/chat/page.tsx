@@ -1,5 +1,7 @@
 'use client';
 
+import { selectChatMessageText } from '@/lib/chatTextSelection';
+
 // Full-screen Chat page — lives on monitor 2+ for dispatch.
 // Monitor Profiles: each monitor gets a saved config with locked driver positions.
 // Opened via window.open('/chat?profile=north-crew') from Dashboard.
@@ -1557,15 +1559,15 @@ function ChatPageInner() {
                   if (isSystem) {
                     return (
                       <div key={msg.id} className="flex justify-center my-1">
-                        <div className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-2 py-0.5">
-                          <p className="text-gray-400 text-xs text-center">{msg.text}</p>
+                        <div onContextMenu={selectChatMessageText} className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-2 py-0.5">
+                          <p data-chat-message-text className="text-gray-400 text-xs text-center select-text">{msg.text}</p>
                         </div>
                       </div>
                     );
                   }
                   return (
                     <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] rounded-xl px-3 py-1.5 ${
+                      <div onContextMenu={selectChatMessageText} className={`max-w-[80%] rounded-xl px-3 py-1.5 ${
                         isMine ? 'bg-[#FFD700] text-black rounded-br-sm' : 'bg-[#1a1a1a] text-gray-200 rounded-bl-sm'
                       }`}>
                         {!isMine && !isLevelReport && msg.senderName && <p className="text-[10px] font-semibold mb-0.5 text-[#FFD700]">{msg.senderName}</p>}
@@ -1580,7 +1582,7 @@ function ChatPageInner() {
                             <img src={(msg as any).photoUrl} alt="Photo" className="rounded-lg max-w-full max-h-32 cursor-pointer hover:opacity-80" />
                           </a>
                         ) : (
-                          <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+                          <p data-chat-message-text className="text-sm whitespace-pre-wrap break-words select-text">{msg.text}</p>
                         )}
                         <p className={`text-[10px] mt-0.5 text-right ${isMine ? 'text-black/50' : 'text-gray-500'}`}>
                           {formatChatTime(msg.timestamp)}

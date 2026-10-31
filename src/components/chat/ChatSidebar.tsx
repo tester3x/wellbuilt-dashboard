@@ -1,5 +1,7 @@
 'use client';
 
+import { selectChatMessageText } from '@/lib/chatTextSelection';
+
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { watchStaffChat, watchStaffChatCompany, staffChatCall, sendStaffChat } from '@/lib/staffChatClient';
 import { useAuth } from '@/contexts/AuthContext';
@@ -394,8 +396,8 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
               if (isSystem) {
                 return (
                   <div key={msg.id} className="flex justify-center my-2">
-                    <div className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-3 py-1.5 max-w-[85%]">
-                      <p className="text-gray-400 text-xs text-center">{msg.text}</p>
+                    <div onContextMenu={selectChatMessageText} className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-3 py-1.5 max-w-[85%]">
+                      <p data-chat-message-text className="text-gray-400 text-xs text-center select-text">{msg.text}</p>
                       <p className="text-gray-600 text-[10px] text-center mt-0.5">
                         {formatChatTime(msg.timestamp)}
                       </p>
@@ -407,6 +409,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
               return (
                 <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                   <div
+                    onContextMenu={selectChatMessageText}
                     className={`max-w-[75%] rounded-2xl px-3.5 py-2 ${
                       isMine
                         ? 'bg-[#FFD700] text-black rounded-br-sm'
@@ -427,7 +430,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
                         />
                       </a>
                     ) : (
-                      <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+                      <p data-chat-message-text className="text-sm whitespace-pre-wrap break-words select-text">{msg.text}</p>
                     )}
                     <p className={`text-[10px] mt-1 text-right ${isMine ? 'text-black/50' : 'text-gray-500'}`}>
                       {formatChatTime(msg.timestamp)}
