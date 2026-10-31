@@ -110,6 +110,14 @@ test('foreign staff record cannot be overwritten by employee approval',async()=>
  expect(mockDocs.get('staff/employee').companyId).toBe('other');
  expect(mockDocs.has('trusted_staff_authority/employee')).toBe(false);
 });
+
+test('dispatch read access survives combined-role ordering without changing primary user role',async()=>{
+ await signup();await approve({roles:['payroll','dispatch']});
+ expect(mockRealtime.get('users/employee').role).toBe('payroll');
+ expect(mockDocs.get('staff/employee')).toMatchObject({role:'dispatch',enabled:true,companyId:'company-a'});
+ await syncEmployeeResponsibilities('employer','employee',['dispatch','payroll']);
+ expect(mockDocs.get('staff/employee')).toMatchObject({role:'dispatch',enabled:true});
+});
 test('requests are company scoped; inactive accounts and rate limits cannot register',async()=>{
  await signup();expect((await listEmployeeJoinRequests.run(request({},'employer'))).requests).toHaveLength(1);mockCompany='other';mockDocs.get('trusted_staff_authority/employer').companyId='other';expect((await listEmployeeJoinRequests.run(request({},'employer'))).requests).toHaveLength(0);
  mockDisabled=true;await expect(signup()).rejects.toThrow('email/password');mockDisabled=false;mockAllowed=false;await expect(signup()).rejects.toThrow('Too many');

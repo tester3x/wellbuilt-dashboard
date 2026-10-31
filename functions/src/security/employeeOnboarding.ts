@@ -161,8 +161,9 @@ export const resolveEmployeeJoin=onCall(options,async request=>{
    refs.forEach((r,i)=>tx.create(r,{schemaVersion:1,uid:i===0?uid:appUid,companyId:row.companyId,active:true,capabilities:row.grant.capabilities}));
    // Firestore listeners authorize this server-owned read projection. The
    // callable capability record alone cannot authorize client reads.
-   tx.create(staff,{companyId:row.companyId,role:row.grant.role,
-    enabled:['admin','manager','dispatch','it'].includes(row.grant.role),employeeJoinUid:uid});
+   const readRole=['admin','manager','dispatch'].find(role=>row.grant.roles.includes(role))||row.grant.role;
+   tx.create(staff,{companyId:row.companyId,role:readRole,
+    enabled:['admin','manager','dispatch'].includes(readRole),employeeJoinUid:uid});
    tx.update(credRef,{active:true});tx.update(ref,{state:'ready'});
   });
  }
@@ -207,8 +208,9 @@ export async function syncEmployeeResponsibilities(actorUid:string,targetUid:str
   if(parsed.some(p=>!p.ok||p.companyId!==access.companyId))return refuse();
   if(priorStaff&&(priorStaff.companyId!==access.companyId||priorStaff.employeeJoinUid!==targetUid))return refuse();
   refs.forEach(r=>tx.update(r,{capabilities:grant.capabilities}));tx.update(ref,{grant});
-  const readGrant={companyId:access.companyId,role:grant.role,
-   enabled:['admin','manager','dispatch','it'].includes(grant.role)
+  const readRole=['admin','manager','dispatch'].find(role=>grant.roles.includes(role))||grant.role;
+  const readGrant={companyId:access.companyId,role:readRole,
+   enabled:['admin','manager','dispatch'].includes(readRole)
     && !(priorStaff?.enabled===false&&['admin','manager','dispatch','it'].includes(priorStaff.role)),employeeJoinUid:targetUid};
   if(staffSnap.exists)tx.update(staff,readGrant);else tx.create(staff,readGrant);
  });
