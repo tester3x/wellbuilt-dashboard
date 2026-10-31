@@ -12,7 +12,7 @@ const stubs = {
   '@/lib/firebase': `export const getFirebaseFunctions=()=>({})`,
   'firebase/functions': `export const httpsCallable=(_,name)=>async payload=>({data:await window.__call(name,payload)})`,
   '@/lib/auth': `export const isPlatformAdmin=user=>user?.uid==='platform-owner';export const hasCapability=()=>window.__allowed!==false;export const DEFAULT_ROLE_LABELS={driver:'Driver',dispatch:'Dispatch',payroll:'Payroll',safety:'Safety',lead:'Lead',manager:'Manager',admin:'Admin',viewer:'Viewer'};export const registerEmployeeWithEmail=payload=>window.__call('registerEmployeeWithEmail',payload)`,
-  './CompanyJoinCodeCard': `export const CompanyJoinCodeCard=()=>null`,
+  './CompanyJoinCodeCard': `import React from 'react';export const CompanyJoinCodeCard=()=>React.createElement('div',null,'Reusable code fallback')`,
 };
 const bundle = await build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import Join from './src/app/join/page';import {EmployeeOnboardingPanel as Panel} from './src/components/admin/EmployeeOnboardingPanel';createRoot(document.getElementById('root')).render(window.__mode==='admin'?React.createElement(Panel):React.createElement(Join));`,resolveDir:process.cwd(),loader:'tsx'},bundle:true,write:false,jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},plugins:[{name:'mock-external-services',setup(b){b.onResolve({filter:/.*/},a=>Object.hasOwn(stubs,a.path)?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:stubs[a.path],loader:'js',resolveDir:process.cwd()}));}}]});
 const server=http.createServer((req,res)=>{res.setHeader('Content-Type',req.url==='/bundle.js'?'text/javascript':'text/html');res.end(req.url==='/bundle.js'?bundle.outputFiles[0].contents:'<html><body><div id="root"></div><script src="/bundle.js"></script></body></html>');});
@@ -30,7 +30,7 @@ async function open(mode='join',extra={},hash=''){
       if(name==='registerEmployeeWithEmail')return {status:'pending',companyName:'Employer A',displayName:payload.displayName};
       if(name==='getEmployeeJoinStatus')return window.__status;
       if(name==='listEmployeeJoinRequests'){if(window.__deferLists)return new Promise(resolve=>window.__pendingLists.push(resolve));if(window.__readFails)throw Object.assign(Error('denied'),{code:'functions/permission-denied'});return {requests:window.__requests};}
-      if(name==='createEmployeeInvitation')return {url:'https://wellbuilt-sync.web.app/join/#invite=private-token'};
+      if(name==='createEmployeeInvitation')return {url:'https://wellbuilt-sync.web.app/join/#invite=private-token-'+window.__calls.filter(call=>call.name==='createEmployeeInvitation').length};
       if(name==='resolveEmployeeJoin'){window.__requests=[];return {status:payload.action==='approve'?'complete':'rejected'};}
       throw Error('Unexpected callable '+name);
     };
@@ -79,6 +79,17 @@ try{
   await page.evaluate(request=>window.__pendingLists[0]({requests:[request]}),request);await page.waitForTimeout(100);
   assert.equal(await page.getByRole('checkbox',{name:'Dispatch',exact:true}).count(),0,'old company results must never replace the selected company');
   assert.equal(await page.getByRole('heading',{name:'New employee requests (0)'}).count(),1);await page.close();
+  page=await open('admin');
+  assert.equal(await page.getByText('Reusable code fallback',{exact:true}).isVisible(),false,'reusable code must stay out of the primary invite flow');
+  await page.getByRole('button',{name:'Invite Employee',exact:true}).click();await page.getByLabel('Private signup link').waitFor();
+  const firstLink=await page.getByLabel('Private signup link').inputValue();
+  await page.getByText('New private invitation ready. This link is for one employee and expires in seven days.').waitFor();
+  assert.equal(await page.getByText('Reusable code fallback',{exact:true}).isVisible(),false);
+  await page.getByRole('button',{name:'Invite Employee',exact:true}).click();await page.waitForFunction(first=>document.querySelector('input[readonly]')?.value!==first,firstLink);
+  assert.notEqual(await page.getByLabel('Private signup link').inputValue(),firstLink,'the displayed invitation must be replaced by each newly generated link');
+  const beforeFallback=(await page.evaluate(()=>window.__calls)).length;
+  await page.getByText('Other ways to join',{exact:true}).click();assert.equal(await page.getByText('Reusable code fallback',{exact:true}).isVisible(),true);
+  assert.equal((await page.evaluate(()=>window.__calls)).length,beforeFallback,'opening the fallback must not generate another invitation');await page.close();
   page=await open('admin',{allowed:false});assert.equal(await page.getByRole('button',{name:'Invite Employee',exact:true}).count(),0);await page.close();
   console.log('PASS actual React DOM: code/invite signup, pending/approved/declined states, expired-link fallback, no applicant role injection, Invite/Email controls, dispatch approval, retry locked to approved responsibilities, unauthorized controls hidden. No production data or email operations.');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

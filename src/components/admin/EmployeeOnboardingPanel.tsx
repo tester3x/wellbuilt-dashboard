@@ -10,6 +10,7 @@ const choices:UserRole[]=['driver','dispatch','payroll','safety','lead','manager
 export function EmployeeOnboardingPanel(){
  const {user,userCompany,operatingCompanyId}=useAuth();const [requests,setRequests]=useState<Request[]>([]),[roles,setRoles]=useState<Record<string,UserRole[]>>({});
  const [url,setUrl]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
+ const [inviteNotice,setInviteNotice]=useState(''),[inviteError,setInviteError]=useState(false);
  const allowed=hasCapability(user,'manageDrivers',userCompany)&&hasCapability(user,'manageRolesAndCapabilities',userCompany);
  const companyId=user?.companyId||operatingCompanyId||null;
  const platform=isPlatformAdmin(user);
@@ -38,17 +39,17 @@ export function EmployeeOnboardingPanel(){
   }
  },[allowed,companyId,scopeKey,scopedInput]);
  useEffect(()=>{
-  setRequests([]);setRoles({});setUrl('');setMessage('');setReadError('');setReadState('idle');setBusy(false);
+  setRequests([]);setRoles({});setUrl('');setInviteNotice('');setInviteError(false);setMessage('');setReadError('');setReadState('idle');setBusy(false);
   void load();
   return ()=>{++loadSequence.current;};
  },[load]);
  if(!allowed)return null;
  async function invite(){
-  if(!companyId)return;const captured=scopeKey;setBusy(true);setMessage('');
+  if(!companyId)return;const captured=scopeKey;setBusy(true);setUrl('');setInviteNotice('');setInviteError(false);
   try{const result=await httpsCallable(getFirebaseFunctions(),'createEmployeeInvitation')(scopedInput());
    if(currentScope.current!==captured)return;
-   setUrl((result.data as {url:string}).url);setMessage('Invitation ready. It expires in seven days and joins one new employee. You approve their responsibilities afterward.');
-  }catch{if(currentScope.current===captured)setMessage('Could not create an invitation.');}
+   setUrl((result.data as {url:string}).url);setInviteNotice('New private invitation ready. This link is for one employee and expires in seven days.');
+  }catch{if(currentScope.current===captured){setInviteError(true);setInviteNotice('Could not create a new invitation. Retry Invite Employee.');}}
   finally{if(currentScope.current===captured)setBusy(false);}
  }
  async function resolve(row:Request,action:'approve'|'reject'){
@@ -60,10 +61,27 @@ export function EmployeeOnboardingPanel(){
   finally{if(currentScope.current===captured)setBusy(false);}
  }
  return <section className="mb-6 space-y-4 rounded-lg border border-gray-600 bg-gray-800 p-4">
-  <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-bold text-white">Employee onboarding</h2><p className="text-sm text-gray-300">Invite anyone joining your company, including office staff. No driver registration is required first.</p></div><button onClick={invite} disabled={busy||!companyId} className="rounded bg-cyan-600 px-4 py-2 text-white disabled:opacity-50">Invite Employee</button></div>
-  {companyId?<CompanyJoinCodeCard key={companyId} companyId={companyId}/>:<p className="text-amber-200">Select a company in the header to manage employee onboarding.</p>}
-  <p className="text-sm text-gray-300">Employees can also visit <a className="text-cyan-300 underline" href="/join/">Join an existing company</a> and enter your company code.</p>
-  {url&&<div className="space-y-2 rounded bg-gray-900 p-3"><label className="block text-sm text-gray-300">Private signup link<input readOnly value={url} className="w-full rounded bg-gray-700 p-2 text-white" onFocus={e=>e.target.select()}/></label><div className="flex gap-4"><button className="text-cyan-300 underline" onClick={async()=>{try{await navigator.clipboard.writeText(url);setMessage('Invitation copied. Send it privately by email or text.');}catch{setMessage('Select and copy the invitation link above.');}}}>Copy link</button><a className="text-cyan-300 underline" href={'mailto:?subject='+encodeURIComponent('Join our company on WellBuilt')+'&body='+encodeURIComponent('Create your employee account using this private invitation. Choose your own password; our company will approve your access.\n\n'+url)}>Email link</a></div></div>}
+  <div><h2 className="text-xl font-bold text-white">Employee onboarding</h2><p className="text-sm text-gray-300">Invite anyone joining your company, including office staff. No driver registration is required first.</p></div>
+  {!companyId&&<p className="text-amber-200">Select a company in the header to manage employee onboarding.</p>}
+  <div className="space-y-3 rounded-lg border border-cyan-900 bg-gray-900 p-4">
+   <h3 className="font-semibold text-white">Invite by private link</h3>
+   <p className="text-sm text-gray-300">Create a unique link for one employee. They choose their own password, then you approve their access.</p>
+   <button onClick={invite} disabled={busy||!companyId} className="rounded bg-cyan-600 px-4 py-2 text-white disabled:opacity-50">Invite Employee</button>
+   {url&&<div className="space-y-3 border-t border-gray-700 pt-3">
+    <label className="block text-sm text-gray-300">Private signup link<input readOnly value={url} className="mt-1 w-full min-w-0 rounded bg-gray-700 p-2 text-white" onFocus={e=>e.target.select()}/></label>
+    <p className="text-sm text-gray-300">The invitation code is already in this link. Each click of Invite Employee creates a different link; the employee does not enter a separate code.</p>
+    <div className="flex flex-wrap gap-4"><button className="text-cyan-300 underline" onClick={async()=>{try{await navigator.clipboard.writeText(url);setInviteError(false);setInviteNotice('Invitation copied. Send it privately by email or text.');}catch{setInviteError(true);setInviteNotice('Select and copy the invitation link above.');}}}>Copy link</button><a className="text-cyan-300 underline" href={'mailto:?subject='+encodeURIComponent('Join our company on WellBuilt')+'&body='+encodeURIComponent('Create your employee account using this private invitation. Choose your own password; our company will approve your access.\n\n'+url)}>Email link</a></div>
+   </div>}
+   {inviteNotice&&<p role="status" className={inviteError?'text-amber-200':'text-emerald-300'}>{inviteNotice}</p>}
+  </div>
+  <details key={scopeKey} className="rounded-lg border border-gray-600 p-3">
+   <summary className="cursor-pointer font-semibold text-gray-200">Other ways to join</summary>
+   <div className="mt-3 space-y-3">
+    <p className="text-sm text-gray-300">The company join code is a reusable alternative to a private invitation. It stays the same when you create invitations or refresh this page.</p>
+    {companyId&&<CompanyJoinCodeCard key={companyId} companyId={companyId}/>}
+    <p className="text-sm text-gray-300">Employees can visit <a className="text-cyan-300 underline" href="/join/">Join an existing company</a> and enter the company code. You still approve their access.</p>
+   </div>
+  </details>
   {message&&<p role="status" className="text-amber-200">{message}</p>}
   {readError&&<p role="alert" className="text-amber-200">{readError}</p>}
   <div className="flex justify-between"><h3 className="font-semibold text-white">New employee requests ({readState==='ready'?requests.length:readState==='loading'?'loading...':'unavailable'})</h3><button disabled={!companyId||readState==='loading'} className="text-cyan-300 underline disabled:opacity-50" onClick={load}>Refresh</button></div>
