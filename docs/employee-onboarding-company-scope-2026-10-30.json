@@ -1,0 +1,35 @@
+{
+  "home": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "problem": "The platform-owner employee panel did not send its selected operating company. The backend supported only trusted company-bound owners. A failed request misleadingly left a zero count and a generic permissions warning.",
+  "repair": "Platform onboarding requires both the verified wellbuiltAdmin token claim and enabled server-owned platform_admins record, plus an explicit existing selected company. Ordinary trusted owners remain confined to their own company. Invitation, listing and initial approval/rejection use the same scope. The panel clears company-specific state on switches, rejects late responses from old scopes, reports unavailable on failed reads and clears errors after successful refresh.",
+  "functionsSource": "ad65c97360ecbb4736779be67304135d9592559e",
+  "functionsProject": "wellbuilt-sync",
+  "functionsRegion": "us-central1",
+  "functionsCodebase": "dashboard",
+  "functions": ["listEmployeeJoinRequests", "createEmployeeInvitation", "resolveEmployeeJoin"],
+  "functionsState": "All three verified ACTIVE, Node22; deployment complete",
+  "functionsSourceHash": "fe4c73efd60e1833126d7c2bfb65faf4ffc321c1",
+  "hostingSource": "10b88703be54830e617f2d5622d79a9dc95ea990",
+  "hostingVerifiedAtUtc": "2026-10-31T02:26:53.346Z",
+  "hostingVerifiedFiles": 398,
+  "hostingApprovedBase": "10b88703be54830e617f2d5622d79a9dc95ea990",
+  "checks": {
+    "backend": "80 tests across six suites pass, including platform selected-company reads, invitation and approval containment, missing/disabled claim or record denial, ordinary-owner substitution refusal and retained onboarding lifecycle/role synchronization. Functions TypeScript passes.",
+    "frontend": "Mandatory actual React DOM onboarding tests pass: selected-company payload on list/invite/approval, no unscoped request, failed-count unavailable, retry clears warning, old company response cannot replace current company, plus retained signup and approval flows.",
+    "hosting": "Certified npm run deploy:hosting passes fresh build, 500 library tests (499 pass, one intentional skip), retained navigation/route/Watchdog and other mandatory checks. Every exported live artifact byte-verified and approved checkpoint advanced normally; own lock released.",
+    "anonymous": "Fresh deployed probes for all three endpoints return401 UNAUTHENTICATED."
+  },
+  "liveVerification": "Reloaded the user's existing signed-in platform-owner Admin Employees tab. Header confirms Liquid Gold Trucking LLC. Employee requests load successfully with zero pending, no permissions warning, Invite Employee available and Company Join Code control visible. Did not generate an invitation, reveal/create a join code, approve any employee or change accounts/roles.",
+  "privateEvidence": [
+    "C:/dev/tmp/employee-onboarding-scope-regressions-private.log",
+    "C:/dev/tmp/employee-onboarding-scope-dom-private.log",
+    "C:/dev/tmp/employee-onboarding-scope-functions-deploy-private.log",
+    "C:/dev/tmp/employee-onboarding-scope-hosting-final-private.log",
+    "C:/dev/tmp/employee-onboarding-scope-live-panel-private.png"
+  ],
+  "releaseNotes": "Initial Hosting preflight caught an invalid encoding byte in a loading label before upload; corrected to ASCII in10b88703 and all gates rerun successfully. Only the three named onboarding functions were deployed. No rules, account grants, migrations, other app builds or Watchdog changes.",
+  "remaining": "The first real employee signup and human-approved account roundtrip remains for the owner to perform privately. Existing docs/employee-onboarding-2026-10-30.json remains historical evidence for the original release; this receipt records the later company-scope repair."
+}
