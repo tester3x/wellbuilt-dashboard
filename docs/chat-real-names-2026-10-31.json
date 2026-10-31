@@ -1,0 +1,30 @@
+{
+  "home": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "source": "5926f837fb7c9519a4b90e7aaeea0ae85c9a4a56",
+  "deployment": {
+    "project": "wellbuilt-sync",
+    "function": "dashboard:staffChat",
+    "region": "us-central1",
+    "runtime": "nodejs22",
+    "state": "ACTIVE",
+    "sourceHash": "04c80ea7d419d9431c87ddd424393daa67601ff3",
+    "method": "firebase deploy --only functions:dashboard:staffChat --project wellbuilt-sync",
+    "scope": "Only staffChat callable updated. No Hosting or APK release, rules, access grants, migrations or customer account edits."
+  },
+  "behavior": "Company-scoped chat reads resolve real employee names using legal/full-name fields and verified identity links, never display/login/email aliases. Existing shift/direct thread titles, participant labels, message sender names, last-message labels, monitor driver slots and driver picker use current names. Group/project/well titles and original message text remain intact. Missing real names use Name unavailable. New staff sends and thread creation also use resolved names.",
+  "checks": {
+    "focused": "32 passing tests across pure name projection, mocked callable read/directory integration and trusted authority. Functions TypeScript build and scoped deploy prebuild passed. Existing chat durable retry/account fence/governed entry test passed.",
+    "readSafety": "Callable fixture proves existing threads/messages relabel without writes, company override denied, legacy reciprocal binding resolves canonical driver, and directory uses real names. Pure tests cover inactive historical people, tenant exclusion, missing-name fallback and retained non-person titles/message text.",
+    "additionalLegacyInventory": "Optional dashboardWriteInventory.test.ts returned three pre-existing source-text failures: expects historical raw packet/project client writes and an old helper token. Relevant source/test files are unchanged from task-start 59067274c6d956619cb6a4307507640f06ae777f. Two other assertions passed. No unrelated production changes or weakened gates."
+  },
+  "liveVerification": "Existing signed-in Messages sidebar initially matched the supplied screenshot: two Driver rows and an old software-test title. After scoped deployment, automatic polling replaced those labels with the corresponding real S24 and ZFold employee profile names. Existing project title, previews, timestamps and unread indicators retained. No message sent, conversation opened/marked read, account created or role changed.",
+  "privateEvidence": [
+    "C:/dev/tmp/chat-real-names-deploy-private.log",
+    "C:/dev/tmp/chat-real-names-functions-private.json",
+    "C:/dev/tmp/chat-real-names-tests-private.log",
+    "C:/dev/tmp/chat-real-names-live-private.png"
+  ]
+}
