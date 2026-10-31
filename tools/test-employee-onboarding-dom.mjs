@@ -24,6 +24,15 @@ async function open(mode='join',extra={},hash=''){
   await page.addInitScript(({mode,extra})=>{
     window.__mode=mode;window.__calls=[];window.__user=extra.user||null;window.__allowed=extra.allowed;
     window.__adminUser=extra.adminUser;window.__company=extra.company;window.__readFails=extra.readFails;window.__deferLists=extra.deferLists;window.__pendingLists=[];window.__status=extra.status||{status:'none'};window.__requests=extra.requests||[];
+    if(extra.manualIntervals){
+      window.__activeIntervals=new Map();let nextId=90000;
+      const nativeInterval=window.setInterval.bind(window),nativeClear=window.clearInterval.bind(window);
+      window.setInterval=(fn,ms,...args)=>{if(ms===5000){const id=++nextId;window.__activeIntervals.set(id,fn);return id;}return nativeInterval(fn,ms,...args);};
+      window.clearInterval=id=>{window.__activeIntervals.delete(id);nativeClear(id);};
+      window.__visibility='visible';window.__isOnline=true;
+      Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>window.__visibility});
+      Object.defineProperty(navigator,'onLine',{configurable:true,get:()=>window.__isOnline});
+    }
     window.__call=async(name,payload)=>{
       window.__calls.push({name,payload});
       if(name==='getEmployeeInvitation'){if(extra.expired)throw Error('expired');return {companyName:'Employer A'};}
@@ -31,7 +40,7 @@ async function open(mode='join',extra={},hash=''){
       if(name==='getEmployeeJoinStatus')return window.__status;
       if(name==='listEmployeeJoinRequests'){if(window.__deferLists)return new Promise(resolve=>window.__pendingLists.push(resolve));if(window.__readFails)throw Object.assign(Error('denied'),{code:'functions/permission-denied'});return {requests:window.__requests};}
       if(name==='createEmployeeInvitation')return {url:'https://wellbuilt-sync.web.app/join/#invite=private-token-'+window.__calls.filter(call=>call.name==='createEmployeeInvitation').length};
-      if(name==='resolveEmployeeJoin'){window.__requests=[];return {status:payload.action==='approve'?'complete':'rejected'};}
+      if(name==='resolveEmployeeJoin'){if(extra.deferResolve)await new Promise(resolve=>window.__finishApproval=resolve);window.__requests=[];return {status:payload.action==='approve'?'complete':'rejected'};}
       throw Error('Unexpected callable '+name);
     };
   },{mode,extra});
@@ -90,6 +99,37 @@ try{
   const beforeFallback=(await page.evaluate(()=>window.__calls)).length;
   await page.getByText('Other ways to join',{exact:true}).click();assert.equal(await page.getByText('Reusable code fallback',{exact:true}).isVisible(),true);
   assert.equal((await page.evaluate(()=>window.__calls)).length,beforeFallback,'opening the fallback must not generate another invitation');await page.close();
+  page=await open('admin',{manualIntervals:true});await page.getByRole('heading',{name:'New employee requests (0)'}).waitFor();
+  await page.evaluate(request=>{window.__requests=[request];for(const tick of window.__activeIntervals.values())tick();},request);
+  await page.getByRole('heading',{name:'New employee requests (1)'}).waitFor();
+  await page.getByRole('checkbox',{name:'Driver',exact:true}).uncheck();await page.getByRole('checkbox',{name:'Dispatch',exact:true}).check();
+  const listCalls=()=>page.evaluate(()=>window.__calls.filter(call=>call.name==='listEmployeeJoinRequests').length);
+  let callCount=await listCalls();
+  await page.evaluate(()=>{window.__deferLists=true;for(const tick of window.__activeIntervals.values()){tick();tick();}});
+  await page.waitForFunction(()=>window.__pendingLists.length===1);
+  assert.equal(await listCalls(),callCount+1,'slow automatic reads must not overlap');
+  assert.equal(await page.getByRole('heading',{name:'New employee requests (1)'}).count(),1,'background reads must keep the loaded list visible');
+  assert.equal(await page.getByRole('checkbox',{name:'Dispatch',exact:true}).isChecked(),true);
+  await page.evaluate(request=>{window.__deferLists=false;window.__requests=[request,{...request,uid:'employee-2',legalName:'Another Employee'}];window.__pendingLists[0]({requests:window.__requests});},request);
+  await page.getByRole('heading',{name:'New employee requests (2)'}).waitFor();
+  assert.equal(await page.getByRole('checkbox',{name:'Dispatch',exact:true}).first().isChecked(),true,'automatic updates must preserve selected responsibilities');
+  assert.equal(await page.getByRole('checkbox',{name:'Driver',exact:true}).first().isChecked(),false);
+  callCount=await listCalls();await page.evaluate(()=>{window.__visibility='hidden';for(const tick of window.__activeIntervals.values())tick();});assert.equal(await listCalls(),callCount,'hidden tabs do not poll');
+  await page.evaluate(()=>{window.__requests=[];window.__visibility='visible';document.dispatchEvent(new Event('visibilitychange'));});await page.getByRole('heading',{name:'New employee requests (0)'}).waitFor();assert.equal(await listCalls(),callCount+1,'returning to the tab refreshes without a button click');
+  callCount=await listCalls();await page.evaluate(()=>{window.__isOnline=false;for(const tick of window.__activeIntervals.values())tick();});assert.equal(await listCalls(),callCount,'offline tabs do not poll');
+  await page.evaluate(request=>{window.__requests=[request];window.__isOnline=true;window.dispatchEvent(new Event('online'));},request);await page.getByRole('heading',{name:'New employee requests (1)'}).waitFor();
+  callCount=await listCalls();await page.evaluate(()=>{window.__allowed=false;window.dispatchEvent(new Event('auth-fixture-change'));});await page.waitForFunction(()=>window.__activeIntervals.size===0);await page.evaluate(()=>window.dispatchEvent(new Event('focus')));assert.equal(await listCalls(),callCount,'losing access cleans up timers and event listeners');await page.close();
+  page=await open('admin',{manualIntervals:true,requests:[request],deferResolve:true});await page.getByRole('button',{name:'Approve employee'}).waitFor();
+  const beforeApproval=await page.evaluate(()=>window.__calls.filter(call=>call.name==='listEmployeeJoinRequests').length);
+  await page.getByRole('button',{name:'Approve employee'}).click();await page.waitForFunction(()=>typeof window.__finishApproval==='function');
+  await page.evaluate(()=>{for(const tick of window.__activeIntervals.values())tick();});
+  assert.equal(await page.evaluate(()=>window.__calls.filter(call=>call.name==='listEmployeeJoinRequests').length),beforeApproval,'automatic reads pause during approval');
+  await page.evaluate(()=>window.__finishApproval());await page.getByText('Employee approved. They can check approval on the signup page or sign in.').waitFor();await page.getByRole('heading',{name:'New employee requests (0)'}).waitFor();await page.close();
+  page=await open('admin',{manualIntervals:true});await page.getByRole('heading',{name:'New employee requests (0)'}).waitFor();
+  await page.evaluate(()=>{window.__readFails=true;for(const tick of window.__activeIntervals.values())tick();});await page.getByRole('alert').waitFor();
+  const failedReadCount=await page.evaluate(()=>window.__calls.filter(call=>call.name==='listEmployeeJoinRequests').length);
+  await page.evaluate(()=>{for(const tick of window.__activeIntervals.values())tick();});assert.equal(await page.evaluate(()=>window.__calls.filter(call=>call.name==='listEmployeeJoinRequests').length),failedReadCount,'failed automatic reads back off');
+  await page.evaluate(()=>window.__readFails=false);await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByRole('heading',{name:'New employee requests (0)'}).waitFor();assert.equal(await page.getByRole('alert').count(),0,'manual recovery is allowed during backoff');await page.close();
   page=await open('admin',{allowed:false});assert.equal(await page.getByRole('button',{name:'Invite Employee',exact:true}).count(),0);await page.close();
-  console.log('PASS actual React DOM: code/invite signup, pending/approved/declined states, expired-link fallback, no applicant role injection, Invite/Email controls, dispatch approval, retry locked to approved responsibilities, unauthorized controls hidden. No production data or email operations.');
+  console.log('PASS actual React DOM: automatic request pickup, stable role selections, serialized reads, visibility/online resume, cleanup and retry backoff; code/invite signup, pending/approved/declined states, expired-link fallback, no applicant role injection, Invite/Email controls, dispatch approval, retry locked to approved responsibilities, unauthorized controls hidden. No production data or email operations.');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

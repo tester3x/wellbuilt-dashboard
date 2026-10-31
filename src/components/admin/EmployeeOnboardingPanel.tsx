@@ -17,48 +17,72 @@ export function EmployeeOnboardingPanel(){
  const scopeKey=JSON.stringify([user?.uid,companyId]);
  const currentScope=useRef(scopeKey);currentScope.current=scopeKey;
  const loadSequence=useRef(0);
+ const inFlight=useRef<{scope:string;promise:Promise<void>}|null>(null);
+ const busyRef=useRef(busy);busyRef.current=busy;
+ const autoRetryAt=useRef(0);
  const [readState,setReadState]=useState<'idle'|'loading'|'ready'|'error'>('idle');
  const [readError,setReadError]=useState('');
  const scopedInput=useCallback(()=>platform?{viewedCompanyId:companyId}:{},[platform,companyId]);
- const load=useCallback(async()=>{
-  if(!allowed||!companyId)return;
+ const load=useCallback(async(background=false)=>{
+  if(!allowed||!companyId||currentScope.current!==scopeKey)return;
+  if(background&&(busyRef.current||Date.now()<autoRetryAt.current))return;
+  // Automatic reads never overlap. Foreground actions wait for an earlier read
+  // before requesting fresh post-action state from the same company.
+  while(inFlight.current?.scope===scopeKey){
+   if(background)return;
+   await inFlight.current.promise;
+   if(currentScope.current!==scopeKey)return;
+  }
   const sequence=++loadSequence.current;
-  setReadState('loading');setReadError('');setRequests([]);
+  const task=(async()=>{
+  if(!background){setReadState('loading');setReadError('');setRequests([]);}
   try{
    const result=await httpsCallable(getFirebaseFunctions(),'listEmployeeJoinRequests')(scopedInput());
    if(currentScope.current!==scopeKey||sequence!==loadSequence.current)return;
    const rows=(result.data as {requests:Request[]}).requests;
    if(!Array.isArray(rows))throw Error('Invalid response');
    setRequests(rows);setRoles(prior=>Object.fromEntries(rows.map(r=>[r.uid,r.status==='pending'?(prior[r.uid]||r.roles||['driver']):(r.roles||['driver'])])));
-   setReadState('ready');
+   autoRetryAt.current=0;setReadError('');setReadState('ready');
   }catch(error){
    if(currentScope.current!==scopeKey||sequence!==loadSequence.current)return;
    const code=(error as {code?:string}).code;
-   setReadState('error');
+   autoRetryAt.current=Date.now()+30_000;setReadState('error');
    setReadError(code==='functions/permission-denied'?'Your account could not access employee onboarding for the selected company. Refresh your sign-in or contact your company administrator.':'Employee requests could not be loaded. Refresh to retry; the request count is unavailable.');
   }
+  })();
+  inFlight.current={scope:scopeKey,promise:task};
+  try{await task;}finally{if(inFlight.current?.promise===task)inFlight.current=null;}
  },[allowed,companyId,scopeKey,scopedInput]);
  useEffect(()=>{
-  setRequests([]);setRoles({});setUrl('');setInviteNotice('');setInviteError(false);setMessage('');setReadError('');setReadState('idle');setBusy(false);
+  setRequests([]);setRoles({});setUrl('');setInviteNotice('');setInviteError(false);setMessage('');setReadError('');setReadState('idle');setBusy(false);autoRetryAt.current=0;
   void load();
   return ()=>{++loadSequence.current;};
  },[load]);
+ useEffect(()=>{
+  if(!allowed||!companyId)return;
+  const refresh=()=>{if(document.visibilityState==='visible'&&navigator.onLine!==false)void load(true);};
+  const timer=window.setInterval(refresh,5_000);
+  document.addEventListener('visibilitychange',refresh);
+  window.addEventListener('focus',refresh);
+  window.addEventListener('online',refresh);
+  return ()=>{window.clearInterval(timer);document.removeEventListener('visibilitychange',refresh);window.removeEventListener('focus',refresh);window.removeEventListener('online',refresh);};
+ },[allowed,companyId,load]);
  if(!allowed)return null;
  async function invite(){
-  if(!companyId)return;const captured=scopeKey;setBusy(true);setUrl('');setInviteNotice('');setInviteError(false);
+  if(!companyId)return;const captured=scopeKey;busyRef.current=true;setBusy(true);setUrl('');setInviteNotice('');setInviteError(false);
   try{const result=await httpsCallable(getFirebaseFunctions(),'createEmployeeInvitation')(scopedInput());
    if(currentScope.current!==captured)return;
    setUrl((result.data as {url:string}).url);setInviteNotice('New private invitation ready. This link is for one employee and expires in seven days.');
   }catch{if(currentScope.current===captured){setInviteError(true);setInviteNotice('Could not create a new invitation. Retry Invite Employee.');}}
-  finally{if(currentScope.current===captured)setBusy(false);}
+  finally{if(currentScope.current===captured){busyRef.current=false;setBusy(false);}}
  }
  async function resolve(row:Request,action:'approve'|'reject'){
-  if(!companyId)return;const captured=scopeKey;setBusy(true);setMessage('');
+  if(!companyId)return;const captured=scopeKey;busyRef.current=true;setBusy(true);++loadSequence.current;setMessage('');
   try{const response=await httpsCallable(getFirebaseFunctions(),'resolveEmployeeJoin',{timeout:120000})({...scopedInput(),uid:row.uid,action,...(action==='approve'?{roles:roles[row.uid]||['driver']}: {})});
    if(currentScope.current!==captured)return;
    const status=(response.data as {status:string}).status;setMessage(status==='complete'?'Employee approved. They can check approval on the signup page or sign in.':'Request declined.');await load();
   }catch(e){if(currentScope.current===captured)setMessage((e as {message?:string}).message||'Could not finish approval. Retry with the same responsibilities.');}
-  finally{if(currentScope.current===captured)setBusy(false);}
+  finally{if(currentScope.current===captured){busyRef.current=false;setBusy(false);}}
  }
  return <section className="mb-6 space-y-4 rounded-lg border border-gray-600 bg-gray-800 p-4">
   <div><h2 className="text-xl font-bold text-white">Employee onboarding</h2><p className="text-sm text-gray-300">Invite anyone joining your company, including office staff. No driver registration is required first.</p></div>
@@ -84,7 +108,8 @@ export function EmployeeOnboardingPanel(){
   </details>
   {message&&<p role="status" className="text-amber-200">{message}</p>}
   {readError&&<p role="alert" className="text-amber-200">{readError}</p>}
-  <div className="flex justify-between"><h3 className="font-semibold text-white">New employee requests ({readState==='ready'?requests.length:readState==='loading'?'loading...':'unavailable'})</h3><button disabled={!companyId||readState==='loading'} className="text-cyan-300 underline disabled:opacity-50" onClick={load}>Refresh</button></div>
+  <div className="flex justify-between"><h3 className="font-semibold text-white">New employee requests ({readState==='ready'?requests.length:readState==='loading'?'loading...':'unavailable'})</h3><button disabled={!companyId||readState==='loading'} className="text-cyan-300 underline disabled:opacity-50" onClick={()=>void load()}>Refresh</button></div>
+  <p className="text-sm text-gray-400">New requests appear automatically while this page is open.</p>
   {requests.map(row=><div key={row.uid} className="space-y-3 rounded bg-gray-900 p-3 text-white"><p className="font-semibold">{row.legalName||row.displayName}</p><p className="text-sm text-gray-300">{row.email} · App sign-in: {row.displayName}</p><div className="flex flex-wrap gap-3">{choices.map(role=><label key={role}><input type="checkbox" disabled={busy||row.status!=='pending'} checked={(roles[row.uid]||['driver']).includes(role)} onChange={e=>setRoles(prior=>{const selected=prior[row.uid]||['driver'];return {...prior,[row.uid]:e.target.checked?[...selected,role]:selected.filter(r=>r!==role)};})}/> {DEFAULT_ROLE_LABELS[role]}</label>)}</div><div className="flex gap-3"><button disabled={busy||!(roles[row.uid]||['driver']).length} onClick={()=>resolve(row,'approve')} className="rounded bg-green-700 p-2">Approve employee</button><button disabled={busy} onClick={()=>resolve(row,'reject')} className="rounded bg-red-800 p-2">Decline</button></div></div>)}
  </section>;
 }
