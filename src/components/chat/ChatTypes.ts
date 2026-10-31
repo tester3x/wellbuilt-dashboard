@@ -18,6 +18,7 @@ export interface LastMessagePreview {
 export interface ChatThread {
   id: string; // Firestore doc ID
   type: ThreadType;
+  audience?: 'dispatch_team' | 'private_driver';
   companyId: string;
 
   // Context links (set depending on type)
@@ -174,4 +175,12 @@ export function formatChatTime(ts: Timestamp | string | undefined): string {
   }
   // Different year: "3/5/25, 2:30 PM"
   return `${date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}, ${time}`;
+}
+
+export function chatAudienceLabel(thread: ChatThread): string {
+  return thread.audience === 'dispatch_team' ? 'Dispatch team' : thread.audience === 'private_driver' ? 'Private · you and driver' : threadTypeLabel(thread.type);
+}
+export function matchesChatFilter(thread: ChatThread, filter: string): boolean {
+  if (filter === 'dispatch_team' || filter === 'private_driver') return thread.audience === filter;
+  return filter === 'all' || (thread.type === filter && !thread.audience);
 }

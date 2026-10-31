@@ -1,3 +1,4 @@
+import { CONVERSATIONS, ensureConversation, validConversation } from './security/dispatchConversations';
 import * as admin from 'firebase-admin';
 import * as functions from 'firebase-functions/v1';
 import { createHash } from 'crypto';
@@ -8,7 +9,7 @@ type Row = Record<string, any>;
 export type LevelChatDeps = {
   read(path: string): Promise<Row | null>;
   company(id: string): Promise<Row | null>;
-  threads(companyId: string): Promise<{ id: string; row: Row }[]>;
+  threads(companyId: string, driverId: string, driverName: string): Promise<{ id: string; row: Row }[]>;
   writeOnce(threadId: string, messageId: string, companyId: string, driverKeys: string[], message: Row): Promise<void>;
 };
 const id = (value: unknown): string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(value) ? value : '';
@@ -78,9 +79,8 @@ export function levelReportText(packet: Row, settings: Row, driverName: string):
 
 export function isLevelChatRecipient(row: Row, company: string, driverKeys: string[]): boolean {
   const members = Array.isArray(row.participants) ? row.participants : [];
-  return row.companyId === company && row.type === 'direct' && row.broadcast !== true &&
-    members.some((p: string) => driverKeys.some(key => p === `driver:${key}`)) &&
-    members.some((p: any) => typeof p === 'string' && p.startsWith('user:'));
+  return row.companyId === company && row.type === 'direct' && row.audience === 'dispatch_team' && row.broadcast !== true &&
+    members.some((p: string) => driverKeys.some(key => p === `driver:${key}`));
 }
 
 export function levelReportMessageId(packetId: string, company: string, driverId: string): string {
@@ -94,7 +94,7 @@ export async function deliverLevelReport(packet: Row, packetId: string, deps = p
   if (settings?.sendLevelToDispatch !== true) return { result: 'disabled' };
   const text = levelReportText(packet, settings, driver.name);
   if (!text) return { result: 'no_measured_level' };
-  const threads = (await deps.threads(driver.companyId)).filter(t => isLevelChatRecipient(t.row, driver.companyId, driver.keys));
+  const threads = (await deps.threads(driver.companyId, driver.driverId, driver.name)).filter(t => isLevelChatRecipient(t.row, driver.companyId, driver.keys));
   // Thread creation can race packet processing. Retry the event rather than lose the report.
   if (!threads.length) throw new Error('level_chat_recipient_not_ready');
   const messageId = levelReportMessageId(packetId, driver.companyId, driver.driverId);
@@ -110,13 +110,16 @@ export function productionLevelChatDeps(): LevelChatDeps {
   return {
     read: async path => (await admin.database().ref(path).once('value')).val(),
     company: async company => (await db.collection('companies').doc(company).get()).data() || null,
-    threads: async company => (await db.collection('chat_threads').where('companyId', '==', company).where('type', '==', 'direct').get())
-      .docs.map(doc => ({ id: doc.id, row: doc.data() })),
+    threads: async (company, driver, name) => {
+      const id = await ensureConversation(company, driver, name);
+      const snapshot = await db.collection(CONVERSATIONS).doc(id).get();
+      return [{ id, row: snapshot.data()! }];
+    },
     writeOnce: async (threadId, messageId, company, keys, message) => {
-      const thread = db.collection('chat_threads').doc(threadId), target = thread.collection('messages').doc(messageId);
+      const thread = db.collection(CONVERSATIONS).doc(threadId), target = thread.collection('messages').doc(messageId);
       await db.runTransaction(async tx => {
         const [current, previous] = await Promise.all([tx.get(thread), tx.get(target)]);
-        if (!current.exists || !isLevelChatRecipient(current.data()!, company, keys)) return;
+        if (!current.exists || !validConversation(current.data(), threadId) || !isLevelChatRecipient(current.data()!, company, keys)) throw new Error('level_chat_recipient_changed');
         if (previous.exists) {
           if (previous.get('sourcePacketId') !== message.sourcePacketId || previous.get('senderId') !== message.senderId) {
             throw new Error('level_chat_identity_conflict');

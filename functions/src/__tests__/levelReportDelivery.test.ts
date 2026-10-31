@@ -5,7 +5,7 @@ import { join } from 'path';
 const packet = { driverId: 'canonical', companyId: 'company-a', wellName: 'Fixture Well',
   tankLevelFeet: 11, tankTopInches: 132, tankAfterInches: 81, bblsTaken: 170,
   dateTimeUTC: '2026-10-30T21:59:00.000Z', timezone: 'America/Chicago' };
-const recipient = { companyId: 'company-a', type: 'direct', participants: ['driver:old-hash', 'user:dispatch'] };
+const recipient = { audience: 'dispatch_team', companyId: 'company-a', type: 'direct', participants: ['driver:old-hash', 'user:dispatch'] };
 function fixture() {
   const records: Record<string, any> = {
     'drivers/profiles/canonical': { companyId: 'company-a', legalName: 'Real Employee', displayName: 'LoginAlias' },
@@ -31,7 +31,7 @@ function fixture() {
   return { deps, records, settings, messages, attempts: () => attempts, fail: (value: boolean) => { failSecond = value; } };
 }
 
-test('canonical driver with no approved record reaches verified legacy dispatch chats', async () => {
+test('canonical driver with no approved record resolves verified legacy identity for dispatch team delivery', async () => {
   const f = fixture();
   expect(await deliverLevelReport(packet, 'packet-1', f.deps)).toEqual({ result: 'delivered', recipients: 2 });
   expect(f.messages.size).toBe(2);
@@ -80,6 +80,8 @@ test('report uses processed bottom exactly and refuses to invent missing or inva
   expect(levelReportText({ ...packet, tankAfterInches: 37 }, {}, 'Real Name')).toContain('Bottom: 3\'1"');
   expect(levelReportText({ ...packet, tankAfterInches: undefined }, {}, 'Real Name')).toBeNull();
   expect(levelReportText({ ...packet, tankAfterInches: Infinity }, {}, 'Real Name')).toBeNull();
+  expect(isLevelChatRecipient({ ...recipient, audience: 'private_driver' }, 'company-a', ['old-hash'])).toBe(false);
+  expect(isLevelChatRecipient({ ...recipient, audience: undefined }, 'company-a', ['old-hash'])).toBe(false);
   expect(isLevelChatRecipient({ ...recipient, broadcast: true }, 'company-a', ['old-hash'])).toBe(false);
 });
 

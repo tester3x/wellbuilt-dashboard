@@ -10,17 +10,20 @@ import {
   ThreadType,
   userParticipantId,
   isThreadUnread,
-  threadTypeLabel,
+  chatAudienceLabel,
+  matchesChatFilter,
   threadTypeIcon,
   formatChatTime,
 } from './ChatTypes';
 
 // ── Filter chips ────────────────────────────────────────────────────────────
 
-type FilterKey = 'all' | ThreadType;
+type FilterKey = 'all' | 'dispatch_team' | 'private_driver' | ThreadType;
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'All' },
+  { key: 'dispatch_team', label: 'Dispatch' },
+  { key: 'private_driver', label: 'Private' },
   { key: 'shift', label: 'Shift' },
   { key: 'well', label: 'Wells' },
   { key: 'project', label: 'Projects' },
@@ -214,7 +217,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
   // ── Filtered threads ────────────────────────────────────────────────────
   const filteredThreads = filter === 'all'
     ? threads
-    : threads.filter((t) => t.type === filter);
+    : threads.filter((t) => matchesChatFilter(t, filter));
 
   const selectedThread = threads.find((t) => t.id === selectedThreadId) || null;
 
@@ -262,7 +265,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
             </button>
             <ThreadIcon type={selectedThread.type} />
             <div className="min-w-0">
-              <h3 className="text-white text-sm font-semibold truncate">{selectedThread.title}</h3>
+              <h3 className="text-white text-sm font-semibold truncate">{selectedThread.title} · {chatAudienceLabel(selectedThread)}</h3>
               {selectedThread.subtitle && (
                 <p className="text-gray-500 text-xs truncate">{selectedThread.subtitle}</p>
               )}
@@ -344,7 +347,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <span className={`text-sm truncate ${unread ? 'text-white font-semibold' : 'text-gray-300 font-medium'}`}>
-                          {thread.title}
+                          {thread.title}{thread.audience ? ` · ${chatAudienceLabel(thread)}` : ''}
                         </span>
                         <span className="text-gray-500 text-xs flex-shrink-0">
                           {formatChatTime(thread.lastMessage?.timestamp)}

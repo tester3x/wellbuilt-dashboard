@@ -27,7 +27,7 @@ async function check(label, run) { await run(); console.log('PASS', label); coun
   const { threadId } = await call({ action: 'direct', driverId: A });
   await check('direct identity reused and member canonical', async () => {
     assert.equal((await call({ action: 'direct', driverId: A })).threadId, threadId);
-    assert.deepEqual((await db.doc(`chat_threads/${threadId}`).get()).get('participantIds'), [A]);
+    assert.deepEqual((await db.doc(`dispatch_conversations/${threadId}`).get()).get('participantIds'), [A]);
   });
   await check('staff retry creates one message with server sender', async () => {
     await Promise.all([call({ action: 'send', threadId, clientId: 'once', text: 'Fixture text', senderId: 'spoof' }), call({ action: 'send', threadId, clientId: 'once', text: 'Fixture text' })]);

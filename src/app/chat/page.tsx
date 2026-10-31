@@ -15,14 +15,15 @@ import {
   type ThreadType,
   userParticipantId,
   isThreadUnread,
-  threadTypeLabel,
+  chatAudienceLabel,
+  matchesChatFilter,
   threadTypeIcon,
   formatChatTime,
 } from '@/components/chat/ChatTypes';
 
 // --- Types ---
 
-type FilterKey = 'all' | 'archived' | ThreadType;
+type FilterKey = 'all' | 'archived' | 'dispatch_team' | 'private_driver' | ThreadType;
 
 interface SlotAssignment {
   driverHash?: string;
@@ -46,6 +47,8 @@ interface MonitorProfile {
 
 const FILTERS: { label: string; value: FilterKey }[] = [
   { label: 'All', value: 'all' },
+  { label: 'Dispatch', value: 'dispatch_team' },
+  { label: 'Private', value: 'private_driver' },
   { label: 'Shifts', value: 'shift' },
   { label: 'Wells', value: 'well' },
   { label: 'Projects', value: 'project' },
@@ -293,9 +296,13 @@ function ChatPageInner() {
   // .find() does not throw at render.
   const driverThreadMap: Record<string, string> = {};
   for (const t of threads) {
-    if (t.type !== 'direct' || t.status === 'archived') continue;
+    if (t.type !== 'direct' || t.audience === 'private_driver' || t.status === 'archived') continue;
     const driverPid = (t.participants || []).find((p) => p.startsWith('driver:'));
-    if (driverPid) driverThreadMap[driverPid.replace('driver:', '')] = t.id;
+    if (driverPid) {
+      const key = driverPid.replace('driver:', '');
+      // Preserve existing driver monitor history until its team conversation exists.
+      if (t.audience === 'dispatch_team' || !driverThreadMap[key]) driverThreadMap[key] = t.id;
+    }
   }
 
   // Build openPanes from profile slots + temp overlays
@@ -598,7 +605,8 @@ function ChatPageInner() {
   }, [paneInputs, myParticipantId, user, userCompany, companyId]);
 
   // --- Start chat with driver (creates thread if needed, returns thread ID) ---
-  const ensureDriverThread = useCallback(async (driverHash: string, driverName: string, driverCompanyId?: string): Promise<string | null> => {
+  const [newConversationScope, setNewConversationScope] = useState<'dispatch' | 'private'>('dispatch');
+  const ensureDriverThread = useCallback(async (driverHash: string, driverName: string, driverCompanyId?: string, scope: 'dispatch' | 'private' = 'dispatch'): Promise<string | null> => {
     if (!hasCapability(user, 'sendChat', userCompany)) {
       setToastMsg('You do not have permission to start conversations.');
       return null;
@@ -606,7 +614,7 @@ function ChatPageInner() {
     const db = getFirestoreDb();
     if (!db) return null;
     try {
-      const result = await staffChatCall({ action: 'direct', companyId, driverId: driverHash });
+      const result = await staffChatCall({ action: scope, companyId, driverId: driverHash });
       return result.threadId;
     } catch (err) {
       console.error('[ChatPage] ensureDriverThread failed', err);
@@ -646,13 +654,13 @@ function ChatPageInner() {
   }, [companyId]);
 
   // --- Sidebar filtering — unanswered first, then by updatedAt ---
-  const nonEmptyThreads = threads.filter((t) => t.lastMessage?.text);
+  const nonEmptyThreads = threads.filter((t) => t.lastMessage?.text || t.audience);
   const filteredThreads = useMemo(() => {
     const base = filter === 'archived'
       ? nonEmptyThreads.filter((t) => t.status === 'archived')
       : filter === 'all'
         ? nonEmptyThreads.filter((t) => t.status !== 'archived')
-        : nonEmptyThreads.filter((t) => t.type === filter && t.status !== 'archived');
+        : nonEmptyThreads.filter((t) => matchesChatFilter(t, filter) && t.status !== 'archived');
 
     // Sort: unanswered (unread + from someone else) first, then by updatedAt desc
     return [...base].sort((a, b) => {
@@ -673,7 +681,8 @@ function ChatPageInner() {
     for (const t of nonEmptyThreads) {
       if (t.status === 'archived') continue;
       if (isThreadUnread(t, myParticipantId)) {
-        counts[t.type] = (counts[t.type] || 0) + 1;
+        const category = t.audience || t.type;
+        counts[category] = (counts[category] || 0) + 1;
         counts['all'] = (counts['all'] || 0) + 1;
       }
     }
@@ -683,7 +692,7 @@ function ChatPageInner() {
   // Show all drivers in the picker — clicking one with an existing thread opens it,
   // clicking one without creates a new thread. No more hiding drivers after first message.
   const driversWithThreads = new Map<string, string>(
-    threads.filter((t) => t.type === 'direct').flatMap((t) =>
+    threads.filter((t) => t.audience === (newConversationScope === 'private' ? 'private_driver' : 'dispatch_team')).flatMap((t) =>
       (t.participants || []).filter((p) => p.startsWith('driver:')).map((p) => [p.replace('driver:', ''), t.id] as [string, string])
     )
   );
@@ -692,6 +701,7 @@ function ChatPageInner() {
     : drivers;
 
   const getTitle = (thread: ChatThread) => {
+    if (thread.audience) return `${thread.title} · ${chatAudienceLabel(thread)}`;
     if (thread.type === 'direct') {
       const otherId = (thread.participants || []).find((p) => p !== myParticipantId);
       if (otherId && thread.participantNames?.[otherId]) return thread.participantNames[otherId];
@@ -912,7 +922,7 @@ function ChatPageInner() {
           })}
         </div>
 
-        {/* New Direct Message button — starting a DM is a sendChat action */}
+        {/* New conversation button — starting a DM is a sendChat action */}
         {canSendChat && (
         <div className="px-3 py-2 border-b border-gray-800">
           <button
@@ -921,7 +931,7 @@ function ChatPageInner() {
               showDriverPicker ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]' : 'bg-[#FFD700]/10 border-[#FFD700]/30 text-[#FFD700] hover:bg-[#FFD700]/20'
             }`}
           >
-            New Direct Message
+            New conversation
           </button>
         </div>
         )}
@@ -929,6 +939,14 @@ function ChatPageInner() {
         {/* Direct driver picker */}
         {showDriverPicker ? (
           <div className="flex-1 overflow-y-auto bg-[#0d0d0d]">
+            <div className="p-3 text-sm border-b border-gray-800">
+              <label htmlFor="conversation-scope">Conversation audience</label>
+              <select id="conversation-scope" value={newConversationScope} onChange={e => setNewConversationScope(e.target.value as 'dispatch' | 'private')} className="w-full mt-2 p-2 bg-[#222] rounded">
+                <option value="dispatch">Dispatch team — all authorized dispatchers</option>
+                <option value="private">Private — only you and this driver</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-2">{newConversationScope === 'private' ? 'Private chats cannot be saved in shared monitor profiles. Level reports stay in Dispatch team.' : 'One conversation per driver, across shifts. Level reports appear here.'}</p>
+            </div>
             <input
               type="text"
               value={driverSearch}
@@ -942,7 +960,7 @@ function ChatPageInner() {
               return (
               <div
                 key={d.hash}
-                onClick={() => { ensureDriverThread(d.hash, d.name, d.companyId); setShowDriverPicker(false); }}
+                onClick={() => { void ensureDriverThread(d.hash, d.name, d.companyId, newConversationScope).then(id => { if (id) setTempSlots(prev => ({ ...prev, [0]: { threadId: id, threadTitle: d.name } })); }); setShowDriverPicker(false); }}
                 className={`w-full text-left px-3 py-3 text-sm hover:bg-[#FFD700]/10 hover:text-white cursor-pointer transition-colors border-b border-gray-800/30 flex items-center justify-between ${hasThread ? 'text-gray-500' : 'text-gray-300'}`}
                 role="button"
               >
@@ -1017,7 +1035,7 @@ function ChatPageInner() {
                   </div>
                   <div className="flex items-center gap-2 ml-6 mt-0.5">
                     <span className="text-[9px] text-gray-600 uppercase tracking-wider">
-                      {threadTypeLabel(thread.type)}
+                      {chatAudienceLabel(thread)}
                     </span>
                     {thread.type !== 'direct' && canSendChat && (
                       <button

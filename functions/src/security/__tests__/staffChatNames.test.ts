@@ -8,6 +8,7 @@ jest.mock('firebase-functions/v2/https', () => ({
   HttpsError: class extends Error { constructor(public code: string, message: string) { super(message); } },
 }));
 jest.mock('../trustedStaffAuthority', () => ({
+  decideTrustedCompanyCapability: () => ({ ok: false }),
   requireTrustedCompanyCapability: jest.fn(async () => ({ uid: 'dispatch', companyId: 'company-a' })),
 }));
 jest.mock('firebase-admin', () => ({
@@ -26,11 +27,11 @@ jest.mock('firebase-admin', () => ({
     const query: any = { orderByChild: () => query, equalTo: () => query, once: async () => ({ val: () => rows[path] }) };
     return query;
   } }),
-  firestore: () => ({ collection: () => {
+  firestore: () => ({ doc: () => ({ get: async () => ({ data: () => null }) }), collection: () => {
     const query: any = {
       where: () => query,
       get: async () => ({ docs: [{ id: 'thread', data: () => mockThread }] }),
-      doc: () => ({ get: async () => ({ exists: true, get: (field: string) => (mockThread as any)[field] }),
+      doc: () => ({ get: async () => ({ exists: true, data: () => mockThread, get: (field: string) => (mockThread as any)[field] }),
         update: mockWrite,
         collection: () => {
           const messages: any = { orderBy: () => messages, limit: () => messages,
