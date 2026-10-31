@@ -1,0 +1,20 @@
+{
+  "home": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "hostingSource": "0e1462ded516ec63f41890feedae3d76c6391484",
+  "verifiedAtUtc": "2026-10-31T03:23:30.329Z",
+  "verifiedLiveFiles": 398,
+  "change": "Private invitation is the primary bordered section. Generated URL, copy/email actions, explanation of embedded unique invitation code and green success notice stay together. Reusable Company Join Code is under a collapsed Other ways to join disclosure with an explanation that creating invitations or refreshing does not change it. Request and approval feedback remain separate. Failed new invitation creation cannot leave an old link looking newly generated.",
+  "scope": "Frontend only. No Functions, authentication, rules, token-generation policy, company codes or employee roles changed. No real invitations or codes created and no email sent during verification.",
+  "checks": "Actual React DOM onboarding scenarios pass, including repeated invite generation replacing the visible URL, fallback collapsed throughout the invitation flow, expanding fallback without creating another invitation, and retained company-scope/late-response/approval behavior. All25 shared join-code source/model checks pass. Certified Hosting gate passes fresh compile, all mandatory retained checks and500 library tests (499pass,one intentional skip).",
+  "deployment": "npm run deploy:hosting succeeded. All398 live artifacts byte-match; shared approved checkpoint advanced normally to source and owned release lock released.",
+  "liveVerification": "Reloaded existing signed-in Liquid Gold platform-owner Employees page. Verified primary Invite by private link section; Other ways to join initially collapsed; expanding it shows separate reusable-code explanation and explicit show/create control, then collapsed it again. Pending request count loads successfully at0. Left primary section visible. No real invite-generation or code-retrieval button was clicked.",
+  "privateEvidence": [
+    "C:/dev/tmp/employee-onboarding-layout-dom-private.log",
+    "C:/dev/tmp/employee-onboarding-layout-code-private.log",
+    "C:/dev/tmp/employee-onboarding-layout-hosting-private.log",
+    "C:/dev/tmp/employee-onboarding-layout-live-private.png"
+  ]
+}
