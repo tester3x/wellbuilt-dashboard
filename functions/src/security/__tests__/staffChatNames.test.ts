@@ -14,13 +14,14 @@ jest.mock('../trustedStaffAuthority', () => ({
 jest.mock('firebase-admin', () => ({
   database: () => ({ ref: (path: string) => {
     const rows: Record<string, any> = {
-      'users/dispatch': { companyId: 'company-a', driverId: 'office-driver', displayName: 'OfficeLogin' },
-      users: { dispatch: { companyId: 'company-a', driverId: 'office-driver', displayName: 'OfficeLogin' } },
+      // Legacy authorized staff row is deliberately absent from companyId query.
+      'users/dispatch': { driverHash: 'office-approved', displayName: 'OfficeLogin' },
+      users: {},
       'drivers/profiles': {
         canonical: { companyId: 'company-a', legalName: 'Michael Burger', displayName: 'bigpapapump' },
         'office-driver': { companyId: 'company-a', legalName: 'Office Employee' },
       },
-      'drivers/approved': {},
+      'drivers/approved': { 'office-approved': {companyId:'company-a',legalName:'Office Employee'} },
       'drivers/identityBindings/byDriver': { canonical: { driverId: 'canonical', approvedKey: 'old-hash', opId: 'verified' } },
       'drivers/identityBindings/byApproved': { 'old-hash': { driverId: 'canonical', approvedKey: 'old-hash', opId: 'verified' } },
     };

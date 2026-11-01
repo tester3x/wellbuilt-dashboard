@@ -12,7 +12,7 @@ const serial = (value: any): any => value?.toDate instanceof Function ? value.to
   : Array.isArray(value) ? value.map(serial) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, serial(v)])) : value;
 const time = (value: any): number => value?.toMillis?.() || Date.parse(value || '') || 0;
 const stamp = () => admin.firestore.FieldValue.serverTimestamp();
-async function directory(companyId: string): Promise<{ drivers: { hash: string; name: string }[]; aliases: Map<string, string>; names: Map<string, string> }> {
+async function directory(companyId: string, verifiedUser?: {uid:string;profile:Record<string,any>|null}): Promise<{ drivers: { hash: string; name: string }[]; aliases: Map<string, string>; names: Map<string, string> }> {
   const rt = admin.database();
   const [profiles, forward, reverse, approved, users] = await Promise.all([
     rt.ref('drivers/profiles').orderByChild('companyId').equalTo(companyId).once('value'),
@@ -29,7 +29,15 @@ async function directory(companyId: string): Promise<{ drivers: { hash: string; 
     if (binding?.driverId === id && back?.driverId === id && back.approvedKey === binding.approvedKey && back.opId === binding.opId) aliases.set(`driver:${binding.approvedKey}`, `driver:${id}`);
     if (row.active !== false) drivers.push({ hash: id, name: '' });
   }
-  const names = chatNameDirectory(companyId, profiles.val() || {}, approved.val() || {}, users.val() || {}, aliases);
+  const scopedUsers = users.val() || {};
+  // The caller has already passed server-owned company capability checks.
+  // Legacy owner rows predate users.companyId and are absent from that query.
+  // Bind only this verified caller for display lookup; never grant access or
+  // accept a conflicting explicit company, login alias, or saved message name.
+  if (verifiedUser?.profile && (!verifiedUser.profile.companyId || verifiedUser.profile.companyId === companyId)) {
+    scopedUsers[verifiedUser.uid] = {...verifiedUser.profile,companyId};
+  }
+  const names = chatNameDirectory(companyId, profiles.val() || {}, approved.val() || {}, scopedUsers, aliases);
   return { drivers: drivers.map(row => ({ ...row, name: names.get(`driver:${row.hash}`) || UNKNOWN_CHAT_NAME })), aliases, names };
 }
 
@@ -48,10 +56,10 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     (!governedId(id) || (validConversation(row, id) && dispatchAccess &&
       (row.audience === 'dispatch_team' || row.staffUid === staff.uid)));
   const profile = (await admin.database().ref(`users/${staff.uid}`).once('value')).val();
-  const identityDirectory = () => directory(staff.companyId);
+  const identityDirectory = () => directory(staff.companyId,{uid:staff.uid,profile});
   const senderDirectory = ['send', 'dispatch', 'private', 'direct', 'group'].includes(action) ? await identityDirectory() : null;
-  const name = realChatName(profile) || senderDirectory?.names.get(participant) || UNKNOWN_CHAT_NAME;
-  if (action === 'directory') return { companyId: staff.companyId, drivers: (await directory(staff.companyId)).drivers };
+  const name = (!profile?.companyId || profile.companyId===staff.companyId ? realChatName(profile) : '') || senderDirectory?.names.get(participant) || UNKNOWN_CHAT_NAME;
+  if (action === 'directory') return { companyId: staff.companyId, drivers: (await identityDirectory()).drivers };
   if (action === 'threads' || action === 'profiles') {
     const collection = action === 'threads' ? 'chat_threads' : 'chat_monitors';
     const snap = await db.collection(collection).where('companyId', '==', staff.companyId).get();
