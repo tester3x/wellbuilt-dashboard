@@ -1,0 +1,34 @@
+{
+  "sourceCommit": "bc5bf886",
+  "company": "Hots Oiler LLC",
+  "publishedAt": "2026-11-01T15:18:07.715Z",
+  "templates": [
+    {
+      "id": "hot-oiler-review-a",
+      "name": "REVIEW A - Hot-oiler work plan",
+      "version": 1,
+      "contentHash": "284377b3ba993523995aa6654779548a2135a3ffdab03a2b5aeacab5501033b9",
+      "stepCount": 8
+    },
+    {
+      "id": "hot-oiler-review-b",
+      "name": "REVIEW B - Hot-oiler crew briefing",
+      "version": 1,
+      "contentHash": "4ec1bae219e1a5d4bd223dc70b09c05f3ea1c304433059e4d998adb1b4ba11d0",
+      "stepCount": 6
+    }
+  ],
+  "verification": {
+    "productionCatalogReader": "passed",
+    "exactTemplateSelection": "passed",
+    "schemaValidation": "passed",
+    "phoneVisualReview": "pending; no phones visible to ADB"
+  },
+  "rollout": {
+    "apkRequired": false,
+    "automaticOperationalDefaultChanged": false,
+    "liquidGoldChanged": false,
+    "jsaSignedOrSubmitted": false
+  },
+  "participation": "Existing WB JSA provides read acknowledgements and prepared-for-work checklists. Crew prompts are verbal/show-and-tell; per-prompt typed responses are not implemented."
+}
