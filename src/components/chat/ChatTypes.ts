@@ -139,6 +139,7 @@ export function threadTypeIcon(type: ThreadType): string {
 // ── Unread Helper ───────────────────────────────────────────────────────────
 
 export function isThreadUnread(thread: ChatThread, myParticipantId: string): boolean {
+  if (!myParticipantId || thread.lastMessage?.senderId === myParticipantId) return false;
   if (!thread.lastMessage?.timestamp) return false;
   const lastReadTs = thread.lastRead?.[myParticipantId];
   if (!lastReadTs) return true; // Never read = unread
