@@ -36,7 +36,7 @@ import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
 import { dispatchLevelSnapshot } from '@/lib/dispatchLevelSnapshot';
 import { wellDetailHref } from '@/lib/wellDetailLink';
-import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
+import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey, dispatchReviewDriverName } from '@/lib/dispatchDriverIdentity';
 import { groupDispatchRows, remainingDispatchLoads } from '@/lib/dispatchJobStacks';
 import { assignmentIdentityForDriver, canonicalIdFromApprovedRow, dispatchCreateTargetForAssignment, driverRealName } from '@/lib/dispatchWriterIdentity';
 import { projectDispatchDriverRoster } from '@/lib/dispatchRosterProjection';
@@ -4387,7 +4387,7 @@ function DispatchPageInner() {
               {reassignJob.status === 'declined' && (
                 <>
                   {' '}was declined by{' '}
-                  <span className="text-red-400">{reassignJob.declinedBy || reassignJob.driverFirstName || reassignJob.driverName}</span>
+                  <span className="text-red-400">{dispatchReviewDriverName(reassignJob, drivers || [])}</span>
                 </>
               )}
               {reassignJob.status !== 'declined' && (
@@ -5473,7 +5473,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   )}
                   <div className="flex items-center gap-2">
                     <span className="text-red-400/80 font-medium">
-                      {job.declinedBy || job.driverFirstName || job.driverName}
+                      {dispatchReviewDriverName(job, drivers || [])}
                     </span>
                     {job.declinedAt && (
                       <span className="text-gray-600">{timeAgo(job.declinedAt)}</span>
