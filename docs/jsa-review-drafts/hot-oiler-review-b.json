@@ -1,0 +1,97 @@
+{
+  "name": "REVIEW B - Hot-oiler crew briefing",
+  "tasks": [
+    "hot-oiler review b"
+  ],
+  "packageId": null,
+  "steps": [
+    {
+      "id": "today",
+      "title": "01 - What are we doing today?",
+      "items": [
+        {
+          "hazard": "Wrong task, fluid or connection; other work interfering.",
+          "controls": "READ: Confirm task, fluid/SDS, asset, flow path, return and permits. CREW CHECK: Describe the job in one sentence; have the representative identify the connection and return. Say what is different today."
+        }
+      ]
+    },
+    {
+      "id": "escape",
+      "title": "02 - Where do we stand if something releases?",
+      "items": [
+        {
+          "hazard": "Vapors reaching ignition, traffic and blocked escape.",
+          "controls": "READ: Use agreed separation and wind-aware layout. Protect lines and escape. Locate extinguishers and controls. CREW CHECK: Point to wind indicator, safe operating position, escape and muster. State the alarm/contact method."
+        }
+      ]
+    },
+    {
+      "id": "air",
+      "title": "03 - What could the air do to us?",
+      "items": [
+        {
+          "hazard": "H2S, flammable vapor, oxygen hazards and unsuitable PPE.",
+          "controls": "READ: Apply site testing/monitoring, detector checks and alarm response. Never judge H2S by smell. Resolve PPE and respiratory needs. CREW CHECK: State the gas/PPE requirements and what everyone does at an alarm."
+        }
+      ]
+    },
+    {
+      "id": "weakpoint",
+      "title": "04 - Show the weak point before pressure does",
+      "items": [
+        {
+          "hazard": "Failed connection, line whip, overpressure and heat damage.",
+          "controls": "READ: Inspect rated components, restraints, exclusion area, relief/check-valve arrangement and approved test results. CREW CHECK: Identify the lowest allowable system rating, its source, pressure/temperature limits, and where people must not stand."
+        }
+      ]
+    },
+    {
+      "id": "stop",
+      "title": "05 - Talk through the start and stop",
+      "items": [
+        {
+          "hazard": "Ignition, hot release, lost return/flow or failed protection.",
+          "controls": "READ: Follow the unit operating procedure. Verify fitted protection; do not bypass it. Stop for leaks, abnormal conditions or lost flow/return. CREW CHECK: Point to emergency stop and explain the safe leak/alarm response, flow limits and communication method."
+        }
+      ]
+    },
+    {
+      "id": "breakline",
+      "title": "06 - Prove it is safe before breaking a line",
+      "items": [
+        {
+          "hazard": "Stored pressure, residual heat, injection injury and spills.",
+          "controls": "READ: Use approved cooldown, isolation and controlled bleed. Verify every trapped section is depressurized; never hammer live unions or check leaks by hand. Injection injury needs immediate medical attention. CREW CHECK: Name the person verifying zero energy and safe temperature. Confirm drainage capture, final valve status and handback."
+        }
+      ]
+    }
+  ],
+  "ppeItems": [
+    {
+      "id": "site-ppe",
+      "label": "PPE selected for this job: FR clothing, eye/face, hand/foot/head and hearing protection as assessed."
+    },
+    {
+      "id": "gas-monitor",
+      "label": "Site-required gas detection is ready and checked; respiratory protection requirements are resolved."
+    }
+  ],
+  "preparedItems": [
+    {
+      "id": "review-only",
+      "label": "This is a software-review draft; it does not authorize hot-oiler work."
+    },
+    {
+      "id": "limits",
+      "label": "Actual pressure, temperature and flow limits require approved truck/site procedures before operational use."
+    },
+    {
+      "id": "participation",
+      "label": "Crew identified the task, escape route, operating limits and stop response; unresolved items mean HOLD."
+    },
+    {
+      "id": "change",
+      "label": "Crew identified one job-specific difference and its extra control; rebrief if conditions change."
+    }
+  ]
+}
