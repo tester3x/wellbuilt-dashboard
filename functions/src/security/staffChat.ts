@@ -12,7 +12,7 @@ const serial = (value: any): any => value?.toDate instanceof Function ? value.to
   : Array.isArray(value) ? value.map(serial) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, serial(v)])) : value;
 const time = (value: any): number => value?.toMillis?.() || Date.parse(value || '') || 0;
 const stamp = () => admin.firestore.FieldValue.serverTimestamp();
-async function directory(companyId: string, verifiedUser?: {uid:string;profile:Record<string,any>|null}): Promise<{ drivers: { hash: string; name: string }[]; aliases: Map<string, string>; names: Map<string, string> }> {
+async function directory(companyId: string, verifiedUser?: {uid:string;profile:Record<string,any>|null}, referencedUsers: string[] = []): Promise<{ drivers: { hash: string; name: string }[]; aliases: Map<string, string>; names: Map<string, string> }> {
   const rt = admin.database();
   const [profiles, forward, reverse, approved, users] = await Promise.all([
     rt.ref('drivers/profiles').orderByChild('companyId').equalTo(companyId).once('value'),
@@ -37,6 +37,19 @@ async function directory(companyId: string, verifiedUser?: {uid:string;profile:R
   if (verifiedUser?.profile && (!verifiedUser.profile.companyId || verifiedUser.profile.companyId === companyId)) {
     scopedUsers[verifiedUser.uid] = {...verifiedUser.profile,companyId};
   }
+  // Receiving staff must resolve those same legacy senders. Only inspect IDs
+  // already present in admitted company threads/messages, and require the
+  // same server-owned tenant proof before adding a missing legacy profile.
+  const missing = [...new Set(referencedUsers.filter(id=>typeof id==='string' && /^user:[A-Za-z0-9_-]{1,128}$/.test(id)))]
+    .map(id=>id.slice(5)).filter(uid=>!scopedUsers[uid]);
+  for(let i=0;i<missing.length;i+=10) await Promise.all(missing.slice(i,i+10).map(async uid=>{
+    try {
+      const trusted=await requireTrustedCompanyCapability(uid,'viewChat');
+      if(trusted.companyId!==companyId)return;
+      const row=(await rt.ref(`users/${uid}`).once('value')).val();
+      if(row && (!row.companyId || row.companyId===companyId))scopedUsers[uid]={...row,companyId};
+    } catch { /* Missing/revoked/foreign identity stays unknown; saved aliases are never a fallback. */ }
+  }));
   const names = chatNameDirectory(companyId, profiles.val() || {}, approved.val() || {}, scopedUsers, aliases);
   return { drivers: drivers.map(row => ({ ...row, name: names.get(`driver:${row.hash}`) || UNKNOWN_CHAT_NAME })), aliases, names };
 }
@@ -56,7 +69,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     (!governedId(id) || (validConversation(row, id) && dispatchAccess &&
       (row.audience === 'dispatch_team' || row.staffUid === staff.uid)));
   const profile = (await admin.database().ref(`users/${staff.uid}`).once('value')).val();
-  const identityDirectory = () => directory(staff.companyId,{uid:staff.uid,profile});
+  const identityDirectory = (referencedUsers:string[]=[]) => directory(staff.companyId,{uid:staff.uid,profile},referencedUsers);
   const senderDirectory = ['send', 'dispatch', 'private', 'direct', 'group'].includes(action) ? await identityDirectory() : null;
   const name = (!profile?.companyId || profile.companyId===staff.companyId ? realChatName(profile) : '') || senderDirectory?.names.get(participant) || UNKNOWN_CHAT_NAME;
   if (action === 'directory') return { companyId: staff.companyId, drivers: (await identityDirectory()).drivers };
@@ -69,7 +82,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
       rows.push(...governed.docs.filter(doc => admits(doc.data(), doc.id)).map(doc => ({ ...doc.data(), id: doc.id })));
     }
     if (action === 'threads') {
-      const { aliases, names } = await identityDirectory();
+      const { aliases, names } = await identityDirectory(rows.flatMap(row=>[...(row.participants||[]),row.lastMessage?.senderId]));
       rows = rows.map(row => {
         const presented = presentChatThread(row, names, aliases);
         return governedId(row.id) ? { ...presented, subtitle: row.audience === 'dispatch_team' ? 'Dispatch team · all authorized dispatchers' : 'Private · you and this driver' } : presented;
@@ -185,7 +198,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
       const row = doc.data(), timestamp = row.timestamp || row.createdAt;
       if (time(timestamp) > cleared) rows.set(doc.id, { ...row, id: doc.id, timestamp, type: row.type || 'text' });
     }
-    const { names } = await identityDirectory();
+    const { names } = await identityDirectory([...rows.values()].map(row=>row.senderId));
     return { rows: serial([...rows.values()].sort((a, b) => time(a.timestamp) - time(b.timestamp)).map(row => presentChatMessage(row, names))) };
   }
   const clientId = key(data.clientId), text = String(data.text || '').trim();

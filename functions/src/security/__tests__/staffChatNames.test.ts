@@ -9,13 +9,15 @@ jest.mock('firebase-functions/v2/https', () => ({
 }));
 jest.mock('../trustedStaffAuthority', () => ({
   decideTrustedCompanyCapability: () => ({ ok: false }),
-  requireTrustedCompanyCapability: jest.fn(async () => ({ uid: 'dispatch', companyId: 'company-a' })),
+  requireTrustedCompanyCapability: jest.fn(async (uid:string) => ({ uid, companyId: uid==='foreign-office'?'company-b':'company-a' })),
 }));
 jest.mock('firebase-admin', () => ({
   database: () => ({ ref: (path: string) => {
     const rows: Record<string, any> = {
       // Legacy authorized staff row is deliberately absent from companyId query.
       'users/dispatch': { driverHash: 'office-approved', displayName: 'OfficeLogin' },
+      'users/legacy-office': {driverHash:'office-approved',displayName:'LegacyOfficeLogin'},
+      'users/foreign-office': {driverHash:'office-approved',displayName:'ForeignOfficeLogin'},
       users: {},
       'drivers/profiles': {
         canonical: { companyId: 'company-a', legalName: 'Michael Burger', displayName: 'bigpapapump' },
@@ -62,4 +64,17 @@ test('driver picker uses real names; company override remains denied', async () 
   const result = await call({ action: 'directory' });
   expect(result.drivers).toContainEqual({ hash: 'canonical', name: 'Michael Burger' });
   await expect(call({ action: 'threads', companyId: 'other-company' })).rejects.toThrow('Chat outside your company');
+});
+
+test.each([['legacy-office','Office Employee'],['foreign-office','Name unavailable']])('receiving staff resolves referenced legacy sender %s only with matching trusted company',async(uid,expected)=>{
+  const previous={...mockThread.lastMessage},oldSender=mockMessage.senderId;
+  try {
+    mockThread.lastMessage={...previous,senderId:`user:${uid}`,senderName:'NeverUseLogin'};
+    mockMessage.senderId=`user:${uid}`;
+    const threads=await call({action:'threads',ownOnly:true});
+    expect(threads.rows[0].lastMessage.senderName).toBe(expected);
+    const messages=await call({action:'messages',threadId:'thread'});
+    expect(messages.rows[0].senderName).toBe(expected);
+    expect(mockWrite).not.toHaveBeenCalled();
+  } finally {mockThread.lastMessage=previous;mockMessage.senderId=oldSender;}
 });
