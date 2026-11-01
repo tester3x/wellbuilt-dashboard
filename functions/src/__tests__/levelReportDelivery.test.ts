@@ -97,3 +97,29 @@ test('processed-event worker remains exported and retryable independently of the
   expect(fastPath).toContain('await deliverLevelReport(');
   expect(fastPath).not.toContain(".collection('messages').doc()");
 });
+
+test.each([true,false])('explicit authoritative state %s appears before custom-template levels and survives delivery retry',async down=>{
+  const f=fixture();
+  const input={...packet,wellDown:down,wellDownIsAuthoritative:true};
+  await deliverLevelReport(input,'state',f.deps);await deliverLevelReport(input,'state',f.deps);
+  expect(f.messages.size).toBe(2);
+  for(const msg of f.messages.values()) {
+    expect(msg.text.startsWith(`Well marked ${down?'DOWN':'UP'} · Fixture Well\n`)).toBe(true);
+    expect(msg.text).toContain('11\'0" -> 6\'9"');
+    expect(msg.wellState).toBe(down?'down':'up');
+  }
+});
+
+test.each([true,false])('status-only authoritative state %s delivers without fabricating gauge levels',async down=>{
+  const f=fixture();
+  expect(await deliverLevelReport({...packet,noLevel:true,tankTopInches:0,tankAfterInches:0,wellDown:down,wellDownIsAuthoritative:true},'status-only',f.deps))
+    .toEqual({result:'delivered',recipients:2});
+  expect([...f.messages.values()][0].text).toBe(`Well marked ${down?'DOWN':'UP'} · Fixture Well\n10/30/2026 · 4:59 PM`);
+});
+
+test('routine pulls, Watchdog non-authoritative flags and malformed commands never claim an UP/DOWN action',()=>{
+  for(const patch of [{wellDown:false},{wellDown:true,wellDownIsAuthoritative:false},{wellDown:'true',wellDownIsAuthoritative:true},{wellDown:false,wellDownIsAuthoritative:'true'}]) {
+    expect(levelReportText({...packet,...patch},{},'Name')).not.toContain('Well marked');
+    expect(levelReportText({...packet,...patch,noLevel:true},{},'Name')).toBeNull();
+  }
+});

@@ -55,12 +55,22 @@ export async function resolveLevelChatDriver(packet: Row, deps: LevelChatDeps): 
   return { driverId: canonical, companyId: company, keys: [...keys], name: realChatName(profile) || UNKNOWN_CHAT_NAME };
 }
 
+export function explicitReportedWellState(packet: Row): 'down' | 'up' | null {
+  // A routine pull's default false must never be announced as reactivation.
+  if (packet.wellDownIsAuthoritative !== true || typeof packet.wellDown !== 'boolean') return null;
+  return packet.wellDown ? 'down' : 'up';
+}
+
 export function levelReportText(packet: Row, settings: Row, driverName: string): string | null {
+  if (!packet.wellName) return null;
+  const state = explicitReportedWellState(packet);
+  const statusLine = state ? `Well marked ${state.toUpperCase()} · ${packet.wellName}` : '';
   const top = Number(packet.tankTopInches ?? Number(packet.tankLevelFeet) * 12);
   const bottom = Number(packet.tankAfterInches);
   const bbls = Number(packet.bblsTaken);
-  if (packet.noLevel || !Number.isFinite(top) || top <= 0 || packet.tankAfterInches == null ||
-      !Number.isFinite(bottom) || !Number.isFinite(bbls) || bbls < 0 || !packet.wellName) return null;
+  const measured = !packet.noLevel && Number.isFinite(top) && top > 0 && packet.tankAfterInches != null &&
+      Number.isFinite(bottom) && Number.isFinite(bbls) && bbls >= 0;
+  if (!measured && !state) return null;
   const date = new Date(packet.dateTimeUTC);
   if (!Number.isFinite(date.getTime())) return null;
   let zone = packet.timezone || settings.timezone || 'America/Chicago';
@@ -71,10 +81,12 @@ export function levelReportText(packet: Row, settings: Row, driverName: string):
     date: date.toLocaleDateString('en-US', { timeZone: zone, month: '2-digit', day: '2-digit', year: 'numeric' }),
     time: date.toLocaleTimeString('en-US', { timeZone: zone, hour: 'numeric', minute: '2-digit' }),
   };
+  if (!measured) return `${statusLine}\n${values.date} · ${values.time}`;
   const template = typeof settings.levelReportTemplate === 'string' && settings.levelReportTemplate.trim()
     ? settings.levelReportTemplate : '{well}\nTop: {top} | Bottom: {bottom}\n{bbls} BBL · {time}';
-  return template.replace(/\{(wellName|well|top|bottom|bbls|driverName|date|time)\}/gi,
-    (_, key: string) => values[Object.keys(values).find(k => k.toLowerCase() === key.toLowerCase())!]).slice(0, 4000);
+  const report = template.replace(/\{(wellName|well|top|bottom|bbls|driverName|date|time)\}/gi,
+    (_, key: string) => values[Object.keys(values).find(k => k.toLowerCase() === key.toLowerCase())!]);
+  return (statusLine ? `${statusLine}\n${report}` : report).slice(0, 4000);
 }
 
 export function isLevelChatRecipient(row: Row, company: string, driverKeys: string[]): boolean {
@@ -100,6 +112,7 @@ export async function deliverLevelReport(packet: Row, packetId: string, deps = p
   const messageId = levelReportMessageId(packetId, driver.companyId, driver.driverId);
   const message = { text, senderId: `driver:${driver.driverId}`, senderName: driver.name,
     type: 'level_report', systemType: 'level_report', clientId: messageId,
+    ...(explicitReportedWellState(packet) ? {wellState: explicitReportedWellState(packet)} : {}),
     sourcePacketId: logicalPullId(packetId), measuredAtUTC: packet.dateTimeUTC };
   for (const thread of threads) await deps.writeOnce(thread.id, messageId, driver.companyId, driver.keys, message);
   return { result: 'delivered', recipients: threads.length };
@@ -124,6 +137,18 @@ export function productionLevelChatDeps(): LevelChatDeps {
           if (previous.get('sourcePacketId') !== message.sourcePacketId || previous.get('senderId') !== message.senderId) {
             throw new Error('level_chat_identity_conflict');
           }
+          // Rolling deployment: the old incoming fast path can win the stable-ID
+          // race with text that omitted status. Enrich that same message once,
+          // preserving its timestamp and any newer human-message preview.
+          if (message.wellState && !previous.get('wellState')) {
+            tx.update(target, {text:message.text,wellState:message.wellState});
+            const preview=current.get('lastMessage'), oldTimestamp=previous.get('timestamp');
+            const sameTime=oldTimestamp?.toMillis && preview?.timestamp?.toMillis &&
+              oldTimestamp.toMillis()===preview.timestamp.toMillis();
+            if (sameTime && preview.senderId===message.senderId && preview.text===String(previous.get('text')).slice(0,100)) {
+              tx.update(thread, {'lastMessage.text':message.text.slice(0,100)});
+            }
+          }
           return; // A retry must not replace a newer human-message preview.
         }
         const timestamp = admin.firestore.FieldValue.serverTimestamp();
@@ -141,7 +166,7 @@ export const deliverProcessedLevelReport = functions.runWith({ timeoutSeconds: 1
     const packet = snapshot.val() || {};
     // Safe rolling activation: old in-flight processors still emit random-ID
     // reports. Only the new producer shares this worker's stable message ID.
-    if (packet.levelReportDeliveryVersion !== 2) return;
+    if (packet.levelReportDeliveryVersion !== 2 && !(packet.noLevel === true && explicitReportedWellState(packet))) return;
     const outcome = await deliverLevelReport(packet, context.params.packetId);
     console.log('[LevelChatDelivery]', outcome);
   });
