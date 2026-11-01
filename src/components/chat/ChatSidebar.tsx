@@ -123,7 +123,8 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
     const unsub = watchStaffChat({ action: 'threads', companyId, ownOnly: true }, rows => {
       const list = rows.filter(row => row.status === 'active') as ChatThread[];
       setThreads(list); setSendError(null);
-      onUnreadChange?.(list.filter(t => isThreadUnread(t, myParticipantId)).length);
+      onUnreadChange?.(list.reduce((count, thread) => count + (typeof thread.unreadCount === 'number'
+        ? Math.max(0, thread.unreadCount) : Number(isThreadUnread(thread, myParticipantId))), 0));
     }, error => setSendError(error.message));
 
     return () => unsub();

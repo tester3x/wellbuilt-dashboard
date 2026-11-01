@@ -93,6 +93,74 @@ async function authority(uid, capabilities, companyId = 'fixture-co') {
     assert.equal((await doc(privateA).collection('messages').get()).size, 2);
     await assert.rejects(() => staff('staff-a', { action: 'send', threadId: privateA, clientId: 'retry', text: 'Changed fixture' }));
   });
+  await check('legacy shift history and saved links converge without losing messages or exposing private chats', async () => {
+    const legacy = db.collection('chat_threads').doc('legacy-dispatch-fixture');
+    await legacy.set({ companyId: 'fixture-co', type: 'direct', title: 'Driver', status: 'active',
+      participants: ['driver:driver-a', 'user:staff-a', 'user:staff-b'], participantNames: {}, lastRead: {} });
+    await legacy.collection('messages').doc('shift').set({ text: 'Driver came on shift', senderId: 'system',
+      type: 'system', systemType: 'shift_started', timestamp: admin.firestore.Timestamp.fromMillis(1000) });
+    await legacy.collection('messages').doc('lost').set({ text: 'Where does this show', senderId: 'driver:driver-a',
+      type: 'text', timestamp: admin.firestore.Timestamp.fromMillis(2000) });
+    const listed = (await driver('driver-a', { action: 'threads' })).threads;
+    assert.ok(!listed.some(row => row.id === legacy.id));
+    assert.ok(listed.find(row => row.id === team).legacyThreadIds.includes(legacy.id));
+    assert.equal((await legacy.collection('messages').get()).size, 2, 'original history retained');
+    assert.ok((await driver('driver-a', { action: 'messages', threadId: team })).messages.some(row => row.text === 'Where does this show'));
+    assert.equal((await legacy.get()).get('type'), 'dispatch_history', 'old Suite direct query can no longer select it');
+    await driver('driver-a', { action: 'send', threadId: legacy.id, clientId: 'saved-link', text: 'Driver saved link' });
+    await staff('staff-b', { action: 'send', threadId: legacy.id, clientId: 'saved-office', text: 'Office saved link' });
+    assert.ok((await staff('staff-a', { action: 'messages', threadId: team })).rows.some(row => row.text === 'Driver saved link'));
+    assert.ok((await driver('driver-a', { action: 'messages', threadId: team })).messages.some(row => row.text === 'Office saved link'));
+    assert.ok(!(await staff('staff-b', { action: 'threads' })).rows.some(row => row.id === legacy.id));
+    await assert.rejects(() => driver('driver-b', { action: 'messages', threadId: legacy.id }));
+    await assert.rejects(() => staff('chat-only', { action: 'messages', threadId: legacy.id }));
+    await driver('driver-a', { action: 'threads' });
+    assert.equal((await doc(team).collection('messages').where('legacySource.threadId', '==', legacy.id).get()).size, 2, 'repeat migration is idempotent');
+  });
+  await check('unread badge counts incoming messages and retains them after own automatic reports', async () => {
+    await driver('driver-a', { action: 'read', threadId: team });
+    await staff('staff-a', { action: 'send', threadId: team, clientId: 'count-one', text: 'First unread' });
+    await staff('staff-b', { action: 'send', threadId: team, clientId: 'count-two', text: 'Latest received' });
+    await driver('driver-a', { action: 'send', threadId: team, clientId: 'own-outgoing', text: 'Outgoing report fixture' });
+    let thread = (await driver('driver-a', { action: 'threads' })).threads.find(row => row.id === team);
+    assert.equal(thread.unreadCount, 2, 'two senders/messages, one conversation');
+    assert.equal(thread.lastUnreadMessage.text, 'Latest received');
+    await staff('staff-b', { action: 'send', threadId: team, clientId: 'count-three', text: 'Third unread from same person' });
+    thread = (await driver('driver-a', { action: 'threads' })).threads.find(row => row.id === team);
+    assert.equal(thread.unreadCount, 3, 'counts messages rather than senders');
+    await driver('driver-a', { action: 'read', threadId: team });
+    assert.equal((await driver('driver-a', { action: 'threads' })).threads.find(row => row.id === team).unreadCount, 0);
+    await staff('staff-a', { action: 'read', threadId: team });
+    await staff('staff-a', { action: 'send', threadId: team, clientId: 'office-own', text: 'Own office send' });
+    assert.equal((await staff('staff-a', { action: 'threads' })).rows.find(row => row.id === team).unreadCount, 0);
+  });
+  await check('large dispatch histories migrate in bounded batches without truncation', async () => {
+    const legacy = db.collection('chat_threads').doc('large-legacy-dispatch-fixture');
+    await legacy.set({ companyId: 'fixture-co', type: 'direct', title: 'Driver', status: 'active',
+      participants: ['driver:driver-b', 'user:staff-a'], participantNames: {}, lastRead: {} });
+    const batch = db.batch();
+    for (let i = 0; i < 405; i++) batch.set(legacy.collection('messages').doc(`m-${i}`), {
+      text: `History ${i}`, senderId: i === 0 ? 'system' : 'driver:driver-b', type: i === 0 ? 'system' : 'text',
+      ...(i === 0 ? { systemType: 'shift_started' } : {}), timestamp: admin.firestore.Timestamp.fromMillis(i + 1000),
+    });
+    await batch.commit();
+    const rows = (await driver('driver-b', { action: 'threads' })).threads;
+    const target = rows.find(row => row.audience === 'dispatch_team');
+    assert.ok(!rows.some(row => row.id === legacy.id));
+    assert.equal((await doc(target.id).collection('messages').where('legacySource.threadId', '==', legacy.id).get()).size, 405);
+    assert.equal((await legacy.collection('messages').get()).size, 405);
+  });
+  await check('shift start/end use the same shared conversation, stable retries and chronological previews', async () => {
+    const { postShiftDispatchNotice } = require('../functions/lib/security/shiftDispatchChat');
+    const shift = { driverId: 'driver-a', companyId: 'fixture-co', loginAt: '2026-01-01T10:00:00Z' };
+    assert.equal(await postShiftDispatchNotice(shift, 'first-shift-fixture', 'shift_started', null), team);
+    await postShiftDispatchNotice(shift, 'first-shift-fixture', 'shift_started', null);
+    assert.equal((await doc(team).collection('messages').where('systemData.shiftId', '==', 'first-shift-fixture').get()).size, 1);
+    await postShiftDispatchNotice({ ...shift, logoutAt: '2026-01-01T11:00:00Z' }, 'first-shift-fixture', 'shift_ended', null);
+    assert.equal((await doc(team).get()).get('lastMessage.text'), 'Own office send', 'late historical shift event cannot overwrite a new preview');
+    assert.equal((await doc(team).get()).get('status'), 'active', 'ending a shift never archives the persistent conversation');
+    assert.equal(await postShiftDispatchNotice({ ...shift, companyId: 'other-co' }, 'foreign-shift', 'shift_started', null), null);
+  });
   if (process.argv[3]) await check('deployed-equivalent rules deny direct reads including company staff and platform admin', async () => {
     const { initializeTestEnvironment, assertFails } = require('@firebase/rules-unit-testing');
     const { getDoc, doc: clientDoc, collection, getDocs } = require('firebase/firestore');

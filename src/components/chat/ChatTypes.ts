@@ -19,6 +19,7 @@ export interface ChatThread {
   id: string; // Firestore doc ID
   type: ThreadType;
   audience?: 'dispatch_team' | 'private_driver';
+  unreadCount?: number;
   companyId: string;
 
   // Context links (set depending on type)
@@ -139,6 +140,7 @@ export function threadTypeIcon(type: ThreadType): string {
 // ── Unread Helper ───────────────────────────────────────────────────────────
 
 export function isThreadUnread(thread: ChatThread, myParticipantId: string): boolean {
+  if (myParticipantId && typeof thread.unreadCount === 'number') return thread.unreadCount > 0;
   if (!myParticipantId || thread.lastMessage?.senderId === myParticipantId) return false;
   if (!thread.lastMessage?.timestamp) return false;
   const lastReadTs = thread.lastRead?.[myParticipantId];

@@ -27,5 +27,7 @@ test('dispatch badges count incoming messages only, including shared conversatio
       assert.equal(isThreadUnread({ ...incoming, lastRead: { 'user:me': '2026-11-01T12:00:00Z' } }, 'user:me'), false);
     }
     assert.equal(isThreadUnread(thread, ''), false);
+    assert.equal(isThreadUnread({ ...thread, unreadCount: 3 }, 'user:me'), true, 'server counts earlier incoming messages despite own latest message');
+    assert.equal(isThreadUnread({ ...thread, unreadCount: 0 }, 'user:me'), false);
   }
 });

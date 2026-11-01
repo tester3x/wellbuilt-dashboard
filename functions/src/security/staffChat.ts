@@ -1,8 +1,9 @@
 import * as https from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { CONVERSATIONS, governedId, conversationCollection, validConversation, ensureConversation } from './dispatchConversations';
+import { CONVERSATIONS, governedId, conversationCollection, validConversation, ensureConversation, consolidateDispatchHistory } from './dispatchConversations';
 import { decideTrustedCompanyCapability, requireTrustedCompanyCapability } from './trustedStaffAuthority';
 import { chatNameDirectory, realChatName, presentChatThread, presentChatMessage, UNKNOWN_CHAT_NAME } from './chatNames';
+import { readUnreadSummary } from './chatUnreadSummary';
 
 const key = (x: unknown): string => {
   if (typeof x !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(x)) throw new https.HttpsError('invalid-argument', 'Invalid chat identifier');
@@ -83,7 +84,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     }
     if (action === 'threads') {
       const { aliases, names } = await identityDirectory(rows.flatMap(row=>[...(row.participants||[]),row.lastMessage?.senderId]));
-      rows = rows.map(row => {
+      rows = rows.filter(row => !row.supersededBy).map(row => {
         const presented = presentChatThread(row, names, aliases);
         return governedId(row.id) ? { ...presented, subtitle: row.audience === 'dispatch_team' ? 'Dispatch team · all authorized dispatchers' : 'Private · you and this driver' } : presented;
       });
@@ -95,6 +96,8 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     if (data.ownOnly && action === 'threads') rows = rows.filter(row => (row.audience === 'dispatch_team' && dispatchAccess) || row.participants?.includes(participant));
     rows = rows.map(row => ({ ...row, status: row.archivedBy?.[participant] ? 'archived' : row.status }));
     rows.sort((a, b) => time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt));
+    if (action === 'threads') rows = await Promise.all(rows.map(async row => ({ ...row, ...await readUnreadSummary(
+      db.collection(conversationCollection(row.id)).doc(row.id), row, participant) })));
     return { companyId: staff.companyId, rows: serial(rows) };
   }
   if (['dispatch', 'private', 'direct'].includes(action)) {
@@ -104,8 +107,9 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     if (!row || row.active === false || row.companyId !== staff.companyId) throw new https.HttpsError('permission-denied', 'Driver outside your company');
     const driverName = senderDirectory!.names.get(`driver:${driverId}`) || UNKNOWN_CHAT_NAME;
     // Legacy action=direct now opens the explicitly shared team conversation.
-    const threadId = await ensureConversation(staff.companyId, driverId, driverName,
-      action === 'private' ? { uid: staff.uid, name } : undefined);
+    const threadId = action === 'private'
+      ? await ensureConversation(staff.companyId, driverId, driverName, { uid: staff.uid, name })
+      : await consolidateDispatchHistory(staff.companyId, driverId, driverName);
     return { ok: true, threadId };
   }
   if (action === 'group') {
@@ -165,8 +169,18 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     await ref.set({ ...fields, companyId: staff.companyId, createdBy: staff.uid, updatedAt: stamp(), ...(!old.exists ? { createdAt: stamp() } : {}) }, { merge: true });
     return { ok: true, profileId: id };
   }
-  const threadId = key(data.threadId), ref = db.collection(conversationCollection(threadId)).doc(threadId), snapshot = await ref.get();
+  let threadId = key(data.threadId), ref = db.collection(conversationCollection(threadId)).doc(threadId), snapshot = await ref.get();
   if (!snapshot.exists || !admits(snapshot.data(), threadId)) throw new https.HttpsError('permission-denied', 'Thread outside your company');
+  if (snapshot.get('supersededBy')) {
+    const previousId = threadId;
+    threadId = key(snapshot.get('supersededBy'));
+    ref = db.collection(conversationCollection(threadId)).doc(threadId);
+    snapshot = await ref.get();
+    if (!governedId(threadId) || !snapshot.exists || !admits(snapshot.data(), threadId) ||
+        snapshot.get('audience') !== 'dispatch_team' || !snapshot.get('legacyThreadIds')?.includes(previousId)) {
+      throw new https.HttpsError('permission-denied', 'Invalid dispatch conversation link');
+    }
+  }
   if (governedId(threadId) && ['members', 'broadcast'].includes(action)) throw new https.HttpsError('permission-denied', 'Conversation audience is fixed');
   if (action === 'members') {
     if (snapshot.get('type') === 'direct' || !Array.isArray(data.driverIds) || data.driverIds.length > 50) throw new https.HttpsError('invalid-argument', 'Invalid group members');

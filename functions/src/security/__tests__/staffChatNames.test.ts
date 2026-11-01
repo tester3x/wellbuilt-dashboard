@@ -3,6 +3,9 @@ const mockThread = { companyId: 'company-a', type: 'shift', title: 'Driver', sta
   lastMessage: { senderId: 'driver:old-hash', senderName: 'bigpapapapump', text: 'Hello', timestamp: '2026-10-31' } };
 const mockMessage = { senderId: 'driver:old-hash', senderName: 'Old Login', text: 'Hello', timestamp: '2026-10-31' };
 const mockWrite = jest.fn(() => { throw Error('Read path must not write'); });
+// This fixture isolates identity presentation; real message-count queries are
+// exercised by the cross-package Firestore/RTDB integration test.
+jest.mock('../chatUnreadSummary', () => ({ readUnreadSummary: async () => ({ unreadCount: 1 }) }));
 jest.mock('firebase-functions/v2/https', () => ({
   onCall: (_: unknown, handler: unknown) => handler,
   HttpsError: class extends Error { constructor(public code: string, message: string) { super(message); } },
