@@ -134,8 +134,8 @@ test('top-only requires an explicitly enabled canonical sender and keeps zero re
  policy.topOnlyDriverStarts['driver-test-123']=new Date(Date.now()-3600000).toISOString();
  const response=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(response.result.status).toBe('queued');
  const packet=database.get('packets/incoming/'+response.result.packetId);
- expect(packet).toMatchObject({requestType:'pull',bblsTaken:0,tankLevelFeet:6+5/12,bottomLevelFeet:6+5/12,driverId:'driver-test-123',wellDownIsAuthoritative:false});
- expect(packet.wellDown).toBeUndefined();expect(packet.watchdogProvenance).toMatchObject({reportedBottomFeet:null,observationKind:'top_only',measurementTimeSource:'posted'});
+ expect(packet).toMatchObject({requestType:'pull',bblsTaken:0,tankLevelFeet:6+5/12,bottomLevelFeet:6+5/12,driverId:'driver-test-123',wellDown:true,wellDownIsAuthoritative:true});
+ expect(packet.watchdogProvenance).toMatchObject({reportedBottomFeet:null,observationKind:'top_only',measurementTimeSource:'posted'});
  database.set('packets/processed/'+response.result.packetId,{...packet,tankAfterInches:77,canonicalProcessingComplete:true});
  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:response.result.identity})).result.status).toBe('complete');
 });
