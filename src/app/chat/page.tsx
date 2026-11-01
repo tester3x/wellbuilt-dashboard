@@ -230,19 +230,47 @@ function ChatPageInner() {
   // Temp slots: threads placed via sidebar click but NOT yet locked to the profile.
   // Map of slot index → SlotAssignment. Not saved to Firestore until user clicks lock.
   const [tempSlots, setTempSlots] = useState<Record<number, SlotAssignment>>({});
+  const [pendingSlotLocks, setPendingSlotLocks] = useState<Record<number, SlotAssignment>>({});
+  const [savingSlots, setSavingSlots] = useState<Record<number, boolean>>({});
 
   // Derive active profile from top of stack
   const activeProfileId = profileStack[profileStack.length - 1] || null;
   const activeProfile = profiles.find(p => p.id === activeProfileId) || null;
+  const slotScopeRef = useRef('');
+  slotScopeRef.current = `${companyId}:${activeProfileId}`;
 
   // Clear temp slots when switching profiles
   const prevProfileIdRef = useRef(activeProfileId);
   useEffect(() => {
     if (activeProfileId !== prevProfileIdRef.current) {
       setTempSlots({});
+      setPendingSlotLocks({});
+      setSavingSlots({});
       prevProfileIdRef.current = activeProfileId;
     }
   }, [activeProfileId]);
+
+  // Keep the visible overlay until the profile subscription confirms its saved
+  // position. A delayed/stale read or failed save must never close the chat.
+  useEffect(() => {
+    const confirmed = Object.entries(pendingSlotLocks).filter(([index, assignment]) => {
+      const saved = activeProfile?.slots[Number(index)];
+      return saved && (assignment.threadId ? saved.threadId === assignment.threadId : saved.driverHash === assignment.driverHash);
+    });
+    if (!confirmed.length) return;
+    setTempSlots(prev => {
+      const next = { ...prev };
+      for (const [index, assignment] of confirmed) {
+        if (prev[Number(index)] === assignment) delete next[Number(index)];
+      }
+      return next;
+    });
+    setPendingSlotLocks(prev => {
+      const next = { ...prev };
+      for (const [index] of confirmed) delete next[Number(index)];
+      return next;
+    });
+  }, [activeProfile, pendingSlotLocks]);
 
   // Persist stack to localStorage
   useEffect(() => {
@@ -496,16 +524,21 @@ function ChatPageInner() {
   const saveProfileSlots = useCallback(async (newSlots: (SlotAssignment | null)[]) => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
       setToastMsg('You do not have permission to manage monitor profiles.');
-      return;
+      return false;
     }
-    if (!activeProfile) return;
+    if (!activeProfile) {
+      setToastMsg('Select a monitor profile before locking a chat position.');
+      return false;
+    }
     const db = getFirestoreDb();
-    if (!db) return;
+    if (!db) return false;
     try {
       await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { slots: newSlots } });
+      return true;
     } catch (err) {
       console.error('[ChatPage] saveProfileSlots failed', err);
       setToastMsg('Could not update profile layout. Check your access.');
+      return false;
     }
   }, [activeProfile, user, userCompany, companyId]);
 
@@ -929,18 +962,20 @@ function ChatPageInner() {
         <div className="px-3 py-2 border-b border-gray-800">
           <button
             onClick={() => { setShowDriverPicker(!showDriverPicker); if (!showDriverPicker) loadDrivers(); }}
+            aria-expanded={showDriverPicker}
+            aria-controls="new-conversation-list"
             className={`w-full py-2 rounded-lg border text-sm font-semibold transition-colors ${
               showDriverPicker ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]' : 'bg-[#FFD700]/10 border-[#FFD700]/30 text-[#FFD700] hover:bg-[#FFD700]/20'
             }`}
           >
-            New conversation
+            {showDriverPicker ? 'Close conversation list' : 'New conversation'}
           </button>
         </div>
         )}
 
         {/* Direct driver picker */}
         {showDriverPicker ? (
-          <div className="flex-1 overflow-y-auto bg-[#0d0d0d]">
+          <div id="new-conversation-list" className="flex-1 overflow-y-auto bg-[#0d0d0d]">
             <div className="p-3 text-sm border-b border-gray-800">
               <label htmlFor="conversation-scope">Conversation audience</label>
               <select id="conversation-scope" value={newConversationScope} onChange={e => setNewConversationScope(e.target.value as 'dispatch' | 'private')} className="w-full mt-2 p-2 bg-[#222] rounded">
@@ -1388,25 +1423,37 @@ function ChatPageInner() {
                 <div className="flex items-center gap-1 flex-shrink-0">
                   {/* Slot lock: temp slots show open lock, click to persist to profile */}
                   {(() => {
-                    const isTemp = !!tempSlots[index];
-                    const lockSlot = () => {
+                    const isTemp = !!tempSlots[index] && !pendingSlotLocks[index];
+                    const lockSlot = async () => {
                       // Persist temp slot to profile
                       const assignment = tempSlots[index];
                       if (!assignment) return;
+                      const scope = slotScopeRef.current;
                       const newSlots = [...slots];
                       while (newSlots.length <= index) newSlots.push(null);
                       newSlots[index] = assignment;
-                      saveProfileSlots(newSlots);
-                      setTempSlots(prev => { const next = { ...prev }; delete next[index]; return next; });
+                      setSavingSlots(prev => ({ ...prev, [index]: true }));
+                      const saved = await saveProfileSlots(newSlots);
+                      if (slotScopeRef.current !== scope) return;
+                      if (saved) {
+                        setPendingSlotLocks(prev => ({ ...prev, [index]: assignment }));
+                      }
+                      setSavingSlots(prev => ({ ...prev, [index]: false }));
                     };
-                    const unlockSlot = () => {
+                    const unlockSlot = async () => {
                       // Move persisted slot to temp (remove from Firestore)
                       const currentSlot = slots[index];
                       if (!currentSlot) return;
-                      setTempSlots(prev => ({ ...prev, [index]: currentSlot }));
+                      const scope = slotScopeRef.current;
                       const newSlots = [...slots];
                       newSlots[index] = null;
-                      saveProfileSlots(newSlots);
+                      setSavingSlots(prev => ({ ...prev, [index]: true }));
+                      const saved = await saveProfileSlots(newSlots);
+                      if (slotScopeRef.current !== scope) return;
+                      if (saved) {
+                        setTempSlots(prev => ({ ...prev, [index]: currentSlot }));
+                      }
+                      setSavingSlots(prev => ({ ...prev, [index]: false }));
                     };
                     const removeTemp = () => {
                       setTempSlots(prev => { const next = { ...prev }; delete next[index]; return next; });
@@ -1419,10 +1466,11 @@ function ChatPageInner() {
                         {canManageProfiles && (
                         <button
                           onClick={isTemp ? lockSlot : unlockSlot}
+                          disabled={Object.values(savingSlots).some(Boolean) || Object.keys(pendingSlotLocks).length > 0}
                           className={`text-xs px-1 py-0.5 rounded transition-colors ${
                             isTemp ? 'text-gray-500 hover:text-[#FFD700]' : 'text-[#FFD700]/60 hover:text-[#FFD700]'
                           }`}
-                          title={isTemp ? 'Lock to this profile slot' : 'Unlock (temporary)'}
+                          title={savingSlots[index] || pendingSlotLocks[index] ? 'Saving chat position' : isTemp ? 'Lock to this profile slot' : 'Unlock (temporary)'}
                         >
                           {isTemp ? '🔓' : '🔒'}
                         </button>
