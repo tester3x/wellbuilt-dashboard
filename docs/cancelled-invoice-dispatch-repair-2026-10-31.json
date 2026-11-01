@@ -19,7 +19,7 @@
     "allInvoicesUnchanged": true,
     "allStaleStagesCleared": true,
     "audit": "Separate durable server audit entry per record; private backups and proofs outside Git",
-    "dashboardListenerAcceptance": "Pending user confirmation; authoritative records independently verified cancelled"
+    "dashboardListenerAcceptance": "User confirmed the cancelled pickup entry disappeared from active Dispatch without refreshing."
   },
   "scope": "Only cancellation endpoint deployed. No APK build/install, Hosting release, rules changes or invoice/well-history rewrites. Earlier Granli work preserved and unactivated."
 }
