@@ -65,7 +65,7 @@ const identityFields = [
   'invoiceDocId', 'bbls', 'isHeavyWater', 'loadCount',
 ] as const;
 
-function remaining(job: StackableDispatch): number {
+export function remainingDispatchLoads(job: Pick<StackableDispatch, 'loadCount' | 'loadsCompleted'>): number {
   const count = Number.isFinite(job.loadCount) && (job.loadCount ?? 0) > 0 ? job.loadCount! : 1;
   return Math.max(0, count - (job.loadsCompleted || 0));
 }
@@ -89,7 +89,7 @@ export function groupDispatchRows<T extends StackableDispatch>(jobs: readonly T[
     const identity = multiHaul
       ? JSON.stringify(['multi-haul', job.companyId, job.driverHash, haulGroup]) : stackKey(job);
     if (identity === null) {
-      rows.push({ key: `single:${job.id || index}`, jobs: [job], remainingLoads: remaining(job) });
+      rows.push({ key: `single:${job.id || index}`, jobs: [job], remainingLoads: remainingDispatchLoads(job) });
       return;
     }
     let row = stacks.get(identity);
@@ -99,7 +99,7 @@ export function groupDispatchRows<T extends StackableDispatch>(jobs: readonly T[
       rows.push(row);
     }
     row.jobs.push(job);
-    row.remainingLoads += remaining(job);
+    row.remainingLoads += remainingDispatchLoads(job);
   });
   return rows;
 }

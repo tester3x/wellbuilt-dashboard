@@ -7,6 +7,12 @@ const rowStart = source.indexOf('function DispatchJobRow(');
 const rowEnd = source.indexOf('// Driver-centric active dispatch panel', rowStart);
 const rowSource = source.slice(rowStart, rowEnd);
 
+test('active total and driver PW/SW badges use remaining loads, matching expanded rows', () => {
+  assert.match(source, /const activeCount = .*remainingDispatchLoads\(d\)/);
+  assert.match(source, /const pwCount = .*remainingDispatchLoads\(j\)/);
+  assert.match(source, /const swCount = .*remainingDispatchLoads\(j\)/);
+});
+
 test('pending assignment age is attached to the Pending badge, not loose card text', () => {
   assert.match(source, /const pendingAge = job\.status === 'pending' \? timeAgo\(job\.assignedAt\) : '';/);
   assert.match(source, /\{fb\.label\}\{pendingAge \? ` · \$\{pendingAge\}` : ''\}/);

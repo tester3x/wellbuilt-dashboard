@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { groupDispatchRows, type StackableDispatch } from '../dispatchJobStacks.ts';
+import { groupDispatchRows, remainingDispatchLoads, type StackableDispatch } from '../dispatchJobStacks.ts';
+
+test('partly completed two-load job plus one other job is two remaining loads', () => {
+  const jobs = [job('repeat', { loadCount: 2, loadsCompleted: 1 }), job('other')];
+  assert.equal(jobs.reduce((sum, j) => sum + remainingDispatchLoads(j), 0), 2);
+  assert.equal(groupDispatchRows(jobs).reduce((sum, row) => sum + row.remainingLoads, 0), 2);
+  assert.equal(remainingDispatchLoads({ loadCount: 2, loadsCompleted: 2 }), 0);
+  assert.equal(remainingDispatchLoads({ loadCount: 2, loadsCompleted: 3 }), 0);
+  assert.equal(remainingDispatchLoads({}), 1);
+});
 
 test('multi-haul groups different active wells while retaining separate jobs', () => {
   const a = job('a', { status: 'in_progress', driverStage: 'en_route_dropoff' });
