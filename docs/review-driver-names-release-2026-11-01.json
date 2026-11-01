@@ -1,0 +1,13 @@
+{
+  "source": "c17bd1479522f5780f256d3b2c79e312aabd7013",
+  "verifiedAt": "2026-11-01T23:22:52.804Z",
+  "liveArtifactsVerified": 398,
+  "change": "Needs Review and reassignment resolve cancellation/decline actor ids through the company driver roster to real names, never raw identifiers.",
+  "checks": [
+    "13 driver identity tests",
+    "6 dispatch wiring checks",
+    "TypeScript",
+    "all mandatory Hosting preflight checks",
+    "live artifact byte match"
+  ]
+}
