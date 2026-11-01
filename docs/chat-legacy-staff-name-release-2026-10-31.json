@@ -26,5 +26,5 @@
   },
   "deployment": "Scoped firebase deploy --only functions:dashboard:staffChat. First publish repaired sends; final publish also repaired receiving staff presentation. Final deployed archive matches the tested compiled source and listed dependencies.",
   "preservation": "No user/profile/authority/role/claim/rule/message-history rewrites. No Hosting release, APK build/install, duty changes, operational job action or agent-sent chat. Historical stored placeholder text is retained as recorded; subsequent staff messages use the resolved real name.",
-  "deviceAcceptance": "A new human-authored Dashboard-to-ZFold test message was requested. Result pending; do not claim new-message phone acceptance from source/deployment checks alone."
+  "deviceAcceptance": "New human-authored Dashboard-to-ZFold test message verified read-only in the admitted conversation: persisted sender matches linked approved real-name profile. User subsequently confirmed the real name displayed on the message. No agent read receipt or sent message. Separate user-requested presentation change will label shared team senders Dispatch while retaining recorded identity."
 }
