@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "2026-11-02T21:49:02.242Z",
+  "hostingSourceCommit": "854708fa87b47c8269fac6b46e14d4f6ab61ee99",
+  "verifiedLiveArtifacts": 399,
+  "scope": "Automatic nearby-town reference, approximate straight-line distance and direction for FWD catalog entries only. No Jacob-specific display overrides. Existing well/SWD/custom context retained; map targets remain original source GPS. Verified stored addresses take precedence, readable ND compact survey stays in depot details.",
+  "reference": {
+    "source": "U.S. Census Bureau2026 Places Gazetteer ND/MT internal points",
+    "points": 903,
+    "sourceZipSha256": "af678e2d990827c89ee39b98c82de6e90b693c7361ff0e559ae3076670dd2863",
+    "referenceJsonSha256": "6e2ba4b04e69e1ed65616152f6754877e2e6b4dc4f38ff070df322ba3d667a92",
+    "notPostalAddressesOrDrivingDistances": true
+  },
+  "checks": "18 focused search tests, TypeScript, canonical Hosting preflight with full fresh build and retained browser/owner/security regressions, then all399 live artifacts byte-verified before approved checkpoint advanced.",
+  "deploymentLog": "C:/dev/tmp/wbt304-dashboard-hosting-diagnostic.log",
+  "retries": "Earlier pre-upload attempts passed checks but could not acquire the shared lock; no remote lock was found. Canonical retry succeeded without changing/bypassing guards or manually advancing checkpoints. Git error logging was temporary diagnostic instrumentation only; expected negative local-remote tests were not production lock failures.",
+  "functionsDeployed": false,
+  "rulesDeployed": false,
+  "liveDataRewritten": false,
+  "phoneRelease": {
+    "sourceCommit": "b47f9e9a341cf9e55d527177f04cc6717203cfa8",
+    "versionCode": 304,
+    "versionName": "1.0.167",
+    "apkSha256": "fe24914483495a6b2687c6bdc21d9faadba9ac7d5878c820ed031d6ee636cb8a",
+    "installedBothPhones": true,
+    "s24First": true,
+    "actualSearchVerified": true
+  },
+  "remaining": "Real Fresh Water load/print/billing acceptance and stopped-job camera-review field test remain separate; no production work record created for these UI checks."
+}
