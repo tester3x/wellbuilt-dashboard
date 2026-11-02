@@ -118,6 +118,7 @@ if (process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW !== 'disabled') {
 execSync('node tools/test-header-badge-stacking.mjs', { stdio: 'inherit' });
 execSync('node tools/test-dispatch-announcements.cjs', { stdio: 'inherit' });
 execSync('node tools/test-announcements-ui.mjs', { stdio: 'inherit' });
+execSync('node tools/test-chat-usability.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-grid-controls.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-grid-drag.mjs', { stdio: 'inherit' });
 execSync('node tools/test-owner-signup.cjs', { stdio: 'inherit' });

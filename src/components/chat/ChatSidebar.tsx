@@ -1,4 +1,6 @@
 'use client';
+import { ChatMessageFooter } from './ChatMessageFooter';
+import { openChatWorkspace } from '@/lib/chatWindows';
 import { AnnouncementMessage } from './AnnouncementMessage';
 
 import { selectChatMessageText } from '@/lib/chatTextSelection';
@@ -279,14 +281,15 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
           <h3 className="text-white text-sm font-semibold">Messages</h3>
         )}
         <button
-          onClick={() => window.open('/chat/', '_blank')}
+          onClick={() => openChatWorkspace()}
           className="text-gray-400 hover:text-[#FFD700] transition-colors flex-shrink-0 ml-2"
-          title="Open chat in new tab"
+          title="Open or focus chat workspace"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>
         </button>
+        <button onClick={() => openChatWorkspace(true)} title="New chat window" aria-label="New chat window" className="text-gray-400 hover:text-[#FFD700] ml-2 text-lg">+</button>
         <button
           onClick={onClose}
           className="text-gray-400 hover:text-white transition-colors flex-shrink-0 ml-2"
@@ -401,9 +404,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
                   <div key={msg.id} className="flex justify-center my-2">
                     <div onContextMenu={selectChatMessageText} className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-3 py-1.5 max-w-[85%]">
                       <p data-chat-message-text className="text-gray-400 text-xs text-center select-text">{msg.text}</p>
-                      <p className="text-gray-600 text-[10px] text-center mt-0.5">
-                        {formatChatTime(msg.timestamp)}
-                      </p>
+                      <ChatMessageFooter message={msg} />
                     </div>
                   </div>
                 );
@@ -435,9 +436,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
                     ) : (
                       <p data-chat-message-text className="text-sm whitespace-pre-wrap break-words select-text">{msg.text}</p>
                     )}
-                    <p className={`text-[10px] mt-1 text-right ${isMine ? 'text-black/50' : 'text-gray-500'}`}>
-                      {formatChatTime(msg.timestamp)}
-                    </p>
+                    <ChatMessageFooter message={msg} mine={isMine} />
                   </div>
                 </div>
               );

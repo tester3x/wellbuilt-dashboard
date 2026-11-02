@@ -1,4 +1,6 @@
 'use client';
+import { ChatMessageFooter } from '@/components/chat/ChatMessageFooter';
+import { openChatWorkspace } from '@/lib/chatWindows';
 import { AnnouncementMessage } from '@/components/chat/AnnouncementMessage';
 
 import {useChatGridDrag} from '@/components/chat/useChatGridDrag';
@@ -541,7 +543,7 @@ function ChatPageInner() {
         name: name.trim(),
         companyId: companyId || '',
         gridLayout: layout,
-        threadType: 'direct',
+        threadType: 'all',
         slots: Array(slotCount).fill(null),
         createdBy: myParticipantId,
       } });
@@ -564,7 +566,7 @@ function ChatPageInner() {
     const db = getFirestoreDb();
     if (!db) return;
     try {
-      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { threadType: type } });
+      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { threadType: activeProfile.threadType === type ? 'all' : type } });
       // Firestore onSnapshot will update profiles → re-derives activeProfile
     } catch (err) {
       console.error('[ChatPage] saveProfileType failed', err);
@@ -922,6 +924,9 @@ function ChatPageInner() {
             </div>
           </div>
 
+          <div className="flex justify-end px-3 py-1 border-b border-gray-800">
+            <button onClick={() => openChatWorkspace(true)} title="New chat window" className="text-xs text-gray-400 hover:text-[#FFD700]">New window</button>
+          </div>
           {/* Setup panel — profiles + grid size + instructions */}
           {setupMode && (
             <div className="mt-3 space-y-2">
@@ -974,7 +979,7 @@ function ChatPageInner() {
                           key={t}
                           onClick={() => saveProfileType(t)}
                           className={`px-2 py-1 rounded text-xs font-semibold border transition-colors ${
-                            (activeProfile.threadType || 'direct') === t
+                            activeProfile.threadType === t
                               ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]'
                               : 'bg-[#0a0a0a] border-gray-700 text-gray-400 hover:border-gray-500'
                           }`}
@@ -983,6 +988,7 @@ function ChatPageInner() {
                         </button>
                       ))}
                     </div>
+                    <p className="text-[10px] text-gray-500 mt-2">Choose a type to filter slot choices. Click the selected type again for all chats.</p>
                   </div>
 
                   {/* Grid size */}
@@ -1004,9 +1010,9 @@ function ChatPageInner() {
                       ))}
                     </div>
                     <p className="text-[10px] text-gray-500 mt-2">
-                      {(activeProfile.threadType || 'direct') === 'direct'
+                      {activeProfile.threadType === 'direct'
                         ? 'Click grid slots to assign drivers'
-                        : 'Click grid slots to assign group chats'}
+                        : 'Click grid slots to assign chats'}
                     </p>
                   </div>
                 </>
@@ -1305,11 +1311,11 @@ function ChatPageInner() {
           const pane=(()=>{
           // Setup mode — show slot assignment UI
           if (setupMode) {
-            const profileType = activeProfile?.threadType || 'direct';
+            const profileType = activeProfile?.threadType || 'all';
             const isDirectProfile = profileType === 'direct';
             const slotLabel = slot?.driverName || slot?.threadTitle || null;
             // Group threads matching this profile type
-            const matchingThreads = threads.filter((t) => t.type === profileType && t.status !== 'archived');
+            const matchingThreads = threads.filter((t) => (profileType === 'all' || t.type === profileType) && t.status !== 'archived');
             const assignedThreadIds = new Set(slots.filter(Boolean).map((s) => s!.threadId).filter(Boolean));
 
             return (
@@ -1320,7 +1326,7 @@ function ChatPageInner() {
                     <p className="text-sm font-bold text-[#FFD700]">{slotLabel}</p>
                     <div className="flex gap-2 mt-2">
                       <button
-                        onClick={() => { setSlotPickerIndex(index); if (isDirectProfile) loadDrivers(); }}
+                        onClick={() => { setSlotPickerIndex(index); if (isDirectProfile || profileType === 'all') loadDrivers(); }}
                         className="text-xs px-2 py-1 rounded bg-[#1a1a1a] border border-gray-700 text-gray-400 hover:text-white"
                       >
                         Change
@@ -1335,7 +1341,7 @@ function ChatPageInner() {
                   </div>
                 ) : (
                   <button
-                    onClick={() => { setSlotPickerIndex(index); if (isDirectProfile) loadDrivers(); }}
+                    onClick={() => { setSlotPickerIndex(index); if (isDirectProfile || profileType === 'all') loadDrivers(); }}
                     className="text-sm text-gray-500 hover:text-[#FFD700] transition-colors"
                   >
                     + {isDirectProfile ? 'Assign Driver' : 'Assign Chat'}
@@ -1350,7 +1356,7 @@ function ChatPageInner() {
                       <button onClick={() => { setSlotPickerIndex(null); setGroupName(''); setGroupMembers([]); setGroupBroadcast(false); }} className="text-gray-400 hover:text-white text-sm px-1.5 py-0.5 rounded hover:bg-gray-700 transition-colors">✕ Close</button>
                     </div>
                     <div className="flex-1 overflow-y-auto">
-                      {isDirectProfile ? (
+                      {(isDirectProfile || profileType === 'all') && (
                         // Driver picker for direct profiles
                         drivers.filter((d) => !assignedHashes.has(d.hash) || d.hash === slot?.driverHash).map((d) => (
                           <div
@@ -1361,7 +1367,8 @@ function ChatPageInner() {
                             {d.name}
                           </div>
                         ))
-                      ) : (
+                      )}
+                      {!isDirectProfile && (
                         // Thread picker + inline create for group profiles
                         <>
                           {matchingThreads.filter((t) => !assignedThreadIds.has(t.id) || t.id === slot?.threadId).map((t) => (
@@ -1374,7 +1381,7 @@ function ChatPageInner() {
                             </div>
                           ))}
                           {/* Inline group creation */}
-                          <div className="p-2 border-t border-gray-700">
+                          {profileType !== 'all' && <div className="p-2 border-t border-gray-700">
                             <input
                               type="text"
                               value={groupName}
@@ -1448,7 +1455,7 @@ function ChatPageInner() {
                                 Create + Assign ({groupMembers.length})
                               </button>
                             </div>
-                          </div>
+                          </div>}
                         </>
                       )}
                     </div>
@@ -1705,6 +1712,7 @@ function ChatPageInner() {
                       <div key={msg.id} className="flex justify-center my-1">
                         <div onContextMenu={selectChatMessageText} className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-2 py-0.5">
                           <p data-chat-message-text className="text-gray-400 text-xs text-center select-text">{msg.text}</p>
+                          <ChatMessageFooter message={msg} />
                         </div>
                       </div>
                     );
@@ -1728,9 +1736,7 @@ function ChatPageInner() {
                         ) : (
                           <p data-chat-message-text className="text-sm whitespace-pre-wrap break-words select-text">{msg.text}</p>
                         )}
-                        <p className={`text-[10px] mt-0.5 text-right ${isMine ? 'text-black/50' : 'text-gray-500'}`}>
-                          {formatChatTime(msg.timestamp)}
-                        </p>
+                        <ChatMessageFooter message={msg} mine={isMine} />
                       </div>
                     </div>
                   );
