@@ -1,4 +1,5 @@
 'use client';
+import { freshWaterLabel } from '@/lib/freshWater';
 
 import { Suspense, useEffect, useState, type FormEvent } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -262,7 +263,7 @@ function TicketsPageInner() {
                       <td className="px-4 py-3 text-white">{ticket.company}</td>
                       <td className="px-4 py-3 text-white">{ticket.location}</td>
                       <td className="px-4 py-3 text-white">{ticket.hauledTo}</td>
-                      <td className="px-4 py-3 text-gray-400 text-sm">{ticket.type}</td>
+                      <td className="px-4 py-3 text-gray-400 text-sm">{freshWaterLabel(ticket.type, ticket.waterTemperature)}</td>
                       <td className="px-4 py-3 text-white font-mono">{ticket.qty}</td>
                       <td className="px-4 py-3 text-white font-mono">{ticket.top || '--'}</td>
                       <td className="px-4 py-3 text-white font-mono">{ticket.bottom || '--'}</td>

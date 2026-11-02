@@ -12,7 +12,8 @@ export interface CombinedLocation {
   label: string;
   sub: string;
   value: string;
-  kind?: 'WELL' | 'SWD' | 'LOC';
+  kind?: 'WELL' | 'SWD' | 'LOC' | 'FWD';
+  catalogId?: string;
   county?: string;
   waterWeight?: number;
   tankHeight?: number;
@@ -26,6 +27,7 @@ export interface CombinedSearchSources {
   /** Full company operator well universe (well_name + operator). */
   operatorWells: Array<{ well_name: string; operator?: string; county?: string }>;
   /** SWD/disposal directory search result rows (well_name). */
+  depotMatches?: Array<{ well_name: string; operator?: string; county?: string; catalogId?: string }>;
   disposalMatches: Array<{ well_name: string; operator?: string; county?: string }>;
   customLocations?: Array<{ locationName: string; company: string; usageCount?: number }>;
   wellStatus?: ReadonlyMap<string, SearchWellStatus>;
@@ -72,6 +74,7 @@ export function hasExactLocationMatch(query: string, s: CombinedSearchSources): 
   return (
     s.wells.some((w) => (w.ndicName || w.wellName).toLowerCase() === q) ||
     s.operatorWells.some((w) => w.well_name.toLowerCase() === q) ||
+    (s.depotMatches || []).some(d => d.well_name.toLowerCase() === q) ||
     s.disposalMatches.some((d) => d.well_name.toLowerCase() === q) ||
     (s.customLocations || []).some(c => c.locationName.toLowerCase() === q)
   );
@@ -104,10 +107,11 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
   const disposalMatches: CombinedLocation[] = s.disposalMatches
     .filter((d) => !seen.has(d.well_name.toLowerCase()))
     .map((d): CombinedLocation => ({ label: d.well_name, sub: d.operator || 'SWD', county: d.county, kind: 'SWD', value: d.well_name }));
+  const depotMatches: CombinedLocation[] = (s.depotMatches || []).filter(d => locationQueryMatches(q, d.well_name)).map(d => ({ label: d.well_name, sub: 'ND DWR', county: d.county, kind: 'FWD', catalogId: d.catalogId, value: d.well_name }));
   const customMatches: CombinedLocation[] = (s.customLocations || [])
     .filter(c => locationQueryMatches(q, c.locationName) && !seen.has(c.locationName.toLowerCase()))
     .map(c => ({ label: c.locationName, sub: `Used ${c.usageCount || 0}× — ${c.company || 'Custom'}`, kind: 'LOC', value: c.locationName }));
-  const rows = [...wellMatches, ...operatorMatches, ...disposalMatches, ...customMatches];
+  const rows = [...wellMatches, ...operatorMatches, ...disposalMatches, ...depotMatches, ...customMatches];
   return s.wellStatus
     ? rankWellSearchRows(rows, q, row => row.label, s.wellStatus, COMBINED_SEARCH_LIMIT, row => row.kind === 'WELL')
     : rankLocationRows(rows, q, row => row.label, COMBINED_SEARCH_LIMIT);

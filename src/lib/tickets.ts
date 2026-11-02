@@ -11,6 +11,7 @@ export interface Ticket {
   location: string;
   hauledTo: string;
   type: string;
+  waterTemperature?: 'hot' | 'cold';
   qty: string;
   bbls: string;
   // Split-tickets bbls split. Mirror qty/bbls for normal tickets; for s_t
@@ -299,6 +300,7 @@ function mapTicketDoc(doc: any): Ticket {
     location: d.location || d.wellName || '',
     hauledTo: d.hauledTo || d.disposal || '',
     type: d.type || d.commodityType || '',
+    ...(d.waterTemperature === 'hot' || d.waterTemperature === 'cold' ? { waterTemperature: d.waterTemperature } : {}),
     qty: d.qty || d.bbls || '',
     bbls: d.bbls || d.qty || '',
     top: d.top || '',

@@ -20,6 +20,7 @@ export const DRIVER_DISPATCH_CREATE_ALLOWLIST = Object.freeze([
   'jobType',
   'jobTypeId',
   'serviceType',
+  'waterTemperature',
   'disposal',
   'hauledTo',
   'driverFirstName',
@@ -51,6 +52,7 @@ export function driverMayJoinProject(project: Record<string, unknown> | null, ca
 }
 
 export function pickDriverCreateFields(record: Record<string, unknown>): StoreResult<{ fields: Record<string, unknown> }> {
+  if (record.waterTemperature !== undefined && record.waterTemperature !== 'hot' && record.waterTemperature !== 'cold') return fail('invalid_water_temperature');
   const rejected = rejectCallerAuthorityFields(record);
   if (!rejected.ok) return rejected;
   const out: Record<string, unknown> = {};

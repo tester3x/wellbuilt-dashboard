@@ -1,3 +1,4 @@
+import { waterTemperature } from './freshWater';
 import { getFirestoreDb } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type OperatorBillingConfig } from './companySettings';
@@ -18,6 +19,7 @@ export interface BillingLineItem {
   hauledTo: string;
   driver: string;
   jobType: string;
+  waterTemperature?: 'hot' | 'cold';
   bbls: number;
   hours: number;
   fuelMinutes: number;
@@ -373,6 +375,7 @@ export async function fetchBillingData(
       hauledTo: d.hauledTo || '',
       driver: d.driver || '',
       jobType,
+      ...(waterTemperature(d.formSnapshot?.waterTemperature) ? { waterTemperature: waterTemperature(d.formSnapshot.waterTemperature) } : {}),
       bbls,
       hours,
       fuelMinutes,

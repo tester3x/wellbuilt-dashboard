@@ -57,11 +57,12 @@ export const getDispatchLocationCatalog = https.onCall({ timeoutSeconds: 60, mem
   const operators: string[] = Array.isArray(company.data()?.assignedOperators) ? company.data()!.assignedOperators.filter((v: unknown): v is string => typeof v === 'string' && !!v.trim()) : [];
   const allowedFields = ['well_name', 'operator', 'api_no', 'latitude', 'longitude', 'legal_desc', 'county', 'field_name', 'search_name', 'search_operator', 'state'];
   const project = (data: Record<string, unknown>) => Object.fromEntries(allowedFields.filter(k => data[k] !== undefined).map(k => [k, data[k]]));
-  const [wellSnaps, disposals, customSnaps, directory] = await Promise.all([
+  const [wellSnaps, disposals, customSnaps, directory, depots] = await Promise.all([
     Promise.all(operators.map(op => db.collection('wells').where('operator', '==', op).limit(20000).get())),
     db.collection('disposals').limit(10000).get(),
     Promise.all(operators.map(op => db.collection('customLocations').where('company', '==', op).limit(5000).get())),
     db.collection('companies').doc(requested).collection('swd_directory').limit(5000).get(),
+    db.collection('freshWaterDepots').where('searchable', '==', true).limit(5000).get(),
   ]);
   const custom=customSnaps.flatMap(s=>s.docs.map(d=>d.data())).filter(p=>p.ndicInactiveApproved!==true || p.companyId===requested);
   const wells=wellSnaps.flatMap(s=>s.docs.map(d=>project(d.data())));
@@ -70,6 +71,7 @@ export const getDispatchLocationCatalog = https.onCall({ timeoutSeconds: 60, mem
   return {
     companyId: requested,
     wells,
+    freshWaterDepots: depots.docs.map(d => d.data()).filter(d => d.source === 'ND DWR' && ['Developed', 'Satellite'].includes(d.sourceStatus)).map(d => ({ ...project(d), catalogId: d.catalogId, kind: 'FWD' })),
     disposals: applyDispatchSwdDirectory(disposals.docs.map(d => project(d.data())), directory.docs.map(d => d.data())),
     customLocations: custom.filter(p=>p.ndicInactiveApproved!==true).map(c => {
       return { locationName: c.locationName, company: c.company, usageCount: typeof c.usageCount === 'number' ? c.usageCount : 0, latitude: c.latitude ?? null, longitude: c.longitude ?? null };

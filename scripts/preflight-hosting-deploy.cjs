@@ -222,3 +222,5 @@ console.log('================================================================\n'
 fs.mkdirSync('.firebase', { recursive: true });
 releaseState.lock = require('./hosting-release-state.cjs').acquireLock(releaseState.source);
 fs.writeFileSync('.firebase/hosting-preflight.json', JSON.stringify(releaseState));
+
+execSync('npx tsx --test src/lib/__tests__/freshWaterTemperature.test.ts', { stdio: 'inherit' });

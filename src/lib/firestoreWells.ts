@@ -15,7 +15,8 @@ import {
 } from 'firebase/firestore';
 
 export interface NdicWell {
-  kind?: 'WELL' | 'SWD' | 'LOC';
+  kind?: 'WELL' | 'SWD' | 'LOC' | 'FWD';
+  catalogId?: string;
   usageCount?: number;
   well_name: string;
   operator: string;
