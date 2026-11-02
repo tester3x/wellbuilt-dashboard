@@ -7,6 +7,7 @@ import {chromium} from 'playwright';
 // Mount the actual chat page. Only authentication and server transport are mocked.
 const transport = `
 const profile={id:'fixture-profile',name:'Only layout',gridLayout:'2x2',slots:[null,null,null,null]};
+const profiles=JSON.parse(localStorage.getItem('fixture-monitor-profiles')||JSON.stringify([profile]));window.profileCallbacks=[];window.fixtureSaves=[];
 const threads=[{id:'whatsapp_levels_fixture',title:'WhatsApp Levels',type:'whatsapp_levels',permanent:true,readOnly:true,status:'active',participants:[],participantNames:{},unreadCount:0},{id:'dispatch_A',title:'Driver A',type:'direct',audience:'dispatch_team',status:'active',participants:['driver:A'],participantNames:{}}];
 const pull=(id,wellName,wellKey,driverKey,senderName)=>({id,text:wellName+' full copy body',wellName,wellKey,driverKey,senderName,senderId:'whatsapp:'+driverKey,type:'level_report',channel:'North Area',top:12,reportedBottom:8,after:8,bbls:140,provisional:false,timestamp:'2026-11-02T01:00:00Z'});
 window.rows=[pull('a','Olson','olson','tag:adam','Adam tag'),pull('b','Dwyer','dwyer','tag:adam','Adam tag'),pull('c','Dwyer','dwyer','tag:luiz','Luiz tag'),pull('u','Well needs identification','__unidentified__','tag:unknown','Unknown tag')];window.feedCallbacks=[];window.fixtureReads=[];
@@ -14,7 +15,7 @@ window.publishFeed=next=>{window.rows=next;window.feedCallbacks.forEach(cb=>cb(s
 export const chatIntentId=()=> 'fixture-id';export const sendStaffChat=async()=>{throw Error('Must not send');};
 export function watchStaffChatCompany(cb){setTimeout(()=>cb('fixture-company'),0);return()=>{};}
 export function watchStaffChat(data,cb){
- if(data.action==='profiles')setTimeout(()=>cb([profile]),0);
+ if(data.action==='profiles'){window.profileCallbacks.push(cb);setTimeout(()=>cb(structuredClone(profiles)),0);}
  if(data.action==='threads')setTimeout(()=>cb(threads),0);
  if(data.action==='messages'){
   if(data.threadId.startsWith('whatsapp_levels_')){window.feedCallbacks.push(cb);setTimeout(()=>cb(structuredClone(window.rows)),0);return()=>{window.feedCallbacks=window.feedCallbacks.filter(x=>x!==cb);};}
@@ -22,11 +23,21 @@ export function watchStaffChat(data,cb){
  }
  return()=>{};
 }
-export async function staffChatCall(data){if(data.action==='read')window.fixtureReads.push(data.threadId);return {ok:true,drivers:[]};}
+export async function staffChatCall(data){
+ if(data.action==='read')window.fixtureReads.push(data.threadId);
+ if(data.action==='saveProfile'){
+  window.fixtureSaves.push(structuredClone(data));const existing=profiles.find(p=>p.id===data.profileId);
+  if(existing)Object.assign(existing,data.record);else profiles.push({id:data.profileId,companyId:'fixture-company',...data.record});
+  localStorage.setItem('fixture-monitor-profiles',JSON.stringify(profiles));
+  setTimeout(()=>window.profileCallbacks.forEach(cb=>cb(structuredClone(profiles))),100);
+  return {ok:true,profileId:data.profileId};
+ }
+ return {ok:true,drivers:[]};
+}
 `;
 const bundle = await build({stdin:{contents:`
 import React from 'react';import {createRoot} from 'react-dom/client';import ChatPage from './src/app/chat/page';import {ChatSidebar} from './src/components/chat/ChatSidebar';import {openChatWorkspace} from './src/lib/chatWindows';window.openFixtureChat=openChatWorkspace;
-localStorage.setItem('wb-chat-profile-stack',JSON.stringify(location.search.includes('missing')?[]:['fixture-profile']));
+if(!localStorage.getItem('wb-chat-profile-stack'))localStorage.setItem('wb-chat-profile-stack',JSON.stringify(['fixture-profile']));
 createRoot(document.getElementById('root')).render(<><button onClick={()=>openChatWorkspace()}>Focus fixture workspace</button>{location.pathname==='/sidebar' ? <ChatSidebar visible={true} onClose={()=>{}} userId="fixture-staff"/> : <ChatPage/>}</>);
 `,loader:'tsx',resolveDir:process.cwd()},bundle:true,write:false,jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},plugins:[{name:'fixture-ports',setup(b){
  b.onResolve({filter:/^@\/(contexts\/AuthContext|lib\/(auth|firebase|staffChatClient))$/},args=>({path:args.path,namespace:'fixture'}));
@@ -66,7 +77,21 @@ try {
   await feed.getByRole('button',{name:'Copy whole message'}).click();
   assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'Well needs identification full copy body');
   assert.equal(await page.evaluate(()=>window.fixtureReads.filter(id=>id.startsWith('whatsapp_levels_')).length),0,'feed never marks or mutates pulls');
-  if(mode==='grid')await page.getByRole('button').filter({hasText:'Driver A'}).first().click();
+  if(mode==='grid'){
+   await page.getByTitle('Lock to this profile slot',{exact:true}).click();
+   await page.getByRole('combobox',{name:'Monitor profile',exact:true}).selectOption('');
+   await page.getByRole('textbox',{name:'Profile name',exact:true}).fill('Dispatch Only');
+   await page.getByRole('combobox',{name:'Position',exact:true}).selectOption('1');
+   await page.getByRole('button',{name:'Save and lock',exact:true}).click();
+   await page.getByTitle('Unlock (temporary)',{exact:true}).waitFor();
+   assert.equal(await page.getByRole('dialog',{name:'Lock chat position'}).count(),0,'new-profile lock completes');
+   assert.equal(await page.locator('[data-chat-slot="1"] [data-whatsapp-levels-feed]').count(),1,'feed stays in chosen slot');
+   const saved=await page.evaluate(()=>window.fixtureSaves.at(-1));assert.equal(saved.record.slots[1].threadId,'whatsapp_levels_fixture');
+   await page.reload();await page.getByTitle('Unlock (temporary)',{exact:true}).waitFor();
+   assert.equal(await page.locator('[data-chat-slot="1"] [data-whatsapp-levels-feed]').count(),1,'saved feed position restored after page reload');
+   assert.equal(await feed.locator('textarea,input[placeholder="Announcement to all drivers"]').count(),0);
+   await page.getByRole('button').filter({hasText:'Driver A'}).first().click();
+  }
   else {await page.getByTitle('Back to threads',{exact:true}).click();await page.getByRole('button').filter({hasText:'Driver A'}).first().click();}
   await page.getByText('Normal chat remains separate',{exact:true}).waitFor();
   assert.ok(await page.locator(mode==='grid'?'textarea':'input[placeholder="Type a message..."]').count()>0,'ordinary chat retains composer');
@@ -83,5 +108,5 @@ try {
   await page.screenshot({path:'C:/dev/tmp/whatsapp-levels-'+mode+'-fixture.png'});
   await page.close();
  }
- await context.close();console.log('PASS actual grid/sidebar WhatsApp feed: searchable intersecting filters, clear, unknown well, hidden arrivals/retry, copy, no composer/writes, ordinary chats retained');
+ await context.close();console.log('PASS actual grid/sidebar WhatsApp feed: searchable intersecting filters, clear, unknown well, hidden arrivals/retry, copy, no composer/writes, ordinary chats retained; new profile feed lock and reload');
 } finally {await browser.close();server.close();}

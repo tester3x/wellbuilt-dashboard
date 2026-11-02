@@ -165,6 +165,10 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
       if (!Array.isArray(fields.slots) || fields.slots.length > 36) throw new https.HttpsError('invalid-argument', 'Invalid monitor slots');
       for (const slot of fields.slots) if (slot) {
         if (slot.threadId) {
+          if (isWhatsappLevelsId(slot.threadId)) {
+            if (!dispatchAccess || slot.threadId !== whatsappLevelsId(staff.companyId)) throw new https.HttpsError('permission-denied', 'Dispatch feed outside your company');
+            continue;
+          }
           if (isAnnouncementId(slot.threadId)) {
             if (!dispatchAccess || slot.threadId !== (await announcementThread(announcementActor)).id) throw new https.HttpsError('permission-denied', 'Announcement outside your company');
             continue;
