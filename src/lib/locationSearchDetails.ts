@@ -3,6 +3,7 @@ export interface LocationSearchContext {
   operator?: string; company?: string; county?: string; state?: string;
   legal_desc?: string; address?: string; city?: string;
   latitude?: number; longitude?: number;
+  kind?: string; well_type?: string; catalogId?: string;
 }
 type PlacePoint = [string, string, number, number];
 const places: PlacePoint[] = require('./data/census-place-points-2026.json').places;
@@ -49,7 +50,8 @@ export function readableSurveyLocation(value: string | undefined, state?: string
   return `Sec ${Number(match[3])} T${Number(match[1])}N R${Number(match[2])}W${match[4] ? ` · Tract ${match[4].toUpperCase()}` : ''}`;
 }
 export function locationSearchDetails(row: LocationSearchContext): string {
-  const nearby = !row.address && !row.city ? nearbyPlaceReference(row) : '';
+  const isDepot = row.kind?.toLowerCase() === 'fwd' || row.well_type?.toLowerCase() === 'fwd' || row.catalogId?.startsWith('nd-dwr:');
+  const nearby = isDepot && !row.address && !row.city ? nearbyPlaceReference(row) : '';
   const parts = [row.operator || row.company, nearby || row.address, row.city,
     row.county ? `${row.county} Co.` : '', nearby ? '' : row.state,
     nearby ? '' : readableSurveyLocation(row.legal_desc, row.state)];
