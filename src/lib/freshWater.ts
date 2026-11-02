@@ -21,3 +21,8 @@ export function canChooseHotWater(type: unknown, pickupName: string, selected: {
   return isFreshWaterJob(type) && !!pickupName.trim() && selected?.name === pickupName
     && typeof selected.kind === 'string' && selected.kind.toLowerCase() === 'fwd';
 }
+
+/** Common local spellings of Western Area Water Supply, for depot search only. */
+export function freshWaterDepotSearchQuery(query: string): string {
+  return query.toLowerCase().replace(/\b(?:wasa|wassa|wawsa)\b/g, 'waws');
+}

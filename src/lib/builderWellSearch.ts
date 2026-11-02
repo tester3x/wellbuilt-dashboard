@@ -1,3 +1,4 @@
+import { freshWaterDepotSearchQuery } from './freshWater.ts';
 import { rankWellSearchRows, type SearchWellStatus } from './wellSearchPresentation.ts';
 
 /**
@@ -107,7 +108,7 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
   const disposalMatches: CombinedLocation[] = s.disposalMatches
     .filter((d) => !seen.has(d.well_name.toLowerCase()))
     .map((d): CombinedLocation => ({ label: d.well_name, sub: d.operator || 'SWD', county: d.county, kind: 'SWD', value: d.well_name }));
-  const depotMatches: CombinedLocation[] = (s.depotMatches || []).filter(d => locationQueryMatches(q, d.well_name)).map(d => ({ label: d.well_name, sub: 'ND DWR', county: d.county, kind: 'FWD', catalogId: d.catalogId, value: d.well_name }));
+  const depotMatches: CombinedLocation[] = (s.depotMatches || []).filter(d => locationQueryMatches(freshWaterDepotSearchQuery(q), d.well_name)).map(d => ({ label: d.well_name, sub: 'ND DWR', county: d.county, kind: 'FWD', catalogId: d.catalogId, value: d.well_name }));
   const customMatches: CombinedLocation[] = (s.customLocations || [])
     .filter(c => locationQueryMatches(q, c.locationName) && !seen.has(c.locationName.toLowerCase()))
     .map(c => ({ label: c.locationName, sub: `Used ${c.usageCount || 0}× — ${c.company || 'Custom'}`, kind: 'LOC', value: c.locationName }));

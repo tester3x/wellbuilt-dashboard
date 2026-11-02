@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { freshWaterFields, freshWaterLabel, canChooseHotWater } from '../freshWater.ts';
+import { freshWaterFields, freshWaterLabel, canChooseHotWater, freshWaterDepotSearchQuery } from '../freshWater.ts';
 import { combinedLocationResults, dropoffSourcesForBuilderOperator } from '../builderWellSearch.ts';
 import { executeServiceWorkWorkflow, createServiceWorkWorkflow } from '../serviceWorkWorkflowCore.ts';
 import { DispatchCreationCoordinator, materialBirthFieldsMatch } from '../staffWriteDispatchCore.ts';
@@ -9,3 +9,5 @@ test('Fresh Water is unchanged for payroll; hot/cold is explicit billing metadat
 test('actual builder workflow carries both temperatures in governed dispatch payload',async()=>{for(const temperature of ['hot','cold'] as const){const sent:Record<string,unknown>[]=[];await executeServiceWorkWorkflow({workflow:createServiceWorkWorkflow(),coordinator:new DispatchCreationCoordinator(),invoke:async payload=>{sent.push(payload);return {ok:true,dispatchId:'test'};},selectedDrivers:[{key:'driver-1',id:'driver-1',displayName:'Driver'}],wellName:'State depot',ndicWellName:'',serviceType:'Fresh Water',waterTemperature:temperature,packageId:'water-hauling',assignedBy:'test'});assert.equal(sent.length,1);const record=sent[0].record as Record<string,unknown>;assert.equal(record.serviceType,'Fresh Water');assert.equal(record.waterTemperature,temperature);assert.equal(record.jobType,'service');}});
 
 test('Hot checkbox waits for a matching FWD pickup; typed, changed, SWD, other job types stay cold',()=>{assert.equal(canChooseHotWater('Fresh Water','Depot',null),false);assert.equal(canChooseHotWater('Fresh Water','Depot',{name:'Depot',kind:'SWD'}),false);assert.equal(canChooseHotWater('Fresh Water','Depot',{name:'Other',kind:'FWD'}),false);assert.equal(canChooseHotWater('Production Water','Depot',{name:'Depot',kind:'FWD'}),false);assert.equal(canChooseHotWater('Fresh Water','Depot',{name:'Depot',kind:'FWD'}),true);});
+
+test('WASA spellings survive combined FWD search filtering',()=>{for(const query of ['WASA','WASSA','WAWSA','wasa watford']){assert.ok(freshWaterDepotSearchQuery(query).startsWith('waws'));const rows=combinedLocationResults(query,{wells:[],operatorWells:[],disposalMatches:[],depotMatches:[{well_name:'WAWS: Watford City',catalogId:'nd-dwr:384'}]});assert.equal(rows.length,1);assert.equal(rows[0].kind,'FWD');}});
