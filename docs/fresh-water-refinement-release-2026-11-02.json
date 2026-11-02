@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "2026-11-02T21:14:49.708Z",
+  "hostingSourceCommit": "aef7ca91d878dd943326ae8f188702ecad4724ee",
+  "verifiedLiveArtifacts": 399,
+  "scope": "FWD pickup gating and Cold default; WASA/WASSA/WAWSA search; source-backed context across shared Dispatch location search rows; exact-name ambiguous depots remain selectable.",
+  "checks": "Canonical clean/pushed source and Hosting preflight, fresh static build, focused search17 tests and TypeScript; postdeploy all399 live artifacts verified before checkpoint advanced.",
+  "log": "C:/dev/tmp/wbt303-dashboard-hosting.log",
+  "functionsDeployed": false,
+  "rulesDeployed": false,
+  "phoneRelease": {
+    "sourceCommit": "a3a7db2bdae94ece22403634fac1410724b20cca",
+    "versionCode": 303,
+    "installedBothPhones": true
+  },
+  "remaining": "Driver real Fresh Water field acceptance and eligible stopped-job camera visual check; public depot operating details unknown until verified."
+}
