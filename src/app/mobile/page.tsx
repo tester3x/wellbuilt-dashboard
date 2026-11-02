@@ -898,7 +898,7 @@ function WellRow({ well }: { well: WellResponse }) {
       </td>
       <td className="px-4 py-3 text-white font-mono">{formatTankLevel()}{well.routeType === 'freshwater' && <div className="text-xs text-gray-400">{well.tanks} × {well.bblPerFoot && well.tankHeight ? well.bblPerFoot / (well.tanks || 1) * well.tankHeight : '--'} BBL · {well.tankHeight} ft</div>}</td>
       <td className="px-4 py-3 text-white font-mono text-sm">{formatNextPull()}</td>
-      <td className="px-4 py-3 text-white font-mono">{levelDisplay}</td>
+      <td className="px-4 py-3 text-white font-mono">{levelDisplay}{well.pipelineOperation?.mode === "running" && !isDown && <div className="text-xs text-cyan-300">Pipeline - assumed holding level</div>}</td>
       <td className="px-4 py-3 text-white font-mono">{well.routeType === 'freshwater' ? <FreshWaterRate well={well}/> : well.flowRate || '--'}</td>
       <td className="px-4 py-3 text-white font-mono">{well.routeType === 'freshwater' ? minimumForecast ? minimumForecast.hoursRemaining.toFixed(1)+'h' : '--' : well.timeTillPull || well.etaToMax || '--'}</td>
       <td className="px-4 py-3">

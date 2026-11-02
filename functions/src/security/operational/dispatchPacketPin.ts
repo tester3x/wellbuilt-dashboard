@@ -24,6 +24,7 @@ export const DISPATCH_BINDING_KEYS = Object.freeze([
 ] as const);
 
 export const CALLER_REJECT_AUTHORITY_KEYS = Object.freeze([
+  'builderOwnership',
   'companyId',
   'contentHash',
   'policyHash',

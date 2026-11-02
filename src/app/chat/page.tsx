@@ -1,4 +1,11 @@
 'use client';
+import { ChatMessageFooter } from '@/components/chat/ChatMessageFooter';
+import { openChatWorkspace } from '@/lib/chatWindows';
+import { AnnouncementMessage } from '@/components/chat/AnnouncementMessage';
+
+import {useChatGridDrag} from '@/components/chat/useChatGridDrag';
+import {moveChatToSlot} from '@/lib/chatGridPlacement';
+import { selectChatMessageText } from '@/lib/chatTextSelection';
 
 // Full-screen Chat page — lives on monitor 2+ for dispatch.
 // Monitor Profiles: each monitor gets a saved config with locked driver positions.
@@ -15,14 +22,15 @@ import {
   type ThreadType,
   userParticipantId,
   isThreadUnread,
-  threadTypeLabel,
+  chatAudienceLabel,
+  matchesChatFilter,
   threadTypeIcon,
   formatChatTime,
 } from '@/components/chat/ChatTypes';
 
 // --- Types ---
 
-type FilterKey = 'all' | 'archived' | ThreadType;
+type FilterKey = 'all' | 'archived' | 'dispatch_team' | 'private_driver' | ThreadType;
 
 interface SlotAssignment {
   driverHash?: string;
@@ -46,6 +54,9 @@ interface MonitorProfile {
 
 const FILTERS: { label: string; value: FilterKey }[] = [
   { label: 'All', value: 'all' },
+  { label: 'Announcements', value: 'announcements' },
+  { label: 'Dispatch', value: 'dispatch_team' },
+  { label: 'Private', value: 'private_driver' },
   { label: 'Shifts', value: 'shift' },
   { label: 'Wells', value: 'well' },
   { label: 'Projects', value: 'project' },
@@ -225,19 +236,57 @@ function ChatPageInner() {
   // Temp slots: threads placed via sidebar click but NOT yet locked to the profile.
   // Map of slot index → SlotAssignment. Not saved to Firestore until user clicks lock.
   const [tempSlots, setTempSlots] = useState<Record<number, SlotAssignment>>({});
+  const [pendingSlotUnlocks,setPendingSlotUnlocks]=useState<Record<number,SlotAssignment>>({});
+  const [savingSlots, setSavingSlots] = useState<Record<number, boolean>>({});
+
+  const [lockRequest,setLockRequest]=useState<{index:number;assignment:SlotAssignment}|null>(null);
+  const [lockProfileChoice,setLockProfileChoice]=useState('');
+  const [lockName,setLockName]=useState('');
+  const [lockLayout,setLockLayout]=useState('2x2');
+  const [lockPosition,setLockPosition]=useState(0);
+  const [lockBusy,setLockBusy]=useState(false);
+  const lockNewProfileIdRef=useRef<string|null>(null);
+  const lockDialogRef=useRef<HTMLElement|null>(null);
+  const [lockError,setLockError]=useState('');
+  const [profileLockHandoff,setProfileLockHandoff]=useState<{scope:string;profileId:string;index:number;assignment:SlotAssignment}|null>(null);
+  const profileCarryRef=useRef<{scope:string;temps:Record<number,SlotAssignment>}|null>(null);
+
+  useEffect(()=>{
+    if(!lockRequest)return;
+    const trap=(e:KeyboardEvent)=>{
+      if(e.key==='Escape'){e.preventDefault();if(!lockBusy)setLockRequest(null);return;}
+      if(e.key!=='Tab')return;
+      const controls=Array.from(lockDialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)')||[]);
+      if(!controls.length){e.preventDefault();return;}
+      const first=controls[0],last=controls[controls.length-1];
+      if(!controls.includes(document.activeElement as HTMLElement)||e.shiftKey&&document.activeElement===first||!e.shiftKey&&document.activeElement===last){e.preventDefault();(e.shiftKey?last:first).focus();}
+    };
+    document.addEventListener('keydown',trap,true);return()=>document.removeEventListener('keydown',trap,true);
+  },[!!lockRequest,lockBusy]);
 
   // Derive active profile from top of stack
   const activeProfileId = profileStack[profileStack.length - 1] || null;
   const activeProfile = profiles.find(p => p.id === activeProfileId) || null;
+  const slotScopeRef = useRef('');
+  slotScopeRef.current = `${companyId}:${activeProfileId}`;
 
   // Clear temp slots when switching profiles
-  const prevProfileIdRef = useRef(activeProfileId);
-  useEffect(() => {
-    if (activeProfileId !== prevProfileIdRef.current) {
-      setTempSlots({});
-      prevProfileIdRef.current = activeProfileId;
+  const prevProfileScopeRef=useRef(slotScopeRef.current);
+  useEffect(()=>{
+    const scope=slotScopeRef.current;
+    if(scope!==prevProfileScopeRef.current){
+      const carry=profileCarryRef.current;
+      setTempSlots(carry?.scope===scope?carry.temps:{});
+      profileCarryRef.current=null;
+      setPendingSlotUnlocks({});setSavingSlots({});setLockRequest(null);setProfileLockHandoff(null);setLockBusy(false);
+      prevProfileScopeRef.current=scope;
     }
-  }, [activeProfileId]);
+  },[activeProfileId,companyId]);
+
+  useEffect(()=>{
+    const confirmed=Object.keys(pendingSlotUnlocks).filter(i=>!activeProfile?.slots[Number(i)]);
+    if(confirmed.length)setPendingSlotUnlocks(prev=>{const next={...prev};for(const i of confirmed)delete next[Number(i)];return next;});
+  },[activeProfile,pendingSlotUnlocks]);
 
   // Persist stack to localStorage
   useEffect(() => {
@@ -293,13 +342,17 @@ function ChatPageInner() {
   // .find() does not throw at render.
   const driverThreadMap: Record<string, string> = {};
   for (const t of threads) {
-    if (t.type !== 'direct' || t.status === 'archived') continue;
+    if (t.type !== 'direct' || t.audience === 'private_driver' || t.status === 'archived') continue;
     const driverPid = (t.participants || []).find((p) => p.startsWith('driver:'));
-    if (driverPid) driverThreadMap[driverPid.replace('driver:', '')] = t.id;
+    if (driverPid) {
+      const key = driverPid.replace('driver:', '');
+      // Preserve existing driver monitor history until its team conversation exists.
+      if (t.audience === 'dispatch_team' || !driverThreadMap[key]) driverThreadMap[key] = t.id;
+    }
   }
 
   // Build openPanes from profile slots + temp overlays
-  const openPanes = slots.slice(0, maxPanes).map((slot, i) => {
+  const openPanes = Array.from({length:maxPanes},(_,i)=>slots[i]||null).map((slot, i) => {
     // Temp slots overlay on top of profile slots (sidebar click without lock)
     const temp = tempSlots[i];
     const effective = temp || slot;
@@ -308,6 +361,43 @@ function ChatPageInner() {
     if (effective.driverHash) return driverThreadMap[effective.driverHash] || null;
     return null;
   });
+
+  const gridDrag=useChatGridDrag(`${companyId}:${activeProfileId}:${gridLayout.label}`, (payload,index)=>{
+    if(payload.scope!==`${companyId}:${activeProfileId}:${gridLayout.label}`||setupMode||lockBusy||Object.values(savingSlots).some(Boolean)||Object.keys(pendingSlotUnlocks).length)return;
+    const thread=threads.find(t=>t.id===payload.threadId);
+    if(!thread)return;
+    const next=moveChatToSlot(slots,tempSlots,openPanes,thread.id,{threadId:thread.id,threadTitle:payload.title},index);
+    if(next){setTempSlots(next);setHighlightedPane(index);}
+    else setToastMsg('That position is locked, or the grid is full. Unlock it or free a position first.');
+  });
+
+  // Wait for the live profile snapshot before changing monitors or dropping an overlay.
+  useEffect(()=>{
+    const pending=profileLockHandoff;if(!pending)return;
+    if(pending.scope!==slotScopeRef.current){setProfileLockHandoff(null);setLockBusy(false);return;}
+    const target=profiles.find(p=>p.id===pending.profileId),saved=target?.slots[pending.index];
+    if(!target||!saved||!(pending.assignment.threadId?saved.threadId===pending.assignment.threadId:saved.driverHash===pending.assignment.driverHash))return;
+    const count=(GRID_LAYOUTS.find(l=>l.label===target.gridLayout)||GRID_LAYOUTS[3]);
+    const size=count.cols*count.rows,carry:Record<number,SlotAssignment>={};
+    for(const [key,assignment] of Object.entries(tempSlots)){
+      if(assignment===pending.assignment)continue;
+      let index=Number(key);
+      if(index>=size||target.slots[index]||carry[index])index=Array.from({length:size},(_,i)=>i).find(i=>!target.slots[i]&&!carry[i])??-1;
+      if(index>=0)carry[index]=assignment;
+    }
+    if(activeProfileId!==target.id){profileCarryRef.current={scope:`${companyId}:${target.id}`,temps:carry};setProfileStack(prev=>[...prev.filter(id=>id!==target.id),target.id]);}
+    else setTempSlots(carry);
+    setProfileLockHandoff(null);setLockRequest(null);setLockBusy(false);setLockError('');
+  },[profileLockHandoff,profiles,companyId,activeProfileId,tempSlots]);
+
+  useEffect(()=>{
+    if(!profileLockHandoff)return;
+    const timer=setTimeout(()=>{
+      setProfileLockHandoff(null);setLockBusy(false);
+      setLockError('The save was accepted, but its position is not confirmed yet. Your chat is still open. Check your connection and retry.');
+    },20000);
+    return()=>clearTimeout(timer);
+  },[profileLockHandoff]);
 
   // --- Load profiles from Firestore ---
   useEffect(() => {
@@ -355,7 +445,7 @@ function ChatPageInner() {
       if (hasInitializedRef.current) {
         const prevMap = prevThreadMapRef.current;
         for (const thread of list) {
-          if (thread.status === 'archived') continue;
+          if (thread.permanent || thread.status === 'archived') continue;
           if (!thread.lastMessage?.senderId || thread.lastMessage.senderId === myParticipantId) continue;
           const ts = typeof thread.updatedAt === 'string'
             ? new Date(thread.updatedAt).getTime()
@@ -399,7 +489,7 @@ function ChatPageInner() {
       setPaneMessages(prev => ({ ...prev, [threadId]: rows }));
       setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 150);
     }, error => setToastMsg(error.message), 5000));
-    for (const threadId of activeThreadIds) void staffChatCall({ action: 'read', threadId, companyId }).catch(() => {});
+    for (const threadId of activeThreadIds.filter(id => !id.startsWith('announcements_'))) void staffChatCall({ action: 'read', threadId, companyId }).catch(() => {});
     return () => unsubs.forEach(stop => stop());
   }, [activeThreadIds.join(','), myParticipantId, authLoading, companyId, canViewChat]);
 
@@ -430,7 +520,7 @@ function ChatPageInner() {
     if (alreadyTemp) return;
     // Only place in the top-of-stack profile's first empty slot (as temp)
     if (!activeProfile) return;
-    const emptyIdx = openPanes.findIndex(p => !p);
+    const emptyIdx = openPanes.findIndex((p,i) => !p&&!slots[i]);
     if (emptyIdx >= 0) {
       setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: thread.title } }));
     }
@@ -453,7 +543,7 @@ function ChatPageInner() {
         name: name.trim(),
         companyId: companyId || '',
         gridLayout: layout,
-        threadType: 'direct',
+        threadType: 'all',
         slots: Array(slotCount).fill(null),
         createdBy: myParticipantId,
       } });
@@ -476,7 +566,7 @@ function ChatPageInner() {
     const db = getFirestoreDb();
     if (!db) return;
     try {
-      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { threadType: type } });
+      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { threadType: activeProfile.threadType === type ? 'all' : type } });
       // Firestore onSnapshot will update profiles → re-derives activeProfile
     } catch (err) {
       console.error('[ChatPage] saveProfileType failed', err);
@@ -487,18 +577,57 @@ function ChatPageInner() {
   const saveProfileSlots = useCallback(async (newSlots: (SlotAssignment | null)[]) => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
       setToastMsg('You do not have permission to manage monitor profiles.');
-      return;
+      return false;
     }
-    if (!activeProfile) return;
+    if (!activeProfile) {
+      setToastMsg('Select a monitor profile before locking a chat position.');
+      return false;
+    }
     const db = getFirestoreDb();
-    if (!db) return;
+    if (!db) return false;
     try {
       await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { slots: newSlots } });
+      return true;
     } catch (err) {
       console.error('[ChatPage] saveProfileSlots failed', err);
       setToastMsg('Could not update profile layout. Check your access.');
+      return false;
     }
   }, [activeProfile, user, userCompany, companyId]);
+
+  const sameAssignment=(a:SlotAssignment|null|undefined,b:SlotAssignment)=>{if(!a)return false;const left=a.threadId||(a.driverHash?driverThreadMap[a.driverHash]:undefined),right=b.threadId||(b.driverHash?driverThreadMap[b.driverHash]:undefined);return left&&right?left===right:!!a.driverHash&&a.driverHash===b.driverHash;};
+  const chooseLockProfile=(id:string,request=lockRequest,newLayout=lockLayout)=>{
+    setLockProfileChoice(id);
+    const target=profiles.find(p=>p.id===id),layout=GRID_LAYOUTS.find(l=>l.label===(target?.gridLayout||newLayout))||GRID_LAYOUTS[3];
+    const free=(i:number)=>!target?.slots[i]||!!request&&sameAssignment(target.slots[i],request.assignment);
+    const index=request?.index??0;
+    setLockPosition(index<layout.cols*layout.rows&&free(index)?index:Array.from({length:layout.cols*layout.rows},(_,i)=>i).find(free)??-1);
+  };
+  const requestSlotLock=(index:number,assignment:SlotAssignment)=>{
+    if(!canManageProfiles)return;
+    if(threads.find(t=>t.id===assignment.threadId)?.audience==='private_driver'){setToastMsg('Private chats cannot be saved in shared monitor profiles.');return;}
+    const request={index,assignment};lockNewProfileIdRef.current=null;setLockRequest(request);setLockError('');setLockName('');setLockLayout(gridLayout.label);
+    chooseLockProfile(activeProfile?.id||'',request,gridLayout.label);
+  };
+  const confirmSlotLock=async()=>{
+    if(!lockRequest||lockBusy||!canManageProfiles||!companyId)return;
+    const scope=slotScopeRef.current,target=profiles.find(p=>p.id===lockProfileChoice);
+    if(lockProfileChoice&&!target){setLockError('That profile is no longer available. Choose another.');return;}
+    if(activeProfile?.locked&&target?.id!==activeProfile.id){setLockError('Unlock the current monitor profile before switching profiles.');return;}
+    const layout=GRID_LAYOUTS.find(l=>l.label===(target?.gridLayout||lockLayout))||GRID_LAYOUTS[3],size=layout.cols*layout.rows;
+    if(!target&&!lockName.trim()){setLockError('Enter a name for the new profile.');return;}
+    if(lockPosition<0||lockPosition>=size||target?.slots[lockPosition]&&!sameAssignment(target.slots[lockPosition],lockRequest.assignment)
+      ||target?.id===activeProfileId&&tempSlots[lockPosition]&&!sameAssignment(tempSlots[lockPosition],lockRequest.assignment)){setLockError('That position is occupied. Choose an open position.');return;}
+    const profileId=target?.id||(lockNewProfileIdRef.current??=chatIntentId());
+    const newSlots=Array.from({length:size},(_,i)=>sameAssignment(target?.slots[i],lockRequest.assignment)?null:target?.slots[i]||null);
+    newSlots[lockPosition]=lockRequest.assignment;
+    setLockBusy(true);setLockError('');
+    try{
+      await staffChatCall({action:'saveProfile',companyId,profileId,record:target?{slots:newSlots}:{name:lockName.trim(),gridLayout:layout.label,threadType:'all',slots:newSlots}});
+      if(slotScopeRef.current!==scope)return;
+      setProfileLockHandoff({scope,profileId,index:lockPosition,assignment:lockRequest.assignment});
+    }catch{if(slotScopeRef.current===scope){setLockBusy(false);setLockError('Could not save this position. Your chat is still open. Try again.');}}
+  };
 
   const saveProfileLayout = useCallback(async (layout: string) => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
@@ -598,7 +727,8 @@ function ChatPageInner() {
   }, [paneInputs, myParticipantId, user, userCompany, companyId]);
 
   // --- Start chat with driver (creates thread if needed, returns thread ID) ---
-  const ensureDriverThread = useCallback(async (driverHash: string, driverName: string, driverCompanyId?: string): Promise<string | null> => {
+  const [newConversationScope, setNewConversationScope] = useState<'dispatch' | 'private'>('dispatch');
+  const ensureDriverThread = useCallback(async (driverHash: string, driverName: string, driverCompanyId?: string, scope: 'dispatch' | 'private' = 'dispatch'): Promise<string | null> => {
     if (!hasCapability(user, 'sendChat', userCompany)) {
       setToastMsg('You do not have permission to start conversations.');
       return null;
@@ -606,7 +736,7 @@ function ChatPageInner() {
     const db = getFirestoreDb();
     if (!db) return null;
     try {
-      const result = await staffChatCall({ action: 'direct', companyId, driverId: driverHash });
+      const result = await staffChatCall({ action: scope, companyId, driverId: driverHash });
       return result.threadId;
     } catch (err) {
       console.error('[ChatPage] ensureDriverThread failed', err);
@@ -646,16 +776,17 @@ function ChatPageInner() {
   }, [companyId]);
 
   // --- Sidebar filtering — unanswered first, then by updatedAt ---
-  const nonEmptyThreads = threads.filter((t) => t.lastMessage?.text);
+  const nonEmptyThreads = threads.filter((t) => t.permanent || t.lastMessage?.text || t.audience);
   const filteredThreads = useMemo(() => {
     const base = filter === 'archived'
-      ? nonEmptyThreads.filter((t) => t.status === 'archived')
+      ? nonEmptyThreads.filter((t) => t.permanent || t.status === 'archived')
       : filter === 'all'
         ? nonEmptyThreads.filter((t) => t.status !== 'archived')
-        : nonEmptyThreads.filter((t) => t.type === filter && t.status !== 'archived');
+        : nonEmptyThreads.filter((t) => matchesChatFilter(t, filter) && t.status !== 'archived');
 
     // Sort: unanswered (unread + from someone else) first, then by updatedAt desc
     return [...base].sort((a, b) => {
+      if (!!a.permanent !== !!b.permanent) return a.permanent ? -1 : 1;
       const aUnread = isThreadUnread(a, myParticipantId) && a.lastMessage?.senderId !== myParticipantId;
       const bUnread = isThreadUnread(b, myParticipantId) && b.lastMessage?.senderId !== myParticipantId;
       if (aUnread && !bUnread) return -1;
@@ -673,7 +804,8 @@ function ChatPageInner() {
     for (const t of nonEmptyThreads) {
       if (t.status === 'archived') continue;
       if (isThreadUnread(t, myParticipantId)) {
-        counts[t.type] = (counts[t.type] || 0) + 1;
+        const category = t.audience || t.type;
+        counts[category] = (counts[category] || 0) + 1;
         counts['all'] = (counts['all'] || 0) + 1;
       }
     }
@@ -683,7 +815,7 @@ function ChatPageInner() {
   // Show all drivers in the picker — clicking one with an existing thread opens it,
   // clicking one without creates a new thread. No more hiding drivers after first message.
   const driversWithThreads = new Map<string, string>(
-    threads.filter((t) => t.type === 'direct').flatMap((t) =>
+    threads.filter((t) => t.audience === (newConversationScope === 'private' ? 'private_driver' : 'dispatch_team')).flatMap((t) =>
       (t.participants || []).filter((p) => p.startsWith('driver:')).map((p) => [p.replace('driver:', ''), t.id] as [string, string])
     )
   );
@@ -692,6 +824,7 @@ function ChatPageInner() {
     : drivers;
 
   const getTitle = (thread: ChatThread) => {
+    if (thread.audience) return `${thread.title} · ${chatAudienceLabel(thread)}`;
     if (thread.type === 'direct') {
       const otherId = (thread.participants || []).find((p) => p !== myParticipantId);
       if (otherId && thread.participantNames?.[otherId]) return thread.participantNames[otherId];
@@ -791,6 +924,9 @@ function ChatPageInner() {
             </div>
           </div>
 
+          <div className="flex justify-end px-3 py-1 border-b border-gray-800">
+            <button onClick={() => openChatWorkspace(true)} title="New chat window" className="text-xs text-gray-400 hover:text-[#FFD700]">New window</button>
+          </div>
           {/* Setup panel — profiles + grid size + instructions */}
           {setupMode && (
             <div className="mt-3 space-y-2">
@@ -843,7 +979,7 @@ function ChatPageInner() {
                           key={t}
                           onClick={() => saveProfileType(t)}
                           className={`px-2 py-1 rounded text-xs font-semibold border transition-colors ${
-                            (activeProfile.threadType || 'direct') === t
+                            activeProfile.threadType === t
                               ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]'
                               : 'bg-[#0a0a0a] border-gray-700 text-gray-400 hover:border-gray-500'
                           }`}
@@ -852,6 +988,7 @@ function ChatPageInner() {
                         </button>
                       ))}
                     </div>
+                    <p className="text-[10px] text-gray-500 mt-2">Choose a type to filter slot choices. Click the selected type again for all chats.</p>
                   </div>
 
                   {/* Grid size */}
@@ -873,9 +1010,9 @@ function ChatPageInner() {
                       ))}
                     </div>
                     <p className="text-[10px] text-gray-500 mt-2">
-                      {(activeProfile.threadType || 'direct') === 'direct'
+                      {activeProfile.threadType === 'direct'
                         ? 'Click grid slots to assign drivers'
-                        : 'Click grid slots to assign group chats'}
+                        : 'Click grid slots to assign chats'}
                     </p>
                   </div>
                 </>
@@ -912,23 +1049,33 @@ function ChatPageInner() {
           })}
         </div>
 
-        {/* New Direct Message button — starting a DM is a sendChat action */}
+        {/* New conversation button — starting a DM is a sendChat action */}
         {canSendChat && (
         <div className="px-3 py-2 border-b border-gray-800">
           <button
             onClick={() => { setShowDriverPicker(!showDriverPicker); if (!showDriverPicker) loadDrivers(); }}
+            aria-expanded={showDriverPicker}
+            aria-controls="new-conversation-list"
             className={`w-full py-2 rounded-lg border text-sm font-semibold transition-colors ${
               showDriverPicker ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]' : 'bg-[#FFD700]/10 border-[#FFD700]/30 text-[#FFD700] hover:bg-[#FFD700]/20'
             }`}
           >
-            New Direct Message
+            {showDriverPicker ? 'Close conversation list' : 'New conversation'}
           </button>
         </div>
         )}
 
         {/* Direct driver picker */}
         {showDriverPicker ? (
-          <div className="flex-1 overflow-y-auto bg-[#0d0d0d]">
+          <div id="new-conversation-list" className="flex-1 overflow-y-auto bg-[#0d0d0d]">
+            <div className="p-3 text-sm border-b border-gray-800">
+              <label htmlFor="conversation-scope">Conversation audience</label>
+              <select id="conversation-scope" value={newConversationScope} onChange={e => setNewConversationScope(e.target.value as 'dispatch' | 'private')} className="w-full mt-2 p-2 bg-[#222] rounded">
+                <option value="dispatch">Dispatch team — all authorized dispatchers</option>
+                <option value="private">Private — only you and this driver</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-2">{newConversationScope === 'private' ? 'Private chats cannot be saved in shared monitor profiles. Level reports stay in Dispatch team.' : 'One conversation per driver, across shifts. Level reports appear here.'}</p>
+            </div>
             <input
               type="text"
               value={driverSearch}
@@ -942,7 +1089,7 @@ function ChatPageInner() {
               return (
               <div
                 key={d.hash}
-                onClick={() => { ensureDriverThread(d.hash, d.name, d.companyId); setShowDriverPicker(false); }}
+                onClick={() => { void ensureDriverThread(d.hash, d.name, d.companyId, newConversationScope).then(id => { if (id) setTempSlots(prev => ({ ...prev, [0]: { threadId: id, threadTitle: d.name } })); }); setShowDriverPicker(false); }}
                 className={`w-full text-left px-3 py-3 text-sm hover:bg-[#FFD700]/10 hover:text-white cursor-pointer transition-colors border-b border-gray-800/30 flex items-center justify-between ${hasThread ? 'text-gray-500' : 'text-gray-300'}`}
                 role="button"
               >
@@ -968,6 +1115,10 @@ function ChatPageInner() {
               return (
                 <button
                   key={thread.id}
+                  data-chat-list-thread={thread.id}
+                  title="Click to open, or drag to a grid position. On touchscreens, press and hold to drag."
+                  {...gridDrag.handles({threadId:thread.id,title:getTitle(thread),scope:`${companyId}:${activeProfileId}:${gridLayout.label}`},setupMode||lockBusy)}
+                  style={{userSelect:'none',WebkitTouchCallout:'none'}}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (setupMode) return;
@@ -988,11 +1139,12 @@ function ChatPageInner() {
                     }
 
                     // 3. Open thread in an available grid slot
-                    const emptyIdx = openPanes.findIndex(p => !p);
+                    const emptyIdx = openPanes.findIndex((p,i) => !p&&!slots[i]);
                     if (emptyIdx >= 0) {
                       setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
                     } else {
-                      const lastIdx = Math.max(openPanes.length - 1, 0);
+                      const lastIdx = openPanes.findLastIndex((_,i)=>!slots[i]||!!tempSlots[i]);
+                      if(lastIdx<0){setToastMsg('All positions are locked. Unlock a chat or choose another profile.');return;}
                       setTempSlots(prev => ({ ...prev, [lastIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
                     }
                   }}
@@ -1006,7 +1158,7 @@ function ChatPageInner() {
                       {getTitle(thread)}
                     </span>
                     <span className={`text-[10px] ${unread ? 'text-[#FFD700]' : 'text-gray-600'}`}>
-                      {formatChatTime(thread.lastMessage?.timestamp || thread.updatedAt)}
+                      {thread.permanent && !thread.lastMessage ? '' : formatChatTime(thread.lastMessage?.timestamp || thread.updatedAt)}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5 ml-6">
@@ -1017,9 +1169,9 @@ function ChatPageInner() {
                   </div>
                   <div className="flex items-center gap-2 ml-6 mt-0.5">
                     <span className="text-[9px] text-gray-600 uppercase tracking-wider">
-                      {threadTypeLabel(thread.type)}
+                      {chatAudienceLabel(thread)}
                     </span>
-                    {thread.type !== 'direct' && canSendChat && (
+                    {!thread.permanent && thread.type !== 'direct' && canSendChat && (
                       <button
                         onClick={async (e) => {
                           e.stopPropagation();
@@ -1109,6 +1261,30 @@ function ChatPageInner() {
           </div>
         )}
 
+      {gridDrag.drag&&<div className="fixed z-[90] pointer-events-none rounded border border-[#FFD700] bg-[#222] px-3 py-2 text-sm text-[#FFD700] shadow-xl" style={{left:gridDrag.drag.x+14,top:gridDrag.drag.y+14,maxWidth:280}}>{gridDrag.drag.payload.title}</div>}
+      {lockRequest&&<div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4" onClick={()=>{if(!lockBusy)setLockRequest(null);}}>
+        <section ref={lockDialogRef} style={{maxHeight:'90dvh',overflowY:'auto'}} role="dialog" aria-modal="true" aria-labelledby="chat-lock-title" className="w-full max-w-md rounded-xl border border-gray-700 bg-[#151515] p-5 shadow-xl" onClick={e=>e.stopPropagation()} onKeyDown={e=>{if(e.key==='Escape'&&!lockBusy)setLockRequest(null);}}>
+          <h2 id="chat-lock-title" className="font-bold text-[#FFD700] mb-2">Lock chat position</h2>
+          <p className="text-sm text-gray-300 mb-4">{lockRequest.assignment.threadTitle||lockRequest.assignment.driverName||'Chat'}</p>
+          <label className="block text-sm mb-3">Monitor profile
+            <select autoFocus aria-label="Monitor profile" disabled={lockBusy} value={lockProfileChoice} onChange={e=>chooseLockProfile(e.target.value)} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2">
+              {profiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}<option value="">Create a new profile…</option>
+            </select>
+          </label>
+          {!lockProfileChoice&&<>
+            <label className="block text-sm mb-3">Profile name<input aria-label="Profile name" maxLength={120} disabled={lockBusy} value={lockName} onChange={e=>setLockName(e.target.value)} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2"/></label>
+            <label className="block text-sm mb-3">Grid size<select aria-label="Grid size" disabled={lockBusy} value={lockLayout} onChange={e=>{setLockLayout(e.target.value);setLockPosition(0);}} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2">{GRID_LAYOUTS.map(l=><option key={l.label}>{l.label}</option>)}</select></label>
+          </>}
+          <label className="block text-sm mb-3">Position<select aria-label="Position" disabled={lockBusy} value={lockPosition} onChange={e=>setLockPosition(Number(e.target.value))} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2">
+            <option value={-1} disabled>Choose an open position</option>
+            {(()=>{const target=profiles.find(p=>p.id===lockProfileChoice),layout=GRID_LAYOUTS.find(l=>l.label===(target?.gridLayout||lockLayout))||GRID_LAYOUTS[3];return Array.from({length:layout.cols*layout.rows},(_,i)=>{const occupied=!!target?.slots[i]&&!sameAssignment(target.slots[i],lockRequest.assignment)||target?.id===activeProfileId&&!!tempSlots[i]&&!sameAssignment(tempSlots[i],lockRequest.assignment);return <option key={i} value={i} disabled={occupied}>Row {Math.floor(i/layout.cols)+1}, column {i%layout.cols+1}{occupied?' — occupied':''}</option>;});})()}
+          </select></label>
+          <p className="text-xs text-gray-400 mb-3">Profiles remain available in Settings for editing. Unlock a chat before dragging it to another position.</p>
+          {lockError&&<p role="alert" className="text-sm text-red-400 mb-3">{lockError}</p>}
+          <div className="flex justify-end gap-2"><button disabled={lockBusy} onClick={()=>setLockRequest(null)} className="px-3 py-2 rounded border border-gray-600">Cancel</button><button disabled={lockBusy||lockPosition<0||!lockProfileChoice&&!lockName.trim()} onClick={confirmSlotLock} className="px-3 py-2 rounded bg-[#FFD700] text-black disabled:opacity-50">{lockBusy?'Saving position…':'Save and lock'}</button></div>
+        </section>
+      </div>}
+
       {/* Toast notification */}
       {toastMsg && (
         <div className="fixed top-4 right-4 z-50 bg-[#FFD700] text-black px-4 py-2 rounded-lg shadow-lg text-sm font-medium animate-pulse">
@@ -1116,24 +1292,15 @@ function ChatPageInner() {
         </div>
       )}
 
-      <div className="flex-1 overflow-hidden" style={{
+      <div className="flex-1 overflow-hidden relative" style={{
         display: 'grid',
         gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
         gridTemplateRows: `repeat(${gridRows}, 1fr)`,
         gap: '1px',
         background: '#1a1a1a',
       }}>
-        {!activeProfile && Object.keys(tempSlots).length === 0 && (
-          <div className="flex items-center justify-center bg-[#0a0a0a]" style={{ gridColumn: `1 / -1`, gridRow: `1 / -1` }}>
-            <div className="text-center">
-              <p className="text-4xl mb-4">💬</p>
-              <p className="text-gray-500 text-lg">Click a conversation to open it</p>
-              <p className="text-gray-600 text-sm mt-2">Or create a monitor profile for a persistent layout</p>
-            </div>
-          </div>
-        )}
 
-        {(activeProfile ? slots.slice(0, maxPanes) : Array(maxPanes).fill(null)).map((slot, index) => {
+        {Array.from({length:maxPanes},(_,i)=>slots[i]||null).map((slot, index) => {
           const threadId = openPanes[index];
           const thread = threadId ? threads.find((t) => t.id === threadId) : null;
           const msgs = threadId ? (paneMessages[threadId] || []) : [];
@@ -1141,13 +1308,14 @@ function ChatPageInner() {
           const lastMsg = msgs[msgs.length - 1];
           const hasUnread = lastMsg && lastMsg.senderId !== myParticipantId;
 
+          const pane=(()=>{
           // Setup mode — show slot assignment UI
           if (setupMode) {
-            const profileType = activeProfile?.threadType || 'direct';
+            const profileType = activeProfile?.threadType || 'all';
             const isDirectProfile = profileType === 'direct';
             const slotLabel = slot?.driverName || slot?.threadTitle || null;
             // Group threads matching this profile type
-            const matchingThreads = threads.filter((t) => t.type === profileType && t.status !== 'archived');
+            const matchingThreads = threads.filter((t) => (profileType === 'all' || t.type === profileType) && t.status !== 'archived');
             const assignedThreadIds = new Set(slots.filter(Boolean).map((s) => s!.threadId).filter(Boolean));
 
             return (
@@ -1158,7 +1326,7 @@ function ChatPageInner() {
                     <p className="text-sm font-bold text-[#FFD700]">{slotLabel}</p>
                     <div className="flex gap-2 mt-2">
                       <button
-                        onClick={() => { setSlotPickerIndex(index); if (isDirectProfile) loadDrivers(); }}
+                        onClick={() => { setSlotPickerIndex(index); if (isDirectProfile || profileType === 'all') loadDrivers(); }}
                         className="text-xs px-2 py-1 rounded bg-[#1a1a1a] border border-gray-700 text-gray-400 hover:text-white"
                       >
                         Change
@@ -1173,7 +1341,7 @@ function ChatPageInner() {
                   </div>
                 ) : (
                   <button
-                    onClick={() => { setSlotPickerIndex(index); if (isDirectProfile) loadDrivers(); }}
+                    onClick={() => { setSlotPickerIndex(index); if (isDirectProfile || profileType === 'all') loadDrivers(); }}
                     className="text-sm text-gray-500 hover:text-[#FFD700] transition-colors"
                   >
                     + {isDirectProfile ? 'Assign Driver' : 'Assign Chat'}
@@ -1188,7 +1356,7 @@ function ChatPageInner() {
                       <button onClick={() => { setSlotPickerIndex(null); setGroupName(''); setGroupMembers([]); setGroupBroadcast(false); }} className="text-gray-400 hover:text-white text-sm px-1.5 py-0.5 rounded hover:bg-gray-700 transition-colors">✕ Close</button>
                     </div>
                     <div className="flex-1 overflow-y-auto">
-                      {isDirectProfile ? (
+                      {(isDirectProfile || profileType === 'all') && (
                         // Driver picker for direct profiles
                         drivers.filter((d) => !assignedHashes.has(d.hash) || d.hash === slot?.driverHash).map((d) => (
                           <div
@@ -1199,7 +1367,8 @@ function ChatPageInner() {
                             {d.name}
                           </div>
                         ))
-                      ) : (
+                      )}
+                      {!isDirectProfile && (
                         // Thread picker + inline create for group profiles
                         <>
                           {matchingThreads.filter((t) => !assignedThreadIds.has(t.id) || t.id === slot?.threadId).map((t) => (
@@ -1212,7 +1381,7 @@ function ChatPageInner() {
                             </div>
                           ))}
                           {/* Inline group creation */}
-                          <div className="p-2 border-t border-gray-700">
+                          {profileType !== 'all' && <div className="p-2 border-t border-gray-700">
                             <input
                               type="text"
                               value={groupName}
@@ -1286,7 +1455,7 @@ function ChatPageInner() {
                                 Create + Assign ({groupMembers.length})
                               </button>
                             </div>
-                          </div>
+                          </div>}
                         </>
                       )}
                     </div>
@@ -1300,13 +1469,13 @@ function ChatPageInner() {
           if (!slot && !threadId) {
             return (
               <div key={index} className="bg-[#0a0a0a] flex items-center justify-center">
-                <p className="text-gray-800 text-xs">Open</p>
+                <p className="text-gray-600 text-xs">{gridDrag.drag?'Drop chat here':'Open'}</p>
               </div>
             );
           }
 
           // Assigned slot but no thread yet (profile has driver hash but no chat thread exists)
-          if (!threadId) {
+          if (!threadId && slot) {
             const slotLabel = slot.driverName || slot.threadTitle || 'Unlinked';
             return (
               <div key={index} className="flex flex-col min-w-0 min-h-0 bg-[#0a0a0a]">
@@ -1332,13 +1501,16 @@ function ChatPageInner() {
             );
           }
 
+          if(!threadId)return null;
           // Active chat pane
           return (
             <div key={index} className={`flex flex-col min-w-0 min-h-0 bg-[#0a0a0a] transition-all ${
               highlightedPane === index ? 'ring-2 ring-[#FFD700] ring-inset' : ''
             }`}>
-              {/* Header */}
-              <div className={`flex items-center justify-between px-3 py-2 border-b flex-shrink-0 transition-colors ${
+              {/* Header: drag here; message text retains native selection. */}
+              <div {...gridDrag.handles({threadId:threadId!,title:thread?getTitle(thread):'Chat',scope:`${companyId}:${activeProfileId}:${gridLayout.label}`},!tempSlots[index]||lockBusy||setupMode)}
+                title={tempSlots[index]?'Drag to move; on touchscreens, press and hold to drag.':'Unlock this chat to move it.'}
+                data-chat-drag-header={threadId} style={{userSelect:'none',WebkitTouchCallout:'none',cursor:tempSlots[index]?'grab':'default'}} className={`flex items-center justify-between px-3 py-2 border-b flex-shrink-0 transition-colors ${
                 hasUnread ? 'bg-[#FFD700]/10 border-[#FFD700]/40' : highlightedPane === index ? 'bg-[#FFD700]/20 border-[#FFD700]/60' : 'bg-[#0d0d0d] border-gray-800'
               }`}>
                 <div className="min-w-0 flex-1">
@@ -1369,24 +1541,21 @@ function ChatPageInner() {
                   {/* Slot lock: temp slots show open lock, click to persist to profile */}
                   {(() => {
                     const isTemp = !!tempSlots[index];
-                    const lockSlot = () => {
-                      // Persist temp slot to profile
-                      const assignment = tempSlots[index];
-                      if (!assignment) return;
-                      const newSlots = [...slots];
-                      while (newSlots.length <= index) newSlots.push(null);
-                      newSlots[index] = assignment;
-                      saveProfileSlots(newSlots);
-                      setTempSlots(prev => { const next = { ...prev }; delete next[index]; return next; });
-                    };
-                    const unlockSlot = () => {
+                    const unlockSlot = async () => {
                       // Move persisted slot to temp (remove from Firestore)
                       const currentSlot = slots[index];
                       if (!currentSlot) return;
-                      setTempSlots(prev => ({ ...prev, [index]: currentSlot }));
+                      const scope = slotScopeRef.current;
                       const newSlots = [...slots];
                       newSlots[index] = null;
-                      saveProfileSlots(newSlots);
+                      setSavingSlots(prev => ({ ...prev, [index]: true }));
+                      const saved = await saveProfileSlots(newSlots);
+                      if (slotScopeRef.current !== scope) return;
+                      if (saved) {
+                        setTempSlots(prev => ({ ...prev, [index]: currentSlot }));
+                        setPendingSlotUnlocks(prev=>({...prev,[index]:currentSlot}));
+                      }
+                      setSavingSlots(prev => ({ ...prev, [index]: false }));
                     };
                     const removeTemp = () => {
                       setTempSlots(prev => { const next = { ...prev }; delete next[index]; return next; });
@@ -1398,11 +1567,12 @@ function ChatPageInner() {
                             local-only state, so it stays available to anyone. */}
                         {canManageProfiles && (
                         <button
-                          onClick={isTemp ? lockSlot : unlockSlot}
+                          onClick={isTemp ? ()=>requestSlotLock(index,tempSlots[index]) : unlockSlot}
+                          disabled={lockBusy || Object.values(savingSlots).some(Boolean) || Object.keys(pendingSlotUnlocks).length > 0}
                           className={`text-xs px-1 py-0.5 rounded transition-colors ${
                             isTemp ? 'text-gray-500 hover:text-[#FFD700]' : 'text-[#FFD700]/60 hover:text-[#FFD700]'
                           }`}
-                          title={isTemp ? 'Lock to this profile slot' : 'Unlock (temporary)'}
+                          title={lockBusy&&lockRequest?.index===index || savingSlots[index] || pendingSlotUnlocks[index] ? 'Saving chat position' : isTemp ? 'Lock to this profile slot' : 'Unlock (temporary)'}
                         >
                           {isTemp ? '🔓' : '🔒'}
                         </button>
@@ -1419,7 +1589,7 @@ function ChatPageInner() {
                       </>
                     );
                   })()}
-                  {thread && thread.type !== 'direct' && canSendChat && (
+                  {thread && !thread.permanent && thread.type !== 'direct' && canSendChat && (
                     <button
                       onClick={() => { setManagingThreadId(managingThreadId === threadId ? null : threadId); loadDrivers(); }}
                       className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
@@ -1430,7 +1600,7 @@ function ChatPageInner() {
                       {thread.participants?.length || 0}
                     </button>
                   )}
-                  {thread && thread.type !== 'direct' && canSendChat && (
+                  {thread && !thread.permanent && thread.type !== 'direct' && canSendChat && (
                     <button
                       onClick={async () => {
                         if (!hasCapability(user, 'sendChat', userCompany)) {
@@ -1454,7 +1624,7 @@ function ChatPageInner() {
                       {(thread as any).broadcast ? '📢' : '💬'}
                     </button>
                   )}
-                  <button
+                  {!thread?.permanent && <button
                     onClick={() => archiveThread(threadId)}
                     className="text-gray-600 hover:text-[#FFD700] p-1 transition-colors"
                     title="Archive chat"
@@ -1462,12 +1632,12 @@ function ChatPageInner() {
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" />
                     </svg>
-                  </button>
+                  </button>}
                 </div>
               </div>
 
               {/* Member management panel */}
-              {managingThreadId === threadId && thread && thread.type !== 'direct' && (
+              {managingThreadId === threadId && thread && !thread.permanent && thread.type !== 'direct' && (
                 <div className="border-b border-gray-800 bg-[#0d0d0d] px-3 py-2 flex-shrink-0 max-h-32 overflow-y-auto">
                   <div className="flex flex-wrap gap-1 mb-1">
                     {(thread.participants || []).filter((p: string) => p.startsWith('driver:')).map((pid: string) => {
@@ -1532,6 +1702,7 @@ function ChatPageInner() {
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-3 space-y-1.5 min-h-0">
                 {msgs.map((msg) => {
+                  if (msg.requiresAcknowledgement) return <AnnouncementMessage key={msg.id} message={msg} />;
                   const isMine = msg.senderId === myParticipantId;
                   const isSystem = msg.type === 'system';
                   const isLevelReport = msg.type === 'level_report';
@@ -1539,15 +1710,16 @@ function ChatPageInner() {
                   if (isSystem) {
                     return (
                       <div key={msg.id} className="flex justify-center my-1">
-                        <div className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-2 py-0.5">
-                          <p className="text-gray-400 text-xs text-center">{msg.text}</p>
+                        <div onContextMenu={selectChatMessageText} className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-2 py-0.5">
+                          <p data-chat-message-text className="text-gray-400 text-xs text-center select-text">{msg.text}</p>
+                          <ChatMessageFooter message={msg} />
                         </div>
                       </div>
                     );
                   }
                   return (
                     <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] rounded-xl px-3 py-1.5 ${
+                      <div onContextMenu={selectChatMessageText} className={`max-w-[80%] rounded-xl px-3 py-1.5 ${
                         isMine ? 'bg-[#FFD700] text-black rounded-br-sm' : 'bg-[#1a1a1a] text-gray-200 rounded-bl-sm'
                       }`}>
                         {!isMine && !isLevelReport && msg.senderName && <p className="text-[10px] font-semibold mb-0.5 text-[#FFD700]">{msg.senderName}</p>}
@@ -1562,11 +1734,9 @@ function ChatPageInner() {
                             <img src={(msg as any).photoUrl} alt="Photo" className="rounded-lg max-w-full max-h-32 cursor-pointer hover:opacity-80" />
                           </a>
                         ) : (
-                          <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+                          <p data-chat-message-text className="text-sm whitespace-pre-wrap break-words select-text">{msg.text}</p>
                         )}
-                        <p className={`text-[10px] mt-0.5 text-right ${isMine ? 'text-black/50' : 'text-gray-500'}`}>
-                          {formatChatTime(msg.timestamp)}
-                        </p>
+                        <ChatMessageFooter message={msg} mine={isMine} />
                       </div>
                     </div>
                   );
@@ -1574,6 +1744,7 @@ function ChatPageInner() {
                 <div ref={(el) => { paneEndRefs.current[threadId] = el; }} />
               </div>
 
+              {thread?.permanent && <p className="px-3 py-2 text-xs text-[#FFD700] bg-[#211d08]">Post to all drivers, including off shift. Each driver must acknowledge.</p>}
               {/* Input */}
               <div className="flex items-center gap-2 px-2 py-1.5 border-t border-gray-800 bg-[#0d0d0d] flex-shrink-0">
                 <div className="flex-1 flex items-end gap-1">
@@ -1581,7 +1752,7 @@ function ChatPageInner() {
                     value={inputText}
                     onChange={(e) => setPaneInputs((prev) => ({ ...prev, [threadId]: e.target.value }))}
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (canSendChat) sendInPane(threadId); } }}
-                    placeholder={canSendChat ? 'Shift+Enter for new line' : 'You do not have permission to send messages'}
+                    placeholder={canSendChat ? (thread?.permanent ? 'Announcement to all drivers' : 'Shift+Enter for new line') : 'You do not have permission to send messages'}
                     rows={1}
                     disabled={!canSendChat}
                     className="flex-1 bg-[#1a1a1a] border border-gray-700 rounded-2xl px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700]/50 resize-none overflow-y-auto disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1609,6 +1780,8 @@ function ChatPageInner() {
               </div>
             </div>
           );
+          })();
+          return <div key={index} data-chat-slot={index} className={`min-w-0 min-h-0 grid ${gridDrag.drag?.target===index?'ring-2 ring-inset ring-[#FFD700]':''}`}>{pane}</div>;
         })}
       </div>
       </div>{/* end flex-col wrapper for tab strip + grid */}

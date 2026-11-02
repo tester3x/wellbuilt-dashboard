@@ -25,6 +25,8 @@ export interface ProcessedComputedFields {
   estDateTimePull: string;
   processedAt: string;
   lastPullRevision?: string | null;
+  /** New producer owns stable level-chat delivery; legacy producers do not. */
+  levelReportDeliveryVersion?: 2;
 }
 
 /** Client-only trail helpers that must NOT be persisted on the processed pull. */

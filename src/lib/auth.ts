@@ -3,6 +3,8 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User
@@ -236,7 +238,7 @@ export function hasCapability(
   capability: Capability,
   companyConfig?: RoleConfig | null,
 ): boolean {
-  if (!user) return false;
+  if (!user || user.onboardingStatus === 'pending_employee_approval') return false;
   // Public demo access is a fixed read-only role. Company overrides must not
   // turn the shared account into a writer or widen it to another tenant.
   if (user.role === 'demo_viewer') {
@@ -293,6 +295,38 @@ export async function registerWithEmail(
   const fn = httpsCallable(getFirebaseFunctions(), 'requestCompanyOnboarding');
   await fn({ companyName: requested });
   return await getUserWithRole(result.user);
+}
+
+/** Create an isolated owner company and an ordinary app sign-in. Retrying
+ * after a network failure reuses the authenticated account, never its password
+ * in browser storage. The server owns all company, role and driver identity. */
+export async function registerOwnerWithEmail(email: string, password: string, companyName: string, displayName: string) {
+  const requested = companyName.trim(), name = displayName.trim(), address = email.trim();
+  if (requested.length < 2 || requested.length > 120 || !/^[\p{L}\p{N} .'_-]{2,64}$/u.test(name)
+    || password.length < 6 || password.length > 128) {
+    throw { code: 'invalid-argument', message: 'Enter a company name, app sign-in name and password of at least 6 characters.' };
+  }
+  const auth = getFirebaseAuth();
+  if (auth.currentUser?.email?.toLowerCase() === address.toLowerCase()) {
+    await reauthenticateWithCredential(auth.currentUser, EmailAuthProvider.credential(address, password));
+  } else {
+    try {
+      await createUserWithEmailAndPassword(auth, address, password);
+    } catch (error) {
+      // A prior attempt may have created Auth before company provisioning
+      // failed. Prove the same password before resuming its server journal.
+      if ((error as { code?: string }).code !== 'auth/email-already-in-use') throw error;
+      await signInWithEmailAndPassword(auth, address, password);
+    }
+  }
+  const result = await httpsCallable(getFirebaseFunctions(), 'createOwnerCompany', { timeout: 120000 })({
+    schemaVersion: 1, companyName: requested, displayName: name, passcode: password,
+  });
+  const value = result.data as { ok?: boolean; companyId?: string; displayName?: string };
+  if (value?.ok !== true || !value.companyId || value.displayName !== name) {
+    throw { code: 'functions/internal', message: 'Company setup was not confirmed. Retry with the same email and password.' };
+  }
+  return value;
 }
 
 // Sign out
@@ -424,7 +458,7 @@ export function subscribeToAuthState(callback: (user: WellBuiltUser | null) => v
 
 // Check if user has required role level
 export function hasRole(user: WellBuiltUser | null, requiredRole: UserRole): boolean {
-  if (!user) return false;
+  if (!user || user.onboardingStatus === 'pending_employee_approval') return false;
   return ROLE_LEVELS[user.role] >= ROLE_LEVELS[requiredRole];
 }
 
@@ -455,4 +489,19 @@ export function canEditPull(
 // Check if user can delete pulls (admin+ only)
 export function canDeletePull(user: WellBuiltUser | null): boolean {
   return hasRole(user, 'admin');
+}
+
+/** Employee signup never creates a company or chooses an access role. */
+export async function registerEmployeeWithEmail(input:{email:string;password:string;displayName:string;legalName:string;companyCode?:string;invitationToken?:string}) {
+ const auth=getFirebaseAuth(),email=input.email.trim();
+ if(auth.currentUser?.email?.toLowerCase()===email.toLowerCase())await reauthenticateWithCredential(auth.currentUser,EmailAuthProvider.credential(email,input.password));
+ else {
+  try{await createUserWithEmailAndPassword(auth,email,input.password);}
+  catch(error){if((error as {code?:string}).code!=='auth/email-already-in-use')throw error;await signInWithEmailAndPassword(auth,email,input.password);}
+ }
+ const response=await httpsCallable(getFirebaseFunctions(),'requestEmployeeJoin',{timeout:120000})({
+  displayName:input.displayName.trim(),legalName:input.legalName.trim(),passcode:input.password,
+  ...(input.invitationToken?{invitationToken:input.invitationToken}:{companyCode:input.companyCode?.trim()}),
+ });
+ return response.data as {ok:boolean;status:string;companyName:string;displayName:string};
 }

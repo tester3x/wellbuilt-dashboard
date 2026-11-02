@@ -1,0 +1,12 @@
+{
+  "source": "b088e2c13c66e709302a71fd1f7453603301c676",
+  "verifiedAt": "2026-11-01T22:14:36.310Z",
+  "liveArtifactsVerified": 398,
+  "change": "Chat and notification counts stay inside their icon button stacking contexts.",
+  "checks": [
+    "TypeScript",
+    "production browser icon and overlay stacking",
+    "all mandatory Hosting preflight checks",
+    "live artifact byte match"
+  ]
+}

@@ -78,6 +78,7 @@ export function materializeDriverCreate(input: {
     companyId: input.caller.companyId,
     driverHash: input.caller.driverId,
     source: 'driver',
+    builderOwnership: { kind: 'driver', actorId: input.caller.driverId },
     assignedBy: 'driver',
     status: 'pending',
     loadCount: 1,

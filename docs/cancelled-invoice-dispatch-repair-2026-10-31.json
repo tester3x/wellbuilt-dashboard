@@ -1,0 +1,25 @@
+{
+  "checkout": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "sourceCommit": "08e571d9693e4f714b1d978df3558c2a54a1d0fa",
+  "owner": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "project": "wellbuilt-sync",
+  "function": "projects/wellbuilt-sync/locations/us-central1/functions/resolveDriverJobCancellation",
+  "state": "ACTIVE",
+  "updateTime": "2026-10-31T21:00:25.827963701Z",
+  "deployedSourceHash": "411881fbafe386b1c66ee4c9f55d918a6dda1dc1",
+  "compiledSourceSha256": "acb1afecd9128d20e65f6518816600a2a11cccb4ff92da3dd68318c1d22650ae",
+  "deployedCompiledSourceByteMatched": true,
+  "problem": "An older client had already cancelled its invoice before the dispatch cancellation command. The backend refused the terminal invoice, leaving Dispatch in progress at pickup.",
+  "fix": "An exactly linked, owned cancelled invoice remains available to all custody checks; the same cancellation completes its Dispatch record without rewriting invoice history. Completed, loaded, ticketed or transferred work remains protected.",
+  "tests": "42 tests across builder cancellation, driver cancellation and water custody passed; Functions TypeScript build passed.",
+  "liveRepair": {
+    "recordsReconciled": 2,
+    "allInvoicesUnchanged": true,
+    "allStaleStagesCleared": true,
+    "audit": "Separate durable server audit entry per record; private backups and proofs outside Git",
+    "dashboardListenerAcceptance": "User confirmed the cancelled pickup entry disappeared from active Dispatch without refreshing."
+  },
+  "scope": "Only cancellation endpoint deployed. No APK build/install, Hosting release, rules changes or invoice/well-history rewrites. Earlier Granli work preserved and unactivated."
+}

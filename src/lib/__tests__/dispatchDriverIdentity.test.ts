@@ -5,6 +5,7 @@ import {
   dispatchMatchesDriver,
   resolveDispatchDriver,
   dispatchDriverDisplayName,
+  dispatchReviewDriverName,
   dispatchDriverGroupKey,
   dispatchActiveJobState,
   dispatchVisibleOnDashboard,
@@ -19,6 +20,14 @@ const LEGACY_HASH = '7413cd7d106a0f49c2a670064bc049e3260a522a09a6a5a7fad0c53522e
 const mike: DriverIdentity = { key: CANON, driverId: CANON, companyId: 'liquid-gold', displayName: 'Mikezfold', legalName: 'Mike ZFold7 Burger', legacyAliases: [LEGACY_HASH] };
 const other: DriverIdentity = { key: 'other-uuid', driverId: 'other-uuid', companyId: 'acme', displayName: 'Al A' };
 const drivers = [mike, other];
+
+test('review cards resolve cancellation actor ids and aliases to real names, never raw ids or logins', () => {
+  for (const declinedBy of [CANON, `driver:${CANON}`, LEGACY_HASH, 'Mikezfold', 'unknown-id']) {
+    assert.equal(dispatchReviewDriverName({ companyId: 'liquid-gold', driverId: CANON, declinedBy }, drivers), 'Mike ZFold7 Burger');
+  }
+  assert.equal(dispatchReviewDriverName({ companyId: 'acme', declinedBy: CANON }, drivers), 'Unassigned driver');
+  assert.equal(dispatchReviewDriverName({ companyId: 'liquid-gold', declinedBy: 'unknown-id', driverName: 'bigpapapump' }, drivers), 'Unassigned driver');
+});
 
 test('1. LG pending DDJD with canonical driverId → included in Active Jobs + attaches to driver', () => {
   const job = { driverId: CANON, companyId: 'liquid-gold', status: 'pending', driverName: 'Mikezfold' };

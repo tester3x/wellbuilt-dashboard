@@ -1,3 +1,12 @@
+import {runningPipeline} from './pipelineOperation';
+import { deliverLevelReport } from './levelReportDelivery';
+export { deliverProcessedLevelReport } from './levelReportDelivery';
+import {averageFlowRates} from './flowAverage';
+import {calculateInventoryProduction} from './inventoryProduction';
+import {previousPullBottomInches} from './previousPullLevel';
+import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecision';
+import {calculateOvernightProductionSample, overnightReadingProof, recordedBottomFeet} from './overnightProduction';
+import { resolveTankBblPerFoot } from './tankCalibration';
 import {refreshFlowWindow} from './refreshFlowWindow';
 export { resolveDriverJobCancellation } from './security/operational/resolveDriverJobCancellation';
 import {effectiveFlow} from './effectiveFlow';
@@ -441,6 +450,7 @@ interface OutgoingResponse {
   originalPacketId?: string;
   windowBblsDay?: string | null;
   overnightBblsDay?: string | null;
+  overnightEstimatedTime?: boolean;
   lastPullDriverId?: string | null;
   lastPullDriverName?: string | null;
   lastPullPacketId?: string | null;
@@ -535,6 +545,9 @@ interface HistoricalPull {
   tankLevelFeet: number;
   bblsTaken: number;
   wellDown: boolean;
+  provisional?: boolean;
+  estimatedTime?: boolean;
+  bottomLevelFeet?: number | null;
 }
 
 /**
@@ -592,6 +605,8 @@ async function getHistoricalPulls(wellName: string, limit: number = 50): Promise
         tankLevelFeet: parseFloat(packet.tankLevelFeet) || 0,
         bblsTaken: parseFloat(packet.bblsTaken) || 0,
         wellDown: packet.wellDown === true || packet.wellDown === 'true',
+        ...overnightReadingProof(packet),
+        bottomLevelFeet: recordedBottomFeet(packet),
       });
     }
 
@@ -661,7 +676,7 @@ function calculateWindowBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot
   for (let i = 1; i < historicalPulls.length; i++) {
     const current = historicalPulls[i];
     const previous = historicalPulls[i - 1];
-    if (current.wellDown || previous.wellDown) continue;
+    if (current.wellDown || previous.wellDown || current.provisional || previous.provisional) continue;
 
     const timeDifDays = (current.timestamp - previous.timestamp) / (1000 * 60 * 60 * 24);
     if (timeDifDays <= 0) continue;
@@ -690,46 +705,6 @@ function calculateWindowBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot
   if (avgFlowRateDays <= 0) return 0;
 
   return Math.round((1 / avgFlowRateDays) * bblPerFoot);
-}
-
-/**
- * Overnight/longest-gap bbls/day.
- * Finds the longest time gap between pulls in the current 6am window.
- */
-function calculateOvernightBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot: number, pullTimestamp: number): number {
-  if (!historicalPulls || historicalPulls.length < 2) return 0;
-
-  // Driver's manual method: most recent pull from any previous day → first pull today.
-  const todayDate = new Date(pullTimestamp).toISOString().slice(0, 10);
-
-  let firstPullToday: HistoricalPull | null = null;
-  let lastPullPrevDay: HistoricalPull | null = null;
-
-  // Pulls are chronological (oldest first). Walk backwards.
-  for (let i = historicalPulls.length - 1; i >= 0; i--) {
-    const pull = historicalPulls[i];
-    const pullDate = new Date(pull.timestamp).toISOString().slice(0, 10);
-
-    if (pullDate === todayDate) {
-      firstPullToday = pull; // Keeps overwriting — last one standing is earliest today
-    } else {
-      lastPullPrevDay = pull; // Most recent pull from a previous day
-      break;
-    }
-  }
-
-  if (!firstPullToday || !lastPullPrevDay) return 0;
-  if (firstPullToday.wellDown || lastPullPrevDay.wellDown) return 0;
-
-  const timeDifDays = (firstPullToday.timestamp - lastPullPrevDay.timestamp) / (1000 * 60 * 60 * 24);
-  if (timeDifDays <= 0) return 0;
-
-  const prevBottomFeet = Math.max(lastPullPrevDay.tankLevelFeet - (lastPullPrevDay.bblsTaken / bblPerFoot), 0);
-  const recoveryFeet = firstPullToday.tankLevelFeet - prevBottomFeet;
-  if (recoveryFeet <= 0) return 0;
-
-  const flowRateDays = timeDifDays / recoveryFeet;
-  return Math.round((1 / flowRateDays) * bblPerFoot);
 }
 
 /**
@@ -763,120 +738,7 @@ async function writeProductionLog(
 
 // Anomaly detection constants (tighter than VBA for better accuracy)
 // VBA uses 5x/2.5x but that's too loose for wells with consistent flow rates
-const ANOMALY_RATIO = 2.0;     // 2x off median = excluded from AFR averaging
-const ITREVIEW_RATIO = 1.5;    // 1.5x off median = flagged but included in AFR
-
-// Calculate median of an array
-function median(arr: number[]): number {
-  if (arr.length === 0) return 0;
-  const sorted = [...arr].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) {
-    return sorted[mid];
-  }
-  return (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-// Determine anomaly level for a flow rate based on median (VBA two-tier system)
-// Returns: 0 = Normal, 1 = IT Review (2.5x-5x), 2 = Anomaly (>5x, excluded from AFR)
-function getFlowRateAnomalyLevel(flowRate: number, medianRate: number): number {
-  if (medianRate <= 0 || flowRate <= 0) return 0;
-
-  // Calculate ratio (how far off from median)
-  const ratio = flowRate < medianRate
-    ? medianRate / flowRate
-    : flowRate / medianRate;
-
-  if (ratio >= ANOMALY_RATIO) {
-    return 2; // Anomaly - excluded from averaging
-  } else if (ratio >= ITREVIEW_RATIO) {
-    return 1; // IT Review - flagged but included
-  }
-  return 0; // Normal
-}
-
-// Filter out anomalies (2x+ off median) from flow rates.
-// Uses two passes plus a regime-shift escape:
-//   1. Progressive median — catches outliers as they appear, lets the well's
-//      baseline drift over time (handles legitimate regime changes when paired
-//      with step detection downstream).
-//   1b. Regime-shift detection — if the LAST N pulls were all rejected as Tier-2
-//       anomalies in the SAME direction, the baseline itself is stale (e.g. a
-//       fresh-tank start followed by a long lapse, pump replacement, or workover).
-//       Reseed from the rejection run as the new baseline and recurse. Mirrors
-//       the step detector at lines ~755-778 but operates on rates that filtered
-//       OUT, which the step detector can't see.
-//   2. Final pass with the OVERALL median of pass-1 results — catches early
-//      outliers that were grandfathered in before there was enough baseline
-//      data (matches the dashboard's anomaly badges so AFR and the UI agree).
-// Returns rates with Tier 2 anomalies removed.
-const REGIME_SHIFT_THRESHOLD = 3;
-function filterAnomalies(flowRates: number[]): number[] {
-  if (flowRates.length < 3) {
-    return flowRates;
-  }
-
-  // Pass 1: progressive (also tracks rejection direction for regime-shift detection)
-  const knownRates: number[] = [];
-  const passOne: number[] = [];
-  // 0 = accepted, +1 = rejected as higher than baseline, -1 = rejected as lower
-  const directions: number[] = [];
-  for (const rate of flowRates) {
-    if (knownRates.length >= 3) {
-      const medianRate = median(knownRates);
-      const level = getFlowRateAnomalyLevel(rate, medianRate);
-      if (level < 2) {
-        passOne.push(rate);
-        knownRates.push(rate);
-        directions.push(0);
-      } else {
-        directions.push(rate > medianRate ? 1 : -1);
-      }
-    } else {
-      // Not enough baseline yet — include for now; pass 2 will re-check.
-      passOne.push(rate);
-      knownRates.push(rate);
-      directions.push(0);
-    }
-  }
-
-  // Pass 1b: regime-shift escape. Scan tail for consecutive same-direction
-  // Tier-2 rejections. If we find a run of REGIME_SHIFT_THRESHOLD or more,
-  // the baseline is stale — reseed from the rejection run and recurse.
-  let runDir = 0;
-  let runStart = -1;
-  for (let i = directions.length - 1; i >= 0; i--) {
-    const d = directions[i];
-    if (d === 0) break;
-    if (runDir === 0) runDir = d;
-    if (d !== runDir) break;
-    runStart = i;
-  }
-  if (runStart >= 0 && (directions.length - runStart) >= REGIME_SHIFT_THRESHOLD) {
-    console.log(`[AFR] regime shift detected: ${directions.length - runStart} consecutive ${runDir > 0 ? 'slower' : 'faster'} rejections, reseeding from index ${runStart}`);
-    return filterAnomalies(flowRates.slice(runStart));
-  }
-
-  // Pass 2: re-check every kept rate against the OVERALL median.
-  // This catches early packets that got grandfathered in during pass 1.
-  if (passOne.length < 5) {
-    return passOne; // Too few to safely re-filter
-  }
-  const overallMedian = median(passOne);
-  const filtered = passOne.filter(rate => getFlowRateAnomalyLevel(rate, overallMedian) < 2);
-
-  if (filtered.length < 3) {
-    return flowRates; // Fallback if too many filtered
-  }
-  return filtered;
-}
-
-// Calculate AFR from recent flow rates using Exponential Moving Average (EMA).
-// EMA tracks gradual well slowdowns better than a fixed-window rolling average.
-// Alpha = 0.4 gives ~60% weight to recent pulls while smoothing noise.
-const EMA_ALPHA = 0.4;
-
-async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<number> {
+async function calculateAFR(wellName: string, newFlowRateDays: number, current?: Record<string, any>): Promise<number> {
 
   // Get recent processed packets for this well
   // NOTE: Don't use limitToLast() - Firebase sorts by key alphabetically,
@@ -889,6 +751,11 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     .once('value');
 
   const flowConfig=(await db.ref('well_config/'+wellName).once('value')).val()||{};
+  if(flowConfig.productionRateMode==='inventory_balance') {
+    const records={...(snapshot.val()||{}),...(current?{[current.packetId]:current}:{})};
+    const at=current?Date.parse(current.dateTimeUTC):Math.max(...Object.values(records).map((p:any)=>Date.parse(p.dateTimeUTC||'')).filter(t=>Number.isFinite(t)&&t<=Date.now()));
+    return calculateInventoryProduction(records,resolveTankBblPerFoot(flowConfig),at)?.daysPerFoot||0;
+  }
   const windowed=effectiveFlow(snapshot.val()||{},flowConfig);
   if(windowed)return windowed.averageDays;
 
@@ -899,7 +766,7 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     const data = child.val();
     const key = child.key || '';
     // Skip edit/delete/history packets
-    if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_')) return;
+    if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_') || isProvisionalPull(data)) return;
     if (!data.wellDown && data.flowRateDays && data.flowRateDays > 0) {
       // Sort by timestamp. Prefer dateTimeUTC (always a valid ISO string) over
       // dateTime (locale-formatted by the WB M client and sometimes malformed,
@@ -923,54 +790,7 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     allRates.push(newFlowRateDays);
   }
 
-  if (allRates.length === 0) return 0;
-  if (allRates.length < 3) return allRates[allRates.length - 1];
-
-  console.log(`[AFR] ${wellName}: ${allRates.length} raw rates`);
-
-  // Filter out anomalies (2x off progressive median) before calculating AFR
-  const rates = filterAnomalies(allRates);
-
-  console.log(`[AFR] ${wellName}: ${rates.length} after anomaly filter`);
-
-  if (rates.length === 0) return allRates[allRates.length - 1];
-  if (rates.length < 3) return rates[rates.length - 1];
-
-  // Step detection: Check if last 3 are ALL >10% off in same direction
-  // Catches sudden regime changes (e.g., well workover, pump change)
-  const STEP_THRESHOLD = 0.10;
-  if (rates.length >= 5) {
-    const preStepRates = rates.slice(0, -3);
-    const recentRates = rates.slice(-3);
-    const preStepAvg = preStepRates.reduce((a, b) => a + b, 0) / preStepRates.length;
-
-    let allHigher = true;
-    let allLower = true;
-
-    for (const rate of recentRates) {
-      const deviation = (rate - preStepAvg) / preStepAvg;
-      if (deviation <= STEP_THRESHOLD) allHigher = false;
-      if (deviation >= -STEP_THRESHOLD) allLower = false;
-    }
-
-    if (allHigher || allLower) {
-      // Step detected - use median of last 3 to reset quickly
-      const sorted = [...recentRates].sort((a, b) => a - b);
-      console.log(`[AFR] ${wellName}: STEP DETECTED, median of last 3: ${sorted[1].toFixed(6)}`);
-      return sorted[1];
-    }
-  }
-
-  // EMA: Exponential Moving Average (alpha=0.4)
-  // Seed with the first rate, then apply EMA formula chronologically.
-  // Recent pulls get exponentially more weight, tracking drift without lag.
-  let ema = rates[0];
-  for (let i = 1; i < rates.length; i++) {
-    ema = EMA_ALPHA * rates[i] + (1 - EMA_ALPHA) * ema;
-  }
-
-  console.log(`[AFR] ${wellName}: EMA(${rates.length} rates, α=${EMA_ALPHA}) = ${ema.toFixed(6)} (${(ema * 24 * 60).toFixed(1)} min/ft)`);
-  return ema;
+  return averageFlowRates(allRates,wellName);
 }
 
 // Main function: Process incoming pull packets
@@ -1002,6 +822,7 @@ export const processIncomingPull = functionsV1.database
     const demoClock = demoWellClock(config);
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+    const bblPerFoot = Number(data.tankLevelFeet) > 0 ? resolveTankBblPerFoot(config) : 0;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
 
     // Get current outgoing response (previous row data)
@@ -1155,7 +976,10 @@ export const processIncomingPull = functionsV1.database
       typeof (data as any).wellDown === 'boolean';
     const existingIsDownSnap = await db.ref(`wells/${wellName}/status/isDown`).once('value');
     const existingIsDown = existingIsDownSnap.val() === true;
-    const nextIsDown = incomingHasAuthoritativeWellDown
+    const pipeline = incomingHasAuthoritativeWellDown && data.wellDown === true ? null : runningPipeline(config);
+    (data as any).pipelineRunning = !!pipeline;
+    if(pipeline || prevResponse?.pipelineRunning === true)(data as any).flowIntervalBarrier = true;
+    const nextIsDown = pipeline ? false : incomingHasAuthoritativeWellDown
       ? ((data as any).wellDown === true)
       : existingIsDown;
 
@@ -1165,6 +989,18 @@ export const processIncomingPull = functionsV1.database
     if (incomingHasAuthoritativeWellDown) {
       const targetConfigKey = configSnap.key || wellName;
       await db.ref(`well_config/${targetConfigKey}/isDown`).set(nextIsDown);
+    }
+
+    // Older outgoing projections may predate the provisional flag. Read their
+    // exact source packet before allowing the next interval to train AFR.
+    let previousIsProvisional=prevResponse?.provisionalBarrels===true;
+    if(!previousIsProvisional&&typeof prevResponse?.lastPullPacketId==='string') {
+      previousIsProvisional=isProvisionalPull((await db.ref('packets/processed/'+prevResponse.lastPullPacketId).once('value')).val());
+    }
+    // Display levels truncate fractional inches; use the linked measurement for AFR.
+    if (typeof prevResponse?.lastPullPacketId === 'string') {
+      const previousSourcePacket = (await db.ref('packets/processed/' + prevResponse.lastPullPacketId).once('value')).val();
+      prevTankAfterInches = previousPullBottomInches(previousSourcePacket, prevTankAfterInches);
     }
 
     // Calculate all fields
@@ -1200,8 +1036,8 @@ export const processIncomingPull = functionsV1.database
       return null;
     }
 
-    const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
-    let tankAfterInches = tankTopInches - bblsInInches;
+    const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / bblPerFoot) * 12 : 0;
+    let tankAfterInches = reportedTrackingBottom(data,tankTopInches) ?? (tankTopInches - bblsInInches);
     if (demoClock && (!Number.isFinite(tankTopInches) || tankTopInches < demoClock.bottomInches
       || !Number.isFinite(Number(data.bblsTaken)) || Number(data.bblsTaken) <= 0
       || tankTopInches > demoClock.tankHeightInches
@@ -1215,8 +1051,6 @@ export const processIncomingPull = functionsV1.database
       });
       return null;
     }
-    const reportedBottom=Number((data as any).watchdogProvenance?.reportedBottomFeet)*12;
-    if(config.flowWindowMinimumRecoveryInches && (data as any).source==='whatsapp_watchdog' && (data as any).watchdogProvenance?.principalId==='laptop-watchdog-v2' && (data as any).watchdogProvenance?.reportedBottomFeet!=null && Number.isFinite(reportedBottom) && reportedBottom>=0 && reportedBottom<=tankTopInches && Math.abs(reportedBottom-tankAfterInches)<=2)tankAfterInches=reportedBottom;
 
     // Time Dif
     let timeDifDays = 0;
@@ -1250,23 +1084,25 @@ export const processIncomingPull = functionsV1.database
       }
     }
 
+    if(isProvisionalPull(data)||previousIsProvisional){flowRateDays=0;flowRate='';}
     const flowHistorySnap=Number(config.flowWindowMinimumRecoveryInches)>=3
       ? await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value') : null;
-    const windowed=flowHistorySnap?effectiveFlow({...flowHistorySnap.val(),[packetId]:{...data,packetId,tankTopInches,tankAfterInches,wellDown:nextIsDown}},config):null;
+    const windowed=flowHistorySnap&&!isProvisionalPull(data)?effectiveFlow({...flowHistorySnap.val(),[packetId]:{...data,packetId,tankTopInches,tankAfterInches,wellDown:nextIsDown}},config):null;
     if(windowed){const sample=windowed.results.find(r=>r.packetId===packetId);flowRateDays=sample?.flowRateDays||0;flowRate=flowRateDays>0?daysToHMMSS(flowRateDays):'';recoveryInches=sample?.recoveryInches||0;timeDifDays=sample?.timeDifDays||0;timeDif=timeDifDays>0?daysToHMM(timeDifDays):'';}
     // Demo tickets are sent by the real app, but their accelerated wall clock
     // must never train a physical production rate. Keep the configured real
     // rate in the normal AFR fields and scale only the demo recovery clock.
-    const afr = demoClock
+    if ((data as any).flowIntervalBarrier === true) { flowRateDays=0; flowRate=''; }
+    const afr = pipeline ? pipeline.minutesPerFoot / 1440 : demoClock
       ? demoClock.realMinutesPerFoot / 1440
-      : (windowed ? windowed.averageDays : await calculateAFR(wellName, flowRateDays));
+      : isProvisionalPull(data)?(Number(config.avgFlowRateMinutes)/1440||await calculateAFR(wellName,0)):(windowed&&config.productionRateMode!=='inventory_balance'?windowed.averageDays:await calculateAFR(wellName, flowRateDays, {...data,packetId,tankAfterInches,wellDown:nextIsDown}));
     if (demoClock) {
       flowRateDays = afr;
       flowRate = daysToHMMSS(afr);
     }
 
     // Calculate window-averaged and overnight bbls/day
-    const bblPerFoot = tanks * 20;
+    // bblPerFoot is the configured total active bank calibration.
     const historicalPulls = await getHistoricalPulls(wellName, 500);
     const pullTimeMs = new Date(data.dateTimeUTC).getTime();
 
@@ -1277,15 +1113,18 @@ export const processIncomingPull = functionsV1.database
       tankLevelFeet: parseFloat(String(data.tankLevelFeet)) || 0,
       bblsTaken: parseFloat(String(data.bblsTaken)) || 0,
       wellDown: data.wellDown === true || data.wellDown === ('true' as any),
+      ...overnightReadingProof(data),
+      bottomLevelFeet: tankAfterInches / 12,
     });
     historicalPulls.sort((a, b) => a.timestamp - b.timestamp);
 
     const windowBblsDay = (windowed || demoClock) ? 0 : calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
-    const overnightBblsDay = (windowed || demoClock) ? 0 : calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
+    const overnightSample = calculateOvernightProductionSample(historicalPulls, bblPerFoot, pullTimeMs, config.overnightProductionMode === 'afr' ? 'afr' : 'overnight');
+    const overnightBblsDay = demoClock ? 0 : overnightSample.bblsDay;
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);
 
     // Recovery Needed
-    const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+    const pullHeightInches = (pullBbls / bblPerFoot) * 12;
     const demoTargetInches = demoClock ? demoTriggerInches(demoClock, packetId) : undefined;
     const targetLevel = demoTargetInches ?? (bottomInches + pullHeightInches);
     const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
@@ -1329,6 +1168,7 @@ export const processIncomingPull = functionsV1.database
       estDateTimePull,
       processedAt: new Date().toISOString(),
       lastPullRevision: initialRevision,
+      levelReportDeliveryVersion: 2,
     });
     await db.ref(`packets/processed/${packetId}`).set(processedClean);
 
@@ -1343,7 +1183,7 @@ export const processIncomingPull = functionsV1.database
     // BBLs per 24 hours
     let bbls24hrs = '0';
     if (afr > 0) {
-      const bbls24 = (1 / afr) * 20 * tanks;
+      const bbls24 = (1 / afr) * bblPerFoot;
       bbls24hrs = Math.round(bbls24).toString();
     }
 
@@ -1353,6 +1193,7 @@ export const processIncomingPull = functionsV1.database
       wellName,
       currentLevel: inchesToFeetInches(currentLevelInches),
       flowRate: initialFlowRate,
+      ...({provisionalBarrels:isProvisionalPull(data),flowRateMeasuredAtUTC:isProvisionalPull(data)||previousIsProvisional?(prevResponse?.flowRateMeasuredAtUTC||prevResponse?.lastPullDateTimeUTC||''):data.dateTimeUTC} as any),
       bbls24hrs,
       timeTillPull: nextIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
       nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
@@ -1375,6 +1216,7 @@ export const processIncomingPull = functionsV1.database
       overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
       ...(demoClock ? { demoClockMultiplier: demoClock.clockMultiplier,
         demoTargetInches } : {}),
+      overnightEstimatedTime: overnightBblsDay > 0 && overnightSample.estimatedTime,
     };
 
     // Write to outgoing/ (delete old responses for this well first)
@@ -1482,6 +1324,7 @@ export const processIncomingPull = functionsV1.database
       calculated: {
         flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
         flowRateMinutes: Math.round(afrMinutes * 100) / 100,
+        ...({provisionalBarrels:isProvisionalPull(data),flowRateMeasuredAtUTC:isProvisionalPull(data)||previousIsProvisional?(prevResponse?.flowRateMeasuredAtUTC||prevResponse?.lastPullDateTimeUTC||''):data.dateTimeUTC} as any),
         bbls24hrs: parseInt(bbls24hrs) || 0,
         nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
         nextPullTimeUTC: estDateTimePull || '',
@@ -1752,7 +1595,7 @@ export const processIncomingPull = functionsV1.database
     // These are fast Firestore writes, adds ~1-2s to packet processing but guarantees delivery.
     try {
       await Promise.all([
-        sendLevelToChat(data, packetId, { tankAfterInches, tanks }).catch(err => console.warn('[LevelChat] Send failed:', err)),
+        sendLevelToChat(data, packetId, { tankAfterInches, tanks, bblPerFoot }).catch(err => console.warn('[LevelChat] Send failed:', err)),
         trackJsaLocation(data).catch(err => console.warn('[JsaTrack] Tracking failed:', err)),
       ]);
     } catch (err) {
@@ -2103,7 +1946,7 @@ export const processDeleteRequest = functionsV1.database
         const nextTimeDif = prevTime > 0 ? (nextTime - prevTime) / (1000 * 60 * 60 * 24) : 0;
         let nextFlowRateDays = 0;
         let nextFlowRate = '';
-        if (nextRecovery > 0 && nextTimeDif > 0) {
+        if (!isProvisionalPull(nextPkt)&&!isProvisionalPull(prevPkt)&&nextRecovery > 0 && nextTimeDif > 0) {
           nextFlowRateDays = (nextTimeDif / nextRecovery) * 12;
           nextFlowRate = daysToHMMSS(nextFlowRateDays);
         }
@@ -2131,7 +1974,7 @@ export const processDeleteRequest = functionsV1.database
         configSnap = await db.ref(`well_config/${cleanName}`).once('value');
       }
       const config = configSnap.val() || {};
-      const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+
       const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
       const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
 
@@ -2176,14 +2019,15 @@ export const processDeleteRequest = functionsV1.database
           console.log(`Delete: AFR for ${wellName} = ${afr}`);
 
           // Calculate windowBblsDay and overnightBblsDay from remaining historical pulls
-          const bblPerFoot = tanks * 20;
+          const bblPerFoot = resolveTankBblPerFoot(config);
           const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
           const historicalPulls = await getHistoricalPulls(wellName, 500);
           const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
-          const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+          const overnightSample = calculateOvernightProductionSample(historicalPulls, bblPerFoot, latestTimeMs, config.overnightProductionMode === 'afr' ? 'afr' : 'overnight');
+          const overnightBblsDay = overnightSample.bblsDay;
 
           const tankAfterInches = latestPacket.tankAfterInches || 0;
-          const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+          const pullHeightInches = (pullBbls / bblPerFoot) * 12;
           const targetLevel = bottomInches + pullHeightInches;
           const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
 
@@ -2200,7 +2044,7 @@ export const processDeleteRequest = functionsV1.database
             estDateTimePull = latestPacket.dateTimeUTC;
           }
 
-          const bbls24 = afr > 0 ? (1 / afr) * 20 * tanks : 0;
+          const bbls24 = afr > 0 ? (1 / afr) * bblPerFoot : 0;
           const bbls24hrs = Math.round(bbls24).toString();
 
           // Delete old outgoing responses for this well and write new one
@@ -2242,6 +2086,7 @@ export const processDeleteRequest = functionsV1.database
             isDeleteRebuild: true,
             windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
             overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+            overnightEstimatedTime: overnightBblsDay > 0 && overnightSample.estimatedTime,
             companyId: outgoingCompanyId(config),
           });
 
@@ -2727,271 +2572,18 @@ async function postSystemMessage(
   });
 }
 
-// ── sendLevelToChat: Fire-and-forget level report to driver's dispatch chat threads ──
-// `computed` lets the caller hand in the already-correct bottom (preferred source of truth).
-// If absent, falls back to reading well_config/{wellName}.tanks (same path the pull processor uses).
+// Compatibility fast path shares the processed-event delivery identity.
+// The independent processed trigger retries transient errors after intake completes.
 async function sendLevelToChat(
   data: PullPacket,
   packetId: string,
-  computed?: { tankAfterInches: number; tanks: number },
+  computed?: { tankAfterInches: number; tanks: number; bblPerFoot: number },
 ): Promise<void> {
-  try {
-    const driverHash = data.driverId;
-    if (!driverHash) {
-      console.log('[LevelChat] No driverId on packet, skipping');
-      return;
-    }
-
-    // Get driver info from RTDB
-    const driverSnap = await db.ref(`drivers/approved/${driverHash}`).once('value');
-    if (!driverSnap.exists()) {
-      console.log('[LevelChat] Driver not found in approved:', driverHash.slice(0, 8));
-      return;
-    }
-    const driverData = driverSnap.val();
-    const companyId = driverData.companyId;
-    if (!companyId) {
-      console.log('[LevelChat] No companyId on driver, skipping');
-      return;
-    }
-    const driverName = driverData.legalName || driverData.displayName || data.driverName || 'Driver';
-
-    // Check company config for sendLevelToDispatch toggle
-    const companyDoc = await firestoreDb.collection('companies').doc(companyId).get();
-    if (!companyDoc.exists) {
-      console.log('[LevelChat] Company doc not found:', companyId);
-      return;
-    }
-    const companyConfig = companyDoc.data() || {};
-    if (!companyConfig.sendLevelToDispatch) {
-      return; // Feature not enabled for this company
-    }
-
-    // Build message from template or default
-    const templateStr: string = companyConfig.levelReportTemplate ||
-      '📊 Level Report\nWell: {wellName}\nTop: {top} | Bottom: {bottom}\nBBLs: {bbls}\nTime: {time}';
-
-    // Format levels as feet'inches"
-    const topInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
-    const wellName = data.wellName;
-    const cleanName = wellName ? wellName.replace(/\s/g, '') : '';
-    let tanks = 1;
-    let bottomInches: number;
-    let sourceUsed: string;
-
-    if (computed && Number.isFinite(computed.tankAfterInches)) {
-      // Caller already computed the correct bottom (uses well_config.tanks). Use it directly.
-      tanks = computed.tanks || 1;
-      bottomInches = computed.tankAfterInches;
-      sourceUsed = `caller.tankAfterInches(tanks=${tanks})`;
-    } else {
-      // Fallback: read well_config/{wellName}.tanks — same path the pull processor uses.
-      try {
-        let configSnap = wellName ? await db.ref(`well_config/${wellName}`).once('value') : null;
-        if (configSnap && !configSnap.exists() && cleanName) {
-          configSnap = await db.ref(`well_config/${cleanName}`).once('value');
-        }
-        const cfg = (configSnap && configSnap.val()) || {};
-        tanks = cfg.tanks || cfg.numTanks || 1;
-      } catch (e) {
-        console.warn('[LevelChat] well_config lookup failed, defaulting tanks=1:', e);
-      }
-      const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / (20 * tanks)) * 12 : 0;
-      bottomInches = topInches - bblsInInches;
-      sourceUsed = `recompute(well_config.tanks=${tanks})`;
-    }
-
-    const bblPerFt = 20 * tanks;
-    const topStr = inchesToFeetInches(topInches);
-    const bottomStr = inchesToFeetInches(Math.max(0, bottomInches));
-
-    console.log('[LevelChat] level math:', {
-      wellName,
-      topLevel: topStr,
-      bottomLevel: bottomStr,
-      bbls: data.bblsTaken,
-      tankCount: tanks,
-      bblPerFt,
-      sourceUsed,
-    });
-
-    // Format date + time from packet
-    const fullTimeStr = data.dateTime || (data.dateTimeUTC ? formatLocalDateTime(new Date(data.dateTimeUTC)) : '');
-    // Split into date and time parts: "04/11/2026 9:12 PM" → date="04/11/2026", time="9:12 PM"
-    const timeParts = fullTimeStr.split(' ');
-    const dateStr = timeParts[0] || '';
-    const timeOnlyStr = timeParts.slice(1).join(' ') || fullTimeStr; // fallback to full string
-
-    let message = templateStr;
-    message = message.replace(/\{wellName\}/gi, data.wellName || '');
-    message = message.replace(/\{well\}/gi, data.wellName || ''); // alias for {wellName}
-    message = message.replace(/\{top\}/gi, topStr);
-    message = message.replace(/\{bottom\}/gi, bottomStr);
-    message = message.replace(/\{bbls\}/gi, String(data.bblsTaken || 0));
-    message = message.replace(/\{date\}/gi, dateStr);
-    message = message.replace(/\{time\}/gi, timeOnlyStr);
-    message = message.replace(/\{driverName\}/gi, driverName);
-
-    // Find driver's direct chat threads with dispatch users
-    const driverPid = `driver:${driverHash}`;
-    const threadsSnap = await firestoreDb.collection('chat_threads')
-      .where('type', '==', 'direct')
-      .where('participants', 'array-contains', driverPid)
-      .get();
-
-    if (threadsSnap.empty) {
-      console.log('[LevelChat] No direct threads for driver:', driverHash.slice(0, 8));
-      return;
-    }
-
-    // Filter to threads where the other participant is a Dashboard user (user:*)
-    const dispatchThreads = threadsSnap.docs.filter(d => {
-      const participants: string[] = d.data().participants || [];
-      return participants.some(p => p.startsWith('user:') && p !== driverPid);
-    });
-
-    if (dispatchThreads.length === 0) {
-      console.log('[LevelChat] No dispatch threads for driver:', driverHash.slice(0, 8));
-      return;
-    }
-
-    // Send to each dispatch thread
-    const now = admin.firestore.Timestamp.now();
-    for (const threadDoc of dispatchThreads) {
-      try {
-        const batch = firestoreDb.batch();
-        const msgRef = firestoreDb.collection('chat_threads').doc(threadDoc.id).collection('messages').doc();
-        batch.set(msgRef, {
-          text: message,
-          senderId: driverPid,
-          senderName: driverName,
-          timestamp: now,
-          type: 'level_report',
-          clientId: `level_${Date.now()}_${threadDoc.id.slice(0, 6)}`,
-        });
-        batch.update(firestoreDb.collection('chat_threads').doc(threadDoc.id), {
-          lastMessage: {
-            text: message.length > 100 ? message.substring(0, 100) + '...' : message,
-            senderId: driverPid,
-            senderName: 'Level Report',
-            timestamp: now,
-            type: 'system',
-          },
-          updatedAt: now,
-        });
-        await batch.commit();
-        console.log('[LevelChat] Level sent to thread:', threadDoc.id);
-      } catch (threadErr) {
-        console.warn('[LevelChat] Failed to send to thread', threadDoc.id, threadErr);
-      }
-    }
-
-    console.log(`[LevelChat] Sent level report for ${data.wellName} to ${dispatchThreads.length} thread(s)`);
-  } catch (err) {
-    console.error('[LevelChat] Error (non-blocking):', err);
-  }
+  await deliverLevelReport({ ...data, ...(computed ? { tankAfterInches: computed.tankAfterInches } : {}) }, packetId);
 }
 
-// ── onShiftCreate: Create shift thread when driver starts shift ────────────
-export const onShiftCreate = functionsV1.firestore
-  .document('driver_shifts/{shiftId}')
-  .onCreate(async (snap, context) => {
-    const shift = snap.data();
-    if (!shift) return;
-
-    const driverId = shift.driverId || shift.driverHash || '';
-    const companyId = shift.companyId || '';
-    if (!driverId || !companyId) return;
-
-    // Resolve driver's real name from RTDB profile (legalName > displayName).
-    // Do NOT trust shift.displayName as the primary source — WB S has historically
-    // written the login identity (which can be a shared device name like "TabletS10")
-    // into that field. drivers/approved/{hash} is the canonical profile.
-    const driverProfileSnap = await db.ref(`drivers/approved/${driverId}`).once('value');
-    const driverProfile = driverProfileSnap.val();
-    const driverName =
-      driverProfile?.legalName ||
-      driverProfile?.displayName ||
-      shift.driverName ||
-      shift.displayName ||
-      'Driver';
-
-    const driverPid = `driver:${driverId}`;
-    // Pass driverId so owner-operators (same person as driver AND as admin)
-    // don't get put on both sides of their own shift thread. If the company's
-    // only "dispatcher" IS the driver, the next guard below skips the thread.
-    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId, [], driverId);
-
-    // Skip thread creation if this company has no dispatchers — otherwise
-    // we create a phantom thread with only the driver as a participant,
-    // which shows up as a useless self-chat in their drawer.
-    if (dispatchIds.length === 0) {
-      console.log(`[WBChat] Skipping shift thread for ${driverName} — company ${companyId} has no dispatchers configured`);
-      return;
-    }
-
-    const participants = [driverPid, ...dispatchIds];
-    const participantNames: Record<string, string> = { [driverPid]: driverName, ...dispatchNames };
-
-    const now = admin.firestore.Timestamp.now();
-    const threadRef = await firestoreDb.collection('chat_threads').add({
-      type: 'shift',
-      companyId,
-      shiftId: context.params.shiftId,
-      title: driverName,
-      subtitle: 'Shift',
-      participants,
-      participantNames,
-      status: 'active',
-      createdAt: now,
-      updatedAt: now,
-      lastRead: {},
-    });
-
-    await postSystemMessage(threadRef.id, `${driverName} started their shift`, 'shift_started', { driverName });
-    console.log(`[WBChat] Shift thread created: ${threadRef.id} for ${driverName}`);
-  });
-
-// ── onShiftUpdate: Archive shift thread when shift ends ────────────────────
-export const onShiftUpdate = functionsV1.firestore
-  .document('driver_shifts/{shiftId}')
-  .onUpdate(async (change, context) => {
-    const before = change.before.data();
-    const after = change.after.data();
-    if (!after) return;
-
-    // Detect shift end (logoutAt set, or status changed to ended)
-    const shiftEnded = (!before.logoutAt && after.logoutAt) || (!before.endedAt && after.endedAt);
-    if (!shiftEnded) return;
-
-    // Find the shift thread and archive it
-    const threadsSnap = await firestoreDb.collection('chat_threads')
-      .where('type', '==', 'shift')
-      .where('shiftId', '==', context.params.shiftId)
-      .limit(1)
-      .get();
-
-    if (!threadsSnap.empty) {
-      const threadDoc = threadsSnap.docs[0];
-      const driverId = after.driverId || after.driverHash || '';
-      let driverName = 'Driver';
-      if (driverId) {
-        const driverProfileSnap = await db.ref(`drivers/approved/${driverId}`).once('value');
-        const driverProfile = driverProfileSnap.val();
-        driverName =
-          driverProfile?.legalName ||
-          driverProfile?.displayName ||
-          after.driverName ||
-          after.displayName ||
-          'Driver';
-      } else {
-        driverName = after.driverName || after.displayName || 'Driver';
-      }
-      await postSystemMessage(threadDoc.id, `${driverName} ended their shift`, 'shift_ended', { driverName });
-      await threadDoc.ref.update({ status: 'archived', updatedAt: admin.firestore.Timestamp.now() });
-      console.log(`[WBChat] Shift thread archived: ${threadDoc.id}`);
-    }
-  });
+// Shift start/end share the governed driver/dispatch conversation across shifts.
+export { onShiftCreate, onShiftUpdate } from './security/shiftDispatchChat';
 
 // ── onDispatchCreate: Post to shift thread + create well/group threads ─────
 export const onDispatchCreate = functionsV1.firestore
@@ -4033,6 +3625,8 @@ export {
   // selector when approved: --only functions:adminBindDriverCompany
   adminBindDriverCompany,
   requestCompanyOnboarding,
+  createOwnerCompany,
+  getOwnerCompanySetup,
   adminListCompanyOnboardingRequests,
   adminApproveCompanyOnboarding,
   adminCreateCompanyWithJoinCode,
@@ -4160,7 +3754,10 @@ export { ingestWatchdogPullV2, getWatchdogPullReceiptV2, stopWatchdogWellV2, get
 export { getDispatchLocationCatalog } from './security/dispatchLocationCatalog';
 export { staffWriteWaterOrder } from './security/staffWriteWaterOrder';
 
-export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview} from './watchdog/remoteReview';
+export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview,resolveWatchdogRejectedReview} from './watchdog/remoteReview';
+export {getWatchdogAgentHealth,requestWatchdogRecovery,syncWatchdogAgentV2} from './watchdog/remoteAgent';
+export {staffGetDispatchDriverSignals} from './security/dispatchDriverSignals';
+
 
 // Dedicated demo company. The shared viewer can read its real tenant data;
 // the retired scheduled worker does not create operational records.
@@ -4178,3 +3775,10 @@ export { staffChat } from './security/staffChat';
 
 // Keep the deployed scoped WB-T resolver on the canonical shared field projection.
 export { resolveWbtWellConfig } from './security/operational/resolveWbtWellConfig';
+export {reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from './watchdog/intake';
+export { getWbmTankInfo, saveWbmTankInfo } from './security/operational/tankInfoCallables';
+export { staffWritePrimaryRouteAssignment, staffGetPrimaryRouteAssignments } from './security/operational/staffWritePrimaryRouteAssignment';
+
+export { createEmployeeInvitation, getEmployeeInvitation, requestEmployeeJoin, getEmployeeJoinStatus, listEmployeeJoinRequests, resolveEmployeeJoin } from "./security/employeeOnboarding";
+
+export {jsaGetShiftPreview} from './jsaReceipt/jsaShiftPreviewCallable';

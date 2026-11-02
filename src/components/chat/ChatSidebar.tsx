@@ -1,4 +1,9 @@
 'use client';
+import { ChatMessageFooter } from './ChatMessageFooter';
+import { openChatWorkspace } from '@/lib/chatWindows';
+import { AnnouncementMessage } from './AnnouncementMessage';
+
+import { selectChatMessageText } from '@/lib/chatTextSelection';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { watchStaffChat, watchStaffChatCompany, staffChatCall, sendStaffChat } from '@/lib/staffChatClient';
@@ -10,17 +15,20 @@ import {
   ThreadType,
   userParticipantId,
   isThreadUnread,
-  threadTypeLabel,
+  chatAudienceLabel,
+  matchesChatFilter,
   threadTypeIcon,
   formatChatTime,
 } from './ChatTypes';
 
 // ── Filter chips ────────────────────────────────────────────────────────────
 
-type FilterKey = 'all' | ThreadType;
+type FilterKey = 'all' | 'dispatch_team' | 'private_driver' | ThreadType;
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'All' },
+  { key: 'dispatch_team', label: 'Dispatch' },
+  { key: 'private_driver', label: 'Private' },
   { key: 'shift', label: 'Shift' },
   { key: 'well', label: 'Wells' },
   { key: 'project', label: 'Projects' },
@@ -118,7 +126,8 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
     const unsub = watchStaffChat({ action: 'threads', companyId, ownOnly: true }, rows => {
       const list = rows.filter(row => row.status === 'active') as ChatThread[];
       setThreads(list); setSendError(null);
-      onUnreadChange?.(list.filter(t => isThreadUnread(t, myParticipantId)).length);
+      onUnreadChange?.(list.reduce((count, thread) => count + (typeof thread.unreadCount === 'number'
+        ? Math.max(0, thread.unreadCount) : Number(isThreadUnread(thread, myParticipantId))), 0));
     }, error => setSendError(error.message));
 
     return () => unsub();
@@ -138,7 +147,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
 
   // ── Mark thread as read when selected ───────────────────────────────────
   useEffect(() => {
-    if (!selectedThreadId) return;
+    if (!selectedThreadId || selectedThreadId.startsWith('announcements_')) return;
     void staffChatCall({ action: 'read', threadId: selectedThreadId, companyId }).catch(() => {});
   }, [selectedThreadId, messages.length, myParticipantId, companyId]);
 
@@ -214,7 +223,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
   // ── Filtered threads ────────────────────────────────────────────────────
   const filteredThreads = filter === 'all'
     ? threads
-    : threads.filter((t) => t.type === filter);
+    : threads.filter((t) => matchesChatFilter(t, filter));
 
   const selectedThread = threads.find((t) => t.id === selectedThreadId) || null;
 
@@ -262,7 +271,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
             </button>
             <ThreadIcon type={selectedThread.type} />
             <div className="min-w-0">
-              <h3 className="text-white text-sm font-semibold truncate">{selectedThread.title}</h3>
+              <h3 className="text-white text-sm font-semibold truncate">{selectedThread.title} · {chatAudienceLabel(selectedThread)}</h3>
               {selectedThread.subtitle && (
                 <p className="text-gray-500 text-xs truncate">{selectedThread.subtitle}</p>
               )}
@@ -272,14 +281,15 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
           <h3 className="text-white text-sm font-semibold">Messages</h3>
         )}
         <button
-          onClick={() => window.open('/chat/', '_blank')}
+          onClick={() => openChatWorkspace()}
           className="text-gray-400 hover:text-[#FFD700] transition-colors flex-shrink-0 ml-2"
-          title="Open chat in new tab"
+          title="Open or focus chat workspace"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>
         </button>
+        <button onClick={() => openChatWorkspace(true)} title="New chat window" aria-label="New chat window" className="text-gray-400 hover:text-[#FFD700] ml-2 text-lg">+</button>
         <button
           onClick={onClose}
           className="text-gray-400 hover:text-white transition-colors flex-shrink-0 ml-2"
@@ -344,7 +354,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <span className={`text-sm truncate ${unread ? 'text-white font-semibold' : 'text-gray-300 font-medium'}`}>
-                          {thread.title}
+                          {thread.title}{thread.audience ? ` · ${chatAudienceLabel(thread)}` : ''}
                         </span>
                         <span className="text-gray-500 text-xs flex-shrink-0">
                           {formatChatTime(thread.lastMessage?.timestamp)}
@@ -385,17 +395,16 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
               </div>
             )}
             {messages.map((msg) => {
+              if (msg.requiresAcknowledgement) return <AnnouncementMessage key={msg.id} message={msg} />;
               const isMine = msg.senderId === myParticipantId;
               const isSystem = msg.type === 'system';
 
               if (isSystem) {
                 return (
                   <div key={msg.id} className="flex justify-center my-2">
-                    <div className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-3 py-1.5 max-w-[85%]">
-                      <p className="text-gray-400 text-xs text-center">{msg.text}</p>
-                      <p className="text-gray-600 text-[10px] text-center mt-0.5">
-                        {formatChatTime(msg.timestamp)}
-                      </p>
+                    <div onContextMenu={selectChatMessageText} className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-3 py-1.5 max-w-[85%]">
+                      <p data-chat-message-text className="text-gray-400 text-xs text-center select-text">{msg.text}</p>
+                      <ChatMessageFooter message={msg} />
                     </div>
                   </div>
                 );
@@ -404,6 +413,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
               return (
                 <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                   <div
+                    onContextMenu={selectChatMessageText}
                     className={`max-w-[75%] rounded-2xl px-3.5 py-2 ${
                       isMine
                         ? 'bg-[#FFD700] text-black rounded-br-sm'
@@ -424,11 +434,9 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
                         />
                       </a>
                     ) : (
-                      <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+                      <p data-chat-message-text className="text-sm whitespace-pre-wrap break-words select-text">{msg.text}</p>
                     )}
-                    <p className={`text-[10px] mt-1 text-right ${isMine ? 'text-black/50' : 'text-gray-500'}`}>
-                      {formatChatTime(msg.timestamp)}
-                    </p>
+                    <ChatMessageFooter message={msg} mine={isMine} />
                   </div>
                 </div>
               );
@@ -436,6 +444,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
             <div ref={messagesEndRef} />
           </div>
 
+          {selectedThread.permanent && <p className="px-3 py-2 text-xs text-[#FFD700] bg-[#211d08]">Post to all drivers, including off shift. Each driver must acknowledge.</p>}
           {/* Input */}
           <div className="border-t border-gray-700 px-3 py-2 bg-[#111] flex flex-col gap-1 flex-shrink-0">
             {sendError && (
@@ -449,7 +458,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={!canSendChat}
-              placeholder={canSendChat ? 'Type a message...' : 'You do not have permission to send messages'}
+              placeholder={canSendChat ? (selectedThread.permanent ? 'Announcement to all drivers' : 'Type a message...') : 'You do not have permission to send messages'}
               className="flex-1 bg-[#1a1a1a] border border-gray-700 rounded-full px-4 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <button

@@ -1,4 +1,5 @@
 import { writeCanonicalFreshWater } from './operational/writeCanonicalFreshWater';
+import { approveInactivePlace } from './approvedInactivePlaces';
 /**
  * Staff create/update/rename/delete for RTDB well_config.
  * Client identity writes are denied. GPS route/routeRecording/routeGroupWell
@@ -113,6 +114,7 @@ export const staffWriteWellConfig = httpsV2.onCall(
     }
 
     if (decided.action === 'already_exact') {
+      await approveInactivePlace(caller.companyId, decided.wellName, decided.payload, caller.uid);
       await writeSecurityAudit({
         action: 'staffWriteWellConfig',
         actorUid: caller.uid,
@@ -205,6 +207,7 @@ export const staffWriteWellConfig = httpsV2.onCall(
       ? { ...decided.payload, operator: canonicalOperator }
       : decided.payload;
     await rtdb.ref(`well_config/${decided.wellName}`).set(createdConfig);
+    await approveInactivePlace(caller.companyId, decided.wellName, createdConfig, caller.uid);
 
     await writeSecurityAudit({
       action: 'staffWriteWellConfig',

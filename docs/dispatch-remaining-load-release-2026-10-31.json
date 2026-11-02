@@ -1,0 +1,21 @@
+{
+  "sourceCommit": "931e3334af99c20ebdfef46b18e986ea8afc60ab",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "checkout": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "owner": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "project": "wellbuilt-sync",
+  "verifiedAt": "2026-11-01T00:16:20.504Z",
+  "liveArtifactsByteMatched": 398,
+  "approvedBaseBefore": "6c2a17398e1f0d3543a45182bf2e84d43af95c5a",
+  "behavior": "Active Jobs total and per-driver PW/SW badges share the remaining-load calculation already used by expanded job rows. A two-load job with one completed plus one other load counts as two, not three.",
+  "checks": {
+    "targetedTests": 18,
+    "allLibraryTests": 510,
+    "types": "passed",
+    "hostingPreflight": "All required retained behavior and responsive/route checks passed"
+  },
+  "dataChanges": "None; all assignments, completion records and driver state preserved.",
+  "verificationLimit": "User must refresh an existing open Dashboard to load the new bundle. A newer live assignment appeared after the supplied screenshot; preserved pending user clarification.",
+  "priorWork": "Previously authorized pipeline client changes are included and passed Hosting checks; no Granli pipeline configuration was activated and no pipeline backend deployment performed in this release."
+}

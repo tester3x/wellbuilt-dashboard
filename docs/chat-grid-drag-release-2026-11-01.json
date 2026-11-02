@@ -1,0 +1,25 @@
+{
+  "source": "c8af2599a4b2fb1a59f25c3c639f7d7ff87db917",
+  "verifiedAt": "2026-11-02T03:56:47.154Z",
+  "project": "wellbuilt-sync",
+  "liveArtifactsVerified": 398,
+  "changes": [
+    "Clicking an unlocked chat's lock opens a profile/position dialog; select an existing profile or create one inline, with existing Settings editing retained.",
+    "Profile saving preserves the visible chat until its position is confirmed by the live subscription. Failures preserve the chat; new-profile retries reuse a stable intent ID; a delayed confirmation becomes an explicit retry state.",
+    "Mouse drag and 450ms touch hold support moving unlocked chat headers between grid positions and dropping conversation-list rows at chosen positions.",
+    "Moving between occupied temporary slots swaps them. A new sidebar chat displaces a temporary occupant only if another open slot can retain it. Locked positions and full grids are protected.",
+    "Ordinary clicks retain top-left-to-bottom-right placement; unsent drafts remain bound to their conversation; message-body selection remains available.",
+    "Unlocking waits for subscription confirmation before enabling a move, avoiding an old saved position reappearing under a moved temporary overlay."
+  ],
+  "checks": [
+    "TypeScript and fresh Next production build",
+    "Actual chat-page browser pending, successful, failed, missing-profile and unlock regressions",
+    "Actual chat-page click placement, mouse move/swap, sidebar drop, full/locked protections, draft retention and Escape cancellation",
+    "Actual chat-page inline profile creation and selection, occupied-position protection and confirmed monitor handoff",
+    "Real browser touchStart/touchMove/touchEnd long-hold drags from headers and sidebar; movement before hold does not drop a conversation",
+    "All mandatory Hosting preflight suites, including retained native message copy behavior and responsive authenticated routes",
+    "All 398 exported artifacts byte-matched against live Hosting before the approved checkpoint advanced"
+  ],
+  "scope": "Dashboard web UI only. No native APK, Functions or security-rule deployment. Browser interaction fixtures used mocked auth/transport; no production chat messages or profile changes were made for testing.",
+  "usage": "Refresh the open chat window once. Drag a chat by its header; on touchscreens hold first. Unlock a saved chat before moving it, then lock again to save its new position."
+}

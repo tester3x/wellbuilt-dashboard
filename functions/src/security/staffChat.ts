@@ -1,7 +1,10 @@
+import { announcementThread, handleAnnouncement, isAnnouncementId } from './dispatchAnnouncements';
 import * as https from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { createHash } from 'crypto';
-import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
+import { CONVERSATIONS, governedId, conversationCollection, validConversation, ensureConversation, consolidateDispatchHistory } from './dispatchConversations';
+import { decideTrustedCompanyCapability, requireTrustedCompanyCapability } from './trustedStaffAuthority';
+import { chatNameDirectory, realChatName, presentChatThread, presentChatMessage, UNKNOWN_CHAT_NAME } from './chatNames';
+import { readUnreadSummary } from './chatUnreadSummary';
 
 const key = (x: unknown): string => {
   if (typeof x !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(x)) throw new https.HttpsError('invalid-argument', 'Invalid chat identifier');
@@ -11,11 +14,13 @@ const serial = (value: any): any => value?.toDate instanceof Function ? value.to
   : Array.isArray(value) ? value.map(serial) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, serial(v)])) : value;
 const time = (value: any): number => value?.toMillis?.() || Date.parse(value || '') || 0;
 const stamp = () => admin.firestore.FieldValue.serverTimestamp();
-async function directory(companyId: string): Promise<{ drivers: { hash: string; name: string }[]; aliases: Map<string, string> }> {
+async function directory(companyId: string, verifiedUser?: {uid:string;profile:Record<string,any>|null}, referencedUsers: string[] = []): Promise<{ drivers: { hash: string; name: string }[]; aliases: Map<string, string>; names: Map<string, string> }> {
   const rt = admin.database();
-  const [profiles, forward, reverse] = await Promise.all([
+  const [profiles, forward, reverse, approved, users] = await Promise.all([
     rt.ref('drivers/profiles').orderByChild('companyId').equalTo(companyId).once('value'),
     rt.ref('drivers/identityBindings/byDriver').once('value'), rt.ref('drivers/identityBindings/byApproved').once('value'),
+    rt.ref('drivers/approved').orderByChild('companyId').equalTo(companyId).once('value'),
+    rt.ref('users').orderByChild('companyId').equalTo(companyId).once('value'),
   ]);
   const byDriver = forward.val() || {}, byApproved = reverse.val() || {}, aliases = new Map<string, string>(), drivers: { hash: string; name: string }[] = [];
   for (const [id, value] of Object.entries(profiles.val() || {})) {
@@ -24,55 +29,110 @@ async function directory(companyId: string): Promise<{ drivers: { hash: string; 
     aliases.set(`driver:${id}`, `driver:${id}`);
     const binding = byDriver[id], back = byApproved[binding?.approvedKey];
     if (binding?.driverId === id && back?.driverId === id && back.approvedKey === binding.approvedKey && back.opId === binding.opId) aliases.set(`driver:${binding.approvedKey}`, `driver:${id}`);
-    if (row.active !== false) drivers.push({ hash: id, name: row.legalName || row.displayName || 'Driver' });
+    if (row.active !== false) drivers.push({ hash: id, name: '' });
   }
-  return { drivers, aliases };
+  const scopedUsers = users.val() || {};
+  // The caller has already passed server-owned company capability checks.
+  // Legacy owner rows predate users.companyId and are absent from that query.
+  // Bind only this verified caller for display lookup; never grant access or
+  // accept a conflicting explicit company, login alias, or saved message name.
+  if (verifiedUser?.profile && (!verifiedUser.profile.companyId || verifiedUser.profile.companyId === companyId)) {
+    scopedUsers[verifiedUser.uid] = {...verifiedUser.profile,companyId};
+  }
+  // Receiving staff must resolve those same legacy senders. Only inspect IDs
+  // already present in admitted company threads/messages, and require the
+  // same server-owned tenant proof before adding a missing legacy profile.
+  const missing = [...new Set(referencedUsers.filter(id=>typeof id==='string' && /^user:[A-Za-z0-9_-]{1,128}$/.test(id)))]
+    .map(id=>id.slice(5)).filter(uid=>!scopedUsers[uid]);
+  for(let i=0;i<missing.length;i+=10) await Promise.all(missing.slice(i,i+10).map(async uid=>{
+    try {
+      const trusted=await requireTrustedCompanyCapability(uid,'viewChat');
+      if(trusted.companyId!==companyId)return;
+      const row=(await rt.ref(`users/${uid}`).once('value')).val();
+      if(row && (!row.companyId || row.companyId===companyId))scopedUsers[uid]={...row,companyId};
+    } catch { /* Missing/revoked/foreign identity stays unknown; saved aliases are never a fallback. */ }
+  }));
+  const names = chatNameDirectory(companyId, profiles.val() || {}, approved.val() || {}, scopedUsers, aliases);
+  return { drivers: drivers.map(row => ({ ...row, name: names.get(`driver:${row.hash}`) || UNKNOWN_CHAT_NAME })), aliases, names };
 }
 
 export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false, invoker: 'public' }, async request => {
   const data = request.data || {}, action = data.action;
   const readActions = ['threads', 'messages', 'profiles', 'read', 'directory'];
-  if (![...readActions, 'saveProfile', 'deleteProfile', 'send', 'direct', 'group', 'members', 'archive', 'broadcast', 'clear'].includes(action)) throw new https.HttpsError('invalid-argument', 'Unknown chat action');
+  if (![...readActions, 'saveProfile', 'deleteProfile', 'send', 'dispatch', 'private', 'direct', 'group', 'members', 'archive', 'broadcast', 'clear'].includes(action)) throw new https.HttpsError('invalid-argument', 'Unknown chat action');
   const staff = await requireTrustedCompanyCapability(request.auth?.uid,
     ['saveProfile', 'deleteProfile'].includes(action) ? 'manageCompany' : readActions.includes(action) ? 'viewChat' : 'sendChat');
   if (data.companyId && data.companyId !== staff.companyId) throw new https.HttpsError('permission-denied', 'Chat outside your company');
   const db = admin.firestore(), participant = `user:${staff.uid}`;
+  const authority = (await db.doc(`trusted_staff_authority/${staff.uid}`).get()).data();
+  const dispatchDecision = decideTrustedCompanyCapability(staff.uid, authority, 'viewDispatch');
+  const dispatchAccess = dispatchDecision.ok && dispatchDecision.companyId === staff.companyId && decideTrustedCompanyCapability(staff.uid, authority, 'viewChat').ok;
+  const admits = (row: any, id: string): boolean => row.companyId === staff.companyId &&
+    (!governedId(id) || (validConversation(row, id) && dispatchAccess &&
+      (row.audience === 'dispatch_team' || row.staffUid === staff.uid)));
   const profile = (await admin.database().ref(`users/${staff.uid}`).once('value')).val();
-  const name = profile?.displayName || profile?.name || 'Dispatch';
-  if (action === 'directory') return { companyId: staff.companyId, drivers: (await directory(staff.companyId)).drivers };
+  const identityDirectory = (referencedUsers:string[]=[]) => directory(staff.companyId,{uid:staff.uid,profile},referencedUsers);
+  const senderDirectory = ['send', 'dispatch', 'private', 'direct', 'group'].includes(action) ? await identityDirectory() : null;
+  const name = (!profile?.companyId || profile.companyId===staff.companyId ? realChatName(profile) : '') || senderDirectory?.names.get(participant) || UNKNOWN_CHAT_NAME;
+  const announcementActor = { companyId: staff.companyId, id: staff.uid, name, staff: true };
+  if (isAnnouncementId(data.threadId)) {
+    if (!dispatchAccess) throw new https.HttpsError('permission-denied', 'Dispatch access required for announcements');
+    return serial(await handleAnnouncement(announcementActor, data, async () => (await identityDirectory()).drivers));
+  }
+  if (action === 'directory') return { companyId: staff.companyId, drivers: (await identityDirectory()).drivers };
   if (action === 'threads' || action === 'profiles') {
     const collection = action === 'threads' ? 'chat_threads' : 'chat_monitors';
     const snap = await db.collection(collection).where('companyId', '==', staff.companyId).get();
     let rows = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as Record<string, any>));
-    if (action === 'threads') {
-      const { aliases } = await directory(staff.companyId);
-      rows = rows.map(row => ({ ...row, participants: [...new Set((row.participants || []).map((id: string) => aliases.get(id) || id))],
-        participantNames: Object.fromEntries(Object.entries(row.participantNames || {}).map(([id, name]) => [aliases.get(id) || id, name])) }));
+    if (action === 'threads' && dispatchAccess) {
+      const governed = await db.collection(CONVERSATIONS).where('companyId', '==', staff.companyId).get();
+      rows.push(...governed.docs.filter(doc => admits(doc.data(), doc.id)).map(doc => ({ ...doc.data(), id: doc.id })));
     }
-    if (data.ownOnly && action === 'threads') rows = rows.filter(row => row.participants?.includes(participant));
+    if (action === 'threads') {
+      const { aliases, names } = await identityDirectory(rows.flatMap(row=>[...(row.participants||[]),row.lastMessage?.senderId]));
+      rows = rows.filter(row => !row.supersededBy).map(row => {
+        const presented = presentChatThread(row, names, aliases);
+        return governedId(row.id) ? { ...presented, subtitle: row.audience === 'dispatch_team' ? 'Dispatch team · all authorized dispatchers' : 'Private · you and this driver' } : presented;
+      });
+    } else {
+      const { names } = await identityDirectory();
+      rows = rows.map(row => ({ ...row, slots: (Array.isArray(row.slots) ? row.slots : []).map((slot: any) => slot?.driverHash
+        ? { ...slot, driverName: names.get(`driver:${slot.driverHash}`) || UNKNOWN_CHAT_NAME } : slot) }));
+    }
+    if (data.ownOnly && action === 'threads') rows = rows.filter(row => (row.audience === 'dispatch_team' && dispatchAccess) || row.participants?.includes(participant));
+    rows = rows.map(row => ({ ...row, status: row.archivedBy?.[participant] ? 'archived' : row.status }));
     rows.sort((a, b) => time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt));
+    if (action === 'threads') rows = await Promise.all(rows.map(async row => ({ ...row, ...await readUnreadSummary(
+      db.collection(conversationCollection(row.id)).doc(row.id), row, participant) })));
+    if (action === 'threads' && dispatchAccess) rows.unshift(await announcementThread(announcementActor));
     return { companyId: staff.companyId, rows: serial(rows) };
   }
-  if (action === 'direct' || action === 'group') {
-    const targets: string[] = action === 'direct' ? [key(data.driverId)] : [...new Set<string>((data.driverIds || []).map(key))];
+  if (['dispatch', 'private', 'direct'].includes(action)) {
+    if (!dispatchAccess) throw new https.HttpsError('permission-denied', 'Dispatch access required');
+    const driverId = key(data.driverId);
+    const row = (await admin.database().ref(`drivers/profiles/${driverId}`).once('value')).val();
+    if (!row || row.active === false || row.companyId !== staff.companyId) throw new https.HttpsError('permission-denied', 'Driver outside your company');
+    const driverName = senderDirectory!.names.get(`driver:${driverId}`) || UNKNOWN_CHAT_NAME;
+    // Legacy action=direct now opens the explicitly shared team conversation.
+    const threadId = action === 'private'
+      ? await ensureConversation(staff.companyId, driverId, driverName, { uid: staff.uid, name })
+      : await consolidateDispatchHistory(staff.companyId, driverId, driverName);
+    return { ok: true, threadId };
+  }
+  if (action === 'group') {
+    const targets: string[] = [...new Set<string>((data.driverIds || []).map(key))];
     if (!targets.length || targets.length > 50) throw new https.HttpsError('invalid-argument', 'Choose 1–50 drivers');
     const profiles = await Promise.all(targets.map(async id => {
       const row = (await admin.database().ref(`drivers/profiles/${id}`).once('value')).val();
       if (!row || row.active === false || row.companyId !== staff.companyId) throw new https.HttpsError('permission-denied', 'Driver outside your company');
-      return { id, name: row.legalName || row.displayName || 'Driver' };
+      return { id, name: senderDirectory!.names.get(`driver:${id}`) || UNKNOWN_CHAT_NAME };
     }));
     const participants = [participant, ...targets.map(id => `driver:${id}`)].sort();
-    const title = action === 'direct' ? profiles[0].name : String(data.title || '').trim().slice(0, 120);
+    const title = String(data.title || '').trim().slice(0, 120);
     if (!title) throw new https.HttpsError('invalid-argument', 'Chat title required');
-    const type = action === 'direct' ? 'direct' : data.type;
-    if (!['direct', 'service_group', 'project', 'well'].includes(type)) throw new https.HttpsError('invalid-argument', 'Invalid thread type');
-    if (action === 'direct') {
-      const { aliases } = await directory(staff.companyId);
-      const old = await db.collection('chat_threads').where('companyId', '==', staff.companyId).where('participants', 'array-contains', participant).get();
-      const match = old.docs.find(doc => doc.get('type') === 'direct' && doc.get('participants')?.some((id: string) => (aliases.get(id) || id) === `driver:${targets[0]}`));
-      if (match) { await match.ref.update({ status: 'active', updatedAt: stamp() }); return { ok: true, threadId: match.id }; }
-    }
-    const id = action === 'direct' ? 'direct_' + createHash('sha256').update(staff.companyId + ':' + participants.join('|')).digest('hex') : key(data.requestId);
+    const type = data.type;
+    if (!['service_group', 'project', 'well'].includes(type)) throw new https.HttpsError('invalid-argument', 'Invalid thread type');
+    const id = key(data.requestId);
     const ref = db.collection('chat_threads').doc(id);
     await db.runTransaction(async tx => {
       const old = await tx.get(ref);
@@ -99,6 +159,15 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
       if (!Array.isArray(fields.slots) || fields.slots.length > 36) throw new https.HttpsError('invalid-argument', 'Invalid monitor slots');
       for (const slot of fields.slots) if (slot) {
         if (slot.threadId) {
+          if (isAnnouncementId(slot.threadId)) {
+            if (!dispatchAccess || slot.threadId !== (await announcementThread(announcementActor)).id) throw new https.HttpsError('permission-denied', 'Announcement outside your company');
+            continue;
+          }
+          if (governedId(slot.threadId)) {
+            const thread = await db.collection(CONVERSATIONS).doc(key(slot.threadId)).get();
+            if (!thread.exists || !admits(thread.data(), thread.id) || thread.get('audience') !== 'dispatch_team') throw new https.HttpsError('permission-denied', 'Private chats cannot be saved in shared monitors');
+            continue;
+          }
           const thread = await db.collection('chat_threads').doc(key(slot.threadId)).get();
           if (!thread.exists || thread.get('companyId') !== staff.companyId) throw new https.HttpsError('permission-denied', 'Monitor thread outside your company');
         }
@@ -111,8 +180,19 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     await ref.set({ ...fields, companyId: staff.companyId, createdBy: staff.uid, updatedAt: stamp(), ...(!old.exists ? { createdAt: stamp() } : {}) }, { merge: true });
     return { ok: true, profileId: id };
   }
-  const threadId = key(data.threadId), ref = db.collection('chat_threads').doc(threadId), snapshot = await ref.get();
-  if (!snapshot.exists || snapshot.get('companyId') !== staff.companyId) throw new https.HttpsError('permission-denied', 'Thread outside your company');
+  let threadId = key(data.threadId), ref = db.collection(conversationCollection(threadId)).doc(threadId), snapshot = await ref.get();
+  if (!snapshot.exists || !admits(snapshot.data(), threadId)) throw new https.HttpsError('permission-denied', 'Thread outside your company');
+  if (snapshot.get('supersededBy')) {
+    const previousId = threadId;
+    threadId = key(snapshot.get('supersededBy'));
+    ref = db.collection(conversationCollection(threadId)).doc(threadId);
+    snapshot = await ref.get();
+    if (!governedId(threadId) || !snapshot.exists || !admits(snapshot.data(), threadId) ||
+        snapshot.get('audience') !== 'dispatch_team' || !snapshot.get('legacyThreadIds')?.includes(previousId)) {
+      throw new https.HttpsError('permission-denied', 'Invalid dispatch conversation link');
+    }
+  }
+  if (governedId(threadId) && ['members', 'broadcast'].includes(action)) throw new https.HttpsError('permission-denied', 'Conversation audience is fixed');
   if (action === 'members') {
     if (snapshot.get('type') === 'direct' || !Array.isArray(data.driverIds) || data.driverIds.length > 50) throw new https.HttpsError('invalid-argument', 'Invalid group members');
     const ids = [...new Set<string>(data.driverIds.map(key))];
@@ -120,7 +200,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     for (const id of ids) {
       const row = (await admin.database().ref(`drivers/profiles/${id}`).once('value')).val();
       if (!row || row.active === false || row.companyId !== staff.companyId) throw new https.HttpsError('permission-denied', 'Driver outside your company');
-      names[`driver:${id}`] = row.legalName || row.displayName || 'Driver';
+      names[`driver:${id}`] = realChatName(row) || UNKNOWN_CHAT_NAME;
     }
     await db.runTransaction(async tx => {
       const latest = await tx.get(ref);
@@ -133,7 +213,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     return { ok: true };
   }
   if (action === 'read') { await ref.update({ [`lastRead.${participant}`]: stamp() }); return { ok: true }; }
-  if (action === 'archive') { await ref.update({ status: data.archived === false ? 'active' : 'archived', updatedAt: stamp() }); return { ok: true }; }
+  if (action === 'archive') { await ref.update(governedId(threadId) ? { [`archivedBy.${participant}`]: data.archived !== false } : { status: data.archived === false ? 'active' : 'archived', updatedAt: stamp() }); return { ok: true }; }
   if (action === 'broadcast') { await ref.update({ broadcast: data.broadcast === true, updatedAt: stamp() }); return { ok: true }; }
   if (action === 'clear') { await ref.update({ [`clearedBefore.${participant}`]: stamp() }); return { ok: true }; }
   if (action === 'messages') {
@@ -143,14 +223,15 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
       const row = doc.data(), timestamp = row.timestamp || row.createdAt;
       if (time(timestamp) > cleared) rows.set(doc.id, { ...row, id: doc.id, timestamp, type: row.type || 'text' });
     }
-    return { rows: serial([...rows.values()].sort((a, b) => time(a.timestamp) - time(b.timestamp))) };
+    const { names } = await identityDirectory([...rows.values()].map(row=>row.senderId));
+    return { rows: serial([...rows.values()].sort((a, b) => time(a.timestamp) - time(b.timestamp)).map(row => presentChatMessage(row, names))) };
   }
   const clientId = key(data.clientId), text = String(data.text || '').trim();
   if (!text || text.length > 4000) throw new https.HttpsError('invalid-argument', 'Message must contain 1–4000 characters');
   const message = ref.collection('messages').doc(`c_${clientId}`);
   return db.runTransaction(async tx => {
     const [thread, previous] = await Promise.all([tx.get(ref), tx.get(message)]);
-    if (thread.get('companyId') !== staff.companyId) throw new https.HttpsError('permission-denied', 'Thread company changed');
+    if (!admits(thread.data(), threadId)) throw new https.HttpsError('permission-denied', 'Thread company changed');
     if (previous.exists) {
       if (previous.get('senderId') !== participant || previous.get('text') !== text) throw new https.HttpsError('permission-denied', 'Message identity conflict');
       return { ok: true, messageId: message.id, duplicate: true };

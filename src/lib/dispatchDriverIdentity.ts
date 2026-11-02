@@ -108,6 +108,14 @@ export function dispatchDriverDisplayName(dispatch: DispatchIdentity, drivers: D
   return 'Unassigned driver';
 }
 
+/** Cancellation/decline actors are identity keys, not display labels. */
+export function dispatchReviewDriverName(dispatch: DispatchIdentity & { declinedBy?: string }, drivers: DriverIdentity[]): string {
+  const actor = t(dispatch.declinedBy).replace(/^driver:/, '');
+  const resolved = actor ? resolveDispatchDriver({ companyId: dispatch.companyId, driverId: actor, driverHash: actor }, drivers) : null;
+  return resolved ? dispatchDriverDisplayName({ companyId: dispatch.companyId, driverId: resolved.driverId || resolved.key }, drivers)
+    : dispatchDriverDisplayName(dispatch, drivers);
+}
+
 export type DispatchActiveState = 'queued' | 'review' | 'accepted' | 'in_progress' | 'paused';
 
 /**

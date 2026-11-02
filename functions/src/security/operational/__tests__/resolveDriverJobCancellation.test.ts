@@ -5,9 +5,9 @@ jest.mock('firebase-functions/v2/https', () => ({
 const rows = new Map<string, any>();
 const writes: Array<[string, any]> = [];
 jest.mock('firebase-admin', () => ({ firestore: () => ({
-  collection: (name: string) => ({ doc: (id: string) => ({ path: `${name}/${id}` }) }),
+  collection: (name: string) => {const q: any = {name, filters: [], doc: (id: string) => ({path: `${name}/${id}`}), where: (...filter: any[]) => {q.filters.push(filter); return q;}}; return q;},
   runTransaction: (fn: any) => fn({
-    get: async (ref: any) => ({ exists: rows.has(ref.path), data: () => rows.get(ref.path) }),
+    get: async (ref: any) => ref.filters ? {docs: [...rows].filter(([path,data]) => path.startsWith(ref.name+'/') && ref.filters.every(([key,op,value]: any[]) => data[key]===value)).map(([path,data]) => ({id:path.split('/')[1],data:()=>data}))} : ({ exists: rows.has(ref.path), data: () => rows.get(ref.path) }),
     update: (ref: any, value: any) => writes.push([ref.path, value]),
   }),
 }) }));
@@ -74,4 +74,18 @@ test('completed jobs and transferred water remain terminal/protected', async () 
   rows.get('invoices/invoice').transferSourceDocId = 'source';
   await expect(invoke({ dispatchId: 'job', action: 'cancel' })).rejects.toThrow('Loaded');
   expect(writes).toHaveLength(0);
+});
+
+test('B cannot be cancelled or declined after A completed; no invoice or sibling writes',async()=>{Object.assign(rows.get('dispatches/job'),{splitGroupId:'g',splitSequence:2,status:'pending',invoiceDocId:undefined});rows.set('dispatches/a',{companyId:'company',driverId:'driver',splitGroupId:'g',splitSequence:1,status:'completed'});for(const action of ['cancel','decline'])await expect(invoke({dispatchId:'job',action})).rejects.toThrow('last split');expect(writes).toHaveLength(0);});
+test('started B cannot return to queue even before a new departure or measured barrel',async()=>{Object.assign(rows.get('dispatches/job'),{splitGroupId:'g',splitSequence:2});await expect(invoke({dispatchId:'job',action:'return_pending'})).rejects.toThrow('last split');expect(writes).toHaveLength(0);});
+test('unloaded A family cleanup still cancels its unstarted B after A is cancelled',async()=>{Object.assign(rows.get('dispatches/job'),{splitGroupId:'g',splitSequence:2,status:'pending',invoiceDocId:undefined});rows.set('dispatches/a',{companyId:'company',driverId:'driver',splitGroupId:'g',splitSequence:1,status:'cancelled'});await expect(invoke({dispatchId:'job',action:'cancel'})).resolves.toMatchObject({result:'cancelled'});expect(writes).toHaveLength(1);});
+
+test('middle B cancellation atomically releases reserved barrels to C, preserving A and destinations',async()=>{
+ Object.assign(rows.get('dispatches/job'),{splitGroupId:'g',splitSequence:2});Object.assign(rows.get('invoices/invoice'),{dispatchCarryBbls:120,totalBBL:40});
+ rows.set('dispatches/a',{companyId:'company',driverId:'driver',splitGroupId:'g',splitSequence:1,status:'completed'});
+ rows.set('dispatches/c',{companyId:'company',driverId:'driver',splitGroupId:'g',splitSequence:3,status:'pending',wellName:'Unchanged destination'});
+ const result=await invoke({dispatchId:'job',invoiceDocId:'invoice',action:'cancel_split'});expect(result.splitCancellationCarry).toMatchObject({nextDispatchId:'c',remainingBbls:120,releasedAllocatedBbls:40});
+ expect(writes.find(([path])=>path==='dispatches/c')?.[1]).toMatchObject({inheritedBbls:120});expect(writes.find(([path])=>path==='dispatches/c')?.[1]).not.toHaveProperty('wellName');expect(writes.some(([path])=>path==='dispatches/a')).toBe(false);
+ for(const [path,patch] of writes)Object.assign(rows.get(path),patch);writes.length=0;
+ const replay=await invoke({dispatchId:'job',action:'cancel'});expect(replay.splitCancellationCarry.remainingBbls).toBe(120);expect(writes).toHaveLength(0);rows.get('dispatches/c').status='completed';const late=await invoke({dispatchId:'job',action:'cancel_split'});expect(late.splitCancellationCarry).toBeUndefined();expect(writes).toHaveLength(0);
 });

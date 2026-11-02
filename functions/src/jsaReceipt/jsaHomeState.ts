@@ -32,10 +32,27 @@ export async function readJsaHomeState(deps:HomeDeps,owner:{companyId:string;dri
   if(!a||!owned(a)||a.requestId!==r.requestId||a.jobRef!==r.jobRef||a.action!==r.action||!parsed?.ok)throw Error('record_unavailable');
   const active={kind:'governed',id:r.requestId,jsaNumber:jsaNumber('JSA-'+r.requestId,r.completedAtMs,r.jsaNumber)};
   if(b.operation!=='read')return {...base,action:'resume',active};
+  return {...base,action:'resume',active,record:await governedJsaDocument(deps,owner,r,shift.periodId,ids)};
+ }
+ const open=standalone.filter(r=>r.state==='open'&&(r.jsaPeriodId?ids.includes(r.jsaPeriodId):r.shiftId===shift.periodId)).sort((a,b)=>a.signedAtMs-b.signedAtMs||String(a.id).localeCompare(String(b.id)))[0];
+ if(!open)return {...base,action:'new',active:null};
+ const record=standaloneJsaDocument(open);
+ const active={kind:'standalone',id:open.id,jsaNumber:record.jsaNumber};
+ return {...base,action:'resume',active,...(b.operation==='read'?{record}:{})};
+}
+
+/** Shared saved-document projection for WB JSA and the read-only WB T viewer. */
+export async function governedJsaDocument(deps:HomeDeps,owner:{companyId:string;driverId:string},r:Row,shiftId:string,ids:string[]){
+ const owned=(row:Row)=>row.companyId===owner.companyId&&row.driverId===owner.driverId;
+ const checked=(rows:Row[])=>{if(rows.length>2000||rows.some(row=>!owned(row)))throw Error('scope_or_size');return rows;};
+ if(!owned(r))throw Error('scope_or_size');
+ const a=await deps.artifact(r.requestId),parsed=a&&parseArtifactInput({requestId:r.requestId,snapshot:a.snapshot});
+ if(!a||!owned(a)||a.requestId!==r.requestId||a.jobRef!==r.jobRef||a.action!==r.action||!parsed?.ok)throw Error('record_unavailable');
+ const active={jsaNumber:jsaNumber('JSA-'+r.requestId,r.completedAtMs,r.jsaNumber)};
   const [job,companyName,acks,coverage]=await Promise.all([
     deps.job?deps.job(r.jobRef):Promise.resolve(null),deps.companyName?deps.companyName():Promise.resolve(''),
-    deps.list('jsa_job_acknowledgments',shift.periodId,ids).then(checked),
-    deps.list('jsa_job_read_coverage',shift.periodId,ids).then(checked),
+    deps.list('jsa_job_acknowledgments',shiftId,ids).then(checked),
+    deps.list('jsa_job_read_coverage',shiftId,ids).then(checked),
   ]);
   if(job&&!decideInvoiceJobFields({expectedCompanyId:owner.companyId,expectedDriverId:owner.driverId,invoice:{...job,exists:true}}).ok)throw Error('scope_or_size');
   const activity=(v:Row)=>String(v.commodityType||v.jobType||'');
@@ -45,11 +62,10 @@ export async function readJsaHomeState(deps:HomeDeps,owner:{companyId:string;dri
       .map(x=>({jobRef:x.jobRef,wellName:String(x.job.wellName||''),jobType:String(x.job.jobType||''),dropOff:String(x.job.dropOff||''),recordedAtMs:x.recordedAtMs,method:x.method}))]
     .sort((a,b)=>a.recordedAtMs-b.recordedAtMs||String(a.jobRef).localeCompare(String(b.jobRef)));
 
-  return {...base,action:'resume',active,...(b.operation==='read'?{record:{...parsed.value.snapshot,id:r.requestId,jsaNumber:active.jsaNumber,driverName:parsed.value.snapshot.printedName,date:parsed.value.snapshot.formDate||'',timestamp:new Date(r.completedAtMs).toISOString(),signatureImage:'data:image/png;base64,'+parsed.value.snapshot.signature.data,wellName:originalJob?.wellName||'',jobActivityName:originalJob?.jobType||'',wells:originalJob?[{name:originalJob.wellName,jobType:originalJob.jobType}]:[],operator:String(job?.operator||''),companyName,coveredJobs,assessmentArchiveUnavailable:true,state:'open'}}:{})};
- }
- const open=standalone.filter(r=>r.state==='open'&&(r.jsaPeriodId?ids.includes(r.jsaPeriodId):r.shiftId===shift.periodId)).sort((a,b)=>a.signedAtMs-b.signedAtMs||String(a.id).localeCompare(String(b.id)))[0];
- if(!open)return {...base,action:'new',active:null};
+  return {...parsed.value.snapshot,id:r.requestId,jsaNumber:active.jsaNumber,driverName:parsed.value.snapshot.printedName,date:parsed.value.snapshot.formDate||'',timestamp:new Date(r.completedAtMs).toISOString(),signatureImage:'data:image/png;base64,'+parsed.value.snapshot.signature.data,wellName:originalJob?.wellName||'',jobActivityName:originalJob?.jobType||'',wells:originalJob?[{name:originalJob.wellName,jobType:originalJob.jobType}]:[],operator:String(job?.operator||''),companyName,coveredJobs,assessmentArchiveUnavailable:true,state:'open'};
+}
+
+export function standaloneJsaDocument(open:Row){
  const parsed=parseArtifactInput({requestId:'A'.repeat(43),snapshot:open.snapshot});if(!parsed.ok)throw Error('record_unavailable');
- const active={kind:'standalone',id:open.id,jsaNumber:jsaNumber('JSA-'+String(open.id).toUpperCase(),open.signedAtMs,open.jsaNumber)};
- return {...base,action:'resume',active,...(b.operation==='read'?{record:{...parsed.value.snapshot,id:open.id,jsaNumber:active.jsaNumber,driverName:parsed.value.snapshot.printedName,date:parsed.value.snapshot.formDate||'',timestamp:new Date(open.signedAtMs).toISOString(),signatureImage:'data:image/png;base64,'+parsed.value.snapshot.signature.data,jobActivityName:open.job?.activity||'',wells:open.job?.wells||[],additions:open.additions||[],state:'open',workflow:'standalone'}}:{})};
+ return {...parsed.value.snapshot,id:open.id,jsaNumber:jsaNumber('JSA-'+String(open.id).toUpperCase(),open.signedAtMs,open.jsaNumber),driverName:parsed.value.snapshot.printedName,date:parsed.value.snapshot.formDate||'',timestamp:new Date(open.signedAtMs).toISOString(),signatureImage:'data:image/png;base64,'+parsed.value.snapshot.signature.data,jobActivityName:open.job?.activity||'',wells:open.job?.wells||[],additions:open.additions||[],state:open.state,workflow:'standalone'};
 }

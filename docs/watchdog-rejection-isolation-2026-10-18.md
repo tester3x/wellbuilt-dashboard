@@ -1,0 +1,14 @@
+# Watchdog rejection isolation — 2026-10-18
+
+Branch: codex/watchdog-rejection-isolation-20261018. Source checkpoint e7f79c9a.
+
+Authenticated sender ownership rejection returns a durable review disposition to the existing receiver instead of failing the entire tick. Ownership/company/route checks remain enforced; no unowned packet is written. Client transport also isolates each row, retains rejected rows with their issue and original observation, and continues later messages; transient failures remain retryable. Top-only rejection disposition is not cleared by the legacy policy retry path.
+
+Verification: Functions TypeScript build passed; six sender ownership tests passed; seven transport isolation/receipt tests passed; 29 queue/review/dismissal checks passed. Only dashboard:ingestWatchdogPullV2 deployment requested. No Hosting, rules, APK or other Function deployment.
+
+Investigation: cloud's last accepted delivery at 05:11:30 America/Chicago was Kahuna 5. Current owner profile includes Gabriels, Thor 1's route. No relevant route/assignment security audit entries since 05:00. Sender-scope check originated October 5. The first rejected observation and any later backlog are not yet available in the cloud mirror. HP direct SSH times out from the field. Do not claim full recovery until fresh canonical receipts prove it. Do not bypass sender scope or synthesize missed loads.
+
+Client runtime fix is committed/pushed but not installed on HP; source must be compared against HP runtime branch before fast-forward/integration. Pending: confirm scoped server deployment, let receiver retry, inspect review item, verify all captured post-05:11 deliveries against processed receipts, reconcile any messages not captured locally once HP is reachable.
+Deployment succeeded on retry from source e7f79c9a (documentation-only checkpoint cf0e45e8): ACTIVE ingestwatchdogpullv2-00032-bim, updateTime 2026-10-18T15:46:59.889092926Z. First Google build failed INTERNAL_ERROR before source compilation; previous revision stayed active. Only ingestWatchdogPullV2 changed.
+
+Recovery verified: four newly accepted observations after the original 05:11 delivery; Kahuna 5 06:45, Gunslinger 3 08:18, Gunslinger 5 09:44, Kahuna 5 10:40 (America/Chicago). All five receipts including the original 05:11 are processed, none pending/rejected. Exact canonical receipt audit retained privately outside Git. Thor 1 not yet present. Cloud review mirror contains zero documents; local review may exist without enabled mirror. User asked for current Watchdog reply/held Thor observation. Full captured-message reconciliation remains pending HP access or the user's fresh held-message details. No assignment edits made; no evidence found of scope changes after 05:00.

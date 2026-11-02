@@ -11,6 +11,7 @@ import { staffWriteUserRoles, classifyUserRolesError } from '@/lib/staffWriteUse
 import { staffWriteDriverRoster, classifyRosterError } from '@/lib/staffWriteDriverRoster';
 import { mergeEmployees, EmployeeRow } from '@/lib/employees';
 import { EmployeePanel } from './EmployeePanel';
+import { EmployeeOnboardingPanel } from './EmployeeOnboardingPanel';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   companyActionRouteFor,
@@ -113,6 +114,7 @@ interface DashboardUser {
   companyId?: string;      // '' / undefined = WB staff (spans all companies)
   companyName?: string;
   driverHash?: string;     // linked driver record, if promoted from a driver
+  driverId?: string;       // canonical app identity linked during employee signup
 }
 
 export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProps) {
@@ -449,6 +451,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             companyId: val.companyId || undefined,
             companyName: val.companyName || undefined,
             driverHash: val.driverHash || undefined,
+            driverId: val.driverId || undefined,
           });
         });
       }
@@ -1565,6 +1568,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           </div>
         </div>
       )}
+
+      <EmployeeOnboardingPanel />
 
       {/* One directory combines employee access and WB-M profile authority. */}
       <EmployeePanel

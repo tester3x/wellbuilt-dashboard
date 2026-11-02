@@ -2,8 +2,8 @@
 // One PERSON can exist in two stores:
 //   drivers/approved/{driverHash}  — WB-T mobile login (device registration)
 //   users/{uid}                    — dashboard login (Firebase Auth)
-// linked (when promoted via the inviteEmployee CF) by
-//   drivers/approved/{hash}.dashboardUid  ↔  users/{uid}.driverHash
+// Linked by dashboardUid, legacy driverHash, or the canonical driverId assigned
+// during employee onboarding. Names and emails are never identity join keys.
 // This module merges the two lists into one row per person. Pure data — no
 // Firebase reads/writes here; the Employees tab supplies the arrays it
 // already loads and renders the result.
@@ -19,6 +19,7 @@ export interface EmployeeDriverInput {
   companyName?: string;
   dashboardUid?: string;
   dashboardRole?: UserRole;
+  driverId?: string;
 }
 
 /** Structural subset of a users/{uid} record the merge needs. */
@@ -31,6 +32,7 @@ export interface EmployeeUserInput {
   companyId?: string;
   companyName?: string;
   driverHash?: string;
+  driverId?: string;
 }
 
 export interface EmployeeRow<D extends EmployeeDriverInput = EmployeeDriverInput,
@@ -58,7 +60,7 @@ export interface EmployeeRow<D extends EmployeeDriverInput = EmployeeDriverInput
 
 /**
  * Merge drivers + dashboard users into one row per person.
- * Link rule: driver.dashboardUid === user.uid OR user.driverHash === driver.key
+ * Link rule: dashboardUid, legacy driverHash, or canonical driverId.
  * (either side may be stamped — legacy records sometimes carry only one).
  * Unlinked records each get their own row.
  */
@@ -67,18 +69,25 @@ export function mergeEmployees<D extends EmployeeDriverInput, U extends Employee
   users: U[],
 ): EmployeeRow<D, U>[] {
   const usersByUid = new Map(users.map(u => [u.uid, u]));
-  const usersByDriverHash = new Map(
-    users.filter(u => u.driverHash).map(u => [u.driverHash as string, u]),
-  );
+  const compatibleCompany = (d: D, u: U) =>
+    !d.companyId || !u.companyId || d.companyId === u.companyId;
+  // An ambiguous link must remain separate rather than silently selecting the
+  // last account. Legacy one-sided stamps remain supported.
+  const uniqueLink = (d: D, field: 'driverHash' | 'driverId', ids: string[]) => {
+    const matches = users.filter(u => !!u[field] && ids.includes(u[field]!) && compatibleCompany(d, u));
+    return matches.length === 1 ? matches[0] : undefined;
+  };
   const claimedUids = new Set<string>();
 
   const rows: EmployeeRow<D, U>[] = [];
 
   for (const d of drivers) {
     // Prefer the driver-side stamp, fall back to the user-side stamp.
+    const stamped = d.dashboardUid ? usersByUid.get(d.dashboardUid) : undefined;
     const linked =
-      (d.dashboardUid ? usersByUid.get(d.dashboardUid) : undefined) ??
-      usersByDriverHash.get(d.key);
+      (stamped && compatibleCompany(d, stamped) ? stamped : undefined) ??
+      uniqueLink(d, 'driverHash', [d.key]) ??
+      uniqueLink(d, 'driverId', [d.key, ...(d.driverId ? [d.driverId] : [])]);
     if (linked) claimedUids.add(linked.uid);
     const dashboardRoles = linked
       ? (linked.roles && linked.roles.length > 0 ? linked.roles : [linked.role])

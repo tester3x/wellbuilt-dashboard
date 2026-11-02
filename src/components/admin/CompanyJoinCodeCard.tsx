@@ -91,9 +91,8 @@ export function CompanyJoinCodeCard({ companyId }: { companyId: string }) {
       </div>
 
       <p className="text-gray-400 text-xs mb-2">
-        New employees enter this join code (format XXXX-XXXX) when registering in WB Mobile to join
-        your company. It is generated once and reused — share it privately with each new hire. Anyone
-        with the code can request to join (you still approve every registration).
+        Employees can enter this reusable code on the Join an existing company page or in WB Mobile.
+        It is separate from private invitation links. You still approve every request to join.
       </p>
 
       {state.phase === 'ready' && (

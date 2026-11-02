@@ -1,0 +1,36 @@
+{
+  "home": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "source": "6b4aae95a0cb5b2dae90c2e2933c5bba16fddfb3",
+  "problem": "Company level reporting was enabled. Server delivery used only legacy approved-driver lookups, did not resolve canonical identities or verified legacy chat aliases, and swallowed delivery failures after processing. The older WB T client fallback writes directly to chat; live rules deny those writes.",
+  "implementation": "Resolve exact canonical or reciprocal legacy driver identity, enforce profile company and chat company/membership, read current company setting/template, and use processed tankAfterInches instead of a single-tank guess. Stable per-packet/per-company/per-driver message IDs and Firestore transactions deduplicate concurrent fast-path/event retries. Duplicate retries leave newer human-message previews intact. Recipient creation races and transient failures remain retryable. No name-based ownership fallback.",
+  "durability": "New deliverProcessedLevelReport RTDB create listener on packets/processed/{packetId}, with platform retry enabled. It runs independently after processed persistence, even if intake acknowledgement or the app ends. levelReportDeliveryVersion2 gates activation to the new stable-ID producer during rolling deployment. Original processor fast path delegates to the same identity. Missing identity and unmeasured levels are skipped rather than attributed or calculated speculatively.",
+  "deployments": {
+    "project": "wellbuilt-sync",
+    "region": "us-central1",
+    "runtime": "nodejs22",
+    "sourceHash": "b5f90310b48836f0459aaf1a9a06479b79056bf0",
+    "worker": { "name": "dashboard:deliverProcessedLevelReport", "state": "ACTIVE", "retry": true, "path": "packets/processed/{packetId}" },
+    "processor": { "name": "dashboard:processIncomingPull", "state": "ACTIVE", "retry": false, "path": "packets/incoming/{packetId}", "previousSourceHash": "968e5838530259591cb8bf25b7ba776fcc66cde2" },
+    "sequence": "Created retry worker first, then updated intake processor, using exact clean pushed source. Worker deploy --force acknowledged only the explicitly scoped new failure policy. No other function, Hosting, app, rules or bucket deployment."
+  },
+  "verification": {
+    "unitAndProcessor": "103 passed across seven suites: levelReportDelivery, tankCalibration, processedRecord, packetGuards, crossKeyPullClaim, previousPullLevel and recoverRejectedPull. Functions TypeScript build passed.",
+    "isolatedIntegration": "Firestore and RTDB emulators, demo-level-chat only: four simultaneous deliveries produce one report per eligible canonical/legacy thread; processed calibrated bottom, real name and timestamp preserved; tenant/unrelated recipients excluded; transaction rechecks changed company; retry does not replace newer human preview; company disabled suppresses sending.",
+    "reproduceIntegration": "npm --prefix functions run build; firebase emulators:exec --only firestore,database --project demo-level-chat --config tools/level-chat-emulators.json \"node tools/test-level-chat-emulator.cjs\"",
+    "retainedProcessor": "Compared processIncomingPull body against both task-start d459629d and calibrated f9293cb0: identical apart from the delivery-version marker. All numerical processing and existing guards retained.",
+    "liveConfiguration": "Functions inventory confirms both functions ACTIVE on expected RTDB paths, exact source hash, and worker retry=true. Company setting observed enabled on existing signed-in Dashboard. Live Firestore rules read-only inspection confirms direct client writes to chat threads/messages are false; no rule changes.",
+    "liveRulesSha256": "e62960d110892ef823029bdfe88e797ba00dfe450065ee0b2d75d0d586e6a2f9",
+    "fieldCheck": "A real post-release WB T load has not yet been observed. Next normal measured pickup/departure should create the level report after its packet processes. No fabricated production pull, manual customer-history replay, shift, signature, account, role or chat message was created for testing."
+  },
+  "appState": "Existing WB T286 can use the repaired server path. No WB T source edits, APK build or installation required. Company setting remains the server authority; SMS/WhatsApp flow is separate and unchanged.",
+  "privateEvidence": [
+    "C:/dev/tmp/chat-level-processor-regressions-private.log",
+    "C:/dev/tmp/chat-level-emulator-private.log",
+    "C:/dev/tmp/chat-level-worker-deploy-private.log",
+    "C:/dev/tmp/chat-level-processor-deploy-private.log",
+    "C:/dev/tmp/chat-level-functions-private.json"
+  ]
+}

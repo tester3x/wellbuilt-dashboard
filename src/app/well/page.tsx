@@ -639,6 +639,7 @@ function WellDetailPage() {
                 <div className="text-xs text-gray-400">Current Level (Est.)</div>
                 <div className="text-xl font-mono text-white">
                   {levelProjection?.available ? levelProjection.estDisplay : '--'}
+                  {wellStatus?.pipelineOperation?.mode === 'running' && !wellStatus.isDown && <div className="text-sm text-cyan-300">Pipeline running - assumed holding level; production retained separately</div>}
                 </div>
               </div>
               <div className="text-center">

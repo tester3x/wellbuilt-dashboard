@@ -1,8 +1,10 @@
 /** Shared, side-effect-free WhatsApp parser. Input is data, never instructions. */
 export interface PullImportOptions {
   defaultWell?: string;
+  levelNotation?: 'decimal_feet' | 'feet_inches';
   wellNames?: string[];
   defaultBbls?: number;
+  driverDefaultBbls?: Record<string, number>;
   timeZone?: string;
   dateOrder?: 'mdy' | 'dmy';
   startDate?: string;
@@ -21,6 +23,8 @@ export interface PullImportRow {
   issues: string[];
   excluded: boolean;
   inferredSeparator?: boolean;
+  levelOnly?: boolean;
+  measurementTimeSource?: 'posted' | 'stated';
 }
 export interface ChatMessage { index: number; date: string; time: string; author: string; body: string }
 const header = /^(?:\[(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*([^\]]+)\]\s*|(\d{1,2}\/\d{1,2}\/\d{2,4}),\s*(.*?)\s+-\s+)(.*)$/;
@@ -53,12 +57,13 @@ function clock(text: string): { hour: number; minute: number; second: number } |
   return { hour, minute, second };
 }
 /** Resolve wall time in the selected zone; reject nonexistent/ambiguous DST times. */
-export function chatTimestamp(date: string, time: string, zone = 'America/Chicago', order: 'mdy' | 'dmy' = 'mdy'): string {
+export function chatTimestamp(date: string, time: string, zone = 'America/Chicago', order: 'mdy' | 'dmy' = 'mdy', referenceUTC?:string): string {
   const pieces = date.split('/').map(Number);
   const year = pieces[2] < 100 ? 2000 + pieces[2] : pieces[2];
   const month = pieces[order === 'mdy' ? 0 : 1];
   const day = pieces[order === 'mdy' ? 1 : 0];
-  const parsedClock = clock(time);
+  const offset = /\s+UTC([+-])(\d{2}):(\d{2})$/.exec(time);
+  const parsedClock = clock(offset ? time.slice(0,offset.index) : time);
   if (!parsedClock) throw new Error('Invalid time');
   const wall = Date.UTC(year, month - 1, day, parsedClock.hour, parsedClock.minute, parsedClock.second);
   const check = new Date(wall);
@@ -74,6 +79,17 @@ export function chatTimestamp(date: string, time: string, zone = 'America/Chicag
     const probe = wall + offset;
     const candidate = wall - (wallAt(probe) - probe);
     if (wallAt(candidate) === wall) candidates.add(candidate);
+  }
+  if(offset){
+    const minutes=Number(offset[2])*60+Number(offset[3]);
+    const instant=wall-(offset[1]==='-'?-minutes:minutes)*60000;
+    if(Number(offset[2])>23||Number(offset[3])>59||!candidates.has(instant))throw new Error('Invalid timezone offset for local time');
+    return new Date(instant).toISOString();
+  }
+  if(candidates.size>1&&referenceUTC&&Number.isFinite(Date.parse(referenceUTC))){
+    const reference=Date.parse(referenceUTC);
+    const nearby=[...candidates].filter(c=>c<=reference+600000&&c>=reference-7200000).sort((a,b)=>Math.abs(a-reference)-Math.abs(b-reference));
+    if(nearby.length&&(!nearby[1]||Math.abs(nearby[0]-reference)!==Math.abs(nearby[1]-reference)))return new Date(nearby[0]).toISOString();
   }
   if (candidates.size !== 1) throw new Error('Ambiguous or nonexistent daylight-saving time');
   return new Date([...candidates][0]).toISOString();
@@ -92,64 +108,123 @@ const wellPattern = /\b(Gunslinger(?:\s+Federal)?\s*[35](?:-\d+(?:-\d+)*[Hh])?|C
 export function normalizeWell(text: string): string { return text.toLowerCase().replace(/[^a-z0-9]/g, ''); }
 export function parsePullChat(text: string, options: PullImportOptions = {}): PullImportRow[] {
   const rows: PullImportRow[] = [];
-  const catalogueNames = (options.wellNames || []).filter(Boolean).sort((a, b) => b.length - a.length).map(name => [...name].map(character => String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
+  const level=(text:string):number|null=>{
+    const value=text.trim().replace(/[–—]/g,'-');
+    if(options.levelNotation==='feet_inches'){
+      const pair=/^(\d{1,2})\s*[.,:]\s*(\d{1,2})$/.exec(value);
+      if(pair)return Number(pair[2])<12?Number(pair[1])+Number(pair[2])/12:null;
+    }
+    return parseFeet(value);
+  };
+  const droneCanonical = (options.wellNames || []).filter(name => normalizeWell(name) === 'drone');
+  const droneAlias = droneCanonical.length === 1 && !(options.wellNames || []).some(name => normalizeWell(name) === 'drone1') ? droneCanonical[0] : null;
+  const pesekCanonical = (options.wellNames || []).find(name => normalizeWell(name) === 'pesek10');
+  const predatorMatches = (options.wellNames || []).filter(name => normalizeWell(name) === 'predator1');
+  const predatorCanonical = predatorMatches.length === 1 && !(options.wellNames || []).some(name => normalizeWell(name) === 'predator') ? predatorMatches[0] : null;
+  // Match only scoped catalogue entries; whitespace is optional, never the well number.
+  const canonicalFor = (value: string): string => {
+    const normalized = normalizeWell(value);
+    if (droneAlias && normalized === 'drone1') return droneAlias;
+    const key = normalized === 'matildabay2' ? 'matilda2' : ['grenli', 'granil'].includes(normalized) ? 'granli' : normalized;
+    const names = (options.wellNames || []).filter(name => normalizeWell(name) === key);
+    return names.length === 1 ? names[0] : value;
+  };
+  const catalogueNames = (options.wellNames || []).filter(Boolean).flatMap(name => droneAlias && name === droneAlias ? [name, 'Drone 1'] : normalizeWell(name) === 'matilda2' ? [name, 'Matilda bay 2'] : normalizeWell(name) === 'granli' ? [name, 'Grenli', 'Granil'] : [name]).sort((a, b) => b.length - a.length).map(name => [...name].map(character => /\s/.test(character) ? '[ \t]*' : String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join('') + (normalizeWell(name) === 'drone' ? '(?![ \t]*\\d)' : ''));
   const boundary = String.fromCharCode(92) + 'b';
-  const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + wellPattern.source + '|' + catalogueNames.join('|') + ')' + boundary, 'ig') : wellPattern;
+  const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + wellPattern.source + '|' + catalogueNames.join('|') + (pesekCanonical ? '|Pesek(?![ \t]*\\d)' : '') + ')' + boundary, 'ig') : wellPattern;
   for (const message of splitChat(text)) {
     const body = message.body.trim();
     if (/message was deleted|<.*omitted>|message_history_notice|end-to-end encrypted/i.test(body)) continue;
-    const matches = [...body.matchAll(namesPattern)];
-    const segments = matches.length ? matches.map((match, i) => ({ well: match[0], body: body.slice((match.index || 0) + match[0].length, matches[i + 1]?.index ?? body.length) })) : [{ well: options.defaultWell || '', body }];
+    const predatorPattern = predatorCanonical ? /\bPredator(?![ \t]*[-#]?[ \t]*\d)\b/ig : null;
+    const matches = [...body.matchAll(namesPattern), ...(predatorPattern ? body.matchAll(predatorPattern) : [])]
+      .sort((a, b) => (a.index || 0) - (b.index || 0));
+    const segments = matches.length ? matches.map((match, i) => ({ well: pesekCanonical && normalizeWell(match[0]) === 'pesek' ? pesekCanonical : canonicalFor(match[0]), body: body.slice((match.index || 0) + match[0].length, matches[i + 1]?.index ?? body.length) })) : [{ well: options.defaultWell || '', body }];
     for (let part = 0; part < segments.length; part++) {
       const segment = segments[part];
+      // Shared-pad reports often put only "pad" or "CTB" after the scoped
+      // well name. Strip that standalone heading, never arbitrary prose.
+      if (matches.length) segment.body = segment.body.replace(/^[ \t]*(?:pad|ctb)[ \t]*[.:]?[ \t]*(?:\r?\n|(?=\d))/i, '');
+      if (predatorCanonical && normalizeWell(segment.well) === 'predator') segment.well = predatorCanonical;
+      // Preserve an unknown named report for review instead of silently dropping it.
+      if (!matches.length) {
+        const named = /^([^\n]*[a-z][^\n]*)\n([\s\S]+)$/i.exec(segment.body);
+        if (named && (/^(?:\s*(?:top|t)\s*[:=.\-]?\s*\d|\s*\d{1,2}(?:[ .,:']\d{1,2})?\s*\/\s*\d)/i.test(named[2]) || /^(?:\s*\d{1,2}[^\n]*\n){2}/.test(named[2]))) {
+          // A whole-line pad name may omit its number only when this channel's
+          // catalogue has exactly one matching numbered well. Explicit other
+          // numbers, prose, foreign names and ambiguous pads remain held.
+          const key = normalizeWell(named[1]);
+          const candidates = [...new Set(options.wellNames || [])].filter(name =>
+            /[ \t]+\d+$/.test(name) && normalizeWell(name.replace(/[ \t]+\d+$/, '')) === key);
+          segment.body = named[2];
+          segment.well = candidates.length === 1 ? candidates[0] : '';
+        }
+      }
       let inlineTime = '';
-      const lines = segment.body.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
-        const suffix = /\s+(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
-        const prefix = suffix ? line.slice(0,suffix.index).trim().replace(/^(?:T|B)\s+/i,'').replace(/\.(?!\d)$/,'') : '';
+      // A well-name suffix such as '. On' is pump status, not a gauge line.
+      // Strip only that exact leading annotation; keep arbitrary prose held.
+      const gaugeBody=segment.body.replace(/^\s*[.,:]?\s*on\s*(?:\r?\n|$)/i,'\n').replace(/^\s*levels?\s*[:=]?\s*(?=\d)/i,'').replace(/\s+(?=(?:top|bottom|t|b)\s*[:=.\-]\s*\d)/ig,'\n');
+      const rawLines=gaugeBody.split('\n').map(line=>line.trim()).filter(Boolean);
+      const lines = gaugeBody.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+        const suffix = /(?:\s+@?\s*|@)(\d{1,4}(?::\d{2})?\s*(?:[ap](?:m)?)?)$/i.exec(line);
+        const prefix = suffix ? line.slice(0,suffix.index).trim().replace(/^(?:top|bottom|t|b)\s*[:=.\-]?\s*/i,'').replace(/\.(?!\d)$/,'') : '';
         if (suffix && clock(suffix[1]) && (/[ap]/i.test(suffix[1]) || parseFeet(prefix)!==null)) { inlineTime = suffix[1]; line = line.slice(0, suffix.index).trim(); }
-        return line.replace(/^(?:T|B)\s+(?=\d)/i, '').replace(/\.(?!\d)$/, '').trim();
+        return line.replace(/^(?:top|bottom|t|b)\s*[:=.\-]?\s*(?=\d)/i, '').replace(/\.(?!\d)$/, '').trim();
       });
-      const labelled = /\btop\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
-      const bottom = /\bbottom\s*[:=-]?\s*([^\n]+)/i.exec(segment.body);
+      const labelled = /(?:^|\n)\s*(?:top|t)\s*[:=.\-]?\s*(\d[^\n]*)/i.exec(gaugeBody);
+      const bottom = /(?:^|\n)\s*(?:bottom|b)\s*[:=.\-]?\s*(\d[^\n]*)/i.exec(gaugeBody);
       const typoPair = /^\s*[-:]?\s*(\d{1,2}\.\d{1,2})\.(\d{1,2}\.\d{1,2})\s*(?:\n|$)/.exec(segment.body);
-      const pair = /^\s*[-:]?\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*\/\s*(\d+(?:\.\d+)?|\d+['’]\d*|\d+[ \t]+\d+)\s*(?:\n|$)/.exec(segment.body) || typoPair;
-      const levelLines = lines.map(line => parseFeet(line));
+      const slash=(lines[0]||'').replace(/^[-:]\s*/,'').split(/\s*\/{1,2}\s*/);
+      const pair=slash.length===2&&level(slash[0])!==null&&level(slash[1])!==null?[lines[0],slash[0],slash[1]]:typoPair;
+      const levelLines = lines.map(line => level(line));
       const unlabelled = !labelled && !pair && levelLines.length >= 2 && levelLines[0] !== null && levelLines[1] !== null;
-      const top = labelled ? parseFeet(labelled[1]) : pair ? parseFeet(pair[1]) : unlabelled ? levelLines[0] : null;
-      const low = bottom ? parseFeet(bottom[1]) : pair ? parseFeet(pair[2]) : unlabelled ? levelLines[1] : null;
+      const topIndex=rawLines.findIndex(line=>/^(?:top|t)\s*[:=.\-]?\s*\d/i.test(line));
+      const bottomIndex=rawLines.findIndex(line=>/^(?:bottom|b)\s*[:=.\-]?\s*\d/i.test(line));
+      let top=labelled?level(lines[topIndex]):pair?level(pair[1]):unlabelled?levelLines[0]:null;
+      let low=bottom?level(lines[bottomIndex]):pair?level(pair[2]):unlabelled?levelLines[1]:null;
+      if(!labelled&&!bottom&&top!==null&&low!==null&&low>top)[top,low]=[low,top];
       const amount = /\b(\d+(?:\.\d+)?)\s*bbls?\b/i.exec(segment.body);
-      const bareAmount = (pair || unlabelled) ? /^\s*(\d{2,3})(?:\.(?!\d))?\s*(.*)$/.exec(lines[pair ? 1 : 2] || '') : null;
-      const bbls = amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : options.defaultBbls || null;
+      const singleLevel = level((lines[0] || '').replace(/^\s*[@:\-]\s*/, '').replace(/\s+off\s*$/i, '').trim());
+      const levelOnly = !pair && !unlabelled && !bottom && !amount && singleLevel !== null && (matches.length > 0 || !!labelled);
+      if (levelOnly) top = singleLevel;
+      const amountLine = lines[pair ? 1 : 2] || '';
+      const isClockLine = /^\d{1,2}:\d{2}(?:\s*[ap](?:m)?)?$|^\d{1,4}\s*[ap](?:m)?$/i.test(amountLine);
+      const bareAmount = (pair || unlabelled || (labelled && bottom)) && !isClockLine ? /^\s*(\d{2,3})(?:\.(?!\d))?\s*(.*)$/.exec(lines[pair ? 1 : 2] || '') : null;
+      const driverDefault = Object.entries(options.driverDefaultBbls || {}).find(([name]) => name.trim().toLowerCase() === message.author.trim().toLowerCase())?.[1];
+      const bbls = levelOnly ? 0 : amount ? Number(amount[1]) : bareAmount ? Number(bareAmount[1]) : driverDefault || options.defaultBbls || null;
       // A routing instruction containing a well and barrels is not a pull.
-      if (!labelled && !pair && !unlabelled) {
-        if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s+)?\d/i.test(segment.body)) { let timestamp='';try{timestamp=chatTimestamp(message.date,message.time,options.timeZone,options.dateOrder);}catch{} rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp, tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false }); }
+      if (!labelled && !pair && !unlabelled && !levelOnly) {
+        if (matches.length && /\btop\b|(?:^|\n)\s*(?:[TB]\s*[:=.\-]?\s*)?\d/i.test(segment.body)) { let timestamp='';try{timestamp=chatTimestamp(message.date,message.time,options.timeZone,options.dateOrder);}catch{} rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt: timestamp, dateTimeUTC: timestamp, tankLevelFeet: null, bottomLevelFeet: null, bblsTaken: bbls, author: message.author, source: body, issues: ['Unreadable levels'], excluded: false }); }
         continue;
       }
       const issues: string[] = typoPair ? ['Inferred level separator needs historical validation'] : [];
+      if(top!==null&&low!==null&&low>top)issues.push('Labelled bottom exceeds top');
       let postedAt = '';
       try { postedAt = chatTimestamp(message.date, message.time, options.timeZone, options.dateOrder); } catch (error) { issues.push(String(error)); }
       let eventTime = postedAt;
-      const explicit = inlineTime || lines.find((line, index) => index >= (pair ? 2 : unlabelled ? 3 : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
+      const explicit = inlineTime || lines.find((line, index) => index >= (levelOnly ? 1 : pair ? (bareAmount ? 2 : 1) : (unlabelled || (labelled && bottom)) ? (bareAmount ? 3 : 2) : 0) && !!clock(line)) || bareAmount?.[2]?.trim();
       if (explicit && clock(explicit)) {
         let resolved = explicit;
-        // Bare 1:30 can mean AM or PM. Choose nearest post only within two hours.
-        if (!/[ap]/i.test(explicit) && Number(clock(explicit)?.hour) < 12) {
+        // Bare 12:38 is ambiguous too: midnight is 12 AM, not 0 AM. A bare
+        // 00:38 remains an unambiguous 24-hour clock. Use the same two-hour guard.
+        const statedHour=Number(clock(explicit)?.hour);
+        if (!/[ap]/i.test(explicit) && statedHour >= 1 && statedHour <= 12) {
           const choices = [explicit + ' AM', explicit + ' PM'].map(time => {
-            try { return { time, difference: Math.abs(Date.parse(chatTimestamp(message.date, time, options.timeZone, options.dateOrder)) - Date.parse(postedAt)) }; } catch { return { time, difference: Infinity }; }
+            try { return { time, difference: Math.abs(Date.parse(chatTimestamp(message.date, time, options.timeZone, options.dateOrder, postedAt)) - Date.parse(postedAt)) }; } catch { return { time, difference: Infinity }; }
           }).sort((a, b) => a.difference - b.difference);
           if (choices[0].difference <= 7_200_000) resolved = choices[0].time;
           else issues.push('Pull time lacks AM/PM; confirm');
         }
-        try { eventTime = chatTimestamp(message.date, resolved, options.timeZone, options.dateOrder); } catch { issues.push('Invalid stated pull time'); }
+        try { eventTime = chatTimestamp(message.date, resolved, options.timeZone, options.dateOrder, postedAt); } catch { issues.push('Invalid stated pull time'); }
       }
       if (eventTime && postedAt && (Date.parse(eventTime) > Date.parse(postedAt) + 600_000 || Date.parse(eventTime) < Date.parse(postedAt) - 7_200_000)) issues.push('Stated time is far from the post; confirm the pull date and time');
       if (matches.length > 1 && !explicit) issues.push('Multiple wells in one message; confirm individual pull times');
       if (!segment.well) issues.push('Choose the well for this shorthand message');
       if (top === null) issues.push('Invalid top level');
-      if (!(bbls && bbls > 0)) issues.push('Missing barrels');
+      if (!levelOnly && !(bbls && bbls > 0)) issues.push('Missing barrels');
+      if (levelOnly && !explicit) issues.push('Confirm measurement time for top-only reading');
       const date = `${message.date.split('/')[2]?.padStart(4, '20')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 1 : 0]?.padStart(2, '0')}-${message.date.split('/')[options.dateOrder === 'dmy' ? 0 : 1]?.padStart(2, '0')}`;
       const excluded = !!((options.startDate && date < options.startDate) || (options.endDate && date > options.endDate));
-      rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded, ...(typoPair ? {inferredSeparator:true} : {}) });
+      rows.push({ id: `${message.index}:${part}`, wellName: segment.well, postedAt, dateTimeUTC: eventTime, tankLevelFeet: top, bottomLevelFeet: low, bblsTaken: bbls, author: message.author, source: body, issues, excluded, ...(typoPair ? {inferredSeparator:true} : {}), ...(levelOnly ? {levelOnly:true,measurementTimeSource:explicit ? 'stated' as const : 'posted' as const} : {}) });
     }
   }
   if (rows.filter(row => !row.excluded).length > 2000) throw new Error('More than 2,000 pulls; split the export into smaller batches.');
@@ -159,6 +234,6 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
 export interface PullChatNotice { messageIndex: number; source: string; reason: string }
 /** Operational changes require dated calibration review, never automatic config writes. */
 export function findPullChatNotices(text: string): PullChatNotice[] {
-  return splitChat(text).filter(message => /(?:opened|closed|active|inactive|added|removed|tank setup|tanks?\s+(?:on|off))[^\n]{0,50}tank|tank[^\n]{0,50}(?:opened|closed|active|inactive|setup)|\bbbls?\s*\/\s*ft/i.test(message.body)).map(message => ({ messageIndex: message.index, source: message.body, reason: 'Tank configuration may have changed; confirm the calibration and applicable date range.' }));
+  return splitChat(text).filter(message => /(?:opened|closed|active|inactive|added|removed|tank setup|tanks?\s+(?:on|off))[^\n]{0,50}tank|tank[^\n]{0,50}(?:opened|closed|active|inactive|setup)|\bbbls?\s*\/{1,2}\s*ft/i.test(message.body)).map(message => ({ messageIndex: message.index, source: message.body, reason: 'Tank configuration may have changed; confirm the calibration and applicable date range.' }));
 }
 

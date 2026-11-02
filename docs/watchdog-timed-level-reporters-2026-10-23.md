@@ -1,0 +1,103 @@
+# Timed level reports — October 23, 2026
+
+The parser now accepts a leading `level`/`levels` label and an `@` immediately
+before the stated time. A trailing note does not displace the first gauge. The
+same parsing applies to every configured well; it is not a one-ticket template.
+Level-only observations retain zero removal and their actual stated time.
+
+An optional `channel.timedLevelReporters[senderHash]` rule permits a specifically
+enabled reporter with `startAt` to submit a stated-time level observation without
+owning a canonical driver account. It does not bind that reporter to a driver,
+grant other well access, infer barrels, infer a missing measurement time, alter
+well-down state, or admit administrative multiwell gauge lists. Existing bound
+driver behavior remains in place. Reporter provenance distinguishes this scoped
+report from verified driver ownership; existing flow-window protections remain.
+
+Validation: 93 parser/import/model/ownership/flow-window tests passed, plus three
+targeted signed-intake tests covering the existing driver gate, administrative
+batch exclusion, and the new scoped reporter path. Functions TypeScript build
+passed. A private replay of the owner's actual message parsed a single zero-volume
+observation with the stated gauge and time. Simulation of possible withdrawals
+was read-only; simulated loads must never be inserted into operational history.
+
+Runtime installation and live receipt verification are separate from this source
+checkpoint and will be recorded after they complete. No Hosting, app build,
+security-rule or canonical packet-processor deployment is part of this patch.
+
+Intake source **08f6bca0751c4b0bc3e172a95b83a6edae5ac5b1** was deployed to
+`dashboard:ingestWatchdogPullV2` only. The owner-confirmed original gauge message
+was submitted with the HP's existing scoped HMAC transport. At
+2026-10-23T05:37:22.819Z, its exact stated time, gauge, zero volume and canonical
+completion were verified in WB M. No simulated withdrawal was written. The
+reporter policy is limited to one exact captured sender and the existing two-well
+channel; no canonical driver binding or other well permission was added.
+
+## Receiver recovery checkpoint
+
+The HP source fast-forwarded from b53a69c6 to 08f6bca0, preserving its untracked
+operational helpers. Compiling on the HP caused contention; those two build
+processes were stopped and the locally built/tested parser installed instead.
+The persistent queue and linked session were retained, with a queue backup.
+
+The canonical startup script now reuses a saved bridge configuration, checks its
+loopback listener with a bounded socket operation, anchors an installed script to
+its adjacent persistent queue, and connects/resumes an existing stopped receiver.
+A regression executes the actual script with a fixture listener and mocked APIs,
+proving connect/resume without duplicate process launch or repeated discovery.
+The task action uses hidden, noninteractive PowerShell with encoded arguments and
+captures startup errors; the temporary CMD wrapper was removed because it could
+open a visible terminal. `install-startup-task.ps1` reproduces the hidden action;
+task principal/triggers and the original task XML are preserved. Browser startup
+stages log only phase names, without message content or credentials.
+
+Further inspection found WhatsApp's download/continue interstitial, not a loaded
+chat receiver. The dependency's default Chrome 101/macOS user-agent override was
+removed (`userAgent:false`) so the installed browser supplies its real identity.
+The actual browser then displayed the normal QR login and the receiver reached
+**Scan QR** at 2026-10-23T05:55:30.311Z. WhatsApp reports the session unpaired;
+the owner was asked to relink from the phone. The profile was not deleted or
+replaced. Why that saved session is unpaired is not proven.
+
+This is **not yet an automatic-delivery pass**: WhatsApp watching must be verified
+connected and unpaused after relinking. A direct submission of the already-captured
+gauge does not establish receiver health. HP sleep was considered but ruled out:
+the owner confirmed it awake, and the machine does not support Modern Standby.
+
+## Relink crash repair
+
+Checking the owner's relink attempt found the receiver process had terminated:
+LocalAuth.logout tried deleting Chromium's open profile and rejected on Windows
+Crashpad's locked file. Its asynchronous navigation callback did not catch that
+rejection. The receiver now overrides only that destructive local cleanup:
+WhatsApp still revokes/validates authentication and provides its normal QR flow,
+while the browser profile stays in place. Inherited browser lifecycle methods
+are unchanged. A dependency-free regression proves logout preserves profile
+contents, does not manufacture authentication, and retains initialization hooks.
+The server also passes Node's syntax check. Runtime verification follows below.
+
+Runtime checkpoint bdb4a9d5 was pushed and fast-forwarded on the HP. Its regression
+also passed on HP Node 22. The hidden scheduled task restarted the receiver with
+the persistent queue unchanged. At 2026-10-23T06:07:11.900Z the local API reported
+Scan QR, paused, transport Ready, eight channels and no review flags. Browser
+inspection independently confirmed UNPAIRED and a normal QR login page. The
+previous relink therefore did not survive the crash; the owner needs to scan the
+fresh QR before automatic receiving can be verified. No profile/queue cleanup or
+hypothetical load was performed by this repair.
+
+## Automatic receiver and delivery verified after QR relink
+
+After the owner scanned the fresh QR, the API reported Connected. Monitoring was
+resumed through its normal authenticated local API. All eight configured chats
+appeared in receiver diagnostics, and successive receiver timestamps advanced.
+A real new load posted while disconnected was captured automatically on catch-up,
+sent through signed intake and acknowledged complete. A transient fetch failure
+retried without removing pending delivery. Both that new load and the recovered
+gauge received complete receipts. Independent RTDB reads proved canonical packet
+completion and the new load's lastPull/current gauge in WB M. No synthetic load
+or manual resubmission was used for this end-to-end test.
+
+At 2026-10-23T06:21:19.758Z: Connected, paused=false, last receiver check
+06:21:17.757Z, transport Ready, 493 complete receipts, no queued/incomplete
+receipts, no review inbox items and no review flags. Worker source is bdb4a9d5;
+subsequent commits document verification only. Automatic watching and delivery
+are now verified, superseding the earlier awaiting-QR checkpoint.

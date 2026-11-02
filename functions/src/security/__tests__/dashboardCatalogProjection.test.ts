@@ -299,6 +299,31 @@ describe('projectDashboardCatalog', () => {
     expect(outPlat.counts.approved).toBe(2);
   });
 
+  it('preserves employee onboarding identity links without exposing credentials or other companies', () => {
+    const out = projectDashboardCatalog({
+      approved: {},
+      profiles: {
+        canonical: { displayName: 'App Name', legalName: 'Employee Name', companyId: 'liquid-gold',
+          dashboardUid: 'auth-uid', employeeJoinUid: 'private-join-id', passwordHash: 'secret' },
+        other: { companyId: 'acme-hauling', dashboardUid: 'other-uid' },
+      },
+      users: {
+        'auth-uid': { companyId: 'liquid-gold', driverId: 'canonical', role: 'admin',
+          roles: ['admin', 'dispatch'], passwordHash: 'secret', employeeJoinUid: 'private-join-id' },
+        'other-uid': { companyId: 'acme-hauling', driverId: 'other' },
+      },
+      wellConfig: {}, caller: liquidGold,
+    });
+    expect(out.profiles.canonical.dashboardUid).toBe('auth-uid');
+    expect(out.approved.canonical.dashboardUid).toBe('auth-uid');
+    expect(out.users['auth-uid'].driverId).toBe('canonical');
+    expect(out.users['auth-uid'].roles).toEqual(['admin', 'dispatch']);
+    expect(JSON.stringify(out)).not.toContain('secret');
+    expect(JSON.stringify(out)).not.toContain('private-join-id');
+    expect(out.profiles.other).toBeUndefined();
+    expect(out.users['other-uid']).toBeUndefined();
+  });
+
   it('does not create duplicate approved entry when profile is already linked via migratedToDriverId', () => {
     const canonUuid = '22222222-3333-4444-5555-666666666666';
     const out = projectDashboardCatalog({

@@ -1,0 +1,15 @@
+{
+  "source": "f2285b782240545314e9c8e832ccb49498794fba",
+  "verifiedAt": "2026-11-01T22:28:07.885Z",
+  "liveArtifactsVerified": 398,
+  "changes": [
+    "Conversation picker button labels its open/close action.",
+    "Grid lock retains temporary chat until saved position is confirmed; failed saves and missing profiles preserve the chat; unlock preserves chat."
+  ],
+  "checks": [
+    "TypeScript",
+    "actual chat page browser success, pending, failure, no-profile and unlock scenarios",
+    "all mandatory Hosting preflight checks",
+    "live artifact byte match"
+  ]
+}

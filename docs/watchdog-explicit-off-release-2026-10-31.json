@@ -1,0 +1,58 @@
+{
+  "sourceCommit": "9f9a0cee8962e0e8a34c134a78abd425bc35ca23",
+  "scope": "Verified sender, complete single-well top-only gauge with explicit trailing off; ordinary readings do not change operational state",
+  "liveCorrection": {
+    "well": "Kahuna 1",
+    "reportTimeUTC": "2026-10-31T20:39:34.000Z",
+    "levelInches": 77,
+    "barrels": 0,
+    "verifiedDownIn": [
+      "well_config",
+      "wells/status",
+      "packets/outgoing",
+      "original processed report"
+    ],
+    "preservedMeasurement": true,
+    "duplicatePullCreated": false,
+    "auditCollection": "watchdog_review_audit",
+    "verifiedAtUTC": "2026-11-01T04:01:02.540Z"
+  },
+  "validation": {
+    "targetedPassed": 93,
+    "typescript": "passed",
+    "broaderIntakeSuite": {
+      "passed": 26,
+      "failed": 7,
+      "baselineSameFailures": true,
+      "details": "Existing calibration/receipt assertions; reproduced without this patch"
+    },
+    "liveTestsSent": false
+  },
+  "deployment": {
+    "function": "ingestWatchdogPullV2",
+    "project": "wellbuilt-sync",
+    "region": "us-central1",
+    "status": "ACTIVE",
+    "scopeExcludes": [
+      "processIncomingPull",
+      "Hosting",
+      "rules",
+      "pipeline configuration"
+    ],
+    "updatedAtUTC": "2026-11-01T04:02:09.569870339Z",
+    "compiledFilesByteMatched": {
+      "lib/watchdog/intake.js": "6beb6ff970371252f6dd702608ca625a495dc6f9c9c6e0acad5d31d8a7b17b09",
+      "lib/watchdog/reportedWellState.js": "e3f52097a68b48174b6429a47d3097125e4a7f1d1aae63abe760e84bc74c18db",
+      "lib/imports/pullParser.js": "b2bebd07525aba6b8b811bba92ca7e438f963b94286a97eaa3212013150459cf",
+      "lib/flowWindows.js": "0c7e7ed88afeeaeb16a0fd206d3049f4f536de89f2d48c5b4d59dfa8fe08df0d",
+      "lib/security/dashboardCatalogProjection.js": "4f6e237914e2f904cebe6f8a9e888b098175a77aa7bdb0f9d80f96ef52d6ccc2"
+    }
+  },
+  "dependencyReview": {
+    "intake": "only explicit off fix",
+    "reportedWellState": "new narrow helper",
+    "flowWindows": "existing passive pipeline-running exclusion",
+    "dashboardCatalogProjection": "existing employee link and optional pipeline field allowlists",
+    "pipelineActivated": false
+  }
+}

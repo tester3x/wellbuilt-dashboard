@@ -4,7 +4,7 @@ const auth={uid:'u',claims:{kind:'driver',app:'wbt',...scope}};
 const snapshot={prepared:{trained:true},locationAcks:{},locations:['Original well'],stepsAcknowledged:true,stepAcks:{one:true},ppeSelected:{gloves:true},ppeOtherItems:[],notes:'Saved note',pusher:'',otherInfo:'',printedName:'Driver',signature:{mimeType:'image/png',data:Buffer.from([137,80,78,71,13,10,26,10,1]).toString('base64')}};
 const read={...scope,requestId:id,jobRef:'first-job',state:'completed',action:'read_and_acknowledged',completedAtMs:100,binding:{periodId:'old-shift'}};
 const ack={...scope,jobRef:'job',method:'acknowledged',recordedAtMs:200,periodId:'old-shift'};
-function deps(extra:Partial<SavedJobDeps>={}):SavedJobDeps{return {invoice:async()=>({...scope,wellName:'Current well'}),list:async c=>c==='jsa_governed_requests'?[read]:c==='jsa_job_acknowledgments'?[ack]:[],artifact:async()=>({...read,snapshot,receiptHandle:'private',actorUidHash:'private'}),...extra};}
+function deps(extra:Partial<SavedJobDeps>={}):SavedJobDeps{return {invoice:async jobRef=>({...scope,wellName:jobRef==='first-job'?'Original well':'Current well'}),list:async c=>c==='jsa_governed_requests'?[read]:c==='jsa_job_acknowledgments'?[ack]:[],artifact:async()=>({...read,snapshot,receiptHandle:'private',actorUidHash:'private'}),...extra};}
 const body={protocolVersion:1,jobRef:'job'};
 test('legacy acknowledgement opens the same-shift earlier full read without current-shift checks',async()=>{
  const out=await readSavedJobJsa(deps(),auth,body);expect(out.acknowledgement?.method).toBe('acknowledged');expect(out.fullRead?.requestId).toBe(id);expect(out.fullRead?.snapshot.notes).toBe('Saved note');expect(JSON.stringify(out)).not.toContain('private');
@@ -54,4 +54,10 @@ test('current locations include recorded stops linked to the same read, never un
  expect(out.coveredJobs?.map(x=>x.wellName)).toEqual(['Original well','Second well']);
  expect(out.coveredJobs?.[1]).toMatchObject({jobType:'Service Work',dropOff:'Disposal'});
  await expect(readSavedJobJsa(deps({linkedStops:async()=>[{...linked,companyId:'foreign'}]}),auth,body)).rejects.toThrow('scope_or_size');
+});
+
+test('first signed job is included even when its signed locations array is empty',async()=>{
+ const out=await readSavedJobJsa(deps({artifact:async()=>({...read,snapshot:{...snapshot,locations:[]}})}),auth,body);
+ expect(out.coveredJobs?.map(j=>j.wellName)).toEqual(['Original well']);
+ await expect(readSavedJobJsa(deps({invoice:async ref=>({...scope,wellName:'Well',...(ref==='first-job'?{driverId:'foreign'}:{})})}),auth,body)).rejects.toThrow('scope_or_size');
 });

@@ -18,6 +18,7 @@ export {
  * NOT deployed yet; selector: --only functions:adminBindDriverCompany
  */
 export { adminBindDriverCompany } from './companyBindingCallable';
+export { createOwnerCompany, getOwnerCompanySetup } from './ownerCompanySignup';
 export {
   requestCompanyOnboarding,
   adminListCompanyOnboardingRequests,

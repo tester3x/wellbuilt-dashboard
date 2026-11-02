@@ -1,0 +1,13 @@
+{
+  "home": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "startingHead": "6a6636910f9330d388db0ac153e6fcb5234f5c8c",
+  "userSteering": "User noted that the ZFold would have many daily chats if this were still occurring and that the two S24 chats might be from testing. Investigate before consolidating existing conversations.",
+  "liveReadOnlyFindings": "Messages Shift filter is empty. Direct filter contains both S24 conversations and the single ZFold conversation. The observed duplicates are Direct, not per-shift threads. Did not open conversations, mark read, send, merge, archive or delete anything.",
+  "sourceFindings": "Current staffChat direct action searches existing company direct conversations by canonical/verified legacy driver link before creating. Current WB T driverChat dispatch action also searches existing owned direct conversations with staff participants before creating; neither reuse key includes a day or shift. Read-only WB T home checkpoint a085ad01f879943cf8f672aadd046917a5669af0 was clean. This source review does not independently certify the exact deployed driverChat source or identify the historic cause of the two S24 records.",
+  "conclusion": "Evidence supports the user's test-history explanation; it does not prove that a new conversation is being created daily. Do not merge personal/direct chats solely by display name or infer that repeated shift system messages represent separate daily chats. Observe the next actual shift against this baseline before changing conversation identity.",
+  "workPreservation": "Unshipped shift-only consolidation exploration preserved in commit17871befc0be09bd32b0a6293f7f98f6a2b6371d, then reverted by a7a996d7 after live filter evidence disproved the initial type assumption. Product source has zero net diff from startingHead. No deployment, APK build, installation or live-data migration.",
+  "baseline": "Two S24 Direct conversations, one ZFold Direct conversation, no conversations in the Shift filter. Existing history retained. Real-name repair remains live from5926f837fb7c9519a4b90e7aaeea0ae85c9a4a56."
+}

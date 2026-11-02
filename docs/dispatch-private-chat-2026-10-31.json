@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "task": "Shared dispatch and private driver conversations",
+  "checkedAt": "2026-10-31T08:41:56.511233+00:00",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "checkout": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "sourceCommit": "fc1bb845920b4b8c6517a018e3fd9a710ad0c22c",
+  "driverBackendSourceCommit": "2e125dbd0377273977f110aa7b25865c7a83a3e2",
+  "mobileBuildSourceCommit": "531d0c831f9ffed0cde2c76f46683ef7da37393d",
+  "behavior": {
+    "dispatch": "One deterministic company+canonical-driver conversation, shared by current trusted viewDispatch+viewChat staff; sendChat additionally required to write. Read-only dispatch staff can read. Independent of shifts and staff roster. Other drivers excluded.",
+    "private": "Separate deterministic company+canonical-driver+authenticated-staff pair. Only that pair admitted through governed APIs; no role fan-in or shared-monitor storage.",
+    "storage": "New dispatch_conversations collection; direct client reads/writes denied by deployed catch-all. Existing legacy chat_threads history retained in place, not relabeled private and not migrated. Existing driver monitor falls back to history until its team conversation exists.",
+    "levels": "Processed calibrated level report is sent once only to dispatch_team; never private or legacy direct. Company sendLevelToDispatch remains authoritative. Existing stable logical-pull dedup, managed retries, computed bottom, real names and timestamps retained.",
+    "identity": "Real profile names; no new account/role changes."
+  },
+  "deployment": {
+    "project": "wellbuilt-sync",
+    "functions": [
+      {
+        "id": "staffChat",
+        "region": "us-central1",
+        "platform": "gcfv2",
+        "state": "ACTIVE",
+        "hash": "63df67091cfbab9c55f278e5631a168db7767972"
+      },
+      {
+        "id": "deliverProcessedLevelReport",
+        "region": "us-central1",
+        "platform": "gcfv1",
+        "state": "ACTIVE",
+        "hash": "e8452f9b5ca03047a014c21125595a50203312e2"
+      },
+      {
+        "id": "driverChat",
+        "region": "us-central1",
+        "platform": "gcfv1",
+        "state": "ACTIVE",
+        "hash": "763a565727332b7eba71205f3f71ca144605390e"
+      },
+      {
+        "id": "processIncomingPull",
+        "region": "us-central1",
+        "platform": "gcfv1",
+        "state": "ACTIVE",
+        "hash": "e8452f9b5ca03047a014c21125595a50203312e2"
+      }
+    ],
+    "hosting": {
+      "sourceCommit": "fc1bb845920b4b8c6517a018e3fd9a710ad0c22c",
+      "verifiedAt": "2026-10-31T08:38:54.579Z",
+      "verifiedFiles": 398,
+      "approvedCheckpointAdvanced": true,
+      "sharedLockReleased": true
+    }
+  },
+  "checks": [
+    {
+      "name": "Cross-package staff+driver integration, final compiled source",
+      "result": "7 scenario groups passed",
+      "evidence": "C:/dev/tmp/dispatch-chat-final-emulator.log",
+      "coverage": [
+        "same shared ID across staff and driver creation",
+        "private pair admission for every mutation and messages",
+        "current dispatch/chat capability and company gates",
+        "other driver blocked",
+        "shared monitor excludes private chats",
+        "calibrated levels shared-only with concurrent dedup",
+        "per-person archive and retry identity",
+        "direct raw reads denied for staff, driver and platform admin using exact fetched live rules"
+      ]
+    },
+    {
+      "name": "Real-name and level-report regressions",
+      "result": "13 tests in 3 suites passed",
+      "evidence": "C:/dev/tmp/dispatch-chat-unit.log"
+    },
+    {
+      "name": "Level delivery retained emulator",
+      "result": "passed",
+      "evidence": "C:/dev/tmp/dispatch-chat-level-regression.log"
+    },
+    {
+      "name": "Hosting mandatory preflight",
+      "result": "passed including 506 library tests, 1 skip, 0 failures, actual DOM and responsive retained route tests",
+      "evidence": "C:/dev/tmp/dispatch-chat-hosting.log"
+    },
+    {
+      "name": "Live API anonymous probes",
+      "result": "staffChat and driverChat return HTTP401 UNAUTHENTICATED"
+    },
+    {
+      "name": "Live browser read-only verification",
+      "result": "Dispatch and Private filters present; audience chooser switches text correctly; driver picker uses server directory; no live conversation created or message sent",
+      "evidence": "C:/dev/tmp/dispatch-private-chooser-live.png"
+    }
+  ],
+  "notPerformed": [
+    "No live test messages or loads",
+    "No customer history migration or deletion",
+    "No role/account changes",
+    "No Firestore/RTDB/Storage rule changes",
+    "No cloud APK builds",
+    "No phone installation for this new feature tonight; local T287 artifact recorded separately after verification"
+  ],
+  "tomorrowAcceptance": [
+    "Install verified T287 on S24 and validate before any ZFold rollout",
+    "Use two real dispatch accounts: both see driver shared conversation and replies",
+    "Open private conversation: only initiating dispatcher and driver see and reply; colleague cannot access it",
+    "Submit a real measured load: one calibrated level report in shared Dispatch team and none in private",
+    "Start another shift: same shared conversation, no daily duplicate"
+  ],
+  "limitations": [
+    "Other-machine unpushed work cannot be discovered",
+    "Two-human off-site test intentionally deferred until tomorrow; no claim it has passed",
+    "Existing historical direct chat data remains under legacy access semantics; only newly explicit Private conversations carry the pair-only guarantee"
+  ]
+}

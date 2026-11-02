@@ -1,0 +1,60 @@
+{
+  "checkedDate": "2026-11-01",
+  "source": "freshly fetched registered laptop homes; upstream difference 0/0 for each",
+  "repositories": [
+    {
+      "id": "wellbuilt-equipment",
+      "remote": "https://github.com/tester3x/wellbuilt-equipment.git",
+      "branch": "codex/wbe-shop-20261012",
+      "checkpoint": "277651cc53715bb98a0aca112b57afc4223677c6"
+    },
+    {
+      "id": "wellbuilt-jsa",
+      "remote": "https://github.com/tester3x/wellbuilt-jsa.git",
+      "branch": "feat/jsa-register-join-code-20260917",
+      "checkpoint": "376de495dd837b833c44d9cc00027d777cad09d0"
+    },
+    {
+      "id": "wellbuilt-suite",
+      "remote": "https://github.com/tester3x/wellbuilt-suite.git",
+      "branch": "codex/suite-equipment-entry-20261012",
+      "checkpoint": "c81694aa2cbb398838e5ef17d3eeea17b88f6fb6"
+    },
+    {
+      "id": "wellbuilt-ticket",
+      "remote": "https://github.com/tester3x/wellbuilt-ticket.git",
+      "branch": "codex/wbt-enroute-20261014",
+      "checkpoint": "3bacc84d79c01675921c1abc2c7ed9b610a59c2f"
+    },
+    {
+      "id": "wellbuilt-dashboard",
+      "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+      "branch": "release/dashboard-owner-signup-20261029",
+      "checkpoint": "44b682dd23f971e86f0ff7c6e917b1fb36ce9525"
+    },
+    {
+      "id": "wellbuilt-site",
+      "remote": "https://github.com/tester3x/wellbuilt-site.git",
+      "branch": "main",
+      "checkpoint": "7a9ecd0e1ebe18954377457e86da59d0d051bc8d"
+    },
+    {
+      "id": "wellbuilt-mobile",
+      "remote": "https://github.com/tester3x/wellbuilt-mobile.git",
+      "branch": "codex/wbm-stale-level-20261005",
+      "checkpoint": "a1c64994a6b2ae24da910fa06972a2e47cc35535"
+    },
+    {
+      "id": "tickettime-expo",
+      "remote": "https://github.com/tester3x/TicketTimeExpo.git",
+      "branch": "wip/etc-hos-timesheet",
+      "checkpoint": "36886dd31a8e28ebc8dd6b05ae758dc587da55bd"
+    },
+    {
+      "id": "wellbuilt-timecard",
+      "remote": "https://github.com/tester3x/wellbuilt-timecard.git",
+      "branch": "test/etc-vc70-end-hos-odometer",
+      "checkpoint": "a64bf78104f0e651003ce232581b299d871265d5"
+    }
+  ]
+}

@@ -63,13 +63,16 @@ export const getDispatchLocationCatalog = https.onCall({ timeoutSeconds: 60, mem
     Promise.all(operators.map(op => db.collection('customLocations').where('company', '==', op).limit(5000).get())),
     db.collection('companies').doc(requested).collection('swd_directory').limit(5000).get(),
   ]);
+  const custom=customSnaps.flatMap(s=>s.docs.map(d=>d.data())).filter(p=>p.ndicInactiveApproved!==true || p.companyId===requested);
+  const wells=wellSnaps.flatMap(s=>s.docs.map(d=>project(d.data())));
+  const seen=new Set(wells.map(w=>w.api_no));
+  for(const p of custom){if(p.ndicInactiveApproved===true&&p.api_no&&!seen.has(p.api_no)){wells.push(project({well_name:p.locationName,operator:p.company,api_no:p.api_no,latitude:p.latitude,longitude:p.longitude,state:'ND'}));seen.add(p.api_no);}}
   return {
     companyId: requested,
-    wells: wellSnaps.flatMap(s => s.docs.map(d => project(d.data()))),
+    wells,
     disposals: applyDispatchSwdDirectory(disposals.docs.map(d => project(d.data())), directory.docs.map(d => d.data())),
-    customLocations: customSnaps.flatMap(s => s.docs.map(d => {
-      const c = d.data();
+    customLocations: custom.filter(p=>p.ndicInactiveApproved!==true).map(c => {
       return { locationName: c.locationName, company: c.company, usageCount: typeof c.usageCount === 'number' ? c.usageCount : 0, latitude: c.latitude ?? null, longitude: c.longitude ?? null };
-    })),
+    }),
   };
 });

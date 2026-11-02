@@ -36,6 +36,10 @@ test('calibrated recovery accounts for previous removal and preserves source pro
   expect(packets[1].tankAfterInches).toBe(84);
   expect(packets[1].historicalOnly).toBe(true);
   expect(packets[1].historicalImport.bblPerFoot).toBe(180);
+  // Exact-well Mobile history enforces tenant scope on the packet itself.
+  // Nested audit provenance alone cannot authorize driver-facing reads.
+  expect(packets[1].companyId).toBe('company');
+  expect(packets[1].historicalImport.companyId).toBe(packets[1].companyId);
   expect(packets[1].driverId).toBeUndefined(); expect(packets[1].invoiceDocId).toBeUndefined();
 });
 test('negative recovery does not invent production', () => {

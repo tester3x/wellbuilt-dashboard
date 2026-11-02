@@ -258,6 +258,7 @@ export const staffWriteDispatch = httpsV2.onCall(
           status: decided.status || 'pending',
           assignedAt: FieldValue.serverTimestamp(),
           assignedBy: fields.assignedBy || access.uid,
+          builderOwnership: { kind: 'staff', actorId: access.uid },
         });
         return { result: 'created' as const, dispatchId: id.dispatchId };
       });

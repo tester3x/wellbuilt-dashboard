@@ -1,3 +1,6 @@
+import {runningPipeline} from '../../pipelineOperation';
+import {isProvisionalPull,reportedTrackingBottom} from '../../watchdog/barrelDecision';
+import { resolveTankBblPerFoot } from '../../tankCalibration';
 import {effectiveFlow} from '../../effectiveFlow';
 import {calculateEditedAfr} from './editAfr';
 import {refreshFlowWindow} from '../../refreshFlowWindow';
@@ -150,6 +153,14 @@ export function outgoingCompanyId(config: { companyId?: unknown } | null | undef
 
 // ── Outbox Preparation ────────────────────────────────────────────────────────
 
+/** Firebase child keys cannot contain audit-path slashes. Encode only at rest. */
+export function storedEditHistoryPaths(paths: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(paths).map(([path, value]) => [Buffer.from(path).toString('base64url'), value]));
+}
+export function expandedEditHistoryPaths(paths: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(paths).map(([key, value]) => [key.startsWith('packets/') ? key : Buffer.from(key, 'base64url').toString('utf8'), value]));
+}
+
 export async function prepareEditOutbox(
   db: admin.database.Database,
   incomingPacketId: string,
@@ -209,8 +220,7 @@ export async function prepareEditOutbox(
   const freezeOriginal = !origPacket.originalSubmittedAt;
   const editedAtIso = new Date(nowMs).toISOString();
 
-  const tanks = config.tanks || config.numTanks || 1;
-  const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
+  const bblPerFoot = resolveTankBblPerFoot(config);
   const pullBbls = config.pullBbls || 100;
   const bottomInches = (config.bottomLevel || config.allowedBottom || 1) * 12;
   const loadLineInches = (config.loadLine ?? 0) * 12;
@@ -224,7 +234,7 @@ export async function prepareEditOutbox(
   const newBblsTaken = data.bblsTaken !== undefined ? data.bblsTaken : origPacket.bblsTaken;
   const newDateTimeUTC = data.dateTimeUTC || origPacket.dateTimeUTC;
   const rawDateTime = data.dateTime || origPacket.dateTime;
-  const newDateTime = rawDateTime ? rawDateTime.replace(/:(\d{2})\s*(AM|PM)/i, ' $2') : '';
+  const newDateTime = rawDateTime ? rawDateTime.replace(/(\d{1,2}:\d{2}):\d{2}\s*(AM|PM)/i, '$1 $2') : '';
 
   const newWellDown =
     data.wellDown !== undefined
@@ -322,14 +332,15 @@ export async function prepareEditOutbox(
       deliveredDispatchIds: [],
       pendingDispatchIds: [],
     };
-    await db.ref(`packets/editOutbox/${editEventId}`).set(record);
+    await db.ref(`packets/editOutbox/${editEventId}`).set({...record, historyPaths: storedEditHistoryPaths(record.historyPaths)});
     return record;
   }
 
   // Recalculate tankAfter
   const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / bblPerFoot) * 12 : 0;
   const rawNewTankAfterInches = newTankTopInches - bblsInInches;
-  const newTankAfterInches = Math.max(rawNewTankAfterInches, loadLineInches);
+  const reportedReviewBottom=reportedTrackingBottom({...origPacket,watchdogProvenance:{...origPacket.watchdogProvenance,reportedBottomFeet:data.bottomLevelFeet??origPacket.watchdogProvenance?.reportedBottomFeet}},newTankTopInches);
+  const newTankAfterInches = reportedReviewBottom??Math.max(rawNewTankAfterInches, loadLineInches);
   const editHitLoadLine = rawNewTankAfterInches < loadLineInches;
 
   // Previous pull for interval flow rate
@@ -341,6 +352,7 @@ export async function prepareEditOutbox(
   const editedTime = new Date(newDateTimeUTC).getTime();
   let prevTankAfterInches = 0;
   let prevTimestamp = '';
+  let previousProvisional=false;
 
   prevOutgoingSnap.forEach((child) => {
     if (child.key === originalPacketId) return;
@@ -350,6 +362,7 @@ export async function prepareEditOutbox(
       if (!prevTimestamp || pktTime > new Date(prevTimestamp).getTime()) {
         prevTankAfterInches = pkt.tankAfterInches || 0;
         prevTimestamp = pkt.dateTimeUTC;
+        previousProvisional=isProvisionalPull(pkt);
       }
     }
   });
@@ -407,8 +420,8 @@ export async function prepareEditOutbox(
   });
 
   allPulls.sort((a, b) => new Date(b.dateTimeUTC).getTime() - new Date(a.dateTimeUTC).getTime());
-  let afr = calculateEditedAfr(allPulls);
-  if (afr === 0 && !newWellDown && Number(origPacket.flowRateDays) > 0) {
+  let afr = calculateEditedAfr(allPulls.filter(p => !isProvisionalPull(p)));
+  if (afr === 0 && !newWellDown && !isProvisionalPull(origPacket) && Number(origPacket.flowRateDays) > 0) {
     afr = Number(origPacket.flowRateDays);
   }
   if (afr === 0 && flowRateDays > 0) {
@@ -416,6 +429,9 @@ export async function prepareEditOutbox(
   }
 
   if(flowWindow)afr=flowWindow.averageDays;
+  const pipeline=runningPipeline(config);
+  if(pipeline){afr=pipeline.minutesPerFoot/1440;flowRateDays=0;flowRate="";}
+  if(isProvisionalPull(origPacket)||previousProvisional){afr=Number(config.avgFlowRateMinutes)/1440||afr;flowRateDays=0;flowRate='';}
   // Determine if latest pull — inspect both outgoing response and relative pull timestamps
   const outgoingSnap = await db.ref('packets/outgoing')
     .orderByChild('wellName')
@@ -536,6 +552,7 @@ export async function prepareEditOutbox(
     stage: 'prepared',
     completed: false,
     measurements: {
+      ...(reportedReviewBottom!==null?{bottomLevelFeet:reportedReviewBottom/12}:{}),
       tankTopInches: newTankTopInches,
       tankLevelFeet: newTankTopInches / 12,
       bblsTaken: newBblsTaken,
@@ -570,7 +587,7 @@ export async function prepareEditOutbox(
   };
 
   // Atomically persist outbox record BEFORE any mutation
-  await db.ref(`packets/editOutbox/${editEventId}`).set(record);
+  await db.ref(`packets/editOutbox/${editEventId}`).set({...record, historyPaths: storedEditHistoryPaths(record.historyPaths)});
   return record;
 }
 
@@ -626,7 +643,7 @@ export async function executeEditOutbox(
       ...Object.fromEntries(
         Object.entries(updates).map(([k, v]) => [`packets/processed/${outbox.originalPacketId}/${k}`, v]),
       ),
-      ...outbox.historyPaths,
+      ...expandedEditHistoryPaths(outbox.historyPaths),
     });
 
     await db.ref(`wells/${outbox.wellName}/status/isDown`).set(outbox.nextEditIsDown);
@@ -961,7 +978,7 @@ async function cascadeNextPacketRecovery(db: admin.database.Database, outbox: Ed
       const nextTimeDifDays = (closestNextTime - editedTime) / (1000 * 60 * 60 * 24);
       let nextFlowRateDays = 0;
       let nextFlowRate = '';
-      if (nextRecovery > 0 && nextTimeDifDays > 0) {
+      if (!isProvisionalPull(nextPacket)&&!isProvisionalPull(prevOutgoingSnap.val()?.[outbox.originalPacketId])&&nextRecovery > 0 && nextTimeDifDays > 0) {
         nextFlowRateDays = (nextTimeDifDays / nextRecovery) * 12;
         nextFlowRate = daysToHMMSS(nextFlowRateDays);
       }
@@ -1005,7 +1022,7 @@ async function updateWellStatusRecalc(db: admin.database.Database, outbox: EditO
     const cfg = configSnap.val() || {};
     const tanks = cfg.tanks || cfg.numTanks || 1;
     const pullBbls = cfg.pullBbls || 100;
-    const bblPerFoot = Number(cfg.bblPerFoot) > 0 ? Number(cfg.bblPerFoot) : 20 * tanks;
+    const bblPerFoot = resolveTankBblPerFoot(cfg);
     const bottomInches = (cfg.bottomLevel || cfg.allowedBottom || 1) * 12;
 
     const pullHeightIn = (pullBbls / bblPerFoot) * 12;

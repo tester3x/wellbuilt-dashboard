@@ -1,0 +1,34 @@
+{
+  "home": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "source": "be24bd48351aaabf1f3a18053683be768c0c2c16",
+  "verifiedAtUtc": "2026-10-31T06:25:03.422Z",
+  "verifiedFiles": 398,
+  "problem": "Employee onboarding creates an app profile and Dashboard user for one person. The catalog omitted their modern linking fields, producing separate employee rows.",
+  "change": "Allowlist canonical profile dashboardUid and user driverId. Carry driverId into Dashboard users and merge explicit identity links, retaining legacy UID/hash links. Refuse ambiguous canonical links and conflicting companies. Never join by name or email.",
+  "backend": {
+    "function": "dashboard:adminGetDashboardCatalog",
+    "project": "wellbuilt-sync",
+    "region": "us-central1",
+    "state": "ACTIVE",
+    "runtime": "nodejs22",
+    "sourceHash": "1f7d2fea3d94cf31f82e0f96cd0aeb290114c30b",
+    "scope": "Only this catalog callable deployed. No rules, auth grants, roles, account writes or migrations."
+  },
+  "hosting": "Certified deploy:hosting passed all gates, byte-verified all 398 files, advanced approved checkpoint normally and released the lock.",
+  "checks": {
+    "focusedBackend": "48 passed across catalog projection, trusted staff authority and both writer census suites; Functions TypeScript build passed.",
+    "mandatoryLibrary": "505 passed, one intentional skip; includes six new identity merge regressions.",
+    "mandatoryHosting": "Owner signup, onboarding auth and actual React DOM behavior, retained Dashboard restorations, header/photo contracts, all29 routes at three widths, freshwater and other certified gates passed.",
+    "additionalLegacySuite": "adminDashboardCatalog.test.ts has two pre-existing source-text assertion failures: forbids a symbol now used by other endpoints in the same file; expects a dispatch prop declaration now moved outside the page. Relevant production/test files have zero diff against task-start c61518144ea94fb224be3035690e5be9f9214e83. Three other assertions pass. No code or gates weakened for these unrelated assertions."
+  },
+  "liveVerification": "Reloaded existing signed-in employee page after release. One merged row for offsite applicant shows legal name, email, both app badges and previously approved admin/dispatch roles. Expanded read-only details show app nickname and checked Dashboard login. No duplicate nickname row. No account creation, approvals, role changes, deletions or other customer-data changes.",
+  "privateEvidence": [
+    "C:/dev/tmp/employee-identity-backend-deploy-private.log",
+    "C:/dev/tmp/employee-identity-targeted-tests-private.log",
+    "C:/dev/tmp/employee-identity-hosting-private.log",
+    "C:/dev/tmp/employee-identity-live-private.png"
+  ]
+}

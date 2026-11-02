@@ -1,0 +1,113 @@
+{
+  "name": "REVIEW A - Hot-oiler work plan",
+  "tasks": [
+    "hot-oiler review a"
+  ],
+  "packageId": null,
+  "steps": [
+    {
+      "id": "scope",
+      "title": "Confirm scope",
+      "items": [
+        {
+          "hazard": "Wrong fluid, asset, connection or conflicting work.",
+          "controls": "Confirm fluid/SDS, task, flow path, return destination, responsible people and required permits with the site representative. Coordinate other crews."
+        }
+      ]
+    },
+    {
+      "id": "position",
+      "title": "Position the unit",
+      "items": [
+        {
+          "hazard": "Traffic, unstable footing, vapor ignition or blocked escape.",
+          "controls": "Use approved separation and layout, wind indicator and upwind/crosswind position. Keep lines out from under vehicles and escape clear. Identify extinguishers and emergency controls."
+        }
+      ]
+    },
+    {
+      "id": "exposure",
+      "title": "Check exposure and PPE",
+      "items": [
+        {
+          "hazard": "H2S, flammable vapor, oxygen hazards, heat and noise.",
+          "controls": "Apply site gas testing/monitoring and alarm response. Confirm detector checks and assessed PPE/respiratory requirements. Never rely on smell to judge H2S."
+        }
+      ]
+    },
+    {
+      "id": "rigup",
+      "title": "Inspect and rig up",
+      "items": [
+        {
+          "hazard": "Line failure, whip, trapped energy and pinch points.",
+          "controls": "Inspect compatible pressure/temperature-rated components. Reject defects. Verify rated supports/restraints, relief discharge, exclusion zone, check-valve arrangement and approved isolation/testing."
+        }
+      ]
+    },
+    {
+      "id": "limits",
+      "title": "Verify before heat",
+      "items": [
+        {
+          "hazard": "Overpressure, overheating, wrong valve lineup or inadequate return.",
+          "controls": "Confirm supply/return capacity and whole-system operating limits, including downhole equipment. Identify the limiting component. Verify fitted protection and emergency stop per the unit procedure; never bypass it."
+        }
+      ]
+    },
+    {
+      "id": "circulate",
+      "title": "Heat and circulate",
+      "items": [
+        {
+          "hazard": "Hot fluid release, ignition, abnormal conditions and line-of-fire exposure.",
+          "controls": "A competent operator attends controls and monitors agreed conditions. Maintain communications, gas monitoring and exclusion zone. Stop for leaks, abnormal pressure/temperature, lost flow/return or failed protection."
+        }
+      ]
+    },
+    {
+      "id": "shutdown",
+      "title": "Stop and disconnect",
+      "items": [
+        {
+          "hazard": "Stored pressure, residual heat and injection injury.",
+          "controls": "Use approved shutdown/cooldown and isolation. Bleed through the intended controlled path; positively verify zero pressure in every trapped section before disconnecting. Never strike/tighten live connections or check leaks by hand. Suspected injection needs immediate professional medical care."
+        }
+      ]
+    },
+    {
+      "id": "handback",
+      "title": "Restore and hand back",
+      "items": [
+        {
+          "hazard": "Spill, residue, loose equipment or wrong final valve status.",
+          "controls": "Capture drainage and manage waste under the site plan. Confirm final valve/isolation status and equipment condition with the representative; secure equipment. Reassess whenever scope or conditions change. Withdraw and raise the alarm if safe shutdown is not possible."
+        }
+      ]
+    }
+  ],
+  "ppeItems": [
+    {
+      "id": "site-ppe",
+      "label": "PPE selected for this job: FR clothing, eye/face, hand/foot/head and hearing protection as assessed."
+    },
+    {
+      "id": "gas-monitor",
+      "label": "Site-required gas detection is ready and checked; respiratory protection requirements are resolved."
+    }
+  ],
+  "preparedItems": [
+    {
+      "id": "review-only",
+      "label": "This is a software-review draft; it does not authorize hot-oiler work."
+    },
+    {
+      "id": "limits",
+      "label": "Actual pressure, temperature and flow limits require approved truck/site procedures before operational use."
+    },
+    {
+      "id": "review",
+      "label": "Crew reviewed each work step, site-specific hazards, controls and emergency arrangements."
+    }
+  ]
+}

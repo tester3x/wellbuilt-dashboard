@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "17cfe74ca52c7a51638e3349c3ea1ff851e1486d",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "project": "wellbuilt-sync",
+  "endpoint": "deliverProcessedLevelReport",
+  "region": "us-central1",
+  "generation": 1,
+  "state": "ACTIVE",
+  "versionId": "3",
+  "updatedAtUtc": "2026-11-01T03:52:38.796Z",
+  "functionSourceHash": "63288310f33964aeb9d277000c16a4b60531264b",
+  "change": "Processed reports prepend Well marked DOWN/UP only for an explicit authoritative boolean command. Routine/default false and non-authoritative flags never claim reactivation. Authoritative no-level processed packets deliver status/date/time without inventing levels or barrels. Existing company toggle, driver ownership, company/team audience and stable-ID dedup retained.",
+  "rollingCompatibility": "Worker enriches the same stable-ID message once if the old incoming fast path saved text without the state marker. Original timestamp retained; newer human preview protected. Status-only legacy producer branch is admitted only with noLevel true plus strict explicit command. No old records replayed or bulk-edited.",
+  "checks": {
+    "focusedJestSuites": 4,
+    "focusedJestTests": 33,
+    "functionsTypeScript": "passed",
+    "coverage": "DOWN and UP with custom template, status-only without measurements, routine/Watchdog/malformed flags excluded, recipient/identity boundaries, retry dedup, actual production transaction race with legacy fast path, newer human preview preservation, processed-record and tank calibration regressions.",
+    "deployedArchiveByteMatch": {
+      "levelReportDelivery.js": "0ed4d3383764031b0fd30ce6df41c61282ce3839e7d50c29006e08e511c3aecc",
+      "security/dispatchConversations.js": "3fb152a7df937878d432df5f4edbfd7c4b2498b04f06c9157978bbfb6ab2f41c",
+      "security/chatNames.js": "4d6c42b37d005d934bbf5d22eb60d7a3cc6dbc0856017b2b869449d6b8f4e17a",
+      "security/operational/crossKeyPullClaim.js": "b0cc8930c1d01c024c6c4df6f1e38012fc7d343162bb136145bb636e3fef4fc2"
+    }
+  },
+  "deployment": "Only functions:dashboard:deliverProcessedLevelReport deployed. Incoming processor, other functions, Hosting, security rules and APKs were not released. Pending pipeline implementation/configuration was not activated.",
+  "preservation": "No agent-sent live test message, synthetic well packet, operational state change, duty/job action or historical backfill. Native future-event confirmation remains pending the next driver-authored explicit UP/DOWN report."
+}

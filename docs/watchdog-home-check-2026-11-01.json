@@ -1,0 +1,146 @@
+{
+  "sourceCommit": "c69ea2ddf551ddaea72b9fbb7a98bfc1afc99b45",
+  "checkedAtUTC": "2026-11-01T15:24:31.390Z",
+  "health": {
+    "paused": false,
+    "version": "remote-agent-v1",
+    "error": "",
+    "pending": 0,
+    "channels": 9,
+    "transportStatus": "Ready",
+    "workerReachable": true,
+    "state": "Connected",
+    "reviews": 10,
+    "lastReceiverCheck": "2026-11-01T15:24:29.337Z"
+  },
+  "receiptWindowStartUTC": "2026-10-30T05:00:00.000Z",
+  "acceptedReceipts": 78,
+  "processedReceipts": 78,
+  "remainingReviewCount": 10,
+  "remainingReviews": [
+    {
+      "well": "Gabriel 5",
+      "issues": [
+        "Estimated barrels; verify loading duration and actual load"
+      ]
+    },
+    {
+      "well": "Bootleg 6",
+      "issues": [
+        "Possible app pull already recorded within 90 minutes; confirm separate load or exclude this report"
+      ]
+    },
+    {
+      "well": "Gabriel 6",
+      "issues": [
+        "Estimated barrels; verify loading duration and actual load"
+      ]
+    },
+    {
+      "well": "Turbo 1",
+      "issues": [
+        "Unreadable levels"
+      ]
+    },
+    {
+      "well": "Gabriel 5",
+      "issues": [
+        "Estimated barrels; verify loading duration and actual load"
+      ]
+    },
+    {
+      "well": "Gabriel 6",
+      "issues": [
+        "Estimated barrels; verify loading duration and actual load"
+      ]
+    },
+    {
+      "well": "Olson",
+      "issues": [
+        "Unreadable levels"
+      ]
+    },
+    {
+      "well": "Gabriel 5",
+      "issues": [
+        "Estimated barrels; verify loading duration and actual load"
+      ]
+    },
+    {
+      "well": "Gabriel 4",
+      "issues": [
+        "Estimated barrels; verify loading duration and actual load"
+      ]
+    },
+    {
+      "well": "Gabriel 5",
+      "issues": [
+        "Estimated barrels; verify loading duration and actual load"
+      ]
+    }
+  ],
+  "repairs": [
+    "Preserve raw WhatsApp offset for repeated DST hour; never guess ambiguous export times",
+    "Stated repeated-hour gauge time resolves against known message occurrence",
+    "Failed intake fences later same-well uploads while other wells continue",
+    "Refresh eight existing receipts; no duplicate load created",
+    "Mirror previous Coopers not-a-load archived decision to clear stale Dashboard review"
+  ],
+  "historicalRecoveries": [
+    {
+      "well": "Gunslinger 3",
+      "dateTimeUTC": "2026-11-01T07:41:00.000Z",
+      "barrels": 185,
+      "historicalOnly": true,
+      "newerLiveGaugeUnchanged": true
+    },
+    {
+      "well": "Gunslinger 5",
+      "dateTimeUTC": "2026-11-01T06:09:00.000Z",
+      "barrels": 185,
+      "historicalOnly": true,
+      "newerLiveGaugeUnchanged": true
+    },
+    {
+      "well": "Kahuna 5",
+      "dateTimeUTC": "2026-11-01T07:32:13.000Z",
+      "barrels": 165,
+      "historicalOnly": true,
+      "newerLiveGaugeUnchanged": true
+    }
+  ],
+  "validation": {
+    "parserAndFormatTests": 50,
+    "explicitOffTests": 8,
+    "workerSuite": 73,
+    "dstWorkerTests": 2,
+    "functionsTypescript": "passed",
+    "cloudCompiledByteMatch": {
+      "lib/imports/pullParser.js": "468078653eb9ed7369e0e2cfb779f675a007e4b3e2e2ceec90cdaf2e0dc44419",
+      "lib/watchdog/intake.js": "6beb6ff970371252f6dd702608ca625a495dc6f9c9c6e0acad5d31d8a7b17b09",
+      "lib/watchdog/reportedWellState.js": "e3f52097a68b48174b6429a47d3097125e4a7f1d1aae63abe760e84bc74c18db"
+    },
+    "hpRuntimeArtifactHashMatch": true
+  },
+  "cloud": {
+    "function": "ingestWatchdogPullV2",
+    "state": "ACTIVE",
+    "updatedAtUTC": "2026-11-01T15:18:18.925299851Z"
+  },
+  "hp": {
+    "deployedArtifacts": [
+      "tools/whatsapp-watchdog/core.mjs",
+      "tools/whatsapp-watchdog/transport.mjs",
+      "functions/lib/imports/pullParser.js"
+    ],
+    "unrelatedSourceAndPrivateDataPreserved": true,
+    "restart": "Existing supervisor restarted worker; retained browser initially blocked launch and was closed without deleting its profile; fresh Connected/Ready polls verified."
+  },
+  "preservation": {
+    "newerGaugeRewound": false,
+    "syntheticLoadCreated": false,
+    "jsaSigned": false,
+    "hosChanged": false,
+    "backupReceiverActivated": false
+  }
+}

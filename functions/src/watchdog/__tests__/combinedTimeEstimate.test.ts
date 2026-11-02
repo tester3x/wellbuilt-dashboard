@@ -1,0 +1,5 @@
+import {applyReviewCorrections} from '../reviewCorrections';
+const row:any={id:'one',wellName:'Well',postedAt:'2026-10-19T19:39:00.000Z',dateTimeUTC:'2026-10-19T19:39:00.000Z',tankLevelFeet:11,bottomLevelFeet:8.5,bblsTaken:165,issues:['Multiple wells in one message; confirm individual pull times']};
+const review={confirmed:true,dateTimeUTC:'2026-10-19T17:51:00.000Z',reason:'Estimated from recent same-driver back-to-back loads',timeEstimate:{status:'estimated',method:'back_to_back_average',sampleCount:20,intervalMinutes:108,anchorPostedAt:row.postedAt}};
+test('valid estimated time clears the combined hold without changing reported levels',()=>{expect(applyReviewCorrections(row,review)).toMatchObject({dateTimeUTC:review.dateTimeUTC,tankLevelFeet:11,bottomLevelFeet:8.5,issues:[]});});
+test.each([{sampleCount:0},{intervalMinutes:0},{anchorPostedAt:'2026-10-20T19:39:00.000Z'},{status:'measured'}])('invalid estimate rejected %p',change=>{expect(()=>applyReviewCorrections(row,{...review,timeEstimate:{...review.timeEstimate,...change}})).toThrow('invalid_time_estimate');});

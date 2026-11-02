@@ -49,7 +49,9 @@ export async function readSavedJobJsa(deps:SavedJobDeps,auth:{uid?:string|null;c
     if(!text(job.wellName))return;
     coveredJobs.push({jobRef,wellName:text(job.wellName),jobType:text(job.jobType),dropOff:text(job.dropOff),recordedAt:new Date(recordedAtMs).toISOString()});
   };
-  add(read,read.jobRef,read.completedAtMs);
+  const original=read.jobRef===b.jobRef?invoice:await deps.invoice(read.jobRef);
+  if(original&&!decideInvoiceJobFields({expectedCompanyId:p.companyId,expectedDriverId:p.driverId,invoice:{...original,exists:true}}).ok)throw Error('scope_or_size');
+  add(original?{wellName:original.wellName,jobType:original.commodityType||original.jobType,dropOff:original.hauledTo||original.disposal}:read,read.jobRef,read.completedAtMs);
   for(const location of snapshot.value.snapshot.locations||[])
     if(!coveredJobs.some(job=>job.wellName===location))add({wellName:location,jobType:read.jobType},read.jobRef,read.completedAtMs);
   for(const stop of stops)if(stop.fullReadId===read.requestId&&['acknowledged','scope_read'].includes(stop.method)

@@ -37,7 +37,8 @@ import { projectWellLevel } from '@/lib/wellLevelProjection';
 import { dispatchLevelSnapshot } from '@/lib/dispatchLevelSnapshot';
 import { wellDetailHref } from '@/lib/wellDetailLink';
 import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
-import { groupDispatchRows } from '@/lib/dispatchJobStacks';
+import { dispatchReviewDriverName } from '@/lib/dispatchDriverIdentity';
+import { groupDispatchRows, remainingDispatchLoads } from '@/lib/dispatchJobStacks';
 import { assignmentIdentityForDriver, canonicalIdFromApprovedRow, dispatchCreateTargetForAssignment, driverRealName } from '@/lib/dispatchWriterIdentity';
 import { projectDispatchDriverRoster } from '@/lib/dispatchRosterProjection';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
@@ -4168,7 +4169,7 @@ function DispatchPageInner() {
                   >
                     Active Jobs
                     {(() => {
-                      const activeCount = dispatches.filter(isActiveDispatchCard).reduce((sum, d) => sum + ((d as any).loadCount || 1), 0);
+                      const activeCount = dispatches.filter(isActiveDispatchCard).reduce((sum, d) => sum + remainingDispatchLoads(d), 0);
                       return activeCount > 0 ? (
                         <span className={`ml-1 px-1.5 py-0.5 text-[10px] rounded font-bold ${
                           rightPanelTab === 'jobs' ? 'bg-blue-500/40 text-blue-100' : 'bg-blue-600/20 text-blue-400'
@@ -4387,7 +4388,7 @@ function DispatchPageInner() {
               {reassignJob.status === 'declined' && (
                 <>
                   {' '}was declined by{' '}
-                  <span className="text-red-400">{reassignJob.declinedBy || reassignJob.driverFirstName || reassignJob.driverName}</span>
+                  <span className="text-red-400">{dispatchReviewDriverName(reassignJob, drivers || [])}</span>
                 </>
               )}
               {reassignJob.status !== 'declined' && (
@@ -5473,7 +5474,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   )}
                   <div className="flex items-center gap-2">
                     <span className="text-red-400/80 font-medium">
-                      {job.declinedBy || job.driverFirstName || job.driverName}
+                      {dispatchReviewDriverName(job, drivers || [])}
                     </span>
                     {job.declinedAt && (
                       <span className="text-gray-600">{timeAgo(job.declinedAt)}</span>
@@ -5523,8 +5524,8 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         // show the driver's REAL profile name — never the login/stamped name.
         const driverRecord = resolveDispatchDriver(jobs[0], drivers || []);
         const driverName = dispatchDriverDisplayName(jobs[0], drivers || []);
-        const pwCount = jobs.filter(j => j.jobType === 'pw').reduce((s, j) => s + ((j as any).loadCount || 1), 0);
-        const swCount = jobs.filter(j => j.jobType === 'service').reduce((s, j) => s + ((j as any).loadCount || 1), 0);
+        const pwCount = jobs.filter(j => j.jobType === 'pw').reduce((s, j) => s + remainingDispatchLoads(j), 0);
+        const swCount = jobs.filter(j => j.jobType === 'service').reduce((s, j) => s + remainingDispatchLoads(j), 0);
 
         const activeJob = jobs.find(j => j.driverStage && !['completed', 'paused'].includes(j.driverStage));
         const summaryJobs = activeJob ? jobs.filter(j => j.id !== activeJob.id) : jobs;

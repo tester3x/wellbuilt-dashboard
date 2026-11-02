@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "a807811565a10b5bce7bf2dcbd0428185753f447",
+  "interimSenderFixCommit": "2847baee",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "project": "wellbuilt-sync",
+  "endpoint": "staffChat",
+  "region": "us-central1",
+  "state": "ACTIVE",
+  "updatedAtUtc": "2026-11-01T01:23:01.856997044Z",
+  "functionSourceHash": "5deba194cf2034494ccb8b7064b67d5ba3fd86da",
+  "rootCause": "An authorized legacy staff user had a protected approved-driver link but no users.companyId field. The company-filtered identity directory omitted that account and stamped Name unavailable instead of resolving its approved real-name profile.",
+  "change": "After existing server-owned capability authorization, add only the caller's compatible legacy profile to the display directory under that verified company. Receiving staff resolve referenced missing legacy sender profiles only after the same trusted company proof. Preserve strict real-name fields and company-owned driver links; never fall back to sign-in/display aliases, saved message names, foreign profiles or caller-supplied company authority.",
+  "checks": {
+    "functionsTypeScript": "passed",
+    "focusedJestSuites": 3,
+    "focusedJestTests": 12,
+    "coverage": "Actual sender transaction; legacy caller omitted by company query; approved real-name link; receiving thread/message presentation; foreign authority/profile/approved links; alias-only remains unknown; no read-path writes or source user-profile mutation.",
+    "liveIdentityEvidence": "Read-only trusted-company and linked approved-profile resolution verified against the affected account. Raw identity data remains outside Git.",
+    "deployedArchiveByteMatch": {
+      "staffChat.js": "7b12659679a616e742de19e5a8aff2ede47666d8daaf80c6a218f5924d4ce88f",
+      "chatNames.js": "4d6c42b37d005d934bbf5d22eb60d7a3cc6dbc0856017b2b869449d6b8f4e17a",
+      "trustedStaffAuthority.js": "23d8c70aee71fea1296dae333506a4776665b85215720ed608fc19ac818e39b9",
+      "dispatchConversations.js": "3fb152a7df937878d432df5f4edbfd7c4b2498b04f06c9157978bbfb6ab2f41c"
+    }
+  },
+  "deployment": "Scoped firebase deploy --only functions:dashboard:staffChat. First publish repaired sends; final publish also repaired receiving staff presentation. Final deployed archive matches the tested compiled source and listed dependencies.",
+  "preservation": "No user/profile/authority/role/claim/rule/message-history rewrites. No Hosting release, APK build/install, duty changes, operational job action or agent-sent chat. Historical stored placeholder text is retained as recorded; subsequent staff messages use the resolved real name.",
+  "deviceAcceptance": "New human-authored Dashboard-to-ZFold test message verified read-only in the admitted conversation: persisted sender matches linked approved real-name profile. User subsequently confirmed the real name displayed on the message. No agent read receipt or sent message. Separate user-requested presentation change will label shared team senders Dispatch while retaining recorded identity."
+}

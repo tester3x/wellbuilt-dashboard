@@ -16,6 +16,7 @@
  */
 
 export interface WellResponse {
+  pipelineOperation?: {mode:string;holdingLevelFeet:number;productionMinutesPerFoot:number;levelBasis:string};
   routeType?: 'produced-water' | 'freshwater';
   displayName?: string;
   inventoryGroupId?: string;
@@ -130,6 +131,7 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
       ? config.tankHeight : undefined;
     const { tankAtLevel } = calcTankAtLevel(tanks, pullBbls, bottomInches, bblPerFootPerTank);
     return {
+      pipelineOperation: config.pipelineOperation as WellResponse['pipelineOperation'],
       wellName,
       routeType: config.routeType === 'freshwater' ? 'freshwater' : 'produced-water',
       displayName: typeof config.displayName === 'string' ? config.displayName : undefined,

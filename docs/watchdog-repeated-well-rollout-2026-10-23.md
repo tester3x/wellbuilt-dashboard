@@ -1,0 +1,9 @@
+# Repeated-well combined reports and home rollout — 2026-10-23
+
+Receiver checkpoint a9eb778f allows repeated well names in one multi-load post while preserving individual row IDs and message order. Earlier times use the existing conservative same-sender/channel interval estimator; the final load keeps the post time. Provisional inferred times remain excluded from average-flow training. The backend estimated-time metadata support, lost during a later intake deployment, was restored without removing the newer reporter and fixed-default logic.
+
+Only ingestWatchdogPullV2 was deployed: ACTIVE revision ingestwatchdogpullv2-00036-wim. Two original held deliveries were reconciled to their canonical completed receipts through the audited review path; neither was duplicated. Private evidence remains outside Git.
+
+At home, the HP checkout fast-forwarded from 546afb61 to a9eb778f, preserving all operational data and untracked helpers. The existing startup action was updated and the independent Firebase health/recovery helper installed. Actual listener replacement exposed a supervisor-state race; 52abe03c fixes it with fresh task-state checks and bounded listener confirmation. The HP fast-forwarded to that checkpoint; its Windows PowerShell fixtures and all 56 Node checks passed. The repeated-well regression is now included in the ordinary test command.
+
+The receiver was externally verified Connected, unpaused, transport Ready, eight selected channels and current receiver checks. Firebase received real helper health with workerReachable true and the same healthy state. No WhatsApp message, new QR pairing, queue deletion, Hosting/rules deployment or phone change was required for this rollout. Private Tailscale installation/sign-in and hotspot SSH verification remain separate outstanding work; Firebase health installation does not prove that remote desktop/SSH path.
