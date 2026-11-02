@@ -1,0 +1,12 @@
+{
+  "recordedAtUtc": "2026-11-02T12:10:15.763462+00:00",
+  "sourceCommit": "3d61ecb2376dd8337b4e7ea98e30db18bd926d96",
+  "hostingVerifiedAt": "2026-11-02T12:09:57.146Z",
+  "liveFilesByteMatched": 399,
+  "mandatoryPreflight": "passed",
+  "approvedCheckpoint": "3d61ecb2376dd8337b4e7ea98e30db18bd926d96",
+  "scope": "Hosting-only separate profile Settings column and safe list placement while editing. Includes prior full-grid safeguard. No backend/rules/native or operational data changes.",
+  "checks": "Actual React browser checks at 1280/1366/1536 preserve roster height and at least four complete rows, click/mouse/touch placement, preview and save while Settings stays open; full-grid race/capacity guards and all mandatory release regressions passed.",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "remainingWork": "None for these two repairs; Mike can refresh WB Chat to validate on his laptop."
+}
