@@ -123,6 +123,7 @@ execSync('npx jest --runInBand --runTestsByPath src/security/__tests__/whatsappL
 execSync('npx jest --runInBand --runTestsByPath src/watchdog/__tests__/intake.test.ts --testNamePattern="accepted observation saves"', { cwd: path.resolve('functions'), stdio: 'inherit' });
 execSync('node tools/test-chat-scroll-position.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-usability.mjs', { stdio: 'inherit' });
+execSync('node tools/test-chat-window-layout.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-grid-controls.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-grid-drag.mjs', { stdio: 'inherit' });
 execSync('node tools/test-owner-signup.cjs', { stdio: 'inherit' });

@@ -2,6 +2,7 @@
 import {WhatsappLevelsFeed} from '@/components/chat/WhatsappLevelsFeed';
 import { ChatMessageViewport } from '@/components/chat/ChatMessageViewport';
 import { ChatMessageFooter } from '@/components/chat/ChatMessageFooter';
+import { useChatWindowLayout } from '@/lib/useChatWindowLayout';
 import { openChatWorkspace } from '@/lib/chatWindows';
 import { AnnouncementMessage } from '@/components/chat/AnnouncementMessage';
 
@@ -49,7 +50,6 @@ interface MonitorProfile {
   threadType?: FilterKey; // 'direct' | 'shift' | 'well' | 'project' | 'service_group' | 'all'
   slots: (SlotAssignment | null)[]; // positional
   createdBy: string;
-  locked?: boolean; // Locked profiles can't be displaced from the stack top
 }
 
 // --- Constants ---
@@ -215,14 +215,13 @@ function ChatPageInner() {
 
   // Profile state — stack-based (multiple profiles can be layered, top = visible)
   const [profiles, setProfiles] = useState<MonitorProfile[]>([]);
-  const [profileStack, setProfileStack] = useState<string[]>(() => {
-    try {
-      if (typeof window === 'undefined') return [];
-      const saved = localStorage.getItem('wb-chat-profile-stack');
-      if (saved) return JSON.parse(saved);
-      const legacy = localStorage.getItem('wb-chat-profile');
-      return legacy ? [legacy] : [];
-    } catch { return []; }
+  const [windowLayout,setWindowLayout,windowLayoutReady]=useChatWindowLayout(myParticipantId&&companyId?`${myParticipantId}:${companyId}`:'');
+  const profileStack=windowLayout.profileIds;
+  const setProfileStack=(value:React.SetStateAction<string[]>)=>setWindowLayout(old=>{
+    const requested=typeof value==='function'?value(old.profileIds):value;
+    if(old.locked&&requested.some(id=>!old.profileIds.includes(id)))return old;
+    const ids=old.locked?[...requested,...old.profileIds.filter(id=>old.pinnedIds.includes(id)&&!requested.includes(id))]:requested;
+    return {...old,profileIds:ids,activeId:ids.includes(old.activeId||'')&&ids.length<=old.profileIds.length?old.activeId:ids.at(-1)||null,pinnedIds:old.pinnedIds.filter(id=>ids.includes(id))};
   });
   const [setupMode, setSetupMode] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
@@ -267,7 +266,7 @@ function ChatPageInner() {
   },[!!lockRequest,lockBusy]);
 
   // Derive active profile from top of stack
-  const activeProfileId = profileStack[profileStack.length - 1] || null;
+  const activeProfileId = windowLayout.activeId;
   const activeProfile = profiles.find(p => p.id === activeProfileId) || null;
   const slotScopeRef = useRef('');
   slotScopeRef.current = `${companyId}:${activeProfileId}`;
@@ -290,12 +289,6 @@ function ChatPageInner() {
     if(confirmed.length)setPendingSlotUnlocks(prev=>{const next={...prev};for(const i of confirmed)delete next[Number(i)];return next;});
   },[activeProfile,pendingSlotUnlocks]);
 
-  // Persist stack to localStorage
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('wb-chat-profile-stack', JSON.stringify(profileStack));
-  }, [profileStack]);
-
   // Toast auto-clear
   useEffect(() => {
     if (!toastMsg) return;
@@ -310,21 +303,17 @@ function ChatPageInner() {
     return () => clearTimeout(t);
   }, [highlightedPane]);
 
-  // Bring a profile to the top of the stack
-  const bringProfileToTop = useCallback((profileId: string) => {
-    setProfileStack(prev => {
-      const currentTopId = prev[prev.length - 1];
-      if (currentTopId === profileId) return prev; // Already on top
-      // Check if current top is locked
-      const currentTop = profiles.find(p => p.id === currentTopId);
-      if (currentTop?.locked) {
-        setToastMsg(`"${currentTop.name}" is locked. Unlock to switch.`);
-        return prev;
-      }
-      const filtered = prev.filter(id => id !== profileId);
-      return [...filtered, profileId];
-    });
-  }, [profiles]);
+  // Focus any open profile while protected; adding another requires unlocking this tab.
+  const bringProfileToTop = (profileId:string) => {
+    if(windowLayout.locked&&!profileStack.includes(profileId)){setToastMsg('Unlock this tab layout to add another profile.');return;}
+    setWindowLayout(old=>({...old,profileIds:old.profileIds.includes(profileId)?old.profileIds:[...old.profileIds,profileId],activeId:profileId}));
+  };
+  const removeWindowProfile=(profileId:string)=>{
+    if(windowLayout.locked&&windowLayout.pinnedIds.includes(profileId))return;
+    setWindowLayout(old=>{const ids=old.profileIds.filter(id=>id!==profileId);return {...old,profileIds:ids,activeId:old.activeId===profileId?ids.at(-1)||null:old.activeId,pinnedIds:old.pinnedIds.filter(id=>id!==profileId)};});
+  };
+  const toggleWindowProfilePin=(profileId:string)=>setWindowLayout(old=>({...old,pinnedIds:old.pinnedIds.includes(profileId)?old.pinnedIds.filter(id=>id!==profileId):[...old.pinnedIds,profileId]}));
+  const toggleWindowLock=()=>setWindowLayout(old=>({...old,locked:!old.locked,pinnedIds:old.locked?old.pinnedIds:[...old.profileIds]}));
 
   // Grid from profile or default
   const gridLayout = activeProfile
@@ -387,7 +376,7 @@ function ChatPageInner() {
       if(index>=size||target.slots[index]||carry[index])index=Array.from({length:size},(_,i)=>i).find(i=>!target.slots[i]&&!carry[i])??-1;
       if(index>=0)carry[index]=assignment;
     }
-    if(activeProfileId!==target.id){profileCarryRef.current={scope:`${companyId}:${target.id}`,temps:carry};setProfileStack(prev=>[...prev.filter(id=>id!==target.id),target.id]);}
+    if(activeProfileId!==target.id){profileCarryRef.current={scope:`${companyId}:${target.id}`,temps:carry};setWindowLayout(old=>({...old,profileIds:old.profileIds.includes(target.id)?old.profileIds:[...old.profileIds,target.id],activeId:target.id}));}
     else setTempSlots(carry);
     setProfileLockHandoff(null);setLockRequest(null);setLockBusy(false);setLockError('');
   },[profileLockHandoff,profiles,companyId,activeProfileId,tempSlots]);
@@ -407,29 +396,19 @@ function ChatPageInner() {
     return watchStaffChat({ action: 'profiles', companyId }, rows => setProfiles(rows), error => setToastMsg(error.message));
   }, [authLoading, myParticipantId, companyId, canViewChat]);
 
-  // Initialize stack from URL param or legacy localStorage on first profile load
-  useEffect(() => {
-    if (profiles.length === 0) return;
-    if (profileStack.length > 0) {
-      // Clean stack: remove IDs for deleted profiles
-      const validIds = new Set(profiles.map(p => p.id));
-      setProfileStack(prev => {
-        const cleaned = prev.filter(id => validIds.has(id));
-        return cleaned.length !== prev.length ? cleaned : prev;
-      });
-      return;
-    }
-    // Empty stack — check URL param or legacy key
-    const urlParam = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('profile') : null;
-    const legacy = typeof window !== 'undefined' ? localStorage.getItem('wb-chat-profile') : null;
-    const profileId = urlParam || legacy;
-    if (profileId) {
-      const found = profiles.find((p) => p.id === profileId || p.name.toLowerCase().replace(/\s+/g, '-') === profileId);
-      if (found) {
-        setProfileStack([found.id]);
-      }
-    }
-  }, [profiles]);
+  const windowProfilesInitialized=useRef(false);
+  useEffect(()=>{windowProfilesInitialized.current=false;},[companyId,myParticipantId]);
+  useEffect(()=>{
+    if(!windowLayoutReady||!profiles.length)return;
+    const valid=new Set(profiles.map(p=>p.id));
+    const ids=profileStack.filter(id=>valid.has(id));
+    if(ids.length!==profileStack.length)setWindowLayout(old=>({...old,profileIds:ids,activeId:ids.includes(old.activeId||'')?old.activeId:ids.at(-1)||null,pinnedIds:old.pinnedIds.filter(id=>valid.has(id))}));
+    if(windowProfilesInitialized.current)return;
+    windowProfilesInitialized.current=true;
+    // Explicit profile links override an inherited tab snapshot, without shared locks.
+    const requested=new URLSearchParams(window.location.search).get('profile');
+    if(requested){const found=profiles.find(p=>p.id===requested||p.name.toLowerCase().replace(/\s+/g,'-')===requested);if(found)setWindowLayout(old=>({...old,profileIds:[...new Set([...old.profileIds,found.id])],activeId:found.id}));}
+  },[profiles,windowLayoutReady,companyId,myParticipantId]);
 
   // --- Subscribe to thread list + auto-open incoming messages ---
   const prevThreadMapRef = useRef<Map<string, number>>(new Map()); // threadId → last updatedAt ms
@@ -529,6 +508,7 @@ function ChatPageInner() {
 
   // --- Profile CRUD ---
   const createProfile = useCallback(async (name: string, layout: string) => {
+    if(windowLayout.locked){setToastMsg('Unlock this tab layout to add a profile.');return;}
     if (!hasCapability(user, 'manageCompany', userCompany)) {
       setToastMsg('You do not have permission to manage monitor profiles.');
       return;
@@ -555,7 +535,7 @@ function ChatPageInner() {
       console.error('[ChatPage] createProfile failed', err);
       setToastMsg('Could not create profile. Check your access.');
     }
-  }, [companyId, myParticipantId, user, userCompany]);
+  }, [companyId, myParticipantId, user, userCompany, windowLayout.locked]);
 
   const saveProfileType = useCallback(async (type: FilterKey) => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
@@ -613,7 +593,7 @@ function ChatPageInner() {
     if(!lockRequest||lockBusy||!canManageProfiles||!companyId)return;
     const scope=slotScopeRef.current,target=profiles.find(p=>p.id===lockProfileChoice);
     if(lockProfileChoice&&!target){setLockError('That profile is no longer available. Choose another.');return;}
-    if(activeProfile?.locked&&target?.id!==activeProfile.id){setLockError('Unlock the current monitor profile before switching profiles.');return;}
+    if(windowLayout.locked&&(!target||!profileStack.includes(target.id))){setLockError('Unlock this tab layout to add another profile.');return;}
     const layout=GRID_LAYOUTS.find(l=>l.label===(target?.gridLayout||lockLayout))||GRID_LAYOUTS[3],size=layout.cols*layout.rows;
     if(!target&&!lockName.trim()){setLockError('Enter a name for the new profile.');return;}
     if(lockPosition<0||lockPosition>=size||target?.slots[lockPosition]&&!sameAssignment(target.slots[lockPosition],lockRequest.assignment)
@@ -648,23 +628,8 @@ function ChatPageInner() {
     }
   }, [activeProfile, user, userCompany, companyId]);
 
-  const toggleProfileLock = useCallback(async () => {
-    if (!hasCapability(user, 'manageCompany', userCompany)) {
-      setToastMsg('You do not have permission to manage monitor profiles.');
-      return;
-    }
-    if (!activeProfile) return;
-    const db = getFirestoreDb();
-    if (!db) return;
-    try {
-      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { locked: !activeProfile.locked } });
-    } catch (err) {
-      console.error('[ChatPage] toggleProfileLock failed', err);
-      setToastMsg('Could not update profile. Check your access.');
-    }
-  }, [activeProfile, user, userCompany, companyId]);
-
   const deleteProfile = useCallback(async (profileId: string) => {
+    if(windowLayout.locked){setToastMsg('Unlock this tab layout before deleting a saved profile.');return;}
     if (!hasCapability(user, 'manageCompany', userCompany)) {
       setToastMsg('You do not have permission to manage monitor profiles.');
       return;
@@ -678,7 +643,7 @@ function ChatPageInner() {
       console.error('[ChatPage] deleteProfile failed', err);
       setToastMsg('Could not delete profile. Check your access.');
     }
-  }, [user, userCompany, companyId]);
+  }, [user, userCompany, companyId, windowLayout.locked]);
 
   // --- Assign driver or thread to slot ---
   const assignSlot = useCallback((index: number, assignment: SlotAssignment | null) => {
@@ -912,19 +877,20 @@ function ChatPageInner() {
                     }}
                     className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1 max-w-full text-left break-words"
                   >
-                    {activeProfile?.locked && <span title="Locked">🔒</span>}
+                    {windowLayout.locked && <span title="Tab layout locked">🔒</span>}
                     {activeProfile?.name || 'Select Profile'} ▾
                   </button>
                   <div id="profile-menu" className="hidden absolute right-0 top-full mt-1 bg-[#111] border border-gray-700 rounded-lg overflow-hidden z-20 min-w-[150px] shadow-lg">
                     {profiles.map((p) => (
                       <button
                         key={p.id}
+                        disabled={windowLayout.locked&&!profileStack.includes(p.id)}
                         onClick={() => { bringProfileToTop(p.id); document.getElementById('profile-menu')?.classList.add('hidden'); }}
-                        className={`w-full text-left px-3 py-2 text-sm hover:bg-[#1a1a1a] transition-colors ${
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-[#1a1a1a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
                           activeProfile?.id === p.id ? 'text-[#FFD700] font-bold' : 'text-gray-300'
                         }`}
                       >
-                        {p.locked ? '🔒 ' : ''}{p.name}
+                        {p.name}
                         {profileStack.includes(p.id) && p.id !== activeProfileId && (
                           <span className="text-gray-600 text-[10px] ml-1">stacked</span>
                         )}
@@ -958,7 +924,7 @@ function ChatPageInner() {
                     >
                       {p.name} <span className="text-[10px] text-gray-600">{p.gridLayout}</span>
                     </span>
-                    <button onClick={() => deleteProfile(p.id)} className="text-gray-600 hover:text-red-400 text-xs px-1" title="Delete profile">✕</button>
+                    <button disabled={windowLayout.locked} onClick={() => deleteProfile(p.id)} className="text-gray-600 hover:text-red-400 text-xs px-1" title="Delete profile">✕</button>
                   </div>
                 ))}
                 <div className="p-2 border-t border-gray-800">
@@ -968,10 +934,12 @@ function ChatPageInner() {
                       value={newProfileName}
                       onChange={(e) => setNewProfileName(e.target.value)}
                       placeholder="New profile name..."
+                      disabled={windowLayout.locked}
                       className="flex-1 bg-[#0a0a0a] border border-gray-700 rounded px-2 py-1 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700]/50"
                       onKeyDown={(e) => { if (e.key === 'Enter' && newProfileName.trim()) createProfile(newProfileName, gridLayout.label); }}
                     />
                     <button
+                      disabled={windowLayout.locked}
                       onClick={() => newProfileName.trim() && createProfile(newProfileName, gridLayout.label)}
                       className="px-2 py-1 rounded bg-[#FFD700]/20 text-[#FFD700] text-xs font-semibold hover:bg-[#FFD700]/30"
                     >
@@ -1143,7 +1111,7 @@ function ChatPageInner() {
                     }
 
                     // 2. Thread in another stacked profile (not the current one)? Bring that profile to top.
-                    const ownerProfiles = (threadToProfiles.get(thread.id) || []).filter(pid => pid !== activeProfileId);
+                    const ownerProfiles = (threadToProfiles.get(thread.id) || []).filter(pid => pid !== activeProfileId&&(!windowLayout.locked||profileStack.includes(pid)));
                     if (ownerProfiles.length > 0) {
                       const inStack = ownerProfiles.sort((a, b) => profileStack.indexOf(b) - profileStack.indexOf(a));
                       bringProfileToTop(inStack[0]);
@@ -1220,58 +1188,17 @@ function ChatPageInner() {
 
       {/* Right: Profile tab strip + Chat Grid */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Profile tab strip — shows stacked profiles, click to bring to top */}
-        {profileStack.length > 1 && (
-          <div className="flex items-center gap-0.5 bg-[#0d0d0d] border-b border-gray-800 px-1 py-0.5 shrink-0">
-            {profileStack.map((pid) => {
-              const p = profiles.find(pr => pr.id === pid);
-              if (!p) return null;
-              const isTop = pid === activeProfileId;
-              return (
-                <div key={pid} className={`flex items-center gap-1 px-2.5 py-1 rounded-t text-xs cursor-pointer transition-colors ${
-                  isTop ? 'bg-[#1a1a1a] text-[#FFD700] font-bold border-t border-x border-[#FFD700]/30' : 'text-gray-500 hover:text-gray-300 hover:bg-[#111]'
-                }`}>
-                  <span onClick={() => bringProfileToTop(pid)}>
-                    {p.locked ? '🔒 ' : ''}{p.name}
-                  </span>
-                  {isTop && canManageProfiles && (
-                    <button
-                      onClick={toggleProfileLock}
-                      className={`ml-1 text-[10px] transition-colors ${p.locked ? 'text-[#FFD700]' : 'text-gray-600 hover:text-gray-400'}`}
-                      title={p.locked ? 'Unlock profile' : 'Lock profile'}
-                    >
-                      {p.locked ? '🔒' : '🔓'}
-                    </button>
-                  )}
-                  {!isTop && (
-                    <button
-                      onClick={() => setProfileStack(prev => prev.filter(id => id !== pid))}
-                      className="text-gray-600 hover:text-red-400 text-[10px] ml-0.5"
-                      title="Remove from stack"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              );
-            })}
+        <div data-chat-window-layout className="flex items-center gap-1 bg-[#0d0d0d] border-b border-gray-800 px-2 py-1 shrink-0">
+          <div className="flex flex-1 min-w-0 gap-1 overflow-x-auto" role="tablist" aria-label="Open monitor profiles">
+            {profileStack.map(pid=>{const p=profiles.find(row=>row.id===pid);if(!p)return null;const pinned=windowLayout.pinnedIds.includes(pid);return <div key={pid} data-window-profile={pid} className={`flex items-center gap-1 rounded px-2 py-1 shrink-0 ${pid===activeProfileId?'bg-[#211e08] text-[#FFD700]':'text-gray-400'}`}>
+              <button role="tab" aria-selected={pid===activeProfileId} onClick={()=>bringProfileToTop(pid)} className="text-xs">{p.name}</button>
+              <button title={pinned?'Unlock profile in this tab':'Lock profile in this tab'} aria-label={`${pinned?'Unlock':'Lock'} ${p.name} in this tab`} onClick={()=>toggleWindowProfilePin(pid)} className="text-xs px-1">{pinned?'🔒':'🔓'}</button>
+              <button title="Remove profile from this tab" aria-label={`Remove ${p.name} from this tab`} disabled={windowLayout.locked&&pinned} onClick={()=>removeWindowProfile(pid)} className="text-xs px-1 disabled:opacity-25 disabled:cursor-not-allowed hover:text-red-400">×</button>
+            </div>;})}
+            {!profileStack.length&&<span className="text-xs text-gray-500 py-1">No profiles open</span>}
           </div>
-        )}
-        {/* Single profile lock toggle when only 1 in stack */}
-        {profileStack.length === 1 && activeProfile && (
-          <div className="flex items-center justify-between bg-[#0d0d0d] border-b border-gray-800 px-3 py-1 shrink-0">
-            <span className="text-xs text-gray-500">{activeProfile.name}</span>
-            {canManageProfiles && (
-            <button
-              onClick={toggleProfileLock}
-              className={`text-xs transition-colors ${activeProfile.locked ? 'text-[#FFD700]' : 'text-gray-600 hover:text-gray-400'}`}
-              title={activeProfile.locked ? 'Unlock profile' : 'Lock profile'}
-            >
-              {activeProfile.locked ? '🔒 Locked' : '🔓 Unlocked'}
-            </button>
-            )}
-          </div>
-        )}
+          <button aria-label={windowLayout.locked?'Unlock tab layout':'Lock tab layout'} title={windowLayout.locked?'Unlock this tab to add or remove profiles freely':'Keep this tab’s current profiles; switching remains available'} disabled={lockBusy} onClick={toggleWindowLock} className={`shrink-0 text-xs px-2 py-1 rounded border ${windowLayout.locked?'text-[#FFD700] border-[#FFD700]/40':'text-gray-400 border-gray-700'}`}>{windowLayout.locked?'🔒 Tab locked':'🔓 Tab unlocked'}</button>
+        </div>
 
       {gridDrag.drag&&<div className="fixed z-[90] pointer-events-none rounded border border-[#FFD700] bg-[#222] px-3 py-2 text-sm text-[#FFD700] shadow-xl" style={{left:gridDrag.drag.x+14,top:gridDrag.drag.y+14,maxWidth:280}}>{gridDrag.drag.payload.title}</div>}
       {lockRequest&&<div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4" onClick={()=>{if(!lockBusy)setLockRequest(null);}}>
@@ -1280,7 +1207,7 @@ function ChatPageInner() {
           <p className="text-sm text-gray-300 mb-4">{lockRequest.assignment.threadTitle||lockRequest.assignment.driverName||'Chat'}</p>
           <label className="block text-sm mb-3">Monitor profile
             <select autoFocus aria-label="Monitor profile" disabled={lockBusy} value={lockProfileChoice} onChange={e=>chooseLockProfile(e.target.value)} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2">
-              {profiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}<option value="">Create a new profile…</option>
+              {profiles.map(p=><option key={p.id} value={p.id} disabled={windowLayout.locked&&!profileStack.includes(p.id)}>{p.name}</option>)}<option value="" disabled={windowLayout.locked}>Create a new profile…</option>
             </select>
           </label>
           {!lockProfileChoice&&<>
