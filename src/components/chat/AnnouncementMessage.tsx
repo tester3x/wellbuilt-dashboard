@@ -1,3 +1,4 @@
+import { selectChatMessageText } from '@/lib/chatTextSelection';
 import type { ChatMessage } from './ChatTypes';
 import { formatChatTime } from './ChatTypes';
 
@@ -5,7 +6,7 @@ import { formatChatTime } from './ChatTypes';
 export function AnnouncementMessage({ message }: { message: ChatMessage }) {
   const recipients = message.receiptSummary || [];
   const pending = recipients.filter(row => !row.acknowledgedAt);
-  return <article className="w-full border border-[#FFD700]/40 rounded-xl p-3 bg-[#211d08] text-white" data-announcement={message.id}>
+  return <article onContextMenu={selectChatMessageText} className="w-full border border-[#FFD700]/40 rounded-xl p-3 bg-[#211d08] text-white" data-announcement={message.id}>
     <p className="text-xs text-[#FFD700] font-semibold">{message.senderName} · Dispatch announcement</p>
     <p data-chat-message-text className="whitespace-pre-wrap break-words select-text text-sm my-2">{message.text}</p>
     <p className="text-xs text-gray-400">{formatChatTime(message.timestamp)}{message.pending ? ' · Sending…' : ''}</p>

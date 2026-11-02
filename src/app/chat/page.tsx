@@ -1152,7 +1152,7 @@ function ChatPageInner() {
                       {getTitle(thread)}
                     </span>
                     <span className={`text-[10px] ${unread ? 'text-[#FFD700]' : 'text-gray-600'}`}>
-                      {formatChatTime(thread.lastMessage?.timestamp || thread.updatedAt)}
+                      {thread.permanent && !thread.lastMessage ? '' : formatChatTime(thread.lastMessage?.timestamp || thread.updatedAt)}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5 ml-6">
