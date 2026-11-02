@@ -870,34 +870,45 @@ function ChatPageInner() {
       <div className="w-80 border-r border-gray-800 flex flex-col">
         {/* Header — gear opens everything, profile name is just a label */}
         <div className="p-4 border-b border-gray-800">
-          <div className="flex items-center justify-between">
-            <h1 className="text-xl font-bold text-[#FFD700] tracking-wide">WB Chat</h1>
-            <div className="flex items-center gap-2">
-              {/* Setup mode is the monitor-profile CRUD surface (shared display
-                  config) — gate on manageCompany so only managers can enter it. */}
+          <div className="flex items-center justify-between gap-3" data-chat-title-row>
+            <div className="flex items-center gap-3 min-w-0">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#FFD700]/30 bg-[#FFD700]/10 text-[#FFD700]" aria-hidden="true">
+              <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-4 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z" />
+                <path d="M8 9h6M8 13h4M17 3a6 6 0 0 1 5 6" />
+              </svg>
+            </span>
+            <div>
+              <h1 className="text-2xl font-bold text-[#FFD700] tracking-wide leading-tight">WB Chat</h1>
+              <p className="text-[11px] text-gray-500 mt-0.5">Dispatch Communications</p>
+            </div>
+            </div>
               {canManageProfiles && (
               <button
                 onClick={() => { setSetupMode(!setupMode); if (!setupMode) loadDrivers(); }}
-                className={`text-xs px-2 py-1 rounded border transition-colors ${
+                className={`shrink-0 p-1 text-lg transition-colors ${
                   setupMode
-                    ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]'
-                    : 'border-gray-700 text-gray-400 hover:text-white hover:border-gray-500'
+                    ? 'text-[#FFD700]'
+                    : 'text-gray-400 hover:text-[#FFD700]'
                 }`}
                 title={setupMode ? 'Exit setup' : 'Setup grid'}
               >
-                {setupMode ? 'Done' : '⚙'}
+                {setupMode ? <span className="text-xs font-semibold">Done</span> : '⚙'}
               </button>
               )}
-              {profiles.length === 1 && <span className="text-xs text-gray-400 max-w-44 truncate" title={profiles[0].name}>Layout: {profiles[0].name}</span>}
+
+          </div>
+          <div className="mt-3 pt-2.5 border-t border-gray-800" data-chat-header-controls>
+              {profiles.length === 1 && <span className="text-xs text-gray-400 block min-w-0 break-words leading-5" title={profiles[0].name}>Layout: {profiles[0].name}</span>}
               {profiles.length > 1 && (
-                <div className="relative">
+                <div className="relative min-w-0">
                   <button
                     onClick={() => {
                       // Cycle to next profile in stack, or show dropdown if only 1
                       const menu = document.getElementById('profile-menu');
                       if (menu) menu.classList.toggle('hidden');
                     }}
-                    className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+                    className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1 max-w-full text-left break-words"
                   >
                     {activeProfile?.locked && <span title="Locked">🔒</span>}
                     {activeProfile?.name || 'Select Profile'} ▾
@@ -920,11 +931,12 @@ function ChatPageInner() {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
 
-          <div className="flex justify-end px-3 py-1 border-b border-gray-800">
-            <button onClick={() => openChatWorkspace(true)} title="New chat window" className="text-xs text-gray-400 hover:text-[#FFD700]">New window</button>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <button onClick={() => openChatWorkspace(true)} title="New chat window" className="ml-auto inline-flex items-center gap-1.5 rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:border-[#FFD700]/50 hover:text-[#FFD700]">
+                New window <span aria-hidden="true">↗</span>
+              </button>
+            </div>
           </div>
           {/* Setup panel — profiles + grid size + instructions */}
           {setupMode && (
@@ -1019,7 +1031,6 @@ function ChatPageInner() {
             </div>
           )}
 
-          {!setupMode && <p className="text-xs text-gray-500 mt-1">Dispatch Communications</p>}
         </div>
 
         {/* Filter chips */}
