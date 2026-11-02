@@ -1,0 +1,71 @@
+{
+  "recordedAtUtc": "2026-11-02T07:37:22.500239+00:00",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "dashboard": {
+    "checkout": "C:\\dev\\dashboard-current-20261004",
+    "branch": "release/dashboard-owner-signup-20261029",
+    "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+    "sourceCommit": "15f6cb571801824ed33bda404c537862890bd1cb",
+    "hostingVerifiedAt": "2026-11-02T07:36:34.650Z",
+    "liveArtifactsByteMatched": 398,
+    "mandatoryPreflight": "passed"
+  },
+  "staffBackend": {
+    "id": "staffChat",
+    "sourceCommit": "15f6cb571801824ed33bda404c537862890bd1cb",
+    "state": "ACTIVE",
+    "updated": "2026-11-02T07:33:56.931005600Z",
+    "revision": "staffchat-00008-yak"
+  },
+  "driverBackend": {
+    "id": "driverChat",
+    "sourceCommit": "a72039c73a0855cee034740b3c6334f6a8b38b88",
+    "status": "ACTIVE",
+    "version": "8",
+    "updated": "2026-11-02T07:32:00.965Z"
+  },
+  "backendVerification": "Deployed handler, shared announcement module and authentication/authority modules downloaded and byte-matched to compiled source; anonymous probes returned HTTP 401 UNAUTHENTICATED. No rule deployment.",
+  "native": {
+    "checkout": "C:\\dev\\TicketTimeExpo\\tmp\\wbt-jobtype-regression",
+    "branch": "codex/wbt-enroute-20261014",
+    "remote": "https://github.com/tester3x/wellbuilt-ticket.git",
+    "sourceCommit": "32f30b7d9fdf9ee2c8c69d1afcf8d35139a543e0",
+    "committed": true,
+    "pushed": true,
+    "apkBuilt": false,
+    "installed": false,
+    "lastInstalledVersionCode": 296,
+    "acceptance": "Next authorized installation must use a reconciled, reserved, signed new local APK; S24 first, then ZFold. Includes pending shift-JSA preview changes from earlier commits."
+  },
+  "sharedAnnouncementModuleSHA256": "c7d8a64082f8ad9a3b5b3fd30691d2946b7f6cb667cddf07569e561d8eef92de",
+  "acceptanceToRun": [
+    "Dispatch sends a clearly identified human test announcement after compatible WB T update is installed. Do not send automated real messages.",
+    "On S24, confirm pinned tab cannot close/archive; dispatch real author shown; no reply/camera/gallery controls.",
+    "Open notice without acknowledging: pending badge remains and dispatch still shows pending.",
+    "Explicitly acknowledge: only that driver receipt changes, then verify same account on another device after refresh.",
+    "Have a different off-shift driver open later: announcement is pending despite no shift at publication.",
+    "Regular dispatch chat still sends levels and messages separately.",
+    "Review receipt list from a second authorized dispatcher. Roll out verified APK to ZFold after S24 validation."
+  ],
+  "tests": {
+    "callableSynthetic": "staff and driver suites passed; off-shift roster, tenant/role fences, no read=ack, permanent room, forbidden driver writes, immutable publication/receipt, 55-notice backlog",
+    "crossPackageEmulators": "12 groups passed including compiled real staff+driver handlers, concurrent same-ID publication and acknowledgement, existing chat/level migration regressions, exact live rules denying direct reads/writes",
+    "browser": "Actual chat page pinned empty room, author, pending names, receipt refresh, forbidden archive/member controls and announcement composer passed",
+    "retainedNative": "TypeScript, Functions compile, retirement guard, counts/row/copy/authors/Back/pin/switch checks passed",
+    "focusedJest": "3 chat suites, 12 tests passed",
+    "broadSuiteLimitation": "An unsupported plural Jest filter inadvertently ran the broad Functions suite: 170 suites passed, 8 failed, 2 skipped; 19 failures in unchanged catalog/equipment/Watchdog areas. Recorded in feature contract. No claim the broad suite passes."
+  },
+  "notPerformed": [
+    "No production announcement or acknowledgement sent for testing",
+    "No customer/job/shift/account/role changes",
+    "No rules deployment",
+    "No cloud build, local APK build or phone installation"
+  ],
+  "evidence": [
+    "C:/dev/tmp/announcements-emulator-final.log",
+    "C:/dev/tmp/announcements-chat-jest.log",
+    "C:/dev/tmp/announcements-hosting-release.log",
+    "C:/dev/tmp/dispatch-announcements-dashboard-fixture.png"
+  ],
+  "limitation": "Other-machine unpushed work cannot be discovered"
+}
