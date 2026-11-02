@@ -1,4 +1,5 @@
 'use client';
+import { ChatMessageViewport } from '@/components/chat/ChatMessageViewport';
 import { ChatMessageFooter } from '@/components/chat/ChatMessageFooter';
 import { openChatWorkspace } from '@/lib/chatWindows';
 import { AnnouncementMessage } from '@/components/chat/AnnouncementMessage';
@@ -209,7 +210,6 @@ function ChatPageInner() {
   const [groupMembers, setGroupMembers] = useState<{ hash: string; name: string }[]>([]);
   const [groupBroadcast, setGroupBroadcast] = useState(false);
   const [managingThreadId, setManagingThreadId] = useState<string | null>(null);
-  const paneEndRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Profile state — stack-based (multiple profiles can be layered, top = visible)
   const [profiles, setProfiles] = useState<MonitorProfile[]>([]);
@@ -487,9 +487,7 @@ function ChatPageInner() {
     if (authLoading || !canViewChat || !myParticipantId || !companyId) return;
     const unsubs = activeThreadIds.map(threadId => watchStaffChat({ action: 'messages', threadId, companyId }, rows => {
       setPaneMessages(prev => ({ ...prev, [threadId]: rows }));
-      setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 150);
     }, error => setToastMsg(error.message), 5000));
-    for (const threadId of activeThreadIds.filter(id => !id.startsWith('announcements_'))) void staffChatCall({ action: 'read', threadId, companyId }).catch(() => {});
     return () => unsubs.forEach(stop => stop());
   }, [activeThreadIds.join(','), myParticipantId, authLoading, companyId, canViewChat]);
 
@@ -890,7 +888,8 @@ function ChatPageInner() {
                 {setupMode ? 'Done' : '⚙'}
               </button>
               )}
-              {profiles.length > 0 && (
+              {profiles.length === 1 && <span className="text-xs text-gray-400 max-w-44 truncate" title={profiles[0].name}>Layout: {profiles[0].name}</span>}
+              {profiles.length > 1 && (
                 <div className="relative">
                   <button
                     onClick={() => {
@@ -1700,7 +1699,8 @@ function ChatPageInner() {
               )}
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-1.5 min-h-0">
+              <ChatMessageViewport scope={`${companyId}:${threadId}`} messages={msgs} participantId={myParticipantId}
+                onRead={threadId && !threadId.startsWith('announcements_') ? () => {void staffChatCall({action:'read',threadId,companyId}).catch(()=>{});} : undefined}>
                 {msgs.map((msg) => {
                   if (msg.requiresAcknowledgement) return <AnnouncementMessage key={msg.id} message={msg} />;
                   const isMine = msg.senderId === myParticipantId;
@@ -1709,7 +1709,7 @@ function ChatPageInner() {
                   const isPhoto = msg.type === 'photo' && (msg as any).photoUrl;
                   if (isSystem) {
                     return (
-                      <div key={msg.id} className="flex justify-center my-1">
+                      <div key={msg.id} data-chat-message-id={msg.id} className="flex justify-center my-1">
                         <div onContextMenu={selectChatMessageText} className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-2 py-0.5">
                           <p data-chat-message-text className="text-gray-400 text-xs text-center select-text">{msg.text}</p>
                           <ChatMessageFooter message={msg} />
@@ -1718,7 +1718,7 @@ function ChatPageInner() {
                     );
                   }
                   return (
-                    <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                    <div key={msg.id} data-chat-message-id={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                       <div onContextMenu={selectChatMessageText} className={`max-w-[80%] rounded-xl px-3 py-1.5 ${
                         isMine ? 'bg-[#FFD700] text-black rounded-br-sm' : 'bg-[#1a1a1a] text-gray-200 rounded-bl-sm'
                       }`}>
@@ -1741,8 +1741,7 @@ function ChatPageInner() {
                     </div>
                   );
                 })}
-                <div ref={(el) => { paneEndRefs.current[threadId] = el; }} />
-              </div>
+              </ChatMessageViewport>
 
               {thread?.permanent && <p className="px-3 py-2 text-xs text-[#FFD700] bg-[#211d08]">Post to all drivers, including off shift. Each driver must acknowledge.</p>}
               {/* Input */}

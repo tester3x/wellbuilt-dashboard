@@ -1,4 +1,5 @@
 'use client';
+import { ChatMessageViewport } from './ChatMessageViewport';
 import { ChatMessageFooter } from './ChatMessageFooter';
 import { openChatWorkspace } from '@/lib/chatWindows';
 import { AnnouncementMessage } from './AnnouncementMessage';
@@ -104,7 +105,6 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
   const [inputText, setInputText] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('all');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -144,17 +144,6 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
 
     return () => unsub();
   }, [selectedThreadId, companyId]);
-
-  // ── Mark thread as read when selected ───────────────────────────────────
-  useEffect(() => {
-    if (!selectedThreadId || selectedThreadId.startsWith('announcements_')) return;
-    void staffChatCall({ action: 'read', threadId: selectedThreadId, companyId }).catch(() => {});
-  }, [selectedThreadId, messages.length, myParticipantId, companyId]);
-
-  // ── Auto-scroll to bottom on new messages ───────────────────────────────
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
 
   // ── Focus input when thread is selected ─────────────────────────────────
   useEffect(() => {
@@ -388,7 +377,8 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
       {selectedThread && (
         <>
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+          <ChatMessageViewport scope={`${companyId}:${selectedThreadId}`} messages={messages} participantId={myParticipantId}
+            onRead={!selectedThread.permanent ? () => {void staffChatCall({action:'read',threadId:selectedThreadId,companyId}).catch(()=>{});} : undefined}>
             {messages.length === 0 && (
               <div className="flex items-center justify-center h-full text-gray-500 text-sm">
                 No messages yet
@@ -401,7 +391,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
 
               if (isSystem) {
                 return (
-                  <div key={msg.id} className="flex justify-center my-2">
+                  <div key={msg.id} data-chat-message-id={msg.id} className="flex justify-center my-2">
                     <div onContextMenu={selectChatMessageText} className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-3 py-1.5 max-w-[85%]">
                       <p data-chat-message-text className="text-gray-400 text-xs text-center select-text">{msg.text}</p>
                       <ChatMessageFooter message={msg} />
@@ -411,7 +401,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
               }
 
               return (
-                <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                <div key={msg.id} data-chat-message-id={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                   <div
                     onContextMenu={selectChatMessageText}
                     className={`max-w-[75%] rounded-2xl px-3.5 py-2 ${
@@ -441,8 +431,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
                 </div>
               );
             })}
-            <div ref={messagesEndRef} />
-          </div>
+          </ChatMessageViewport>
 
           {selectedThread.permanent && <p className="px-3 py-2 text-xs text-[#FFD700] bg-[#211d08]">Post to all drivers, including off shift. Each driver must acknowledge.</p>}
           {/* Input */}
