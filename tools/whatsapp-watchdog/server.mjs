@@ -10,6 +10,7 @@ import {Queue,header,hash,newestReceiverMessages} from './core.mjs';
 import {Transport} from './transport.mjs';
 import {ReviewAlerts} from './alerts.mjs';
 import {RemoteReviews} from './remote-review.mjs';
+import {isIgnoredSender,loadSenderIgnoreRules} from './sender-ignore.mjs';
 const require=createRequire(import.meta.url);
 const {splitChat,parsePullChat,chatTimestamp}=require('../../functions/lib/imports/pullParser.js');
 const root=path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +20,7 @@ const deliveryTimer=setInterval(()=>void transport.tick(paused),10000);deliveryT
 const token=randomBytes(32).toString('hex');
 const configFile=path.join(directory,'channels.json');
 let channels=existsSync(configFile)?JSON.parse(readFileSync(configFile,'utf8')):[];
+const senderIgnoreRules=loadSenderIgnoreRules(directory);
 queue.save();
 let client=null,qr='',state='Stopped',paused=true,error='',chats=[],loadingGroups=false;
 async function loadGroups(){if(loadingGroups||!client||!['Connected','Syncing WhatsApp'].includes(state))throw Error('WhatsApp is not connected yet. Current state: '+state);loadingGroups=true;try{let available;try{available=await Promise.race([client.getChats(),new Promise((_,reject)=>setTimeout(()=>reject(Error('Chat list timed out')),8000))]);}catch{available=await client.pupPage.evaluate(()=>window.require('WAWebCollections').Chat.getModelsArray().filter(c=>c.id?.server==='g.us').map(c=>({id:{_serialized:c.id._serialized},name:c.name||c.formattedTitle||c.id._serialized,isGroup:true})));}chats=available.filter(c=>c.isGroup||c.id?._serialized?.endsWith('@g.us')).map(c=>({id:c.id._serialized,name:c.name||c.id._serialized}));error=chats.length?'':'WhatsApp is syncing groups; retrying shortly.';}catch(e){error='Group list is not ready; retrying shortly. '+String(e?.message||e);}finally{loadingGroups=false;}}
@@ -46,7 +48,7 @@ async function pollReceiver(){
   return {diagnostics,groups:groups.map(c=>({id:c.id._serialized,name:c.name||c.formattedTitle||c.id._serialized})),messages};
  },paused?[]:channels.map(c=>c.id));
  chats=result.groups;receiverGroups=result.diagnostics;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
- if(!paused)for(const m of newestReceiverMessages(result.messages)){const selected=channels.find(c=>c.id===m.channel);if(selected)queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:{...selected.options,wellNames:(transport.wells||[]).filter(w=>w.channels?.includes(selected.id)).map(w=>w.wellName)},deleted:m.deleted,senderId:m.senderId});}
+ if(!paused)for(const m of newestReceiverMessages(result.messages)){const selected=channels.find(c=>c.id===m.channel);if(selected&&!isIgnoredSender(senderIgnoreRules,m.channel,m.senderId))queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:{...selected.options,wellNames:(transport.wells||[]).filter(w=>w.channels?.includes(selected.id)).map(w=>w.wellName)},deleted:m.deleted,senderId:m.senderId});}
  }catch(e){error='Receiver not ready: '+String(e?.message||e);if(state==='Connected')state='Syncing WhatsApp';}
  finally{polling=false;}
 }
@@ -57,7 +59,7 @@ const alertTimer=setInterval(()=>{if(client&&state==='Connected'&&!paused)void a
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
 function status(){return {reviewCorrectionsEnabled:true,remoteReviewError:remoteReviews.error,reviewAlerts:{enabled:!!queue.data.reviewAlerts?.enabled,groupId:queue.data.reviewAlerts?.groupId||'',lastSentAt:queue.data.reviewAlerts?.lastSentAt||null,error:alerts.error},state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,wellLifecycle:transport.wells||[],enabledAt:transport.config?.enabledAt,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
-async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId:m.id?.participant?._serialized||m.author||null});}
+async function capture(m,deleted=false){if(paused)return;const channelId=m.fromMe?m.to:m.from;const configured=channels.find(c=>c.id===channelId);if(!configured)return;const senderId=m.id?.participant?._serialized||m.author||null;if(isIgnoredSender(senderIgnoreRules,channelId,senderId))return;queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
  client=new Client({authStrategy:new LocalAuth({dataPath:path.join(directory,'session')}),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
  state='Connecting';error='';
