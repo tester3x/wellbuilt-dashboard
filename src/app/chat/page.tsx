@@ -1,4 +1,5 @@
 'use client';
+import {WhatsappLevelsFeed} from '@/components/chat/WhatsappLevelsFeed';
 import { ChatMessageViewport } from '@/components/chat/ChatMessageViewport';
 import { ChatMessageFooter } from '@/components/chat/ChatMessageFooter';
 import { openChatWorkspace } from '@/lib/chatWindows';
@@ -56,6 +57,7 @@ interface MonitorProfile {
 const FILTERS: { label: string; value: FilterKey }[] = [
   { label: 'All', value: 'all' },
   { label: 'Announcements', value: 'announcements' },
+  { label: 'WhatsApp Levels', value: 'whatsapp_levels' },
   { label: 'Dispatch', value: 'dispatch_team' },
   { label: 'Private', value: 'private_driver' },
   { label: 'Shifts', value: 'shift' },
@@ -1173,7 +1175,7 @@ function ChatPageInner() {
                   </div>
                   <div className="flex items-center gap-2 mt-0.5 ml-6">
                     <span className="text-xs text-gray-500 truncate flex-1">
-                      {thread.lastMessage?.text || 'No messages'}
+                      {thread.type === 'whatsapp_levels' ? 'Browse processed pulls by well or driver' : thread.lastMessage?.text || 'No messages'}
                     </span>
                     {unread && <span className="w-2 h-2 rounded-full bg-[#FFD700] flex-shrink-0" />}
                   </div>
@@ -1316,7 +1318,7 @@ function ChatPageInner() {
           const msgs = threadId ? (paneMessages[threadId] || []) : [];
           const inputText = threadId ? (paneInputs[threadId] || '') : '';
           const lastMsg = msgs[msgs.length - 1];
-          const hasUnread = lastMsg && lastMsg.senderId !== myParticipantId;
+          const hasUnread = thread?.type !== 'whatsapp_levels' && lastMsg && lastMsg.senderId !== myParticipantId;
 
           const pane=(()=>{
           // Setup mode — show slot assignment UI
@@ -1710,6 +1712,7 @@ function ChatPageInner() {
               )}
 
               {/* Messages */}
+              {thread?.type === 'whatsapp_levels' ? <WhatsappLevelsFeed key={companyId+':'+threadId} scope={`${companyId}:${threadId}`} messages={msgs} participantId={myParticipantId}/> : <>
               <ChatMessageViewport scope={`${companyId}:${threadId}`} messages={msgs} participantId={myParticipantId}
                 onRead={threadId && !threadId.startsWith('announcements_') ? () => {void staffChatCall({action:'read',threadId,companyId}).catch(()=>{});} : undefined}>
                 {msgs.map((msg) => {
@@ -1788,6 +1791,7 @@ function ChatPageInner() {
                   ➤
                 </button>
               </div>
+              </>}
             </div>
           );
           })();

@@ -328,3 +328,10 @@ test('explicit fixed driver default reaches intake without re-estimating a gauge
  expect(packet.bottomLevelFeet).toBe(11);
  expect(packet.watchdogProvenance.barrels).toMatchObject({source:'default',needsReview:false,status:'provisional',selectedBbls:185});
 });
+
+test('accepted observation saves WhatsApp display metadata without changing load or ownership',async()=>{
+ const channel=documents.get('watchdog_v2_config/laptop').channels.group;channel.name='North Area';
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(first.code).toBe(200);expect(first.result.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.watchdogProvenance).toMatchObject({author:'Driver',channelName:'North Area'});expect(packet.driverId).toBeNull();
+ const again=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(again.result.packetId).toBe(first.result.packetId);expect([...database.keys()].filter(k=>k.startsWith('packets/incoming/'))).toHaveLength(1);
+});

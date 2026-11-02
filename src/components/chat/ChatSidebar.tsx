@@ -1,4 +1,5 @@
 'use client';
+import {WhatsappLevelsFeed} from '@/components/chat/WhatsappLevelsFeed';
 import { ChatMessageViewport } from './ChatMessageViewport';
 import { ChatMessageFooter } from './ChatMessageFooter';
 import { openChatWorkspace } from '@/lib/chatWindows';
@@ -28,6 +29,7 @@ type FilterKey = 'all' | 'dispatch_team' | 'private_driver' | ThreadType;
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'All' },
+  { key: 'whatsapp_levels', label: 'WhatsApp Levels' },
   { key: 'dispatch_team', label: 'Dispatch' },
   { key: 'private_driver', label: 'Private' },
   { key: 'shift', label: 'Shift' },
@@ -357,7 +359,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
                             ? thread.lastMessage.type === 'system'
                               ? thread.lastMessage.text
                               : `${thread.lastMessage.senderName}: ${thread.lastMessage.text}`
-                            : 'No messages yet'}
+                            : thread.type === 'whatsapp_levels' ? 'Browse processed pulls by well or driver' : 'No messages yet'}
                         </p>
                         {unread && (
                           <span className="w-2.5 h-2.5 rounded-full bg-[#FFD700] flex-shrink-0" />
@@ -379,6 +381,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
       {selectedThread && (
         <>
           {/* Messages */}
+          {selectedThread.type === 'whatsapp_levels' ? <WhatsappLevelsFeed key={companyId+':'+selectedThreadId} scope={`${companyId}:${selectedThreadId}`} messages={visibleMessages} participantId={myParticipantId}/> : <>
           <ChatMessageViewport scope={`${companyId}:${selectedThreadId}`} messages={visibleMessages} participantId={myParticipantId}
             onRead={!selectedThread.permanent ? () => {void staffChatCall({action:'read',threadId:selectedThreadId,companyId}).catch(()=>{});} : undefined}>
             {visibleMessages.length === 0 && (
@@ -464,6 +467,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
             </button>
             </div>
           </div>
+          </>}
         </>
       )}
 
