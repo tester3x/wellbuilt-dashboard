@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "8c43d27e9ec540948bcff8c3fd025ba57fdcf059",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "verifiedAtUtc": "2026-11-02T09:31:43.173Z",
+  "byteMatchedLiveFiles": 399,
+  "deployed": true,
+  "behavior": [
+    "Initial chat history opens at latest message",
+    "Each pane independently follows only at bottom; unchanged polls cannot move the reader",
+    "Scrolled-up panes retain position, including text-selection pause; new incoming messages count by ID, not sender and not outgoing copies",
+    "Gold jump button shows received count and one gentle pulse per count change; reduced motion respected; explicit jump or manual bottom resumes following",
+    "Read calls gated on visible document and bottom position; announcement opening never acknowledges",
+    "Sidebar thread/company-scoped rows prevent previous history marking a new conversation read while it loads",
+    "Single saved layout shown as plain label instead of an inert one-choice dropdown"
+  ],
+  "checks": "Exact production build and full mandatory Hosting preflight passed. Actual browser tests mount grid and sidebar with synthetic50-message histories: same-data polls, incoming/own counts, independent panes, text selection, explicit jump/resumed following, read suppression above bottom, delayed sidebar thread switch, single-profile label; retained profile locks/drag/copy/window/announcement/text selection and all release checks passed.",
+  "native": "Dashboard-only; WB T unchanged at previously installed T298. No Android build/install or cloud build required for this request.",
+  "scope": "Hosting frontend only; no Functions/rules deployment and no real messages, operational records or profile data used for tests.",
+  "implementationFiles": [
+    "src/components/chat/ChatMessageViewport.tsx",
+    "src/components/chat/ChatSidebar.tsx",
+    "src/components/chat/AnnouncementMessage.tsx",
+    "src/app/chat/page.tsx",
+    "tools/test-chat-scroll-position.mjs",
+    "scripts/preflight-hosting-deploy.cjs"
+  ],
+  "privateEvidence": [
+    "C:/dev/tmp/chat-scroll-hosting-20261102.log",
+    "C:/dev/tmp/chat-scroll-hosting-final-20261102.log",
+    ".firebase/verified-hosting-release.json"
+  ]
+}
