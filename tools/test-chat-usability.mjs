@@ -28,7 +28,7 @@ export async function staffChatCall(data){
 const bundle = await build({stdin:{contents:`
 import React from 'react';import {createRoot} from 'react-dom/client';import ChatPage from './src/app/chat/page';import {ChatSidebar} from './src/components/chat/ChatSidebar';import {openChatWorkspace} from './src/lib/chatWindows';window.openFixtureChat=openChatWorkspace;
 localStorage.setItem('wb-chat-profile-stack',JSON.stringify(location.search.includes('missing')?[]:['fixture-profile']));
-createRoot(document.getElementById('root')).render(location.pathname==='/sidebar' ? <ChatSidebar visible={true} onClose={()=>{}} userId="fixture-staff"/> : <ChatPage/>);
+createRoot(document.getElementById('root')).render(<><button onClick={()=>openChatWorkspace()}>Focus fixture workspace</button>{location.pathname==='/sidebar' ? <ChatSidebar visible={true} onClose={()=>{}} userId="fixture-staff"/> : <ChatPage/>}</>);
 `,loader:'tsx',resolveDir:process.cwd()},bundle:true,write:false,jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},plugins:[{name:'fixture-ports',setup(b){
  b.onResolve({filter:/^@\/(contexts\/AuthContext|lib\/(auth|firebase|staffChatClient))$/},args=>({path:args.path,namespace:'fixture'}));
  b.onLoad({filter:/.*/,namespace:'fixture'},args=>({contents:args.path.endsWith('AuthContext')?`const user={uid:'fixture-staff',companyId:'fixture-company',role:'admin'};export const useAuth=()=>({user,userCompany:{},loading:false});`:args.path.endsWith('/auth')?'export const hasCapability=()=>true;':args.path.endsWith('/firebase')?'export const getFirestoreDb=()=>({});':transport,loader:'js'}));
@@ -57,12 +57,12 @@ try {
  await page.getByRole('status').filter({hasText:'Copied'}).waitFor();
  const selection=await page.locator('[data-chat-message-text]').first().evaluate(e=>getComputedStyle(e).userSelect);assert.equal(selection,'text');
  // Real same-origin named windows: repeated open focuses the same page and does not reload its draft.
- const firstPromise=context.waitForEvent('page');await page.evaluate(()=>window.openFixtureChat());const first=await firstPromise;await first.waitForURL('**/chat/');await first.getByTitle('New chat window',{exact:true}).waitFor();
+ const firstPromise=context.waitForEvent('page');await page.getByRole('button',{name:'Focus fixture workspace',exact:true}).click();const first=await firstPromise;await first.waitForURL('**/chat/');await first.getByTitle('New chat window',{exact:true}).waitFor();
  await first.evaluate(()=>{window.retainedDraft='keep this grid';});
- const count=context.pages().length;await page.evaluate(()=>window.openFixtureChat());
+ const count=context.pages().length;await page.getByRole('button',{name:'Focus fixture workspace',exact:true}).click();
  assert.equal(context.pages().length,count);assert.equal(await first.evaluate(()=>window.retainedDraft),'keep this grid');
  const extraPromise=context.waitForEvent('page');await first.getByTitle('New chat window',{exact:true}).click();const extra=await extraPromise;await extra.waitForURL('**/chat/');await extra.getByTitle('New chat window',{exact:true}).waitFor();assert.equal(context.pages().length,count+1);
- await first.close();const replacementPromise=context.waitForEvent('page');await page.evaluate(()=>window.openFixtureChat());const replacement=await replacementPromise;await replacement.waitForURL('**/chat/');await replacement.getByTitle('New chat window',{exact:true}).waitFor();
+ await first.close();const replacementPromise=context.waitForEvent('page');await page.getByRole('button',{name:'Focus fixture workspace',exact:true}).click();const replacement=await replacementPromise;await replacement.waitForURL('**/chat/');await replacement.getByTitle('New chat window',{exact:true}).waitFor();
  // Sidebar uses the same whole-card copy control.
  await page.goto(base+'/sidebar');await page.getByRole('button').filter({hasText:'Fixture Driver'}).first().click();await page.getByRole('button',{name:'Copy whole message',exact:true}).click();
  assert.equal((await page.evaluate(()=>navigator.clipboard.readText())).replaceAll('\r\n','\n'),'Whole card\nsecond line');
