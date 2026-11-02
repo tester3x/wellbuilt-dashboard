@@ -125,6 +125,7 @@ execSync('node tools/test-chat-scroll-position.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-usability.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-window-layout.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-grid-controls.mjs', { stdio: 'inherit' });
+execSync('node tools/test-chat-full-grid.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-grid-drag.mjs', { stdio: 'inherit' });
 execSync('node tools/test-owner-signup.cjs', { stdio: 'inherit' });
 execSync('node tools/test-employee-onboarding.cjs', { stdio: 'inherit' });

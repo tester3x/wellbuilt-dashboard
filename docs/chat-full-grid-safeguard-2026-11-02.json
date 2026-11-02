@@ -1,0 +1,27 @@
+{
+  "recordedAtUtc": "2026-11-02T11:57:06.861615+00:00",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "request": "Full Dispatch Only 2x2 grid could be silently covered by driver-picker selection; show guidance for adding conversations and allow picker drag/drop.",
+  "cause": "Picker unconditionally wrote temporary slot 0; existing-list clicks also silently replaced the last unlocked slot when full.",
+  "change": [
+    "Shared live-grid placement path for picker and list clicks: focus existing chat or occupy an actually empty, unreserved square; never implicitly replace another chat.",
+    "Capacity checked before creating a new driver thread and rechecked after async resolution; synchronously reserve distinct positions for simultaneous completions.",
+    "Fence pending lookups by company/profile/grid scope and edit/save state.",
+    "Persistent full-grid notice offers Settings/Grid Size, unlock/close chat, profile switching and New window, with separate tab-unlock explanation for adding profiles.",
+    "Driver directory supports mouse drag and touch long-hold placement, using selected dispatch/private audience.",
+    "New conversation retained because directory includes drivers without threads and offers private vs dispatch audience. Existing conversation list retains direct click and drag.",
+    "Existing intentional header/list drag moves and swaps remain; locked slots are protected."
+  ],
+  "checks": [
+    "Web TypeScript passed.",
+    "Actual full locked 2x2: picker click/list click/driver drop leave all slots and drafts unchanged; no new thread call when no room; clicking visible driver focuses.",
+    "Full unlocked temporary grid: extra click does not replace existing chats.",
+    "Concurrent lookup completions get distinct empty positions; capacity consumed while awaiting preserves all current chats.",
+    "Profile changes and entering Settings during lookup prevent stale placement.",
+    "Mouse and actual long-hold touchscreen picker drops respect selected square.",
+    "Existing drag/lock/new-profile/feed/scroll/window/profile-type/copy regressions passed."
+  ],
+  "releaseScope": "Hosting-only client fix. No Functions/rules/native change or release. Tests used synthetic fixtures; no real conversations/messages/profile modifications.",
+  "releaseState": "Feature checkpoint only; verified live receipt follows scoped Hosting release.",
+  "limitation": "Unpushed other-machine work cannot be discovered."
+}

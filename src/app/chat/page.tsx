@@ -228,6 +228,7 @@ function ChatPageInner() {
   const [slotPickerIndex, setSlotPickerIndex] = useState<number | null>(null);
   const [highlightedPane, setHighlightedPane] = useState<number | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [showFullGridNotice,setShowFullGridNotice]=useState(false);
   useEffect(() => {
     setChatCompanyId(''); setThreads([]); setPaneMessages({}); setProfiles([]); setDrivers([]);
     if (authLoading || !canViewChat || !myParticipantId) return;
@@ -353,13 +354,29 @@ function ChatPageInner() {
     return null;
   });
 
-  const gridDrag=useChatGridDrag(`${companyId}:${activeProfileId}:${gridLayout.label}`, (payload,index)=>{
-    if(payload.scope!==`${companyId}:${activeProfileId}:${gridLayout.label}`||setupMode||lockBusy||Object.values(savingSlots).some(Boolean)||Object.keys(pendingSlotUnlocks).length)return;
-    const thread=threads.find(t=>t.id===payload.threadId);
-    if(!thread)return;
-    const next=moveChatToSlot(slots,tempSlots,openPanes,thread.id,{threadId:thread.id,threadTitle:payload.title},index);
-    if(next){setTempSlots(next);setHighlightedPane(index);}
-    else setToastMsg('That position is locked, or the grid is full. Unlock it or free a position first.');
+  const placementScope=`${companyId}:${activeProfileId}:${gridLayout.label}`;
+  const placementBlocked=setupMode||lockBusy||Object.values(savingSlots).some(Boolean)||Object.keys(pendingSlotUnlocks).length>0;
+  const placementRef=useRef({scope:placementScope,slots,temporary:tempSlots,driverThreadMap,maxPanes,blocked:placementBlocked});
+  placementRef.current={scope:placementScope,slots,temporary:tempSlots,driverThreadMap,maxPanes,blocked:placementBlocked};
+  const currentOpen=(state:typeof placementRef.current)=>Array.from({length:state.maxPanes},(_,i)=>{
+    const slot=state.temporary[i]||state.slots[i];return slot?.threadId||(slot?.driverHash?state.driverThreadMap[slot.driverHash]:null)||null;
+  });
+  const placeConversation=(threadId:string,title:string,target?:number,expectedScope=placementRef.current.scope)=>{
+    const state=placementRef.current;if(state.scope!==expectedScope){setToastMsg('The grid changed while opening this chat. Select it again from the list.');return false;}
+    if(state.blocked){setToastMsg('Finish editing the grid or saving its positions, then open this chat again.');return false;}
+    const open=currentOpen(state),existing=open.indexOf(threadId);
+    if(target===undefined&&existing>=0){setHighlightedPane(existing);return true;}
+    const index=target??open.findIndex((id,i)=>!id&&!state.slots[i]&&!state.temporary[i]);
+    if(index<0){setShowFullGridNotice(true);return false;}
+    const next=moveChatToSlot(state.slots,state.temporary,open,threadId,{threadId,threadTitle:title},index);
+    if(!next){if(open.every((id,i)=>!!id||!!state.slots[i]||!!state.temporary[i]))setShowFullGridNotice(true);else setToastMsg('That square is locked. Use an empty square, or unlock and close its chat first.');return false;}
+    // Reserve immediately so concurrent driver lookups cannot claim the same square.
+    placementRef.current={...state,temporary:next};setTempSlots(next);setHighlightedPane(index);return true;
+  };
+  const gridDrag=useChatGridDrag(placementScope, (payload,index)=>{
+    if(payload.scope!==placementRef.current.scope||setupMode||lockBusy||Object.values(savingSlots).some(Boolean)||Object.keys(pendingSlotUnlocks).length)return;
+    if(payload.driverId){void openDriverConversation(payload.driverId,payload.title,payload.audience||'dispatch',index,payload.scope);return;}
+    const thread=threads.find(t=>t.id===payload.threadId);if(thread)placeConversation(thread.id,payload.title,index,payload.scope);
   });
 
   // Wait for the live profile snapshot before changing monitors or dropping an overlay.
@@ -710,6 +727,19 @@ function ChatPageInner() {
     }
   }, [myParticipantId, companyId, user, userCompany]);
 
+  async function openDriverConversation(driverId:string,name:string,audience:'dispatch'|'private',target?:number,expectedScope=placementRef.current.scope){
+    if(setupMode||lockBusy)return;
+    const state=placementRef.current;if(state.scope!==expectedScope)return;
+    const known=threads.find(thread=>thread.participants?.includes(`driver:${driverId}`)&&(audience==='private'?thread.audience==='private_driver':thread.audience==='dispatch_team'));
+    const open=currentOpen(state);
+    if(known&&target===undefined&&open.includes(known.id)){placeConversation(known.id,name);setShowDriverPicker(false);return;}
+    // Check capacity before creating a conversation, then check the live grid again after the await.
+    const index=target??open.findIndex((id,i)=>!id&&!state.slots[i]&&!state.temporary[i]);
+    if(index<0||target!==undefined&&(state.slots[index]&&!state.temporary[index]||open[index]&&!open.some((id,i)=>!id&&!state.slots[i]&&!state.temporary[i]))){setShowFullGridNotice(true);return;}
+    const id=known?.id||await ensureDriverThread(driverId,name,undefined,audience);
+    if(id&&placeConversation(id,name,target,expectedScope))setShowDriverPicker(false);
+  }
+
   // --- Create group thread ---
   const createGroupThread = useCallback(async () => {
     if (!hasCapability(user, 'sendChat', userCompany)) {
@@ -1054,6 +1084,7 @@ function ChatPageInner() {
                 <option value="dispatch">Dispatch team — all authorized dispatchers</option>
                 <option value="private">Private — only you and this driver</option>
               </select>
+              <p className="text-xs text-gray-400 mt-2">Click a driver to use an empty square, or drag to choose one.</p>
               <p className="text-xs text-gray-400 mt-2">{newConversationScope === 'private' ? 'Private chats cannot be saved in shared monitor profiles. Level reports stay in Dispatch team.' : 'One conversation per driver, across shifts. Level reports appear here.'}</p>
             </div>
             <input
@@ -1069,7 +1100,13 @@ function ChatPageInner() {
               return (
               <div
                 key={d.hash}
-                onClick={() => { void ensureDriverThread(d.hash, d.name, d.companyId, newConversationScope).then(id => { if (id) setTempSlots(prev => ({ ...prev, [0]: { threadId: id, threadTitle: d.name } })); }); setShowDriverPicker(false); }}
+                data-chat-driver={d.hash}
+                {...gridDrag.handles({threadId:'',driverId:d.hash,title:d.name,audience:newConversationScope,scope:placementScope},setupMode||lockBusy)}
+                onClick={() => {void openDriverConversation(d.hash,d.name,newConversationScope);}}
+                onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();void openDriverConversation(d.hash,d.name,newConversationScope);}}}
+                tabIndex={0}
+                title="Click to open in an empty square, or drag to choose a square. On touchscreens, press and hold to drag."
+                style={{userSelect:'none',WebkitTouchCallout:'none'}}
                 className={`w-full text-left px-3 py-3 text-sm hover:bg-[#FFD700]/10 hover:text-white cursor-pointer transition-colors border-b border-gray-800/30 flex items-center justify-between ${hasThread ? 'text-gray-500' : 'text-gray-300'}`}
                 role="button"
               >
@@ -1118,15 +1155,8 @@ function ChatPageInner() {
                       return;
                     }
 
-                    // 3. Open thread in an available grid slot
-                    const emptyIdx = openPanes.findIndex((p,i) => !p&&!slots[i]);
-                    if (emptyIdx >= 0) {
-                      setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
-                    } else {
-                      const lastIdx = openPanes.findLastIndex((_,i)=>!slots[i]||!!tempSlots[i]);
-                      if(lastIdx<0){setToastMsg('All positions are locked. Unlock a chat or choose another profile.');return;}
-                      setTempSlots(prev => ({ ...prev, [lastIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
-                    }
+                    // A click never displaces another conversation, including an unlocked one.
+                    placeConversation(thread.id,getTitle(thread));
                   }}
                   className={`w-full text-left px-3 py-3 border-b border-gray-800/50 hover:bg-[#111] transition-colors ${
                     isOpen ? 'bg-[#111] border-l-2 border-l-[#FFD700]' : ''
@@ -1221,6 +1251,19 @@ function ChatPageInner() {
           <p className="text-xs text-gray-400 mb-3">Profiles remain available in Settings for editing. Unlock a chat before dragging it to another position.</p>
           {lockError&&<p role="alert" className="text-sm text-red-400 mb-3">{lockError}</p>}
           <div className="flex justify-end gap-2"><button disabled={lockBusy} onClick={()=>setLockRequest(null)} className="px-3 py-2 rounded border border-gray-600">Cancel</button><button disabled={lockBusy||lockPosition<0||!lockProfileChoice&&!lockName.trim()} onClick={confirmSlotLock} className="px-3 py-2 rounded bg-[#FFD700] text-black disabled:opacity-50">{lockBusy?'Saving position…':'Save and lock'}</button></div>
+        </section>
+      </div>}
+
+      {showFullGridNotice&&<div className="fixed inset-0 z-[85] bg-black/70 flex items-center justify-center p-4" onClick={()=>setShowFullGridNotice(false)}>
+        <section role="alertdialog" aria-modal="true" aria-labelledby="full-grid-title" className="max-w-md rounded-xl border border-gray-600 bg-[#151515] p-5 text-sm shadow-xl" onClick={e=>e.stopPropagation()} onKeyDown={e=>{if(e.key==='Escape')setShowFullGridNotice(false);}}>
+          <h2 id="full-grid-title" className="text-[#FFD700] font-bold text-lg mb-3">This profile grid is full</h2>
+          <p className="text-gray-200">To add a conversation, unlock and close a chat, increase Grid Size in Settings, switch profiles, or open a new window.</p>
+          <p className="text-gray-400 mt-2">To add another profile to this tab, unlock the tab layout first.</p>
+          <div className="flex flex-wrap justify-end gap-2 mt-4">
+            <button className="border border-gray-600 rounded px-3 py-2" onClick={()=>{setShowFullGridNotice(false);setShowDriverPicker(false);setSetupMode(true);}}>Settings</button>
+            <button className="border border-gray-600 rounded px-3 py-2" onClick={()=>{openChatWorkspace(true);setShowFullGridNotice(false);}}>New window</button>
+            <button autoFocus className="bg-[#FFD700] text-black rounded px-3 py-2" onClick={()=>setShowFullGridNotice(false)}>Got it</button>
+          </div>
         </section>
       </div>}
 
