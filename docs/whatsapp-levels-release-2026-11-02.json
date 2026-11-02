@@ -1,0 +1,71 @@
+{
+  "recordedAtUtc": "2026-11-02T10:54:47.385301+00:00",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "checkout": "C:/dev/dashboard-current-20261004",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "sourceCommit": "247b44f3a0b3f81c5491b67cccfa43a196e803d5",
+  "committed": true,
+  "pushed": true,
+  "hosting": {
+    "deployed": true,
+    "mandatoryPreflight": "passed",
+    "verifiedAt": "2026-11-02T10:53:53.661Z",
+    "liveFilesByteMatched": 399,
+    "approvedCheckpoint": "247b44f3a0b3f81c5491b67cccfa43a196e803d5",
+    "lockReleased": true
+  },
+  "backend": {
+    "sourceCommit": "247b44f3a0b3f81c5491b67cccfa43a196e803d5",
+    "functions": [
+      {
+        "id": "staffChat",
+        "state": "ACTIVE",
+        "updated": "2026-11-02T10:50:58.649705076Z",
+        "revision": "staffchat-00009-bog"
+      },
+      {
+        "id": "ingestWatchdogPullV2",
+        "state": "ACTIVE",
+        "updated": "2026-11-02T10:50:51.397667233Z",
+        "revision": "ingestwatchdogpullv2-00045-coj"
+      }
+    ],
+    "anonymousStatus": 401
+  },
+  "backendModuleProof": {
+    "staffChatReachableModulesByteMatched": 7,
+    "ingestWatchdogPullV2ReachableModulesByteMatched": 20
+  },
+  "readOnlyProjectionCheck": {
+    "at": "2026-11-02T10:49:55.626Z",
+    "companyScopedRead": true,
+    "processedRecords": 2900,
+    "displayedPulls": 2882,
+    "uniquePacketIds": 2882,
+    "wells": 63,
+    "sources": {
+      "WB T": 808,
+      "WB M": 873,
+      "WhatsApp": 1201
+    },
+    "unidentifiedReporters": 955,
+    "projectionWrites": 0
+  },
+  "validation": [
+    "Web and Functions TypeScript compile passed.",
+    "Actual grid and sidebar browser checks passed: searchable well/driver intersection and clear, unknown well, filtered new-arrival counter/retry idempotency, whole-card copy, absent feed composer and unchanged normal chat composer, bounded initial archive rendering/expand older.",
+    "Mandatory Hosting regression gate passed, including prior chat window/profile/drag/scroll/selection/announcement/header fixes and route layouts.",
+    "Focused chat Jest: 3 suites / 10 passed. New accepted-observation metadata regression: 1 passed.",
+    "No live send, acknowledgement, history backfill, new pull or driver-identity/account modification performed."
+  ],
+  "knownBaselineFailures": "Full Watchdog intake Jest has 7 existing failures reproduced with the display-metadata change removed; these were not repaired. New metadata test passes.",
+  "native": {
+    "changed": false,
+    "apkBuilt": false,
+    "installed": false,
+    "reason": "Dispatch-only Dashboard and scoped server feature; T299 remains installed baseline."
+  },
+  "fieldAcceptance": "Refresh Dashboard WB Chat; open WhatsApp Levels. User field acceptance of live feed remains pending. Old records without author/channel metadata display unavailable rather than infer identities. Held/rejected messages remain in existing Watchdog review path.",
+  "limitation": "Unpushed work on another machine cannot be discovered."
+}
