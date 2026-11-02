@@ -102,6 +102,8 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messageScope, setMessageScope] = useState('');
+  const visibleMessages = messageScope === `${companyId}:${selectedThreadId}` ? messages : [];
   const [inputText, setInputText] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('all');
@@ -140,7 +142,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
       return;
     }
 
-    const unsub = watchStaffChat({ action: 'messages', threadId: selectedThreadId, companyId }, rows => { setMessages(rows); setSendError(null); }, error => setSendError(error.message), 3000);
+    const unsub = watchStaffChat({ action: 'messages', threadId: selectedThreadId, companyId }, rows => { setMessages(rows); setMessageScope(`${companyId}:${selectedThreadId}`); setSendError(null); }, error => setSendError(error.message), 3000);
 
     return () => unsub();
   }, [selectedThreadId, companyId]);
@@ -377,14 +379,14 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
       {selectedThread && (
         <>
           {/* Messages */}
-          <ChatMessageViewport scope={`${companyId}:${selectedThreadId}`} messages={messages} participantId={myParticipantId}
+          <ChatMessageViewport scope={`${companyId}:${selectedThreadId}`} messages={visibleMessages} participantId={myParticipantId}
             onRead={!selectedThread.permanent ? () => {void staffChatCall({action:'read',threadId:selectedThreadId,companyId}).catch(()=>{});} : undefined}>
-            {messages.length === 0 && (
+            {visibleMessages.length === 0 && (
               <div className="flex items-center justify-center h-full text-gray-500 text-sm">
                 No messages yet
               </div>
             )}
-            {messages.map((msg) => {
+            {visibleMessages.map((msg) => {
               if (msg.requiresAcknowledgement) return <AnnouncementMessage key={msg.id} message={msg} />;
               const isMine = msg.senderId === myParticipantId;
               const isSystem = msg.type === 'system';

@@ -16,7 +16,7 @@ export function watchStaffChat(data,cb){
  if(data.action==='threads')setTimeout(()=>cb(threads),0);
  if(data.action==='messages'){
   const rows=window.rows[data.threadId]||Array.from({length:50},(_,i)=>({id:'m'+i,text:'Synthetic message '+i+' '+('reading material '.repeat(12)),senderId:'driver:fixture',senderName:'Fixture',type:'text',timestamp:new Date().toISOString()}));
-  window.rows[data.threadId]=rows;window.updaters[data.threadId]=(next)=>{window.rows[data.threadId]=next;cb(structuredClone(next));};setTimeout(()=>cb(structuredClone(rows)),0);
+  window.rows[data.threadId]=rows;window.updaters[data.threadId]=(next)=>{window.rows[data.threadId]=next;cb(structuredClone(next));};setTimeout(()=>cb(structuredClone(rows)),data.threadId==='dispatch_B'?350:0);
  }
  return()=>{};
 }
@@ -80,6 +80,14 @@ try {
   await page.evaluate(()=>window.getSelection().removeAllRanges());await pane.getByRole('button',{name:'1 new message, go to latest',exact:true}).click();
   await page.evaluate(()=>window.updaters.dispatch_A([...window.rows.dispatch_A,{...window.rows.dispatch_A.at(-1),id:'following-new',text:'Arrived at bottom'}]));
   await pane.locator('[data-chat-message-id="following-new"]').waitFor();assert.ok(await bottom()<3,'follow resumes after explicit jump');
+  if(mode==='sidebar'){
+   await page.getByTitle('Back to threads',{exact:true}).click();
+   const readsBeforeSwitch=await page.evaluate(()=>window.fixtureReads.filter(id=>id==='dispatch_B').length);
+   await page.getByRole('button').filter({hasText:'Driver B'}).first().click();
+   assert.equal(await page.evaluate(()=>window.fixtureReads.filter(id=>id==='dispatch_B').length),readsBeforeSwitch,'old conversation rows cannot mark new thread read');
+   await page.locator('[data-chat-viewport-scope="fixture-company:dispatch_B"] [data-chat-message-id="m49"]').waitFor();
+   await page.waitForFunction(()=>window.fixtureReads.includes('dispatch_B'));
+  }
   await page.close();
  }
  await context.close();console.log('PASS actual grid/sidebar: initial bottom, unchanged polls stable, incoming/own counts, read only at bottom, independent panes, explicit jump, selection pause, following resumes and single-profile label.');
