@@ -1,4 +1,5 @@
 import {effectiveFlow} from '../../effectiveFlow';
+import {calculateEditedAfr} from './editAfr';
 import {refreshFlowWindow} from '../../refreshFlowWindow';
 /**
  * Event-scoped durable edit outbox and state machine.
@@ -398,6 +399,7 @@ export async function prepareEditOutbox(
         dateTimeUTC: newDateTimeUTC,
         flowRateDays,
         tankTopInches: newTankTopInches,
+        wellDown: nextEditIsDown,
       });
     } else {
       allPulls.push(child.val());
@@ -405,16 +407,8 @@ export async function prepareEditOutbox(
   });
 
   allPulls.sort((a, b) => new Date(b.dateTimeUTC).getTime() - new Date(a.dateTimeUTC).getTime());
-  const validRates: number[] = [];
-  for (const p of allPulls) {
-    const fr = Number(p.flowRateDays) || 0;
-    if (fr > 0 && fr < 365) {
-      validRates.push(fr);
-      if (validRates.length >= 5) break;
-    }
-  }
-  let afr = validRates.length > 0 ? validRates.reduce((sum, r) => sum + r, 0) / validRates.length : 0;
-  if (afr === 0 && Number(origPacket.flowRateDays) > 0) {
+  let afr = calculateEditedAfr(allPulls);
+  if (afr === 0 && !newWellDown && Number(origPacket.flowRateDays) > 0) {
     afr = Number(origPacket.flowRateDays);
   }
   if (afr === 0 && flowRateDays > 0) {

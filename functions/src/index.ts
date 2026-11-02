@@ -900,7 +900,7 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     const key = child.key || '';
     // Skip edit/delete/history packets
     if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_')) return;
-    if (data.flowRateDays && data.flowRateDays > 0) {
+    if (!data.wellDown && data.flowRateDays && data.flowRateDays > 0) {
       // Sort by timestamp. Prefer dateTimeUTC (always a valid ISO string) over
       // dateTime (locale-formatted by the WB M client and sometimes malformed,
       // e.g. "4/11/2026 3 PM" with no minutes — parses to NaN and corrupts sort).
@@ -1239,7 +1239,7 @@ export const processIncomingPull = functionsV1.database
     // Flow Rate (days per foot)
     let flowRateDays = 0;
     let flowRate = '';
-    if (recoveryInches > 0 && timeDifDays > 0) {
+    if (!nextIsDown && recoveryInches > 0 && timeDifDays > 0) {
       flowRateDays = (timeDifDays / recoveryInches) * 12;
       // Reject unreasonable flow rates (matches windowBblsPerDay safeguard)
       if (flowRateDays >= 365) {
