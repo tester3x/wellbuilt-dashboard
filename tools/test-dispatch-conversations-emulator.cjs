@@ -161,11 +161,41 @@ async function authority(uid, capabilities, companyId = 'fixture-co') {
     assert.equal((await doc(team).get()).get('status'), 'active', 'ending a shift never archives the persistent conversation');
     assert.equal(await postShiftDispatchNotice({ ...shift, companyId: 'other-co' }, 'foreign-shift', 'shift_started', null), null);
   });
+  await check('permanent announcements reach off-shift drivers with individual durable receipts and trusted authors', async () => {
+    const { ANNOUNCEMENTS, announcementId } = require('../functions/lib/security/dispatchAnnouncements');
+    const id = announcementId('fixture-co');
+    await rt.ref('drivers/profiles/driver-off').set({ companyId: 'fixture-co', active: true, legalName: 'Fixture Off Shift' });
+    await Promise.all([1, 2, 3].map(() => staff('staff-a', { action: 'send', threadId: id, clientId: 'announcement-retry', text: 'Synthetic dispatch announcement', senderName: 'Fake Login' })));
+    await staff('staff-b', { action: 'send', threadId: id, clientId: 'announcement-two', text: 'Synthetic second announcement' });
+    const room = db.collection(ANNOUNCEMENTS).doc(id);
+    assert.equal((await room.collection('messages').get()).size, 2);
+    const notice = await room.collection('messages').doc('c_announcement-retry').get();
+    assert.equal(notice.get('senderName'), 'Fixture Dispatcher A');
+    assert.ok(notice.get('recipientIds').includes('driver-off'));
+    assert.equal((await driver('driver-off', { action: 'threads' })).threads[0].unreadCount, 2);
+    await driver('driver-off', { action: 'read', threadId: id });
+    assert.equal((await driver('driver-off', { action: 'threads' })).threads[0].unreadCount, 2);
+    for (const action of ['send', 'photoUpload', 'archive']) await assert.rejects(() => driver('driver-off', { action, threadId: id, clientId: 'denied', text: 'No' }));
+    for (const uid of ['chat-only', 'foreign']) await assert.rejects(() => staff(uid, { action: 'messages', threadId: id }));
+    await assert.rejects(() => staff('dispatch-reader', { action: 'send', threadId: id, clientId: 'denied', text: 'No' }));
+    await Promise.all([1,2,3].map(() => driver('driver-off', { action: 'acknowledge', threadId: id, messageId: notice.id, driverId: 'driver-a' })));
+    assert.equal((await room.collection('receipts').get()).size, 1);
+    assert.equal((await driver('driver-off', { action: 'threads' })).threads[0].unreadCount, 1);
+    assert.equal((await driver('driver-a', { action: 'threads' })).threads[0].unreadCount, 2);
+    const messages = (await staff('staff-b', { action: 'messages', threadId: id })).rows;
+    const receipts = messages.find(row => row.id === notice.id).receiptSummary;
+    assert.equal(receipts.find(row => row.driverId === 'driver-off').name, 'Fixture Off Shift');
+    assert.ok(receipts.find(row => row.driverId === 'driver-off').acknowledgedAt);
+    assert.equal(receipts.find(row => row.driverId === 'driver-a').acknowledgedAt, null);
+    assert.equal((await driver('driver-off', { action: 'messages', threadId: id })).messages[0].receiptSummary, undefined);
+    await staff('staff-a', { action: 'saveProfile', profileId: 'announcement-monitor', record: { slots: [{ threadId: id }] } });
+    for (const action of ['archive','clear','members','broadcast']) await assert.rejects(() => staff('staff-a', { action, threadId: id }));
+  });
   if (process.argv[3]) await check('deployed-equivalent rules deny direct reads including company staff and platform admin', async () => {
     const { initializeTestEnvironment, assertFails } = require('@firebase/rules-unit-testing');
-    const { getDoc, doc: clientDoc, collection, getDocs } = require('firebase/firestore');
+    const { getDoc, setDoc, doc: clientDoc, collection, getDocs } = require('firebase/firestore');
     const live = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
-    const files = live.files?.source?.files || live.files?.files || live.files;
+    const files = live.source?.files || live.files?.source?.files || live.files?.files || live.files;
     const rules = Array.isArray(files) ? files.find(file => file.name.endsWith('.rules')).content : null;
     assert.equal(typeof rules, 'string', 'Exact fetched live rules are required');
     const [host, port] = process.env.FIRESTORE_EMULATOR_HOST.split(':');
@@ -178,6 +208,16 @@ async function authority(uid, capabilities, companyId = 'fixture-co') {
         await assertFails(getDoc(clientDoc(client, CONVERSATIONS, id)));
         await assertFails(getDocs(collection(client, CONVERSATIONS, id, 'messages')));
       }
+    }
+    const { ANNOUNCEMENTS, announcementId } = require('../functions/lib/security/dispatchAnnouncements');
+    const aid = announcementId('fixture-co');
+    for (const claims of [{}, { kind: 'driver', driverId: 'driver-off', companyId: 'fixture-co' }, { wellbuiltAdmin: true }]) {
+      const client = env.authenticatedContext('announcement-client', claims).firestore();
+      for (const tail of ['', '/messages/c_announcement-retry', '/receipts/c_announcement-retry_driver-off']) {
+        await assertFails(getDoc(clientDoc(client, ANNOUNCEMENTS + '/' + aid + tail)));
+        await assertFails(setDoc(clientDoc(client, ANNOUNCEMENTS + '/' + aid + tail), { spoofed: true }));
+      }
+      await assertFails(getDocs(collection(client, ANNOUNCEMENTS, aid, 'messages')));
     }
     await env.cleanup();
   });

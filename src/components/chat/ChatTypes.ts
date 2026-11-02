@@ -5,7 +5,7 @@ import { Timestamp } from 'firebase/firestore';
 
 // ── Thread Types ────────────────────────────────────────────────────────────
 
-export type ThreadType = 'shift' | 'service_group' | 'project' | 'well' | 'direct';
+export type ThreadType = 'shift' | 'service_group' | 'project' | 'well' | 'direct' | 'announcements';
 
 export interface LastMessagePreview {
   text: string;
@@ -20,6 +20,7 @@ export interface ChatThread {
   type: ThreadType;
   audience?: 'dispatch_team' | 'private_driver';
   unreadCount?: number;
+  permanent?: boolean;
   companyId: string;
 
   // Context links (set depending on type)
@@ -77,6 +78,8 @@ export interface SystemMessageData {
 export interface ChatMessage {
   id: string; // Firestore doc ID
   text: string;
+  requiresAcknowledgement?: boolean;
+  receiptSummary?: { driverId: string; name: string; acknowledgedAt: string | null }[];
   senderId: string;         // "driver:{hash}" or "user:{uid}"
   senderName: string;
   timestamp: Timestamp | string;
@@ -119,6 +122,7 @@ const THREAD_TYPE_LABELS: Record<ThreadType, string> = {
   project: 'Project',
   well: 'Well',
   direct: 'Direct',
+  announcements: 'Announcements',
 };
 
 export function threadTypeLabel(type: ThreadType): string {
@@ -131,6 +135,7 @@ const THREAD_TYPE_ICONS: Record<ThreadType, string> = {
   project: '',
   well: '',
   direct: '',
+  announcements: '📢',
 };
 
 export function threadTypeIcon(type: ThreadType): string {
@@ -181,9 +186,11 @@ export function formatChatTime(ts: Timestamp | string | undefined): string {
 }
 
 export function chatAudienceLabel(thread: ChatThread): string {
+  if (thread.permanent) return 'All drivers · acknowledgement required';
   return thread.audience === 'dispatch_team' ? 'Dispatch team' : thread.audience === 'private_driver' ? 'Private · you and driver' : threadTypeLabel(thread.type);
 }
 export function matchesChatFilter(thread: ChatThread, filter: string): boolean {
+  if (thread.permanent) return true;
   if (filter === 'dispatch_team' || filter === 'private_driver') return thread.audience === filter;
   return filter === 'all' || (thread.type === filter && !thread.audience);
 }

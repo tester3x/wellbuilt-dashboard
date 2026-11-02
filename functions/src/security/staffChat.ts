@@ -1,3 +1,4 @@
+import { announcementThread, handleAnnouncement, isAnnouncementId } from './dispatchAnnouncements';
 import * as https from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { CONVERSATIONS, governedId, conversationCollection, validConversation, ensureConversation, consolidateDispatchHistory } from './dispatchConversations';
@@ -73,6 +74,11 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
   const identityDirectory = (referencedUsers:string[]=[]) => directory(staff.companyId,{uid:staff.uid,profile},referencedUsers);
   const senderDirectory = ['send', 'dispatch', 'private', 'direct', 'group'].includes(action) ? await identityDirectory() : null;
   const name = (!profile?.companyId || profile.companyId===staff.companyId ? realChatName(profile) : '') || senderDirectory?.names.get(participant) || UNKNOWN_CHAT_NAME;
+  const announcementActor = { companyId: staff.companyId, id: staff.uid, name, staff: true };
+  if (isAnnouncementId(data.threadId)) {
+    if (!dispatchAccess) throw new https.HttpsError('permission-denied', 'Dispatch access required for announcements');
+    return serial(await handleAnnouncement(announcementActor, data, async () => (await identityDirectory()).drivers));
+  }
   if (action === 'directory') return { companyId: staff.companyId, drivers: (await identityDirectory()).drivers };
   if (action === 'threads' || action === 'profiles') {
     const collection = action === 'threads' ? 'chat_threads' : 'chat_monitors';
@@ -98,6 +104,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     rows.sort((a, b) => time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt));
     if (action === 'threads') rows = await Promise.all(rows.map(async row => ({ ...row, ...await readUnreadSummary(
       db.collection(conversationCollection(row.id)).doc(row.id), row, participant) })));
+    if (action === 'threads' && dispatchAccess) rows.unshift(await announcementThread(announcementActor));
     return { companyId: staff.companyId, rows: serial(rows) };
   }
   if (['dispatch', 'private', 'direct'].includes(action)) {
@@ -152,6 +159,10 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
       if (!Array.isArray(fields.slots) || fields.slots.length > 36) throw new https.HttpsError('invalid-argument', 'Invalid monitor slots');
       for (const slot of fields.slots) if (slot) {
         if (slot.threadId) {
+          if (isAnnouncementId(slot.threadId)) {
+            if (!dispatchAccess || slot.threadId !== (await announcementThread(announcementActor)).id) throw new https.HttpsError('permission-denied', 'Announcement outside your company');
+            continue;
+          }
           if (governedId(slot.threadId)) {
             const thread = await db.collection(CONVERSATIONS).doc(key(slot.threadId)).get();
             if (!thread.exists || !admits(thread.data(), thread.id) || thread.get('audience') !== 'dispatch_team') throw new https.HttpsError('permission-denied', 'Private chats cannot be saved in shared monitors');

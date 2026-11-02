@@ -1,4 +1,5 @@
 'use client';
+import { AnnouncementMessage } from '@/components/chat/AnnouncementMessage';
 
 import {useChatGridDrag} from '@/components/chat/useChatGridDrag';
 import {moveChatToSlot} from '@/lib/chatGridPlacement';
@@ -51,6 +52,7 @@ interface MonitorProfile {
 
 const FILTERS: { label: string; value: FilterKey }[] = [
   { label: 'All', value: 'all' },
+  { label: 'Announcements', value: 'announcements' },
   { label: 'Dispatch', value: 'dispatch_team' },
   { label: 'Private', value: 'private_driver' },
   { label: 'Shifts', value: 'shift' },
@@ -441,7 +443,7 @@ function ChatPageInner() {
       if (hasInitializedRef.current) {
         const prevMap = prevThreadMapRef.current;
         for (const thread of list) {
-          if (thread.status === 'archived') continue;
+          if (thread.permanent || thread.status === 'archived') continue;
           if (!thread.lastMessage?.senderId || thread.lastMessage.senderId === myParticipantId) continue;
           const ts = typeof thread.updatedAt === 'string'
             ? new Date(thread.updatedAt).getTime()
@@ -485,7 +487,7 @@ function ChatPageInner() {
       setPaneMessages(prev => ({ ...prev, [threadId]: rows }));
       setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 150);
     }, error => setToastMsg(error.message), 5000));
-    for (const threadId of activeThreadIds) void staffChatCall({ action: 'read', threadId, companyId }).catch(() => {});
+    for (const threadId of activeThreadIds.filter(id => !id.startsWith('announcements_'))) void staffChatCall({ action: 'read', threadId, companyId }).catch(() => {});
     return () => unsubs.forEach(stop => stop());
   }, [activeThreadIds.join(','), myParticipantId, authLoading, companyId, canViewChat]);
 
@@ -772,16 +774,17 @@ function ChatPageInner() {
   }, [companyId]);
 
   // --- Sidebar filtering — unanswered first, then by updatedAt ---
-  const nonEmptyThreads = threads.filter((t) => t.lastMessage?.text || t.audience);
+  const nonEmptyThreads = threads.filter((t) => t.permanent || t.lastMessage?.text || t.audience);
   const filteredThreads = useMemo(() => {
     const base = filter === 'archived'
-      ? nonEmptyThreads.filter((t) => t.status === 'archived')
+      ? nonEmptyThreads.filter((t) => t.permanent || t.status === 'archived')
       : filter === 'all'
         ? nonEmptyThreads.filter((t) => t.status !== 'archived')
         : nonEmptyThreads.filter((t) => matchesChatFilter(t, filter) && t.status !== 'archived');
 
     // Sort: unanswered (unread + from someone else) first, then by updatedAt desc
     return [...base].sort((a, b) => {
+      if (!!a.permanent !== !!b.permanent) return a.permanent ? -1 : 1;
       const aUnread = isThreadUnread(a, myParticipantId) && a.lastMessage?.senderId !== myParticipantId;
       const bUnread = isThreadUnread(b, myParticipantId) && b.lastMessage?.senderId !== myParticipantId;
       if (aUnread && !bUnread) return -1;
@@ -1162,7 +1165,7 @@ function ChatPageInner() {
                     <span className="text-[9px] text-gray-600 uppercase tracking-wider">
                       {chatAudienceLabel(thread)}
                     </span>
-                    {thread.type !== 'direct' && canSendChat && (
+                    {!thread.permanent && thread.type !== 'direct' && canSendChat && (
                       <button
                         onClick={async (e) => {
                           e.stopPropagation();
@@ -1579,7 +1582,7 @@ function ChatPageInner() {
                       </>
                     );
                   })()}
-                  {thread && thread.type !== 'direct' && canSendChat && (
+                  {thread && !thread.permanent && thread.type !== 'direct' && canSendChat && (
                     <button
                       onClick={() => { setManagingThreadId(managingThreadId === threadId ? null : threadId); loadDrivers(); }}
                       className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
@@ -1590,7 +1593,7 @@ function ChatPageInner() {
                       {thread.participants?.length || 0}
                     </button>
                   )}
-                  {thread && thread.type !== 'direct' && canSendChat && (
+                  {thread && !thread.permanent && thread.type !== 'direct' && canSendChat && (
                     <button
                       onClick={async () => {
                         if (!hasCapability(user, 'sendChat', userCompany)) {
@@ -1614,7 +1617,7 @@ function ChatPageInner() {
                       {(thread as any).broadcast ? '📢' : '💬'}
                     </button>
                   )}
-                  <button
+                  {!thread?.permanent && <button
                     onClick={() => archiveThread(threadId)}
                     className="text-gray-600 hover:text-[#FFD700] p-1 transition-colors"
                     title="Archive chat"
@@ -1622,12 +1625,12 @@ function ChatPageInner() {
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" />
                     </svg>
-                  </button>
+                  </button>}
                 </div>
               </div>
 
               {/* Member management panel */}
-              {managingThreadId === threadId && thread && thread.type !== 'direct' && (
+              {managingThreadId === threadId && thread && !thread.permanent && thread.type !== 'direct' && (
                 <div className="border-b border-gray-800 bg-[#0d0d0d] px-3 py-2 flex-shrink-0 max-h-32 overflow-y-auto">
                   <div className="flex flex-wrap gap-1 mb-1">
                     {(thread.participants || []).filter((p: string) => p.startsWith('driver:')).map((pid: string) => {
@@ -1692,6 +1695,7 @@ function ChatPageInner() {
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-3 space-y-1.5 min-h-0">
                 {msgs.map((msg) => {
+                  if (msg.requiresAcknowledgement) return <AnnouncementMessage key={msg.id} message={msg} />;
                   const isMine = msg.senderId === myParticipantId;
                   const isSystem = msg.type === 'system';
                   const isLevelReport = msg.type === 'level_report';
@@ -1734,6 +1738,7 @@ function ChatPageInner() {
                 <div ref={(el) => { paneEndRefs.current[threadId] = el; }} />
               </div>
 
+              {thread?.permanent && <p className="px-3 py-2 text-xs text-[#FFD700] bg-[#211d08]">Post to all drivers, including off shift. Each driver must acknowledge.</p>}
               {/* Input */}
               <div className="flex items-center gap-2 px-2 py-1.5 border-t border-gray-800 bg-[#0d0d0d] flex-shrink-0">
                 <div className="flex-1 flex items-end gap-1">
@@ -1741,7 +1746,7 @@ function ChatPageInner() {
                     value={inputText}
                     onChange={(e) => setPaneInputs((prev) => ({ ...prev, [threadId]: e.target.value }))}
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (canSendChat) sendInPane(threadId); } }}
-                    placeholder={canSendChat ? 'Shift+Enter for new line' : 'You do not have permission to send messages'}
+                    placeholder={canSendChat ? (thread?.permanent ? 'Announcement to all drivers' : 'Shift+Enter for new line') : 'You do not have permission to send messages'}
                     rows={1}
                     disabled={!canSendChat}
                     className="flex-1 bg-[#1a1a1a] border border-gray-700 rounded-2xl px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700]/50 resize-none overflow-y-auto disabled:opacity-50 disabled:cursor-not-allowed"

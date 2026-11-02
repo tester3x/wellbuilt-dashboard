@@ -1,0 +1,30 @@
+{
+  "task": "Permanent Dispatch Announcements",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "date": "2026-11-02",
+  "contract": {
+    "room": "One permanent company-wide Dispatch Announcements room, separate from shared and private driver conversations.",
+    "audience": "Snapshot of all active canonical company driver profiles at publication, independent of shifts. Newly added drivers receive subsequent notices. Disabled drivers cannot authenticate.",
+    "authority": "Existing authenticated driver identity and trusted company viewChat+viewDispatch; staff sendChat additionally required to post. No client role/company/name/audience accepted.",
+    "authors": "Verified real dispatcher names; unidentified staff cannot publish announcements.",
+    "readOnly": "Drivers cannot send text/photos, archive, clear, change membership or disable broadcast. Staff also cannot archive/clear or change this fixed audience.",
+    "acknowledgement": "Explicit per-notice, per-canonical-driver receipt; opening or reading the room does not acknowledge. Retry is idempotent and preserves original acknowledgement time.",
+    "storage": "dispatch_announcements/<hashed-company-room>/messages and /receipts. Direct client reads/writes are denied by the existing live rules catch-all; no rule deployment. Receipt IDs hash the message/driver tuple.",
+    "history": "All pending notices remain accessible beyond the ordinary 50-message window. Driver view defaults to pending notices, with acknowledged history available separately.",
+    "badges": "Driver unread total includes pending notices; count persists until explicit receipt. Preview has a megaphone and !, dismissal only dismisses local preview. Dispatch gets no outgoing badge for announcements.",
+    "privacy": "Drivers receive only their own acknowledgement status; dispatch sees immutable publication roster with individual pending/acknowledged status."
+  },
+  "validation": [
+    "Both TypeScript application checks and both Functions builds",
+    "Staff and driver callable tests with synthetic in-memory ports: off-shift audience, trusted names, company/auth fences, idempotent publication/receipt, forbidden mutations and 55-notice pending history",
+    "12 real Firestore/RTDB emulator integration groups, compiled staff+driver packages, concurrent sends/acks and exact fetched live Firestore rules denying direct notice/receipt reads/writes",
+    "Actual Dashboard browser: pinned empty room, no archive/membership controls, real authors, off-shift pending list, live receipt update, company-wide send composer",
+    "Retained native incoming counts, own-send exclusion, row preview, selection/copy, real authors, focused Back, pin/active-tab/account-switch checks"
+  ],
+  "validationLimitations": [
+    "Broad Functions Jest suite was inadvertently selected by an unsupported plural filter flag: 170 suites passed, 8 failed, 2 skipped (19 failed tests in unchanged catalog/equipment/Watchdog areas). No unrelated source was changed to make these pass. Focused chat suites separately passed: 3 suites / 12 tests.",
+    "Other-machine unpushed work cannot be discovered.",
+    "No real all-driver announcement, customer load, acknowledgement, shift or profile mutation used for validation.",
+    "Native feature requires a new WB T APK. No APK build or installation performed for this coding task; current installed T296 is not claimed to contain this change."
+  ]
+}

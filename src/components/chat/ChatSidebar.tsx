@@ -1,4 +1,5 @@
 'use client';
+import { AnnouncementMessage } from './AnnouncementMessage';
 
 import { selectChatMessageText } from '@/lib/chatTextSelection';
 
@@ -144,7 +145,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
 
   // ── Mark thread as read when selected ───────────────────────────────────
   useEffect(() => {
-    if (!selectedThreadId) return;
+    if (!selectedThreadId || selectedThreadId.startsWith('announcements_')) return;
     void staffChatCall({ action: 'read', threadId: selectedThreadId, companyId }).catch(() => {});
   }, [selectedThreadId, messages.length, myParticipantId, companyId]);
 
@@ -391,6 +392,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
               </div>
             )}
             {messages.map((msg) => {
+              if (msg.requiresAcknowledgement) return <AnnouncementMessage key={msg.id} message={msg} />;
               const isMine = msg.senderId === myParticipantId;
               const isSystem = msg.type === 'system';
 
@@ -443,6 +445,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
             <div ref={messagesEndRef} />
           </div>
 
+          {selectedThread.permanent && <p className="px-3 py-2 text-xs text-[#FFD700] bg-[#211d08]">Post to all drivers, including off shift. Each driver must acknowledge.</p>}
           {/* Input */}
           <div className="border-t border-gray-700 px-3 py-2 bg-[#111] flex flex-col gap-1 flex-shrink-0">
             {sendError && (
@@ -456,7 +459,7 @@ export function ChatSidebar({ visible, onClose, userId, onUnreadChange }: ChatSi
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={!canSendChat}
-              placeholder={canSendChat ? 'Type a message...' : 'You do not have permission to send messages'}
+              placeholder={canSendChat ? (selectedThread.permanent ? 'Announcement to all drivers' : 'Type a message...') : 'You do not have permission to send messages'}
               className="flex-1 bg-[#1a1a1a] border border-gray-700 rounded-full px-4 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <button
