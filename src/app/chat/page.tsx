@@ -1,5 +1,7 @@
 'use client';
 
+import {useChatGridDrag} from '@/components/chat/useChatGridDrag';
+import {moveChatToSlot} from '@/lib/chatGridPlacement';
 import { selectChatMessageText } from '@/lib/chatTextSelection';
 
 // Full-screen Chat page — lives on monitor 2+ for dispatch.
@@ -230,8 +232,33 @@ function ChatPageInner() {
   // Temp slots: threads placed via sidebar click but NOT yet locked to the profile.
   // Map of slot index → SlotAssignment. Not saved to Firestore until user clicks lock.
   const [tempSlots, setTempSlots] = useState<Record<number, SlotAssignment>>({});
-  const [pendingSlotLocks, setPendingSlotLocks] = useState<Record<number, SlotAssignment>>({});
+  const [pendingSlotUnlocks,setPendingSlotUnlocks]=useState<Record<number,SlotAssignment>>({});
   const [savingSlots, setSavingSlots] = useState<Record<number, boolean>>({});
+
+  const [lockRequest,setLockRequest]=useState<{index:number;assignment:SlotAssignment}|null>(null);
+  const [lockProfileChoice,setLockProfileChoice]=useState('');
+  const [lockName,setLockName]=useState('');
+  const [lockLayout,setLockLayout]=useState('2x2');
+  const [lockPosition,setLockPosition]=useState(0);
+  const [lockBusy,setLockBusy]=useState(false);
+  const lockNewProfileIdRef=useRef<string|null>(null);
+  const lockDialogRef=useRef<HTMLElement|null>(null);
+  const [lockError,setLockError]=useState('');
+  const [profileLockHandoff,setProfileLockHandoff]=useState<{scope:string;profileId:string;index:number;assignment:SlotAssignment}|null>(null);
+  const profileCarryRef=useRef<{scope:string;temps:Record<number,SlotAssignment>}|null>(null);
+
+  useEffect(()=>{
+    if(!lockRequest)return;
+    const trap=(e:KeyboardEvent)=>{
+      if(e.key==='Escape'){e.preventDefault();if(!lockBusy)setLockRequest(null);return;}
+      if(e.key!=='Tab')return;
+      const controls=Array.from(lockDialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)')||[]);
+      if(!controls.length){e.preventDefault();return;}
+      const first=controls[0],last=controls[controls.length-1];
+      if(!controls.includes(document.activeElement as HTMLElement)||e.shiftKey&&document.activeElement===first||!e.shiftKey&&document.activeElement===last){e.preventDefault();(e.shiftKey?last:first).focus();}
+    };
+    document.addEventListener('keydown',trap,true);return()=>document.removeEventListener('keydown',trap,true);
+  },[!!lockRequest,lockBusy]);
 
   // Derive active profile from top of stack
   const activeProfileId = profileStack[profileStack.length - 1] || null;
@@ -240,37 +267,22 @@ function ChatPageInner() {
   slotScopeRef.current = `${companyId}:${activeProfileId}`;
 
   // Clear temp slots when switching profiles
-  const prevProfileIdRef = useRef(activeProfileId);
-  useEffect(() => {
-    if (activeProfileId !== prevProfileIdRef.current) {
-      setTempSlots({});
-      setPendingSlotLocks({});
-      setSavingSlots({});
-      prevProfileIdRef.current = activeProfileId;
+  const prevProfileScopeRef=useRef(slotScopeRef.current);
+  useEffect(()=>{
+    const scope=slotScopeRef.current;
+    if(scope!==prevProfileScopeRef.current){
+      const carry=profileCarryRef.current;
+      setTempSlots(carry?.scope===scope?carry.temps:{});
+      profileCarryRef.current=null;
+      setPendingSlotUnlocks({});setSavingSlots({});setLockRequest(null);setProfileLockHandoff(null);setLockBusy(false);
+      prevProfileScopeRef.current=scope;
     }
-  }, [activeProfileId]);
+  },[activeProfileId,companyId]);
 
-  // Keep the visible overlay until the profile subscription confirms its saved
-  // position. A delayed/stale read or failed save must never close the chat.
-  useEffect(() => {
-    const confirmed = Object.entries(pendingSlotLocks).filter(([index, assignment]) => {
-      const saved = activeProfile?.slots[Number(index)];
-      return saved && (assignment.threadId ? saved.threadId === assignment.threadId : saved.driverHash === assignment.driverHash);
-    });
-    if (!confirmed.length) return;
-    setTempSlots(prev => {
-      const next = { ...prev };
-      for (const [index, assignment] of confirmed) {
-        if (prev[Number(index)] === assignment) delete next[Number(index)];
-      }
-      return next;
-    });
-    setPendingSlotLocks(prev => {
-      const next = { ...prev };
-      for (const [index] of confirmed) delete next[Number(index)];
-      return next;
-    });
-  }, [activeProfile, pendingSlotLocks]);
+  useEffect(()=>{
+    const confirmed=Object.keys(pendingSlotUnlocks).filter(i=>!activeProfile?.slots[Number(i)]);
+    if(confirmed.length)setPendingSlotUnlocks(prev=>{const next={...prev};for(const i of confirmed)delete next[Number(i)];return next;});
+  },[activeProfile,pendingSlotUnlocks]);
 
   // Persist stack to localStorage
   useEffect(() => {
@@ -336,7 +348,7 @@ function ChatPageInner() {
   }
 
   // Build openPanes from profile slots + temp overlays
-  const openPanes = slots.slice(0, maxPanes).map((slot, i) => {
+  const openPanes = Array.from({length:maxPanes},(_,i)=>slots[i]||null).map((slot, i) => {
     // Temp slots overlay on top of profile slots (sidebar click without lock)
     const temp = tempSlots[i];
     const effective = temp || slot;
@@ -345,6 +357,43 @@ function ChatPageInner() {
     if (effective.driverHash) return driverThreadMap[effective.driverHash] || null;
     return null;
   });
+
+  const gridDrag=useChatGridDrag(`${companyId}:${activeProfileId}:${gridLayout.label}`, (payload,index)=>{
+    if(payload.scope!==`${companyId}:${activeProfileId}:${gridLayout.label}`||setupMode||lockBusy||Object.values(savingSlots).some(Boolean)||Object.keys(pendingSlotUnlocks).length)return;
+    const thread=threads.find(t=>t.id===payload.threadId);
+    if(!thread)return;
+    const next=moveChatToSlot(slots,tempSlots,openPanes,thread.id,{threadId:thread.id,threadTitle:payload.title},index);
+    if(next){setTempSlots(next);setHighlightedPane(index);}
+    else setToastMsg('That position is locked, or the grid is full. Unlock it or free a position first.');
+  });
+
+  // Wait for the live profile snapshot before changing monitors or dropping an overlay.
+  useEffect(()=>{
+    const pending=profileLockHandoff;if(!pending)return;
+    if(pending.scope!==slotScopeRef.current){setProfileLockHandoff(null);setLockBusy(false);return;}
+    const target=profiles.find(p=>p.id===pending.profileId),saved=target?.slots[pending.index];
+    if(!target||!saved||!(pending.assignment.threadId?saved.threadId===pending.assignment.threadId:saved.driverHash===pending.assignment.driverHash))return;
+    const count=(GRID_LAYOUTS.find(l=>l.label===target.gridLayout)||GRID_LAYOUTS[3]);
+    const size=count.cols*count.rows,carry:Record<number,SlotAssignment>={};
+    for(const [key,assignment] of Object.entries(tempSlots)){
+      if(assignment===pending.assignment)continue;
+      let index=Number(key);
+      if(index>=size||target.slots[index]||carry[index])index=Array.from({length:size},(_,i)=>i).find(i=>!target.slots[i]&&!carry[i])??-1;
+      if(index>=0)carry[index]=assignment;
+    }
+    if(activeProfileId!==target.id){profileCarryRef.current={scope:`${companyId}:${target.id}`,temps:carry};setProfileStack(prev=>[...prev.filter(id=>id!==target.id),target.id]);}
+    else setTempSlots(carry);
+    setProfileLockHandoff(null);setLockRequest(null);setLockBusy(false);setLockError('');
+  },[profileLockHandoff,profiles,companyId,activeProfileId,tempSlots]);
+
+  useEffect(()=>{
+    if(!profileLockHandoff)return;
+    const timer=setTimeout(()=>{
+      setProfileLockHandoff(null);setLockBusy(false);
+      setLockError('The save was accepted, but its position is not confirmed yet. Your chat is still open. Check your connection and retry.');
+    },20000);
+    return()=>clearTimeout(timer);
+  },[profileLockHandoff]);
 
   // --- Load profiles from Firestore ---
   useEffect(() => {
@@ -467,7 +516,7 @@ function ChatPageInner() {
     if (alreadyTemp) return;
     // Only place in the top-of-stack profile's first empty slot (as temp)
     if (!activeProfile) return;
-    const emptyIdx = openPanes.findIndex(p => !p);
+    const emptyIdx = openPanes.findIndex((p,i) => !p&&!slots[i]);
     if (emptyIdx >= 0) {
       setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: thread.title } }));
     }
@@ -541,6 +590,40 @@ function ChatPageInner() {
       return false;
     }
   }, [activeProfile, user, userCompany, companyId]);
+
+  const sameAssignment=(a:SlotAssignment|null|undefined,b:SlotAssignment)=>{if(!a)return false;const left=a.threadId||(a.driverHash?driverThreadMap[a.driverHash]:undefined),right=b.threadId||(b.driverHash?driverThreadMap[b.driverHash]:undefined);return left&&right?left===right:!!a.driverHash&&a.driverHash===b.driverHash;};
+  const chooseLockProfile=(id:string,request=lockRequest,newLayout=lockLayout)=>{
+    setLockProfileChoice(id);
+    const target=profiles.find(p=>p.id===id),layout=GRID_LAYOUTS.find(l=>l.label===(target?.gridLayout||newLayout))||GRID_LAYOUTS[3];
+    const free=(i:number)=>!target?.slots[i]||!!request&&sameAssignment(target.slots[i],request.assignment);
+    const index=request?.index??0;
+    setLockPosition(index<layout.cols*layout.rows&&free(index)?index:Array.from({length:layout.cols*layout.rows},(_,i)=>i).find(free)??-1);
+  };
+  const requestSlotLock=(index:number,assignment:SlotAssignment)=>{
+    if(!canManageProfiles)return;
+    if(threads.find(t=>t.id===assignment.threadId)?.audience==='private_driver'){setToastMsg('Private chats cannot be saved in shared monitor profiles.');return;}
+    const request={index,assignment};lockNewProfileIdRef.current=null;setLockRequest(request);setLockError('');setLockName('');setLockLayout(gridLayout.label);
+    chooseLockProfile(activeProfile?.id||'',request,gridLayout.label);
+  };
+  const confirmSlotLock=async()=>{
+    if(!lockRequest||lockBusy||!canManageProfiles||!companyId)return;
+    const scope=slotScopeRef.current,target=profiles.find(p=>p.id===lockProfileChoice);
+    if(lockProfileChoice&&!target){setLockError('That profile is no longer available. Choose another.');return;}
+    if(activeProfile?.locked&&target?.id!==activeProfile.id){setLockError('Unlock the current monitor profile before switching profiles.');return;}
+    const layout=GRID_LAYOUTS.find(l=>l.label===(target?.gridLayout||lockLayout))||GRID_LAYOUTS[3],size=layout.cols*layout.rows;
+    if(!target&&!lockName.trim()){setLockError('Enter a name for the new profile.');return;}
+    if(lockPosition<0||lockPosition>=size||target?.slots[lockPosition]&&!sameAssignment(target.slots[lockPosition],lockRequest.assignment)
+      ||target?.id===activeProfileId&&tempSlots[lockPosition]&&!sameAssignment(tempSlots[lockPosition],lockRequest.assignment)){setLockError('That position is occupied. Choose an open position.');return;}
+    const profileId=target?.id||(lockNewProfileIdRef.current??=chatIntentId());
+    const newSlots=Array.from({length:size},(_,i)=>sameAssignment(target?.slots[i],lockRequest.assignment)?null:target?.slots[i]||null);
+    newSlots[lockPosition]=lockRequest.assignment;
+    setLockBusy(true);setLockError('');
+    try{
+      await staffChatCall({action:'saveProfile',companyId,profileId,record:target?{slots:newSlots}:{name:lockName.trim(),gridLayout:layout.label,threadType:'all',slots:newSlots}});
+      if(slotScopeRef.current!==scope)return;
+      setProfileLockHandoff({scope,profileId,index:lockPosition,assignment:lockRequest.assignment});
+    }catch{if(slotScopeRef.current===scope){setLockBusy(false);setLockError('Could not save this position. Your chat is still open. Try again.');}}
+  };
 
   const saveProfileLayout = useCallback(async (layout: string) => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
@@ -1023,6 +1106,10 @@ function ChatPageInner() {
               return (
                 <button
                   key={thread.id}
+                  data-chat-list-thread={thread.id}
+                  title="Click to open, or drag to a grid position. On touchscreens, press and hold to drag."
+                  {...gridDrag.handles({threadId:thread.id,title:getTitle(thread),scope:`${companyId}:${activeProfileId}:${gridLayout.label}`},setupMode||lockBusy)}
+                  style={{userSelect:'none',WebkitTouchCallout:'none'}}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (setupMode) return;
@@ -1043,11 +1130,12 @@ function ChatPageInner() {
                     }
 
                     // 3. Open thread in an available grid slot
-                    const emptyIdx = openPanes.findIndex(p => !p);
+                    const emptyIdx = openPanes.findIndex((p,i) => !p&&!slots[i]);
                     if (emptyIdx >= 0) {
                       setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
                     } else {
-                      const lastIdx = Math.max(openPanes.length - 1, 0);
+                      const lastIdx = openPanes.findLastIndex((_,i)=>!slots[i]||!!tempSlots[i]);
+                      if(lastIdx<0){setToastMsg('All positions are locked. Unlock a chat or choose another profile.');return;}
                       setTempSlots(prev => ({ ...prev, [lastIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
                     }
                   }}
@@ -1164,6 +1252,30 @@ function ChatPageInner() {
           </div>
         )}
 
+      {gridDrag.drag&&<div className="fixed z-[90] pointer-events-none rounded border border-[#FFD700] bg-[#222] px-3 py-2 text-sm text-[#FFD700] shadow-xl" style={{left:gridDrag.drag.x+14,top:gridDrag.drag.y+14,maxWidth:280}}>{gridDrag.drag.payload.title}</div>}
+      {lockRequest&&<div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4" onClick={()=>{if(!lockBusy)setLockRequest(null);}}>
+        <section ref={lockDialogRef} style={{maxHeight:'90dvh',overflowY:'auto'}} role="dialog" aria-modal="true" aria-labelledby="chat-lock-title" className="w-full max-w-md rounded-xl border border-gray-700 bg-[#151515] p-5 shadow-xl" onClick={e=>e.stopPropagation()} onKeyDown={e=>{if(e.key==='Escape'&&!lockBusy)setLockRequest(null);}}>
+          <h2 id="chat-lock-title" className="font-bold text-[#FFD700] mb-2">Lock chat position</h2>
+          <p className="text-sm text-gray-300 mb-4">{lockRequest.assignment.threadTitle||lockRequest.assignment.driverName||'Chat'}</p>
+          <label className="block text-sm mb-3">Monitor profile
+            <select autoFocus aria-label="Monitor profile" disabled={lockBusy} value={lockProfileChoice} onChange={e=>chooseLockProfile(e.target.value)} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2">
+              {profiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}<option value="">Create a new profile…</option>
+            </select>
+          </label>
+          {!lockProfileChoice&&<>
+            <label className="block text-sm mb-3">Profile name<input aria-label="Profile name" maxLength={120} disabled={lockBusy} value={lockName} onChange={e=>setLockName(e.target.value)} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2"/></label>
+            <label className="block text-sm mb-3">Grid size<select aria-label="Grid size" disabled={lockBusy} value={lockLayout} onChange={e=>{setLockLayout(e.target.value);setLockPosition(0);}} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2">{GRID_LAYOUTS.map(l=><option key={l.label}>{l.label}</option>)}</select></label>
+          </>}
+          <label className="block text-sm mb-3">Position<select aria-label="Position" disabled={lockBusy} value={lockPosition} onChange={e=>setLockPosition(Number(e.target.value))} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2">
+            <option value={-1} disabled>Choose an open position</option>
+            {(()=>{const target=profiles.find(p=>p.id===lockProfileChoice),layout=GRID_LAYOUTS.find(l=>l.label===(target?.gridLayout||lockLayout))||GRID_LAYOUTS[3];return Array.from({length:layout.cols*layout.rows},(_,i)=>{const occupied=!!target?.slots[i]&&!sameAssignment(target.slots[i],lockRequest.assignment)||target?.id===activeProfileId&&!!tempSlots[i]&&!sameAssignment(tempSlots[i],lockRequest.assignment);return <option key={i} value={i} disabled={occupied}>Row {Math.floor(i/layout.cols)+1}, column {i%layout.cols+1}{occupied?' — occupied':''}</option>;});})()}
+          </select></label>
+          <p className="text-xs text-gray-400 mb-3">Profiles remain available in Settings for editing. Unlock a chat before dragging it to another position.</p>
+          {lockError&&<p role="alert" className="text-sm text-red-400 mb-3">{lockError}</p>}
+          <div className="flex justify-end gap-2"><button disabled={lockBusy} onClick={()=>setLockRequest(null)} className="px-3 py-2 rounded border border-gray-600">Cancel</button><button disabled={lockBusy||lockPosition<0||!lockProfileChoice&&!lockName.trim()} onClick={confirmSlotLock} className="px-3 py-2 rounded bg-[#FFD700] text-black disabled:opacity-50">{lockBusy?'Saving position…':'Save and lock'}</button></div>
+        </section>
+      </div>}
+
       {/* Toast notification */}
       {toastMsg && (
         <div className="fixed top-4 right-4 z-50 bg-[#FFD700] text-black px-4 py-2 rounded-lg shadow-lg text-sm font-medium animate-pulse">
@@ -1171,24 +1283,15 @@ function ChatPageInner() {
         </div>
       )}
 
-      <div className="flex-1 overflow-hidden" style={{
+      <div className="flex-1 overflow-hidden relative" style={{
         display: 'grid',
         gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
         gridTemplateRows: `repeat(${gridRows}, 1fr)`,
         gap: '1px',
         background: '#1a1a1a',
       }}>
-        {!activeProfile && Object.keys(tempSlots).length === 0 && (
-          <div className="flex items-center justify-center bg-[#0a0a0a]" style={{ gridColumn: `1 / -1`, gridRow: `1 / -1` }}>
-            <div className="text-center">
-              <p className="text-4xl mb-4">💬</p>
-              <p className="text-gray-500 text-lg">Click a conversation to open it</p>
-              <p className="text-gray-600 text-sm mt-2">Or create a monitor profile for a persistent layout</p>
-            </div>
-          </div>
-        )}
 
-        {(activeProfile ? slots.slice(0, maxPanes) : Array(maxPanes).fill(null)).map((slot, index) => {
+        {Array.from({length:maxPanes},(_,i)=>slots[i]||null).map((slot, index) => {
           const threadId = openPanes[index];
           const thread = threadId ? threads.find((t) => t.id === threadId) : null;
           const msgs = threadId ? (paneMessages[threadId] || []) : [];
@@ -1196,6 +1299,7 @@ function ChatPageInner() {
           const lastMsg = msgs[msgs.length - 1];
           const hasUnread = lastMsg && lastMsg.senderId !== myParticipantId;
 
+          const pane=(()=>{
           // Setup mode — show slot assignment UI
           if (setupMode) {
             const profileType = activeProfile?.threadType || 'direct';
@@ -1355,13 +1459,13 @@ function ChatPageInner() {
           if (!slot && !threadId) {
             return (
               <div key={index} className="bg-[#0a0a0a] flex items-center justify-center">
-                <p className="text-gray-800 text-xs">Open</p>
+                <p className="text-gray-600 text-xs">{gridDrag.drag?'Drop chat here':'Open'}</p>
               </div>
             );
           }
 
           // Assigned slot but no thread yet (profile has driver hash but no chat thread exists)
-          if (!threadId) {
+          if (!threadId && slot) {
             const slotLabel = slot.driverName || slot.threadTitle || 'Unlinked';
             return (
               <div key={index} className="flex flex-col min-w-0 min-h-0 bg-[#0a0a0a]">
@@ -1387,13 +1491,16 @@ function ChatPageInner() {
             );
           }
 
+          if(!threadId)return null;
           // Active chat pane
           return (
             <div key={index} className={`flex flex-col min-w-0 min-h-0 bg-[#0a0a0a] transition-all ${
               highlightedPane === index ? 'ring-2 ring-[#FFD700] ring-inset' : ''
             }`}>
-              {/* Header */}
-              <div className={`flex items-center justify-between px-3 py-2 border-b flex-shrink-0 transition-colors ${
+              {/* Header: drag here; message text retains native selection. */}
+              <div {...gridDrag.handles({threadId:threadId!,title:thread?getTitle(thread):'Chat',scope:`${companyId}:${activeProfileId}:${gridLayout.label}`},!tempSlots[index]||lockBusy||setupMode)}
+                title={tempSlots[index]?'Drag to move; on touchscreens, press and hold to drag.':'Unlock this chat to move it.'}
+                data-chat-drag-header={threadId} style={{userSelect:'none',WebkitTouchCallout:'none',cursor:tempSlots[index]?'grab':'default'}} className={`flex items-center justify-between px-3 py-2 border-b flex-shrink-0 transition-colors ${
                 hasUnread ? 'bg-[#FFD700]/10 border-[#FFD700]/40' : highlightedPane === index ? 'bg-[#FFD700]/20 border-[#FFD700]/60' : 'bg-[#0d0d0d] border-gray-800'
               }`}>
                 <div className="min-w-0 flex-1">
@@ -1423,23 +1530,7 @@ function ChatPageInner() {
                 <div className="flex items-center gap-1 flex-shrink-0">
                   {/* Slot lock: temp slots show open lock, click to persist to profile */}
                   {(() => {
-                    const isTemp = !!tempSlots[index] && !pendingSlotLocks[index];
-                    const lockSlot = async () => {
-                      // Persist temp slot to profile
-                      const assignment = tempSlots[index];
-                      if (!assignment) return;
-                      const scope = slotScopeRef.current;
-                      const newSlots = [...slots];
-                      while (newSlots.length <= index) newSlots.push(null);
-                      newSlots[index] = assignment;
-                      setSavingSlots(prev => ({ ...prev, [index]: true }));
-                      const saved = await saveProfileSlots(newSlots);
-                      if (slotScopeRef.current !== scope) return;
-                      if (saved) {
-                        setPendingSlotLocks(prev => ({ ...prev, [index]: assignment }));
-                      }
-                      setSavingSlots(prev => ({ ...prev, [index]: false }));
-                    };
+                    const isTemp = !!tempSlots[index];
                     const unlockSlot = async () => {
                       // Move persisted slot to temp (remove from Firestore)
                       const currentSlot = slots[index];
@@ -1452,6 +1543,7 @@ function ChatPageInner() {
                       if (slotScopeRef.current !== scope) return;
                       if (saved) {
                         setTempSlots(prev => ({ ...prev, [index]: currentSlot }));
+                        setPendingSlotUnlocks(prev=>({...prev,[index]:currentSlot}));
                       }
                       setSavingSlots(prev => ({ ...prev, [index]: false }));
                     };
@@ -1465,12 +1557,12 @@ function ChatPageInner() {
                             local-only state, so it stays available to anyone. */}
                         {canManageProfiles && (
                         <button
-                          onClick={isTemp ? lockSlot : unlockSlot}
-                          disabled={Object.values(savingSlots).some(Boolean) || Object.keys(pendingSlotLocks).length > 0}
+                          onClick={isTemp ? ()=>requestSlotLock(index,tempSlots[index]) : unlockSlot}
+                          disabled={lockBusy || Object.values(savingSlots).some(Boolean) || Object.keys(pendingSlotUnlocks).length > 0}
                           className={`text-xs px-1 py-0.5 rounded transition-colors ${
                             isTemp ? 'text-gray-500 hover:text-[#FFD700]' : 'text-[#FFD700]/60 hover:text-[#FFD700]'
                           }`}
-                          title={savingSlots[index] || pendingSlotLocks[index] ? 'Saving chat position' : isTemp ? 'Lock to this profile slot' : 'Unlock (temporary)'}
+                          title={lockBusy&&lockRequest?.index===index || savingSlots[index] || pendingSlotUnlocks[index] ? 'Saving chat position' : isTemp ? 'Lock to this profile slot' : 'Unlock (temporary)'}
                         >
                           {isTemp ? '🔓' : '🔒'}
                         </button>
@@ -1677,6 +1769,8 @@ function ChatPageInner() {
               </div>
             </div>
           );
+          })();
+          return <div key={index} data-chat-slot={index} className={`min-w-0 min-h-0 grid ${gridDrag.drag?.target===index?'ring-2 ring-inset ring-[#FFD700]':''}`}>{pane}</div>;
         })}
       </div>
       </div>{/* end flex-col wrapper for tab strip + grid */}

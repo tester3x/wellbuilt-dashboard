@@ -39,6 +39,7 @@ const browser=await chromium.launch();
 try {
  for(const scenario of ['success','failure','missing']) {
   const page=await browser.newPage({viewport:{width:1440,height:1000}});
+  page.setDefaultTimeout(8000);
   await page.goto(`http://127.0.0.1:${server.address().port}/?${scenario}`);
   const picker=page.getByRole('button',{name:'New conversation',exact:true});
   await picker.click();
@@ -48,16 +49,20 @@ try {
   await page.getByRole('button').filter({hasText:'Fixture Driver'}).first().click();
   const lock=page.getByTitle('Lock to this profile slot',{exact:true});
   await lock.click();
+  await page.getByRole('dialog',{name:'Lock chat position'}).waitFor();
   if(scenario==='missing') {
-   await page.getByText('Select a monitor profile before locking a chat position.',{exact:true}).waitFor();
+   assert.equal(await page.getByRole('combobox',{name:'Monitor profile',exact:true}).inputValue(),'');
+   await page.getByRole('button',{name:'Cancel',exact:true}).click();
    assert.equal(await page.getByTitle('Close temporary chat').count(),1,'no profile keeps the chat open');
    assert.equal(await page.evaluate(()=>window.fixtureSaves.length),0);
   } else {
+   await page.getByRole('button',{name:'Save and lock',exact:true}).click();
    await page.waitForFunction(()=>!!window.finishSave);
    assert.equal(await page.locator('textarea').count(),1,'pending save keeps the pane');
    await page.evaluate(ok=>window.finishSave(ok),scenario==='success');
    if(scenario==='failure') {
-    await page.getByText('Could not update profile layout. Check your access.',{exact:true}).waitFor();
+    await page.getByRole('alert').filter({hasText:'Your chat is still open'}).waitFor();
+    await page.getByRole('button',{name:'Cancel',exact:true}).click();
     assert.equal(await page.getByTitle('Close temporary chat').count(),1,'failed save preserves temporary chat');
    } else {
     await page.getByTitle('Saving chat position').waitFor();
@@ -71,8 +76,9 @@ try {
     await page.getByTitle('Unlock (temporary)',{exact:true}).click();
     await page.getByTitle('Saving chat position').waitFor();
     await page.evaluate(()=>window.finishSave(true));
-    await page.getByTitle('Lock to this profile slot',{exact:true}).waitFor();
+    await page.getByTitle('Saving chat position').waitFor();
     await page.evaluate(()=>window.profileSnapshot());
+    await page.getByTitle('Lock to this profile slot',{exact:true}).waitFor();
     assert.equal(await page.locator('textarea').count(),1,'unlock keeps chat visible');
    }
   }
