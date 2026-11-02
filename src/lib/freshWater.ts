@@ -14,3 +14,10 @@ export function freshWaterLabel(type: string, value: unknown): string {
   const temp = isFreshWaterJob(type) ? waterTemperature(value) : undefined;
   return temp ? `${type} · ${temp === 'hot' ? 'Hot' : 'Cold'}` : type;
 }
+
+/** Show the uncommon Hot control only after an explicit FWD pickup selection.
+ * Typed names and SWD/drop-off choices do not establish that source identity. */
+export function canChooseHotWater(type: unknown, pickupName: string, selected: { name?: unknown; kind?: unknown } | null | undefined): boolean {
+  return isFreshWaterJob(type) && !!pickupName.trim() && selected?.name === pickupName
+    && typeof selected.kind === 'string' && selected.kind.toLowerCase() === 'fwd';
+}

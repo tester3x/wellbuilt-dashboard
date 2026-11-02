@@ -1,5 +1,5 @@
 'use client';
-import { isFreshWaterJob, freshWaterFields } from '@/lib/freshWater';
+import { canChooseHotWater, freshWaterFields } from '@/lib/freshWater';
 import { FreshWaterRate } from '@/components/FreshWaterRate';
 
 import { useEffect, useState, useMemo, useCallback, useRef, Suspense, type ReactNode } from 'react';
@@ -530,7 +530,12 @@ function DispatchPageInner() {
   const [swSplitBBbls, setSwSplitBBbls] = useState('');
   const [swSplitBNotes, setSwSplitBNotes] = useState('');
   const [swHotWater, setSwHotWater] = useState(false);
+  const [swPickupChoice, setSwPickupChoice] = useState<{ value: string; kind?: string; catalogId?: string } | null>(null);
   const [swServiceType, setSwServiceType] = useState('');
+  const swCanChooseHotWater = canChooseHotWater(swServiceType, swWellName, swPickupChoice
+    ? { name: swPickupChoice.value, kind: swPickupChoice.kind } : null);
+  useEffect(() => { setSwHotWater(false); }, [swServiceType, swWellName, swPickupChoice?.catalogId]);
+  useEffect(() => { if (swPickupChoice && swPickupChoice.value !== swWellName) setSwPickupChoice(null); }, [swWellName, swPickupChoice]);
   const [swDemoBbls, setSwDemoBbls] = useState('60');
   const [swOnsiteBy, setSwOnsiteBy] = useState('');
   const [swOnsiteByDraft, setSwOnsiteByDraft] = useState(false);
@@ -1845,7 +1850,7 @@ function DispatchPageInner() {
         ndicWellName: swNdicName,
         operator: linkedOperator || builderOperator,
         serviceType: trimmedServiceType,
-        ...freshWaterFields(trimmedServiceType, swHotWater ? 'hot' : 'cold'),
+        ...freshWaterFields(trimmedServiceType, swCanChooseHotWater && swHotWater ? 'hot' : 'cold'),
         packageId: swPackageId,
         customJobTypes: customJobTypesList,
         dropoff: swDropoff.trim() || undefined,
@@ -3239,10 +3244,12 @@ function DispatchPageInner() {
                         <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
                           <BuilderAutocomplete
                             value={swWellName}
-                            onValueChange={setSwWellName}
+                            onValueChange={value => { setSwWellName(value); setSwPickupChoice(null); setSwHotWater(false); }}
                             items={swWellOptions}
                             onSelect={(item) => {
                               setSwWellName(item.value);
+                              setSwPickupChoice(item);
+                              setSwHotWater(false);
                               if (!builderOperator) setBuilderOperator(operatorForBuilderWell(item.value, allOperatorWells));
                             }}
                             getItemKey={(item, i) => `${item.value}-${i}`}
@@ -3307,9 +3314,9 @@ function DispatchPageInner() {
                               <option key={st} value={st}>{st === 'Production Water' ? 'Production Water (hr)' : st}</option>
                             ))}
                           </select>
-                          {isFreshWaterJob(swServiceType) && <label className="flex items-center gap-2 mt-2 text-sm text-white min-h-11">
+                          {swCanChooseHotWater && <label className="flex items-center gap-2 mt-2 text-sm text-white min-h-11">
                             <input type="checkbox" checked={swHotWater} onChange={e => setSwHotWater(e.target.checked)} />
-                            Hot Water <span className={swHotWater ? 'text-red-400' : 'text-blue-400'}>{swHotWater ? 'Hot' : 'Cold'}</span>
+                            Hot Water
                           </label>}
                         </div>
                         {user?.role === 'demo_viewer' && !swSplitTicket && (
@@ -3357,10 +3364,12 @@ function DispatchPageInner() {
                           <label className="block text-sm text-gray-300 mb-1">Pickup well / location (required)</label>
                           <BuilderAutocomplete
                             value={swWellName}
-                            onValueChange={setSwWellName}
+                            onValueChange={value => { setSwWellName(value); setSwPickupChoice(null); setSwHotWater(false); }}
                             items={swWellOptions}
                             onSelect={(item) => {
                               setSwWellName(item.value);
+                              setSwPickupChoice(item);
+                              setSwHotWater(false);
                               if (!builderOperator) setBuilderOperator(operatorForBuilderWell(item.value, allOperatorWells));
                             }}
                             getItemKey={(item, i) => `${item.value}-${i}`}
