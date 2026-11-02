@@ -13,7 +13,7 @@
  * entire workflow succeeds AND UI completion is confirmed, or the user cancels.
  */
 
-import { freshWaterFields } from './freshWater';
+import { freshWaterFields } from './freshWater.ts';
 import {
   DispatchCreationCoordinator,
   mintDispatchId,

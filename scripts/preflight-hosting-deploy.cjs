@@ -217,10 +217,10 @@ try {
 execSync('npx tsx tools/test-freshwater-shared.ts', { stdio: 'inherit' });
 execSync('node tools/test-freshwater-dashboard-display.cjs', { stdio: 'inherit' });
 console.log('\n================================================================');
+execSync('npx tsx --test src/lib/__tests__/freshWaterTemperature.test.ts', { stdio: 'inherit' });
 console.log('✅ [ALL PREFLIGHT SAFETY GATES PASSED] Hosting Release Certified.');
 console.log('================================================================\n');
 fs.mkdirSync('.firebase', { recursive: true });
 releaseState.lock = require('./hosting-release-state.cjs').acquireLock(releaseState.source);
 fs.writeFileSync('.firebase/hosting-preflight.json', JSON.stringify(releaseState));
 
-execSync('npx tsx --test src/lib/__tests__/freshWaterTemperature.test.ts', { stdio: 'inherit' });
