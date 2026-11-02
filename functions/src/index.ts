@@ -3780,3 +3780,5 @@ export { getWbmTankInfo, saveWbmTankInfo } from './security/operational/tankInfo
 export { staffWritePrimaryRouteAssignment, staffGetPrimaryRouteAssignments } from './security/operational/staffWritePrimaryRouteAssignment';
 
 export { createEmployeeInvitation, getEmployeeInvitation, requestEmployeeJoin, getEmployeeJoinStatus, listEmployeeJoinRequests, resolveEmployeeJoin } from "./security/employeeOnboarding";
+
+export {jsaGetShiftPreview} from './jsaReceipt/jsaShiftPreviewCallable';
