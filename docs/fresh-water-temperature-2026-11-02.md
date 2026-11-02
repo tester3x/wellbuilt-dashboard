@@ -11,3 +11,5 @@ Validated: 26 location/builder/temperature runtime tests; 76 Functions catalog/s
 ## Mike's pickup refinement, November 2
 
 Hot Water stays unchecked for new jobs and the builder label is simply Hot Water. The control appears only after an explicit FWD pickup selection for Fresh Water. Merely selecting the job type, typing a depot name, choosing an SWD, or choosing an FWD drop-off does not enable it. Changing pickup resets Hot and the submitted builder payload falls back to Cold, even before an effect clears stale checkbox state. Both builders enforce the same rule. The active-ticket Hot/Cold label is unchanged. This source refinement requires a new APK/Hosting release; the T301 receipt remains historical.
+
+Mike expanded location descriptors to all search results, not only duplicated FWD names. Shared combined/catalog rows retain source-backed operator/company, county/state and legal/address/city information, with valid GPS fallback when no legal/address exists. No missing address is invented. Exact duplicated FWD names keep both source-ID rows selectable. Focused search17 tests and TypeScript pass; Hosting verification remains separately recorded.
