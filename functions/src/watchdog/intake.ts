@@ -6,6 +6,7 @@ import {isTimedLevelReporter} from './timedLevelReporter';
 import {historicalResolutionReceipt} from './rejectedResolution';
 import {historicalReviewCommitted} from './historicalReview';
 import {matchExistingAppPull} from './existingAppPull';
+import {lateAppMatchReceipt} from './appMatchDeletion';
 import {applyReviewCorrections,normalizeReviewReason} from './reviewCorrections';
 import {diagnosticFlowWindow} from '../flowWindows';
 import {possibleAggregateOverlap} from './aggregateOverlap';
@@ -146,6 +147,7 @@ export const getWatchdogPullReceiptV2=https.onRequest(options,async(req,res)=>{
  try{await authenticate(req,'getWatchdogPullReceiptV2');const identity=req.body?.identity;if(typeof identity!=='string'||!/^[a-f0-9]{64}$/.test(identity)||Object.keys(req.body).some(k=>k!=='identity'))throw Error('invalid_receipt');
  const entryRef=admin.firestore().collection(root).doc(identity);
  let entry=(await entryRef.get()).data();if(!entry||entry.principalId!=='laptop-watchdog-v2')throw Error('receipt_not_owned');
+ const superseded=lateAppMatchReceipt(entry,identity);if(superseded){res.json(superseded);return;}
  const db=admin.database();let packet=(await db.ref('packets/processed/'+entry.packetId).once('value')).val();
  const resolved=historicalResolutionReceipt(entry,packet,identity);if(resolved){res.json(resolved);return;}
  // A processor rejection is terminal attention, never an indefinitely queued receipt.

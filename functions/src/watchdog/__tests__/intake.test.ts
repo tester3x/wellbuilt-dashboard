@@ -252,6 +252,24 @@ test('same verified owner later report never creates another app pull',async()=>
  expect([...database.keys()].some(k=>k.startsWith('packets/incoming/'))).toBe(false);
 });
 
+test('late app regression: replay of earlier WhatsApp without barrels matches later WB-T record',async()=>{
+ const {watchdogSenderKey}=require('../senderOwnership');const senderId='123456789@lid';
+ documents.get('watchdog_v2_config/laptop').senderBindings={[watchdogSenderKey(senderId)]:{enabled:true,companyId:'liquid-gold',driverId:'driver-test-123'}};
+ database.set('drivers/profiles/driver-test-123',{active:true,companyId:'liquid-gold',displayName:'Test Driver',assignedWells:['Kahuna 5']});
+ const original={canonicalProcessingComplete:true,originAppContext:'wbt',packetId:'app',requestType:'pull',wellName:'Kahuna 5',dateTimeUTC:new Date(Date.now()+20*60000).toISOString(),tankLevelFeet:12+5/12,bblsTaken:140,tankAfterInches:135,driverId:'driver-test-123'};
+ database.set('packets/processed/app',original);
+ const body={...observation(),senderId,chat:observation().chat.replace('165 bbl','')};
+ const result=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ expect(result.result).toMatchObject({status:'duplicate',alreadyRecorded:true,matchedPacketId:'app',matchedDateTimeUTC:original.dateTimeUTC});
+ expect([...database.keys()].some(k=>k.startsWith('packets/incoming/'))).toBe(false);
+ expect(database.get('packets/processed/app')).toEqual(original);
+});
+test('late app regression: superseded receipt points to the app after canonical removal',async()=>{
+ const identity='a'.repeat(64);documents.set('watchdog_v2_deliveries/'+identity,{principalId:'laptop-watchdog-v2',packetId:'old-chat',lateAppMatch:{eventId:'event',matchedPacketId:'app',matchedDateTimeUTC:'2026-10-30T16:03:36Z'}});
+ const result=await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity});
+ expect(result.result).toMatchObject({status:'duplicate',needsReview:false,alreadyRecorded:true,matchedPacketId:'app'});
+});
+
 test('separator candidate passes only corroborated historical recovery, otherwise stays reviewable',async()=>{
  const body={...observation(),chat:observation().chat.replace('Top 12.5\nBottom 11.125','12.5.11.2')};
  const prior={wellDown:false,packetId:'previous',requestType:'pull',wellName:'Kahuna 5',dateTimeUTC:new Date(Date.now()-30*60000).toISOString(),tankLevelFeet:14,bblsTaken:240,tankAfterInches:144,flowRateDays:60/1440,canonicalProcessingComplete:true};

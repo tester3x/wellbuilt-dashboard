@@ -1,4 +1,6 @@
 import {runningPipeline} from './pipelineOperation';
+export {reconcileWatchdogAppRecords} from './watchdog/lateAppMatchTrigger';
+import {validateAppMatchDeletion,finishAppMatchDeletion} from './watchdog/appMatchDeletion';
 import { deliverLevelReport } from './levelReportDelivery';
 export { deliverProcessedLevelReport } from './levelReportDelivery';
 import {averageFlowRates} from './flowAverage';
@@ -1908,6 +1910,7 @@ export const processDeleteRequest = functionsV1.database
     // Read the packet before deleting (to check if it was the latest)
     const targetSnap = await db.ref(`packets/processed/${targetPacketId}`).once('value');
     const deletedPacket = targetSnap.exists() ? targetSnap.val() : null;
+    await validateAppMatchDeletion(data,deletedPacket);
 
     // CASCADE: Before deleting, fix the next packet's flowRateDays.
     // The next packet's recovery was measured from this packet's tankAfterInches.
@@ -2144,6 +2147,7 @@ export const processDeleteRequest = functionsV1.database
       result: deletedPacket ? 'rebuilt_from_previous' : 'packet_not_found',
     };
     await db.ref(`packets/processed/delete_${targetPacketId}`).set(auditData);
+    await finishAppMatchDeletion(data);
     await snapshot.ref.remove();
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {

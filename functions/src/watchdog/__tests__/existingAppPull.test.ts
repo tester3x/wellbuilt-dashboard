@@ -10,3 +10,18 @@ test('unwritten barrels do not override independently matching app levels and ow
  test('verified WB T top and barrels match without comparing a calculated bottom',()=>{const wbt={...app,originAppContext:'wbt',tankAfterInches:49};expect(matchExistingAppPull(row,{wbt},'driver',20).status).toBe('matched');expect(matchExistingAppPull(row,{wbt},null,20).status).toBe('review');expect(matchExistingAppPull({...row,bblsTaken:165},{wbt},'driver',20).status).toBe('review');expect(matchExistingAppPull({...row,bblsTaken:165},{wbt},'driver',20,false).status).toBe('matched');expect(matchExistingAppPull(row,{wbt:{...wbt,bottomLevelFeet:3}},'driver',20).status).toBe('review');expect(matchExistingAppPull(row,{wbt,other:{...wbt,packetId:'other'}},'driver',20).status).toBe('review');});
 
 test('legacy canonical app bottom is also modeled, not an independent reading',()=>{const legacy={...app,tankAfterInches:49,canonicalProcessingBottomInches:49};expect(matchExistingAppPull(row,{legacy},'driver',20).status).toBe('matched');expect(matchExistingAppPull(row,{legacy:{...legacy,driverId:'other'}},'driver',20).status).toBe('review');});
+
+test('a completed app measurement can be later than the WhatsApp measurement',()=>{
+ const later={...app,dateTimeUTC:'2026-10-06T17:07:00Z'};
+ expect(matchExistingAppPull(row,{later},'driver',20).status).toBe('matched');
+ expect(matchExistingAppPull(row,{later:{...later,dateTimeUTC:'2026-10-06T18:18:00Z'}},'driver',20).status).toBe('none');
+ expect(matchExistingAppPull(row,{later,between:{...app,packetId:'between',dateTimeUTC:'2026-10-06T16:55:00Z',tankLevelFeet:8}},'driver',20).status).toBe('review');
+});
+test('top-only gauges only match zero-removal app gauges, never completed loads',()=>{
+ const gauge={...app,bblsTaken:0,tankAfterInches:138};
+ const reading={...row,bblsTaken:0,bottomLevelFeet:null,levelOnly:true};
+ expect(matchExistingAppPull(reading,{gauge},'driver',20).status).toBe('matched');
+ expect(matchExistingAppPull(reading,{app},'driver',20).status).toBe('none');
+ expect(matchExistingAppPull(row,{gauge},'driver',20).status).toBe('none');
+ expect(matchExistingAppPull(reading,{gauge:{...gauge,driverId:'other'}},'driver',20).status).toBe('review');
+});
