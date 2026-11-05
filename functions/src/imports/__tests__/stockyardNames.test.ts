@@ -2,6 +2,24 @@ import {parsePullChat} from '../pullParser';
 const parse=(name:string)=>parsePullChat('[10/16/2026, 15:07] Driver: '+name+'\n7.9/4.5\n140\n3:07',{wellNames:['Bootleg 4','Ironbank 4','Matilda 2'],levelNotation:'feet_inches'});
 test.each([['Bootleg4','Bootleg 4'],['Ironbank4','Ironbank 4'],['Matilda bay 2','Matilda 2']])('scoped name %s', (input,expected)=>{const rows=parse(input);expect(rows).toHaveLength(1);expect(rows[0].wellName).toBe(expected);expect(rows[0].issues).toEqual([]);});
 test('unknown load goes to review and never guesses a numbered well',()=>{for(const name of ['Bootleg6','Unknown 9']){const rows=parse(name);expect(rows).toHaveLength(1);expect(rows[0].wellName).toBe('');expect(rows[0].issues).toContain('Choose the well for this shorthand message');}});
+test('Wilson reports resolve only to the unique channel-scoped Wilson33 well',()=>{
+ const report=(heading:string)=>`[11/4/2026, 10:26:18] Driver: ${heading}\n13’8\n4’5\n185bbl`;
+ const options={wellNames:['Wilson33'],levelNotation:'feet_inches' as const};
+ for(const heading of ['Wilson33','Wilson 33','Wilson-33','Wilson #33','Wilson']){
+  const [row]=parsePullChat(report(heading),options);
+  expect(row.wellName).toBe('Wilson33');
+  expect(row.tankLevelFeet).toBeCloseTo(13+8/12);
+  expect(row.bottomLevelFeet).toBeCloseTo(4+5/12);
+  expect(row.bblsTaken).toBe(185);
+  expect(row.issues).toEqual([]);
+ }
+ for(const heading of ['Wilson 34','Willson 33']){
+  const [row]=parsePullChat(report(heading),options);
+  expect(row.wellName).toBe('');
+  expect(row.issues).toContain('Choose the well for this shorthand message');
+ }
+ expect(parsePullChat(report('Wilson'),{wellNames:['Wilson33','Wilson34'],levelNotation:'feet_inches'})[0].wellName).toBe('');
+});
 test('conversation is not a load',()=>expect(parsePullChat('[10/16/2026, 15:07] Driver: See you tomorrow')).toEqual([]));
 test('unknown name overrides a default well only into review',()=>{const rows=parsePullChat('[10/16/2026, 15:07] Driver: Unknown 9\n7 9\n4 5\n140',{defaultWell:'Bootleg 4',wellNames:['Bootleg 4'],levelNotation:'feet_inches'});expect(rows).toHaveLength(1);expect(rows[0].wellName).toBe('');expect(rows[0].issues).toContain('Choose the well for this shorthand message');});
 
