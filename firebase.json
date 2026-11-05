@@ -34,10 +34,10 @@
   "hosting": {
     "public": "out",
     "predeploy": [
-      "node scripts/preflight-hosting-deploy.cjs"
+      "scripts/preflight-hosting-deploy.cmd"
     ],
     "postdeploy": [
-      "node scripts/deploy-hosting.cjs --verify"
+      "scripts/verify-hosting-deploy.cmd"
     ],
     "ignore": [
       "firebase.json",
