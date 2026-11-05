@@ -10,8 +10,11 @@ type Offer = { id: string; mode: string; wellName: string; fromDriverName: strin
 type RosterDriver = { id: string; name: string };
 export function LoadTransferPanel({ companyId }: { companyId: string | null }) {
   const { user, userCompany } = useAuth();
-  const visible = hasCapability(user, 'viewDispatch', userCompany);
-  const canAssign = hasCapability(user, 'createDispatch', userCompany);
+  // Demo viewers can see the Dispatch tour, but staffLoadTransfers requires a
+  // trusted staff authority record. The demo company has no real transfers.
+  const visible = companyId !== 'wellbuilt-demo' && user?.role !== 'demo_viewer'
+    && hasCapability(user, 'viewDispatch', userCompany);
+  const canAssign = visible && hasCapability(user, 'createDispatch', userCompany);
   const [offers, setOffers] = useState<Offer[]>([]), [drivers, setDrivers] = useState<RosterDriver[]>([]);
   const [chosen, setChosen] = useState<Record<string, string>>({}), [busy, setBusy] = useState(''), [error, setError] = useState('');
   const scope = useRef(companyId); scope.current = companyId;
