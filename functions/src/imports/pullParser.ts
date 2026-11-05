@@ -129,7 +129,13 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
     const names = (options.wellNames || []).filter(name => normalizeWell(name) === key);
     return names.length === 1 ? names[0] : value;
   };
-  const catalogueNames = (options.wellNames || []).filter(Boolean).flatMap(name => droneAlias && name === droneAlias ? [name, 'Drone 1'] : normalizeWell(name) === 'matilda2' ? [name, 'Matilda bay 2'] : normalizeWell(name) === 'granli' ? [name, 'Grenli', 'Granil'] : [name]).sort((a, b) => b.length - a.length).map(name => [...name].map(character => /\s/.test(character) ? '[ \t]*' : String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join('') + (normalizeWell(name) === 'drone' ? '(?![ \t]*\\d)' : ''));
+  const catalogueNames = (options.wellNames || []).filter(Boolean).flatMap(name => droneAlias && name === droneAlias ? [name, 'Drone 1'] : normalizeWell(name) === 'matilda2' ? [name, 'Matilda bay 2'] : normalizeWell(name) === 'granli' ? [name, 'Grenli', 'Granil'] : [name]).sort((a, b) => b.length - a.length).map(name => {
+    const chars = [...name];
+    return chars.map((character, index) => {
+      const separator = index > 0 && /[a-z]/i.test(chars[index - 1]) && /\d/.test(character) ? '[ \\t]*[-#]?[ \\t]*' : '';
+      return separator + (/\s/.test(character) ? '[ \\t]*' : String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0'));
+    }).join('') + (normalizeWell(name) === 'drone' ? '(?![ \\t]*\\d)' : '');
+  });
   const boundary = String.fromCharCode(92) + 'b';
   const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + wellPattern.source + '|' + catalogueNames.join('|') + (pesekCanonical ? '|Pesek(?![ \t]*\\d)' : '') + ')' + boundary, 'ig') : wellPattern;
   for (const message of splitChat(text)) {
@@ -154,7 +160,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
           // numbers, prose, foreign names and ambiguous pads remain held.
           const key = normalizeWell(named[1]);
           const candidates = [...new Set(options.wellNames || [])].filter(name =>
-            /[ \t]+\d+$/.test(name) && normalizeWell(name.replace(/[ \t]+\d+$/, '')) === key);
+            /[a-z][ \t#-]*\d+$/i.test(name) && normalizeWell(name.replace(/\d+$/, '').replace(/[ \t#-]+$/, '')) === key);
           segment.body = named[2];
           segment.well = candidates.length === 1 ? candidates[0] : '';
         }
