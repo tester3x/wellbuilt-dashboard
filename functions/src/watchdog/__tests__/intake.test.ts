@@ -25,6 +25,18 @@ test.each(['Drone','Drone 1','Drone1'])('Drone regression: signed intake consume
  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:answer.result.identity})).result.status).toBe('complete');
 });
 
+test('signed intake resolves Wilson 33 to the sole watched Wilson33 well',async()=>{
+ documents.get('watchdog_v2_config/laptop').channels.group.wells=['Wilson33'];
+ database.set('well_config',{Wilson33:{bblPerFoot:20,tankHeight:20,companyId:'liquid-gold'}});
+ const request={...observation(),chat:observation().chat.replace(/Driver:[\s\S]*/,"Driver: Wilson 33\n13’8\n4’5\n185bbl")};
+ const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request);
+ expect(answer.result.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+answer.result.packetId);
+ expect(packet).toMatchObject({wellName:'Wilson33',bblsTaken:185});
+ expect(packet.tankLevelFeet).toBeCloseTo(13+8/12);
+ expect(packet.bottomLevelFeet).toBeCloseTo(4+5/12);
+});
+
 test('armed hold resumes through signed intake once, preserves first report and rejects old backlog',async()=>{
  const policy=documents.get('watchdog_v2_config/laptop'),channel=policy.channels.group;
  policy.heldWells={'Kahuna 5':{state:'on_hold',effectiveAt:new Date(Date.now()-86400000).toISOString(),channels:{group:channel},autoResume:{mode:'next_load_or_level',armedAt:new Date(Date.now()-600000).toISOString()}}};
