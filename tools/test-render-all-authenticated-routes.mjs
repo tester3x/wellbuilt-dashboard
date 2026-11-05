@@ -97,10 +97,25 @@ export async function renderAllAuthenticatedRoutes() {
     for (const route of AUTH_ROUTES) {
       const page = await browser.newPage();
       try {
+        if (route === '/watchdog') await page.emulateMedia({ colorScheme: 'light' });
         // 1. Desktop Test (1280 x 900)
         await page.setViewportSize({ width: 1280, height: 900 });
         const resDesktop = await page.goto(`${baseUrl}${route}`, { waitUntil: 'domcontentloaded' });
         const desktopStatus = resDesktop ? resDesktop.status() : 0;
+
+        if (route === '/watchdog') {
+          const surface = await page.locator('main').evaluate(main => {
+            const shell = main.parentElement;
+            return shell && {
+              background: getComputedStyle(shell).backgroundColor,
+              foreground: getComputedStyle(shell).color,
+              height: shell.getBoundingClientRect().height,
+            };
+          });
+          if (surface?.background !== 'rgb(17, 24, 39)' || surface.foreground !== 'rgb(255, 255, 255)' || surface.height < 900) {
+            throw new Error(`Watchdog light-system theme regression: ${JSON.stringify(surface)}`);
+          }
+        }
 
         const desktopMetrics = await page.evaluate(() => {
           return {
