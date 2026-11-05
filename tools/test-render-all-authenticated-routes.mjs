@@ -112,7 +112,8 @@ export async function renderAllAuthenticatedRoutes() {
               height: shell.getBoundingClientRect().height,
             };
           });
-          if (surface?.background !== 'rgb(17, 24, 39)' || surface.foreground !== 'rgb(255, 255, 255)' || surface.height < 900) {
+          const darkBackground = ['rgb(17, 24, 39)', 'oklch(0.21 0.034 264.665)'].includes(surface?.background);
+          if (!darkBackground || surface.foreground !== 'rgb(255, 255, 255)' || surface.height < 900) {
             throw new Error(`Watchdog light-system theme regression: ${JSON.stringify(surface)}`);
           }
         }
