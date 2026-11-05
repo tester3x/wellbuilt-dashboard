@@ -1,4 +1,5 @@
 'use client';
+import { freshWaterLabel } from '@/lib/freshWater';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -90,7 +91,7 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
 
               <PaperRow label="Invoice #" value={ticket.invoiceNumber || '--'} mono />
               <PaperRow label="Date" value={ticket.date} />
-              <PaperRow label="Type" value={ticket.type || invoice?.commodityType || '--'} />
+              <PaperRow label="Type" value={freshWaterLabel(ticket.type || invoice?.commodityType || '--', ticket.waterTemperature)} />
 
               <Divider />
 
@@ -157,7 +158,7 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                   // Backwards compat: when only legacy `qty`/`bbls` exists,
                   // both columns show that single value (mirror).
                   <div className="grid grid-cols-5 border-t border-gray-300">
-                    <MeasureBox label="TYPE" value={ticket.type || 'Production Water'} />
+                    <MeasureBox label="TYPE" value={freshWaterLabel(ticket.type || 'Production Water', ticket.waterTemperature)} />
                     <MeasureBox
                       label="PICKUP BBL"
                       value={

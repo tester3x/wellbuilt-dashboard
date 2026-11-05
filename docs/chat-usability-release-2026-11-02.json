@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "30b065bf17c61fd5e799efad62e9e82d624da4ac",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "deployed": true,
+  "verifiedAtUtc": "2026-11-02T08:34:05.928Z",
+  "byteMatchedLiveFiles": 398,
+  "changes": [
+    "Dashboard main chat action focuses/reuses named workspace without reload; explicit New window on sidebar and chat page",
+    "Whole-body copy beside timestamps for sidebar/grid/system/announcement cards; native partial selection retained",
+    "Selected Profile Type toggles back to all/no selected restriction; untyped profiles use mixed driver/chat assignment, existing slots retained"
+  ],
+  "validation": "Exact committed clean fresh production build and all mandatory Hosting checks passed, including actual-browser named-window/draft preservation/closed-window recovery, clipboard contents with Windows newline normalization, optional profile selection, locks, mouse/touch drag, announcements, text selection and retained routes. Live artifacts byte-matched; approved checkpoint advanced and shared lock released.",
+  "nativeState": "T298 ba121f5e243cf3c5cd1190139fda4806d3bbce3e local build, S24 first then ZFold installed; receipt in WB T repo",
+  "scope": "Frontend Hosting only; no Functions or rules deployment, no customer messages sent or profile data changed for tests; fixtures synthetic.",
+  "preflightRepairs": "First attempt rejected an invalid source encoding, corrected to UTF-8. Second attempt exposed a browser test popup race from script evaluation; retained the same assertions and changed fixture opens to actual user clicks. Final full release gate passed."
+}

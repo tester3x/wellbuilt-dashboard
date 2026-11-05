@@ -1,0 +1,34 @@
+{
+  "recordedAtUtc": "2026-11-02T10:49:03.802309+00:00",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "scope": "Dispatch-only read-only WhatsApp Levels virtual feed; Mike explicitly included original WB M pulls; WB T processed pulls are labeled WB T. No driver identity/history migration.",
+  "data": "Server-authorized same-company packets/processed projection; no new pulls, messages, memberships or read markers; excludes mutation commands, explicit incomplete writes and Watchdog lifecycle stops. Existing individual Dispatch deliveries unchanged.",
+  "ui": [
+    "Searchable well and driver dropdowns apply only within this feed and intersect; clear X restores all.",
+    "Options derive from complete admitted history; canonical persisted well name (normalized spacing/case) avoids mixed optional-ID duplicates; missing well has Needs identification.",
+    "Count new arrivals outside selected filters without moving reader; explicit Show all returns to latest.",
+    "Reuse native browser selection, whole-card copy and reader-respecting viewport.",
+    "Render latest 100 matching cards initially; Show older expands without removing cards under reader on incoming snapshots.",
+    "No composer/archive/member/broadcast controls; no native driver room."
+  ],
+  "provenance": "Older packets can lack original WhatsApp author/channel: show Reporter unavailable/WhatsApp; preserve future accepted author and configured channel name/label as display metadata only. No matching old tags to WB accounts.",
+  "sourceAudit": {
+    "staffChat": "7 reachable local modules reviewed; changed only staffChat plus new whatsappLevels module against downloaded live source",
+    "ingestWatchdogPullV2": "20 reachable modules reviewed against live; only intake display-metadata change. No parser, calculation, transport/auth or ownership changes."
+  },
+  "checks": {
+    "typescript": "passed",
+    "functionsBuild": "passed",
+    "actualGridSidebarBrowser": "passed including filters, intersection/clear, hidden-arrival/retry, copy, no feed writes/composer, normal chat retained, large-history window",
+    "focusedChatJest": "3 suites / 10 tests passed",
+    "metadataTest": "1 passed / 33 unrelated skipped",
+    "existingAnnouncementAndScrollRegressions": "passed",
+    "baselineLimitation": "Watchdog intake full suite has 7 pre-existing failures; identical 7 failures reproduced with a transform removing only the metadata addition. New metadata test passes. These existing parser/calibration/review fixture failures are not repaired or claimed passing."
+  },
+  "releaseState": "Committed feature checkpoint only; release evidence recorded separately after scoped deployment. No APK necessary for dispatch-only Dashboard change.",
+  "knownLimits": [
+    "Server queries and caches the company history for 10 seconds, then returns only display fields; archive pagination/indexing may be needed as production volume grows.",
+    "Unpushed work on another machine cannot be discovered.",
+    "This feed shows processed packets only; held/rejected/unparseable WhatsApp messages remain in their existing review path."
+  ]
+}

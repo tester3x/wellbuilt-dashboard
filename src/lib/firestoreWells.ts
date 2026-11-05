@@ -2,6 +2,7 @@
 // Uses the same `wellbuilt-sync` Firestore that WB Tickets populates via scripts/importWellData.ts
 // Collections: operators (ND ~103 + MT), wells (ND ~19K + MT ~13K), disposals (ND ~1K + MT)
 
+import { freshWaterDepotSearchQuery } from './freshWater.ts';
 import { getFirestoreDb, getFirebaseFunctions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
 import { locationQueryMatches, rankLocationRows } from './builderWellSearch';
@@ -15,7 +16,9 @@ import {
 } from 'firebase/firestore';
 
 export interface NdicWell {
-  kind?: 'WELL' | 'SWD' | 'LOC';
+  kind?: 'WELL' | 'SWD' | 'LOC' | 'FWD';
+  catalogId?: string;
+  well_type?: string;
   usageCount?: number;
   well_name: string;
   operator: string;
@@ -195,7 +198,8 @@ export function searchDisposals(
   const matches = disposals.filter(disp => {
     const name = (disp.search_name || disp.well_name || '').toLowerCase();
     const op = (disp.search_operator || disp.operator || '').toLowerCase();
-    return locationQueryMatches(lower, name) || locationQueryMatches(lower, op);
+    const rowQuery = disp.kind === 'FWD' || disp.well_type === 'FWD' ? freshWaterDepotSearchQuery(lower) : lower;
+    return locationQueryMatches(rowQuery, name) || locationQueryMatches(rowQuery, op);
   });
 
   return rankLocationRows(matches, lower, row => row.well_name, maxResults);

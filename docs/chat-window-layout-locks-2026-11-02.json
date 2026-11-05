@@ -1,0 +1,22 @@
+{
+  "recordedAtUtc": "2026-11-02T11:14:46.969588+00:00",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "request": "Tab/window layout membership protection must be independent between browser tabs; protect 1 or 3 profiles while allowing focus changes; individual local profile pin can be released to remove from only that window; unlock window for full add/remove.",
+  "cause": "Shared monitor.locked field blocked switching and propagated to every window; profile stack was also persisted in shared localStorage.",
+  "change": [
+    "Tab-local sessionStorage state scoped by signed-in participant and trusted chat company: ordered open profiles, active profile, window lock, profile pins.",
+    "Switching focuses existing profiles without changing order, regardless of window lock. Adding a profile requires window unlock; profile pins protect removal while locked.",
+    "Removing a profile from top strip changes only this tab membership; Settings keeps shared saved profile editing/deletion; deleting shared definitions requires window unlocked.",
+    "Window lock pins current membership. Individual pins can be released and removed while window remains locked. Window unlock permits full membership edits.",
+    "Explicit New window starts empty/unlocked; reload preserves state in its own tab; old shared monitor.locked is ignored without any backend mutation.",
+    "Legacy shared profile stack is read only for first migration; each tab starts unlocked. No ongoing localStorage membership writes. Existing saved profiles and chat slot locks unchanged."
+  ],
+  "checks": [
+    "TypeScript passed.",
+    "Actual two-browser-tab regression: independent stacks/global locks/profile pins; old shared locked values ignored; 1 and 3 profiles; stable tab order/focus; protected removal; per-profile release/removal; unlock and add; refresh; last profile removed remains empty; explicit popup starts empty; account/company state separation; no server profile writes.",
+    "Existing new profile feed lock/reload, generic grid controls, drag/touch/click placement, reader scroll behavior and chat usability/window/copy/profile-type regressions passed."
+  ],
+  "releaseScope": "Hosting only; no Functions/rules/native source, build, installation, live profile or operational data changes.",
+  "releaseState": "Feature checkpoint; live receipt follows after mandatory preflight and all-file verification.",
+  "limitation": "Unpushed other-machine work cannot be discovered."
+}

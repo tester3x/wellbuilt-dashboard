@@ -18,6 +18,7 @@ export const DISPATCH_CREATE_ALLOWLIST = [
   'jobType',
   'jobTypeId',
   'serviceType',
+  'waterTemperature',
   'packageId',
   'status',
   'notes',
@@ -254,6 +255,7 @@ export function evaluateStaffWriteDispatch(input: {
   isPlatformAdmin: boolean;
 }): StaffWriteResult {
   const record = input.record || {};
+  if (record.waterTemperature !== undefined && record.waterTemperature !== 'hot' && record.waterTemperature !== 'cold') return { ok: false, reason: 'invalid_water_temperature', field: 'waterTemperature' };
 
   for (const key of DECLINE_FIELDS) {
     if (key in record && record[key] !== undefined) {

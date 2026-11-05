@@ -494,7 +494,7 @@ export function generateInvoiceCSV(
 ): string {
   const headers = [
     'Billing Invoice #', 'Date', 'Operator', 'Well', 'Drop-off', 'Driver',
-    'Job Type', 'BBLs', 'Hours', 'Rate', 'Rate Method', 'Base Amount',
+    'Job Type', 'Water Temperature', 'BBLs', 'Hours', 'Rate', 'Rate Method', 'Base Amount',
     'Fuel Surcharge', 'Detention', 'Total',
   ];
 
@@ -509,6 +509,7 @@ export function generateInvoiceCSV(
         item.hauledTo || '',
         legalNameMap[item.driver] || item.driver,
         item.jobType || '',
+        item.waterTemperature || '',
         String(item.bbls || 0),
         String(item.hours || 0),
         String(item.rate || 0),
@@ -645,6 +646,7 @@ export function generateInvoiceJSON(
         dropOff: item.hauledTo || undefined,
         driver: legalNameMap[item.driver] || item.driver,
         jobType: item.jobType || undefined,
+        waterTemperature: item.waterTemperature || undefined,
         bbls: item.bbls,
         hours: item.hours,
         rateMethod: item.rateMethod,

@@ -1,3 +1,4 @@
+import {isWhatsappLevelsId, whatsappLevelsId, whatsappLevelsThread, readWhatsappLevels} from './whatsappLevels';
 import { announcementThread, handleAnnouncement, isAnnouncementId } from './dispatchAnnouncements';
 import * as https from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
@@ -70,6 +71,11 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
   const admits = (row: any, id: string): boolean => row.companyId === staff.companyId &&
     (!governedId(id) || (validConversation(row, id) && dispatchAccess &&
       (row.audience === 'dispatch_team' || row.staffUid === staff.uid)));
+  if (isWhatsappLevelsId(data.threadId)) {
+    if (!dispatchAccess || data.threadId !== whatsappLevelsId(staff.companyId)) throw new https.HttpsError('permission-denied', 'Dispatch feed outside your company');
+    if (action !== 'messages') throw new https.HttpsError('permission-denied', 'WhatsApp Levels is read only');
+    return {rows: await readWhatsappLevels(staff.companyId)};
+  }
   const profile = (await admin.database().ref(`users/${staff.uid}`).once('value')).val();
   const identityDirectory = (referencedUsers:string[]=[]) => directory(staff.companyId,{uid:staff.uid,profile},referencedUsers);
   const senderDirectory = ['send', 'dispatch', 'private', 'direct', 'group'].includes(action) ? await identityDirectory() : null;
@@ -104,7 +110,7 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
     rows.sort((a, b) => time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt));
     if (action === 'threads') rows = await Promise.all(rows.map(async row => ({ ...row, ...await readUnreadSummary(
       db.collection(conversationCollection(row.id)).doc(row.id), row, participant) })));
-    if (action === 'threads' && dispatchAccess) rows.unshift(await announcementThread(announcementActor));
+    if (action === 'threads' && dispatchAccess) rows.unshift(await announcementThread(announcementActor), whatsappLevelsThread(staff.companyId));
     return { companyId: staff.companyId, rows: serial(rows) };
   }
   if (['dispatch', 'private', 'direct'].includes(action)) {
@@ -159,6 +165,10 @@ export const staffChat = https.onCall({ timeoutSeconds: 30, memory: '256MiB', en
       if (!Array.isArray(fields.slots) || fields.slots.length > 36) throw new https.HttpsError('invalid-argument', 'Invalid monitor slots');
       for (const slot of fields.slots) if (slot) {
         if (slot.threadId) {
+          if (isWhatsappLevelsId(slot.threadId)) {
+            if (!dispatchAccess || slot.threadId !== whatsappLevelsId(staff.companyId)) throw new https.HttpsError('permission-denied', 'Dispatch feed outside your company');
+            continue;
+          }
           if (isAnnouncementId(slot.threadId)) {
             if (!dispatchAccess || slot.threadId !== (await announcementThread(announcementActor)).id) throw new https.HttpsError('permission-denied', 'Announcement outside your company');
             continue;

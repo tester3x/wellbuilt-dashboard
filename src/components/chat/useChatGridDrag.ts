@@ -1,7 +1,7 @@
 'use client';
 import {useEffect,useRef,useState} from 'react';
 import type React from 'react';
-export type ChatDrag={threadId:string;title:string;scope:string};
+export type ChatDrag={threadId:string;title:string;scope:string;driverId?:string;audience?:'dispatch'|'private'};
 type Gesture={payload:ChatDrag;x:number;y:number;active:boolean;timer:ReturnType<typeof setTimeout>|null};
 /** Mouse threshold + touch hold, preserving ordinary list scrolling before the hold. */
 export function useChatGridDrag(scope:string,onDrop:(payload:ChatDrag,index:number)=>void){

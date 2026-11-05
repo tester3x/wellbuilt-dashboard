@@ -1,0 +1,28 @@
+{
+  "recordedAtUtc": "2026-11-02T20:14:04.144196+00:00",
+  "hosting": {
+    "sourceCommit": "01c21cab0650b9ee78b3ef63f1cdb703b659e894",
+    "url": "https://wellbuilt-sync.web.app",
+    "verifiedLiveFiles": 399,
+    "evidence": "C:/dev/tmp/hot-dashboard-hosting-final.log: postdeploy full byte match and approved checkpoint advanced normally"
+  },
+  "functions": {
+    "sourceCommit": "0ec4efe0f82ff72bf2d1cf25da905ffc1bffc7fb",
+    "names": [
+      "staffWriteDispatch",
+      "createDriverDispatchIfAbsent",
+      "getDispatchLocationCatalog"
+    ],
+    "hash": "03566cf8a6e03ef3715793fbd14852be9d155105",
+    "verification": "Actual deployed source and compiled scoped modules downloaded after deploy and compared to local bytes, all match. C:/dev/tmp/hotwater-live-byte-verification.json. Existing authority/callables retained; catalog also includes current company-approved inactive-well safeguards from laptop source. No rules deployment."
+  },
+  "checks": [
+    "515 retained frontend tests:514 passed,1 skipped,0 failed",
+    "3 added FWD/temperature runtime tests passed",
+    "76 catalog/staff/driver authority tests passed",
+    "Frontend and Functions TypeScript passed",
+    "Mandatory DOM/responsive/authenticated-route/media/chat/Watchdog/retained preflight passed"
+  ],
+  "scope": "FWD directory in both Dispatch location searches; Hot checkbox with unchecked Cold for new Fresh Water jobs; explicit separate ticket/billing CSV/JSON temperature; no payroll/rate/old-record backfill changes.",
+  "manualAcceptance": "Actual new Fresh Water hauling/billing workflow still requires Mike field testing; no customer operational records created by release verification."
+}

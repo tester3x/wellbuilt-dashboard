@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "62311f5d532d1fe20e16b025e310a4611eefa0c3",
+  "branch": "release/dashboard-owner-signup-20261029",
+  "verifiedAtUtc": "2026-11-02T09:39:56.857Z",
+  "byteMatchedLiveFiles": 399,
+  "changes": "Gold chat icon and WB Chat title; borderless Settings gear right-aligned on title row per Mike correction; layout and New window grouped below divider; subtitle moved beneath title.",
+  "validation": "Rendered actual-page synthetic fixture screenshot reviewed at C:/dev/tmp/chat-header-cleanup-preview.png. TypeScript and all mandatory Hosting build/regression checks passed; all live files byte matched.",
+  "scope": "Dashboard Hosting frontend only. No native build, Functions/rules deployment or real data mutations for header cleanup. Separate WB T handle repair continues."
+}

@@ -1,0 +1,25 @@
+{
+  "sourceCommit": "09f3bbca2f457d211dea745def8ed31a0e60885b",
+  "id": "staffChat",
+  "state": "ACTIVE",
+  "updated": "2026-11-02T11:03:02.852211068Z",
+  "revision": "staffchat-00010-kes",
+  "anonymousSaveProfileStatus": 401,
+  "scope": "staffChat only; no Hosting or rules deployment",
+  "recordedAtUtc": "2026-11-02T11:03:45.760213+00:00",
+  "reachableLiveModulesByteMatched": 7,
+  "moduleSHA256": {
+    "lib/security/staffChat.js": "cc2e18423c7f244b8f92d021b84fcea9a2f5022f50dc022b4ad7711b37678fd6",
+    "lib/security/chatUnreadSummary.js": "8aa780e5a8130878bbf0a115d45ffbe5fc9b650bba0991da704255710cb26fdf",
+    "lib/security/chatNames.js": "4d6c42b37d005d934bbf5d22eb60d7a3cc6dbc0856017b2b869449d6b8f4e17a",
+    "lib/security/trustedStaffAuthority.js": "23d8c70aee71fea1296dae333506a4776665b85215720ed608fc19ac818e39b9",
+    "lib/security/dispatchConversations.js": "a8ad3c049d74ffa4c92452af5aed72dcc628bba8eed916350d8ac265e709a225",
+    "lib/security/dispatchAnnouncements.js": "09395a4310164b21464b1e6e24c1bb1a944d9a66c07750fb3d253503c82a21ef",
+    "lib/security/whatsappLevels.js": "033b4ebd157dfb6074fb06fe21cf1e96ae106813d4035c47dcfef15337e51828"
+  },
+  "checks": "Functions build; 3 chat Jest suites / 12 tests; actual grid/sidebar including new-profile save/reload; existing profile lock and announcements regression checks all passed.",
+  "hosting": "Unchanged at 247b44f3a0b3f81c5491b67cccfa43a196e803d5; existing renderer/filter fix needs browser refresh in old tabs.",
+  "native": "No native changes/build/install.",
+  "liveProfileMutation": "None; profile tests used synthetic fixtures. User should refresh and retry Save and lock.",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28"
+}

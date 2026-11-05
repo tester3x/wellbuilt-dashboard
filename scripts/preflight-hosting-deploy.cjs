@@ -118,8 +118,15 @@ if (process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW !== 'disabled') {
 execSync('node tools/test-header-badge-stacking.mjs', { stdio: 'inherit' });
 execSync('node tools/test-dispatch-announcements.cjs', { stdio: 'inherit' });
 execSync('node tools/test-announcements-ui.mjs', { stdio: 'inherit' });
+execSync('node tools/test-whatsapp-levels-ui.mjs', { stdio: 'inherit' });
+execSync('npx jest --runInBand --runTestsByPath src/security/__tests__/whatsappLevels.test.ts', { cwd: path.resolve('functions'), stdio: 'inherit' });
+execSync('npx jest --runInBand --runTestsByPath src/watchdog/__tests__/intake.test.ts --testNamePattern="accepted observation saves"', { cwd: path.resolve('functions'), stdio: 'inherit' });
+execSync('node tools/test-chat-scroll-position.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-usability.mjs', { stdio: 'inherit' });
+execSync('node tools/test-chat-window-layout.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-grid-controls.mjs', { stdio: 'inherit' });
+execSync('node tools/test-chat-settings-layout.mjs', { stdio: 'inherit' });
+execSync('node tools/test-chat-full-grid.mjs', { stdio: 'inherit' });
 execSync('node tools/test-chat-grid-drag.mjs', { stdio: 'inherit' });
 execSync('node tools/test-owner-signup.cjs', { stdio: 'inherit' });
 execSync('node tools/test-employee-onboarding.cjs', { stdio: 'inherit' });
@@ -210,8 +217,10 @@ try {
 execSync('npx tsx tools/test-freshwater-shared.ts', { stdio: 'inherit' });
 execSync('node tools/test-freshwater-dashboard-display.cjs', { stdio: 'inherit' });
 console.log('\n================================================================');
+execSync('npx tsx --test src/lib/__tests__/freshWaterTemperature.test.ts', { stdio: 'inherit' });
 console.log('✅ [ALL PREFLIGHT SAFETY GATES PASSED] Hosting Release Certified.');
 console.log('================================================================\n');
 fs.mkdirSync('.firebase', { recursive: true });
 releaseState.lock = require('./hosting-release-state.cjs').acquireLock(releaseState.source);
 fs.writeFileSync('.firebase/hosting-preflight.json', JSON.stringify(releaseState));
+

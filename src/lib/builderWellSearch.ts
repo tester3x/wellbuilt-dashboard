@@ -1,3 +1,5 @@
+import { freshWaterDepotSearchQuery } from './freshWater.ts';
+import { locationSearchDetails, type LocationSearchContext } from './locationSearchDetails.ts';
 import { rankWellSearchRows, type SearchWellStatus } from './wellSearchPresentation.ts';
 
 /**
@@ -12,8 +14,10 @@ export interface CombinedLocation {
   label: string;
   sub: string;
   value: string;
-  kind?: 'WELL' | 'SWD' | 'LOC';
+  kind?: 'WELL' | 'SWD' | 'LOC' | 'FWD';
+  catalogId?: string;
   county?: string;
+  locationContext?: string;
   waterWeight?: number;
   tankHeight?: number;
   estimatedLevel?: string;
@@ -22,12 +26,13 @@ export interface CombinedLocation {
 
 export interface CombinedSearchSources {
   /** Governed well pool rows (need ndicName/wellName + route). */
-  wells: Array<{ ndicName?: string; wellName: string; route?: string }>;
+  wells: Array<LocationSearchContext & { ndicName?: string; wellName: string; route?: string }>;
   /** Full company operator well universe (well_name + operator). */
-  operatorWells: Array<{ well_name: string; operator?: string; county?: string }>;
+  operatorWells: Array<LocationSearchContext & { well_name: string }>;
   /** SWD/disposal directory search result rows (well_name). */
-  disposalMatches: Array<{ well_name: string; operator?: string; county?: string }>;
-  customLocations?: Array<{ locationName: string; company: string; usageCount?: number }>;
+  depotMatches?: Array<LocationSearchContext & { well_name: string; catalogId?: string }>;
+  disposalMatches: Array<LocationSearchContext & { well_name: string }>;
+  customLocations?: Array<LocationSearchContext & { locationName: string; company: string; usageCount?: number }>;
   wellStatus?: ReadonlyMap<string, SearchWellStatus>;
 }
 
@@ -69,9 +74,12 @@ export function operatorForBuilderWell(
 export function hasExactLocationMatch(query: string, s: CombinedSearchSources): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return false;
+  // An exact shared depot name is still ambiguous: keep both source sites selectable.
+  if ((s.depotMatches || []).filter(d => d.well_name.toLowerCase() === q).length > 1) return false;
   return (
     s.wells.some((w) => (w.ndicName || w.wellName).toLowerCase() === q) ||
     s.operatorWells.some((w) => w.well_name.toLowerCase() === q) ||
+    (s.depotMatches || []).some(d => d.well_name.toLowerCase() === q) ||
     s.disposalMatches.some((d) => d.well_name.toLowerCase() === q) ||
     (s.customLocations || []).some(c => c.locationName.toLowerCase() === q)
   );
@@ -104,10 +112,18 @@ export function combinedLocationResults(query: string, s: CombinedSearchSources)
   const disposalMatches: CombinedLocation[] = s.disposalMatches
     .filter((d) => !seen.has(d.well_name.toLowerCase()))
     .map((d): CombinedLocation => ({ label: d.well_name, sub: d.operator || 'SWD', county: d.county, kind: 'SWD', value: d.well_name }));
+  const depotMatches: CombinedLocation[] = (s.depotMatches || []).filter(d => locationQueryMatches(freshWaterDepotSearchQuery(q), d.well_name)).map(d => ({ label: d.well_name, sub: 'ND DWR', county: d.county, kind: 'FWD', catalogId: d.catalogId, value: d.well_name }));
   const customMatches: CombinedLocation[] = (s.customLocations || [])
     .filter(c => locationQueryMatches(q, c.locationName) && !seen.has(c.locationName.toLowerCase()))
     .map(c => ({ label: c.locationName, sub: `Used ${c.usageCount || 0}× — ${c.company || 'Custom'}`, kind: 'LOC', value: c.locationName }));
-  const rows = [...wellMatches, ...operatorMatches, ...disposalMatches, ...customMatches];
+  const rows = [...wellMatches, ...operatorMatches, ...disposalMatches, ...depotMatches, ...customMatches].map(row => {
+    // Match by source ID for depots: same-name locations must retain their own context.
+    const record = row.kind === 'FWD' ? s.depotMatches?.find(d => d.catalogId === row.catalogId)
+      : row.kind === 'SWD' ? s.disposalMatches.find(d => d.well_name === row.value)
+      : row.kind === 'LOC' ? s.customLocations?.find(d => d.locationName === row.value)
+      : s.operatorWells.find(d => d.well_name === row.value) || s.wells.find(d => (d.ndicName || d.wellName) === row.value);
+    return { ...row, locationContext: record ? locationSearchDetails(record) : undefined };
+  });
   return s.wellStatus
     ? rankWellSearchRows(rows, q, row => row.label, s.wellStatus, COMBINED_SEARCH_LIMIT, row => row.kind === 'WELL')
     : rankLocationRows(rows, q, row => row.label, COMBINED_SEARCH_LIMIT);

@@ -1,0 +1,17 @@
+{
+  "recordedAtUtc": "2026-11-02T11:00:53.835142+00:00",
+  "scope": "Fix user-reported inability to lock WhatsApp Levels in a new monitor profile.",
+  "cause": "saveProfile validated virtual announcements explicitly but looked for a chat_threads document for the new virtual WhatsApp Levels feed; no such document exists by design.",
+  "change": "Allow the exact trusted-company virtual feed ID only when caller has current dispatch and chat access, in addition to existing manageCompany/profile-ownership checks. No virtual room or pull documents are created.",
+  "tests": [
+    "Actual staffChat callable creates/retries/updates/unlocks synthetic monitor slots with virtual feed and no chat document.",
+    "Foreign company/forged feed IDs, non-dispatch callers, missing profile-management capability and foreign monitor ownership are rejected without profile writes.",
+    "Actual chat page creates a new profile, saves feed at row 1 column 2, completes lock handoff and restores same position on reload; read-only feed remains.",
+    "Focused chat Jest: 3 suites / 12 tests passed. Functions TypeScript build passed.",
+    "Existing announcement and grid controls regressions passed."
+  ],
+  "releaseScope": "staffChat Function only; no frontend product code, Hosting release, rules, native build, user profile mutation, messages, historical packets or other Function changes. Browser must refresh to receive the already-published feed renderer/filters instead of the old generic announcement renderer.",
+  "releaseState": "Scoped feature checkpoint. Deployment receipt follows after live module verification.",
+  "sourceAudit": "Against prior verified live staffChat source: only lib/security/staffChat.js differs across 7 reachable modules.",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28"
+}

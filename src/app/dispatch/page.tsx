@@ -1,4 +1,5 @@
 'use client';
+import { canChooseHotWater, freshWaterFields } from '@/lib/freshWater';
 import { FreshWaterRate } from '@/components/FreshWaterRate';
 
 import { useEffect, useState, useMemo, useCallback, useRef, Suspense, type ReactNode } from 'react';
@@ -485,6 +486,7 @@ function DispatchPageInner() {
   const [assignLoadCount, setAssignLoadCount] = useState(1);
   const [disposalSearch, setDisposalSearch] = useState('');
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
+  const [allFreshWaterDepots, setAllFreshWaterDepots] = useState<NdicWell[]>([]);
   const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
   const [customCatalogLocations, setCustomCatalogLocations] = useState<Array<{ locationName: string; company: string; usageCount?: number; latitude?: number; longitude?: number }>>([]);
   const [allOperatorWells, setAllOperatorWells] = useState<NdicWell[]>([]);
@@ -527,7 +529,13 @@ function DispatchPageInner() {
   const [swSplitABbls, setSwSplitABbls] = useState('');
   const [swSplitBBbls, setSwSplitBBbls] = useState('');
   const [swSplitBNotes, setSwSplitBNotes] = useState('');
+  const [swHotWater, setSwHotWater] = useState(false);
+  const [swPickupChoice, setSwPickupChoice] = useState<{ value: string; kind?: string; catalogId?: string } | null>(null);
   const [swServiceType, setSwServiceType] = useState('');
+  const swCanChooseHotWater = canChooseHotWater(swServiceType, swWellName, swPickupChoice
+    ? { name: swPickupChoice.value, kind: swPickupChoice.kind } : null);
+  useEffect(() => { setSwHotWater(false); }, [swServiceType, swWellName, swPickupChoice?.catalogId]);
+  useEffect(() => { if (swPickupChoice && swPickupChoice.value !== swWellName) setSwPickupChoice(null); }, [swWellName, swPickupChoice]);
   const [swDemoBbls, setSwDemoBbls] = useState('60');
   const [swOnsiteBy, setSwOnsiteBy] = useState('');
   const [swOnsiteByDraft, setSwOnsiteByDraft] = useState(false);
@@ -907,6 +915,7 @@ function DispatchPageInner() {
       wellStatus: searchWellStatus,
       wells: scopedWells,
       operatorWells: scopedOperatorWells,
+      depotMatches: searchDisposals(swWellName.trim().toLowerCase(), allFreshWaterDepots),
       disposalMatches: builderOperator ? [] : searchDisposals(swWellName.trim().toLowerCase(), allDisposals),
       customLocations: builderOperator ? customCatalogLocations.filter(c => c.company.toLowerCase() === builderOperator.toLowerCase()) : customCatalogLocations,
     };
@@ -925,13 +934,14 @@ function DispatchPageInner() {
       seen.add(key);
       return true;
     }).map(item => item.kind === 'WELL' ? { ...item, showWaterDetails: true } : item)];
-  }, [catalogRouteWells, allOperatorWells, builderOperator, allDisposals, customCatalogLocations, swWellName, swHeavyWater, asOfMs, searchWellStatus]);
+  }, [catalogRouteWells, allOperatorWells, builderOperator, allFreshWaterDepots, allDisposals, customCatalogLocations, swWellName, swHeavyWater, asOfMs, searchWellStatus]);
   function swDestinationOptions(query: string) {
     const sources = dropoffSourcesForBuilderOperator({
       wellStatus: searchWellStatus,
       wells: catalogRouteWells,
       operatorWells: allOperatorWells,
       disposalMatches: searchDisposals(query.trim().toLowerCase(), allDisposals),
+      depotMatches: searchDisposals(query.trim().toLowerCase(), allFreshWaterDepots),
       customLocations: customCatalogLocations,
     }, builderOperator);
     if (!swHeavyWater) return combinedLocationResults(query, sources);
@@ -952,12 +962,13 @@ function DispatchPageInner() {
     const rows: NdicWell[] = [
       ...allOperatorWells.map(w => ({ ...w, kind: 'WELL' as const })),
       ...allDisposals.map(w => ({ ...w, kind: 'SWD' as const })),
+      ...allFreshWaterDepots.map(w => ({ ...w, kind: 'FWD' as const })),
       ...customCatalogLocations.map(c => ({ well_name: c.locationName, operator: c.company, usageCount: c.usageCount, api_no: '', latitude: c.latitude, longitude: c.longitude, kind: 'LOC' as const })),
       ...catalogRouteWells.map(w => ({ well_name: w.ndicName || w.wellName, operator: w.route || '', api_no: w.ndicApiNo || '', kind: 'WELL' as const })),
     ];
     const seen = new Set<string>();
     return rows.filter(w => { const k = w.well_name.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-  }, [allOperatorWells, allDisposals, customCatalogLocations, catalogRouteWells]);
+  }, [allOperatorWells, allFreshWaterDepots, allDisposals, customCatalogLocations, catalogRouteWells]);
   const locationResults = (q: string) => rankWellSearchRows(
     searchDisposals(q, locationCatalog, locationCatalog.length), q, row => row.well_name,
     searchWellStatus, 15, row => row.kind === 'WELL',
@@ -990,6 +1001,7 @@ function DispatchPageInner() {
     let cancelled = false;
     setAllOperatorWells([]);
     setAllDisposals([]);
+    setAllFreshWaterDepots([]);
     setCustomCatalogLocations([]);
     const loadPackageJobTypes = async () => {
       try {
@@ -1012,9 +1024,10 @@ function DispatchPageInner() {
           // Replace it on scope changes; never retain another company's catalog.
           const response = await httpsCallable(getFirebaseFunctions(), 'getDispatchLocationCatalog')({ companyId });
           if (cancelled) return;
-          const catalog = response.data as { wells: NdicWell[]; disposals: NdicWell[]; customLocations: Array<{ locationName: string; company: string; usageCount?: number; latitude?: number; longitude?: number }> };
+          const catalog = response.data as { wells: NdicWell[]; disposals: NdicWell[]; freshWaterDepots?: NdicWell[]; customLocations: Array<{ locationName: string; company: string; usageCount?: number; latitude?: number; longitude?: number }> };
           setAllOperatorWells(catalog.wells);
           setAllDisposals(catalog.disposals);
+          setAllFreshWaterDepots(catalog.freshWaterDepots || []);
           setCustomCatalogLocations(catalog.customLocations);
           setReadErrors(prev => ({ ...prev, operatorCatalog: undefined }));
         }
@@ -1801,7 +1814,7 @@ function DispatchPageInner() {
           loadCount: 1, notes: swNotes.trim(),
         });
         setMessage(`Hot Oiler service job dispatched to Antig: ${bbls} BBL from ${swWellName.trim()} to ${swDropoff.trim()}.`);
-        setSwWellName(''); setSwDropoff(''); setSwServiceType(''); setSwNotes('');
+        setSwWellName(''); setSwDropoff(''); setSwServiceType(''); setSwHotWater(false); setSwNotes('');
         setSwDriverHashes(new Set());
         setWorkspaceTab('jobs');
         return;
@@ -1837,6 +1850,7 @@ function DispatchPageInner() {
         ndicWellName: swNdicName,
         operator: linkedOperator || builderOperator,
         serviceType: trimmedServiceType,
+        ...freshWaterFields(trimmedServiceType, swCanChooseHotWater && swHotWater ? 'hot' : 'cold'),
         packageId: swPackageId,
         customJobTypes: customJobTypesList,
         dropoff: swDropoff.trim() || undefined,
@@ -1902,7 +1916,7 @@ function DispatchPageInner() {
           setSwSplitABbls('');
           setSwSplitBBbls('');
           setSwSplitBNotes('');
-          setSwServiceType('');
+          setSwServiceType(''); setSwHotWater(false);
           setSwOnsiteBy('');
           setSwOnsiteByDraft(false);
           setSwOnsiteByInputKey(key => key + 1);
@@ -1944,7 +1958,7 @@ function DispatchPageInner() {
     setSwSplitABbls('');
     setSwSplitBBbls('');
     setSwSplitBNotes('');
-    setSwServiceType('');
+    setSwServiceType(''); setSwHotWater(false);
     setSwOnsiteBy('');
     setSwOnsiteByDraft(false);
     setSwOnsiteByInputKey(key => key + 1);
@@ -3230,10 +3244,12 @@ function DispatchPageInner() {
                         <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
                           <BuilderAutocomplete
                             value={swWellName}
-                            onValueChange={setSwWellName}
+                            onValueChange={value => { setSwWellName(value); setSwPickupChoice(null); setSwHotWater(false); }}
                             items={swWellOptions}
                             onSelect={(item) => {
                               setSwWellName(item.value);
+                              setSwPickupChoice(item);
+                              setSwHotWater(false);
                               if (!builderOperator) setBuilderOperator(operatorForBuilderWell(item.value, allOperatorWells));
                             }}
                             getItemKey={(item, i) => `${item.value}-${i}`}
@@ -3283,7 +3299,7 @@ function DispatchPageInner() {
                         <div>
                           <label className="block text-xs text-gray-400 mb-1">Service Type</label>
                           <select value={swServiceType} onChange={(e) => {
-                            setSwServiceType(e.target.value);
+                            setSwServiceType(e.target.value); setSwHotWater(false);
                             if (e.target.value === 'Fresh Water Tank Refill') {
                               setSwSplitTicket(false);
                               setSwExtraSplitLegs([]);
@@ -3298,6 +3314,10 @@ function DispatchPageInner() {
                               <option key={st} value={st}>{st === 'Production Water' ? 'Production Water (hr)' : st}</option>
                             ))}
                           </select>
+                          {swCanChooseHotWater && <label className="flex items-center gap-2 mt-2 text-sm text-white min-h-11">
+                            <input type="checkbox" checked={swHotWater} onChange={e => setSwHotWater(e.target.checked)} />
+                            Hot Water
+                          </label>}
                         </div>
                         {user?.role === 'demo_viewer' && !swSplitTicket && (
                           <label className="block text-xs text-gray-400">Planned BBLs
@@ -3344,10 +3364,12 @@ function DispatchPageInner() {
                           <label className="block text-sm text-gray-300 mb-1">Pickup well / location (required)</label>
                           <BuilderAutocomplete
                             value={swWellName}
-                            onValueChange={setSwWellName}
+                            onValueChange={value => { setSwWellName(value); setSwPickupChoice(null); setSwHotWater(false); }}
                             items={swWellOptions}
                             onSelect={(item) => {
                               setSwWellName(item.value);
+                              setSwPickupChoice(item);
+                              setSwHotWater(false);
                               if (!builderOperator) setBuilderOperator(operatorForBuilderWell(item.value, allOperatorWells));
                             }}
                             getItemKey={(item, i) => `${item.value}-${i}`}

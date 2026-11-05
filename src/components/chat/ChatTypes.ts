@@ -5,7 +5,7 @@ import { Timestamp } from 'firebase/firestore';
 
 // ── Thread Types ────────────────────────────────────────────────────────────
 
-export type ThreadType = 'shift' | 'service_group' | 'project' | 'well' | 'direct' | 'announcements';
+export type ThreadType = 'shift' | 'service_group' | 'project' | 'well' | 'direct' | 'announcements' | 'whatsapp_levels';
 
 export interface LastMessagePreview {
   text: string;
@@ -21,6 +21,7 @@ export interface ChatThread {
   audience?: 'dispatch_team' | 'private_driver';
   unreadCount?: number;
   permanent?: boolean;
+  readOnly?: boolean;
   companyId: string;
 
   // Context links (set depending on type)
@@ -123,6 +124,7 @@ const THREAD_TYPE_LABELS: Record<ThreadType, string> = {
   well: 'Well',
   direct: 'Direct',
   announcements: 'Announcements',
+  whatsapp_levels: 'WhatsApp Levels',
 };
 
 export function threadTypeLabel(type: ThreadType): string {
@@ -136,6 +138,7 @@ const THREAD_TYPE_ICONS: Record<ThreadType, string> = {
   well: '',
   direct: '',
   announcements: '📢',
+  whatsapp_levels: '💧',
 };
 
 export function threadTypeIcon(type: ThreadType): string {
@@ -186,6 +189,7 @@ export function formatChatTime(ts: Timestamp | string | undefined): string {
 }
 
 export function chatAudienceLabel(thread: ChatThread): string {
+  if (thread.type === 'whatsapp_levels') return 'Dispatch only · read only';
   if (thread.permanent) return 'All drivers · acknowledgement required';
   return thread.audience === 'dispatch_team' ? 'Dispatch team' : thread.audience === 'private_driver' ? 'Private · you and driver' : threadTypeLabel(thread.type);
 }

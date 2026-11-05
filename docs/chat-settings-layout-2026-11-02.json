@@ -1,0 +1,13 @@
+{
+  "scope": "Hosting-only chat profile Settings layout",
+  "behavior": [
+    "Settings uses an independently scrolling 288px column beside the driver/chat list on laptop screens; narrow screens use a closable overlay.",
+    "Driver list retains its height while editing profiles.",
+    "List clicks, mouse drag and touch long-hold drag can place chats while Settings remains open. Occupied previews remain visible and lockable.",
+    "Full-grid, reserved-slot, save-in-progress and stale profile/grid completion guards remain enforced. Settings-open placement supersedes the previous edit-mode rejection."
+  ],
+  "acceptance": "Actual React browser regression passes at 1366x768, 1536x864 and 1280x720, with at least four whole list rows, click/mouse/touch placement and saving without closing Settings. TypeScript, full-grid, usability and prior drag regressions passed. Mandatory release preflight includes the new regression.",
+  "authorization": "Mike requested a usable laptop list during profile creation/editing; current workspace policy carries scoped repair through verified Hosting release.",
+  "ownerSession": "01a139b5-d3f7-7401-bdf0-3443ec841c28",
+  "native": "No native changes or APK installation required."
+}

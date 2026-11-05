@@ -1,5 +1,8 @@
 'use client';
+import {WhatsappLevelsFeed} from '@/components/chat/WhatsappLevelsFeed';
+import { ChatMessageViewport } from '@/components/chat/ChatMessageViewport';
 import { ChatMessageFooter } from '@/components/chat/ChatMessageFooter';
+import { useChatWindowLayout } from '@/lib/useChatWindowLayout';
 import { openChatWorkspace } from '@/lib/chatWindows';
 import { AnnouncementMessage } from '@/components/chat/AnnouncementMessage';
 
@@ -47,7 +50,6 @@ interface MonitorProfile {
   threadType?: FilterKey; // 'direct' | 'shift' | 'well' | 'project' | 'service_group' | 'all'
   slots: (SlotAssignment | null)[]; // positional
   createdBy: string;
-  locked?: boolean; // Locked profiles can't be displaced from the stack top
 }
 
 // --- Constants ---
@@ -55,6 +57,7 @@ interface MonitorProfile {
 const FILTERS: { label: string; value: FilterKey }[] = [
   { label: 'All', value: 'all' },
   { label: 'Announcements', value: 'announcements' },
+  { label: 'WhatsApp Levels', value: 'whatsapp_levels' },
   { label: 'Dispatch', value: 'dispatch_team' },
   { label: 'Private', value: 'private_driver' },
   { label: 'Shifts', value: 'shift' },
@@ -209,24 +212,23 @@ function ChatPageInner() {
   const [groupMembers, setGroupMembers] = useState<{ hash: string; name: string }[]>([]);
   const [groupBroadcast, setGroupBroadcast] = useState(false);
   const [managingThreadId, setManagingThreadId] = useState<string | null>(null);
-  const paneEndRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Profile state — stack-based (multiple profiles can be layered, top = visible)
   const [profiles, setProfiles] = useState<MonitorProfile[]>([]);
-  const [profileStack, setProfileStack] = useState<string[]>(() => {
-    try {
-      if (typeof window === 'undefined') return [];
-      const saved = localStorage.getItem('wb-chat-profile-stack');
-      if (saved) return JSON.parse(saved);
-      const legacy = localStorage.getItem('wb-chat-profile');
-      return legacy ? [legacy] : [];
-    } catch { return []; }
+  const [windowLayout,setWindowLayout,windowLayoutReady]=useChatWindowLayout(myParticipantId&&companyId?`${myParticipantId}:${companyId}`:'');
+  const profileStack=windowLayout.profileIds;
+  const setProfileStack=(value:React.SetStateAction<string[]>)=>setWindowLayout(old=>{
+    const requested=typeof value==='function'?value(old.profileIds):value;
+    if(old.locked&&requested.some(id=>!old.profileIds.includes(id)))return old;
+    const ids=old.locked?[...requested,...old.profileIds.filter(id=>old.pinnedIds.includes(id)&&!requested.includes(id))]:requested;
+    return {...old,profileIds:ids,activeId:ids.includes(old.activeId||'')&&ids.length<=old.profileIds.length?old.activeId:ids.at(-1)||null,pinnedIds:old.pinnedIds.filter(id=>ids.includes(id))};
   });
   const [setupMode, setSetupMode] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
   const [slotPickerIndex, setSlotPickerIndex] = useState<number | null>(null);
   const [highlightedPane, setHighlightedPane] = useState<number | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [showFullGridNotice,setShowFullGridNotice]=useState(false);
   useEffect(() => {
     setChatCompanyId(''); setThreads([]); setPaneMessages({}); setProfiles([]); setDrivers([]);
     if (authLoading || !canViewChat || !myParticipantId) return;
@@ -265,7 +267,7 @@ function ChatPageInner() {
   },[!!lockRequest,lockBusy]);
 
   // Derive active profile from top of stack
-  const activeProfileId = profileStack[profileStack.length - 1] || null;
+  const activeProfileId = windowLayout.activeId;
   const activeProfile = profiles.find(p => p.id === activeProfileId) || null;
   const slotScopeRef = useRef('');
   slotScopeRef.current = `${companyId}:${activeProfileId}`;
@@ -288,12 +290,6 @@ function ChatPageInner() {
     if(confirmed.length)setPendingSlotUnlocks(prev=>{const next={...prev};for(const i of confirmed)delete next[Number(i)];return next;});
   },[activeProfile,pendingSlotUnlocks]);
 
-  // Persist stack to localStorage
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('wb-chat-profile-stack', JSON.stringify(profileStack));
-  }, [profileStack]);
-
   // Toast auto-clear
   useEffect(() => {
     if (!toastMsg) return;
@@ -308,21 +304,17 @@ function ChatPageInner() {
     return () => clearTimeout(t);
   }, [highlightedPane]);
 
-  // Bring a profile to the top of the stack
-  const bringProfileToTop = useCallback((profileId: string) => {
-    setProfileStack(prev => {
-      const currentTopId = prev[prev.length - 1];
-      if (currentTopId === profileId) return prev; // Already on top
-      // Check if current top is locked
-      const currentTop = profiles.find(p => p.id === currentTopId);
-      if (currentTop?.locked) {
-        setToastMsg(`"${currentTop.name}" is locked. Unlock to switch.`);
-        return prev;
-      }
-      const filtered = prev.filter(id => id !== profileId);
-      return [...filtered, profileId];
-    });
-  }, [profiles]);
+  // Focus any open profile while protected; adding another requires unlocking this tab.
+  const bringProfileToTop = (profileId:string) => {
+    if(windowLayout.locked&&!profileStack.includes(profileId)){setToastMsg('Unlock this tab layout to add another profile.');return;}
+    setWindowLayout(old=>({...old,profileIds:old.profileIds.includes(profileId)?old.profileIds:[...old.profileIds,profileId],activeId:profileId}));
+  };
+  const removeWindowProfile=(profileId:string)=>{
+    if(windowLayout.locked&&windowLayout.pinnedIds.includes(profileId))return;
+    setWindowLayout(old=>{const ids=old.profileIds.filter(id=>id!==profileId);return {...old,profileIds:ids,activeId:old.activeId===profileId?ids.at(-1)||null:old.activeId,pinnedIds:old.pinnedIds.filter(id=>id!==profileId)};});
+  };
+  const toggleWindowProfilePin=(profileId:string)=>setWindowLayout(old=>({...old,pinnedIds:old.pinnedIds.includes(profileId)?old.pinnedIds.filter(id=>id!==profileId):[...old.pinnedIds,profileId]}));
+  const toggleWindowLock=()=>setWindowLayout(old=>({...old,locked:!old.locked,pinnedIds:old.locked?old.pinnedIds:[...old.profileIds]}));
 
   // Grid from profile or default
   const gridLayout = activeProfile
@@ -362,13 +354,29 @@ function ChatPageInner() {
     return null;
   });
 
-  const gridDrag=useChatGridDrag(`${companyId}:${activeProfileId}:${gridLayout.label}`, (payload,index)=>{
-    if(payload.scope!==`${companyId}:${activeProfileId}:${gridLayout.label}`||setupMode||lockBusy||Object.values(savingSlots).some(Boolean)||Object.keys(pendingSlotUnlocks).length)return;
-    const thread=threads.find(t=>t.id===payload.threadId);
-    if(!thread)return;
-    const next=moveChatToSlot(slots,tempSlots,openPanes,thread.id,{threadId:thread.id,threadTitle:payload.title},index);
-    if(next){setTempSlots(next);setHighlightedPane(index);}
-    else setToastMsg('That position is locked, or the grid is full. Unlock it or free a position first.');
+  const placementScope=`${companyId}:${activeProfileId}:${gridLayout.label}`;
+  const placementBlocked=lockBusy||Object.values(savingSlots).some(Boolean)||Object.keys(pendingSlotUnlocks).length>0;
+  const placementRef=useRef({scope:placementScope,slots,temporary:tempSlots,driverThreadMap,maxPanes,blocked:placementBlocked});
+  placementRef.current={scope:placementScope,slots,temporary:tempSlots,driverThreadMap,maxPanes,blocked:placementBlocked};
+  const currentOpen=(state:typeof placementRef.current)=>Array.from({length:state.maxPanes},(_,i)=>{
+    const slot=state.temporary[i]||state.slots[i];return slot?.threadId||(slot?.driverHash?state.driverThreadMap[slot.driverHash]:null)||null;
+  });
+  const placeConversation=(threadId:string,title:string,target?:number,expectedScope=placementRef.current.scope)=>{
+    const state=placementRef.current;if(state.scope!==expectedScope){setToastMsg('The grid changed while opening this chat. Select it again from the list.');return false;}
+    if(state.blocked){setToastMsg('Wait for the chat positions to finish saving, then open this chat again.');return false;}
+    const open=currentOpen(state),existing=open.indexOf(threadId);
+    if(target===undefined&&existing>=0){setHighlightedPane(existing);return true;}
+    const index=target??open.findIndex((id,i)=>!id&&!state.slots[i]&&!state.temporary[i]);
+    if(index<0){setShowFullGridNotice(true);return false;}
+    const next=moveChatToSlot(state.slots,state.temporary,open,threadId,{threadId,threadTitle:title},index);
+    if(!next){if(open.every((id,i)=>!!id||!!state.slots[i]||!!state.temporary[i]))setShowFullGridNotice(true);else setToastMsg('That square is locked. Use an empty square, or unlock and close its chat first.');return false;}
+    // Reserve immediately so concurrent driver lookups cannot claim the same square.
+    placementRef.current={...state,temporary:next};setTempSlots(next);setSlotPickerIndex(null);setHighlightedPane(index);return true;
+  };
+  const gridDrag=useChatGridDrag(placementScope, (payload,index)=>{
+    if(payload.scope!==placementRef.current.scope||lockBusy||Object.values(savingSlots).some(Boolean)||Object.keys(pendingSlotUnlocks).length)return;
+    if(payload.driverId){void openDriverConversation(payload.driverId,payload.title,payload.audience||'dispatch',index,payload.scope);return;}
+    const thread=threads.find(t=>t.id===payload.threadId);if(thread)placeConversation(thread.id,payload.title,index,payload.scope);
   });
 
   // Wait for the live profile snapshot before changing monitors or dropping an overlay.
@@ -385,7 +393,7 @@ function ChatPageInner() {
       if(index>=size||target.slots[index]||carry[index])index=Array.from({length:size},(_,i)=>i).find(i=>!target.slots[i]&&!carry[i])??-1;
       if(index>=0)carry[index]=assignment;
     }
-    if(activeProfileId!==target.id){profileCarryRef.current={scope:`${companyId}:${target.id}`,temps:carry};setProfileStack(prev=>[...prev.filter(id=>id!==target.id),target.id]);}
+    if(activeProfileId!==target.id){profileCarryRef.current={scope:`${companyId}:${target.id}`,temps:carry};setWindowLayout(old=>({...old,profileIds:old.profileIds.includes(target.id)?old.profileIds:[...old.profileIds,target.id],activeId:target.id}));}
     else setTempSlots(carry);
     setProfileLockHandoff(null);setLockRequest(null);setLockBusy(false);setLockError('');
   },[profileLockHandoff,profiles,companyId,activeProfileId,tempSlots]);
@@ -405,29 +413,19 @@ function ChatPageInner() {
     return watchStaffChat({ action: 'profiles', companyId }, rows => setProfiles(rows), error => setToastMsg(error.message));
   }, [authLoading, myParticipantId, companyId, canViewChat]);
 
-  // Initialize stack from URL param or legacy localStorage on first profile load
-  useEffect(() => {
-    if (profiles.length === 0) return;
-    if (profileStack.length > 0) {
-      // Clean stack: remove IDs for deleted profiles
-      const validIds = new Set(profiles.map(p => p.id));
-      setProfileStack(prev => {
-        const cleaned = prev.filter(id => validIds.has(id));
-        return cleaned.length !== prev.length ? cleaned : prev;
-      });
-      return;
-    }
-    // Empty stack — check URL param or legacy key
-    const urlParam = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('profile') : null;
-    const legacy = typeof window !== 'undefined' ? localStorage.getItem('wb-chat-profile') : null;
-    const profileId = urlParam || legacy;
-    if (profileId) {
-      const found = profiles.find((p) => p.id === profileId || p.name.toLowerCase().replace(/\s+/g, '-') === profileId);
-      if (found) {
-        setProfileStack([found.id]);
-      }
-    }
-  }, [profiles]);
+  const windowProfilesInitialized=useRef(false);
+  useEffect(()=>{windowProfilesInitialized.current=false;},[companyId,myParticipantId]);
+  useEffect(()=>{
+    if(!windowLayoutReady||!profiles.length)return;
+    const valid=new Set(profiles.map(p=>p.id));
+    const ids=profileStack.filter(id=>valid.has(id));
+    if(ids.length!==profileStack.length)setWindowLayout(old=>({...old,profileIds:ids,activeId:ids.includes(old.activeId||'')?old.activeId:ids.at(-1)||null,pinnedIds:old.pinnedIds.filter(id=>valid.has(id))}));
+    if(windowProfilesInitialized.current)return;
+    windowProfilesInitialized.current=true;
+    // Explicit profile links override an inherited tab snapshot, without shared locks.
+    const requested=new URLSearchParams(window.location.search).get('profile');
+    if(requested){const found=profiles.find(p=>p.id===requested||p.name.toLowerCase().replace(/\s+/g,'-')===requested);if(found)setWindowLayout(old=>({...old,profileIds:[...new Set([...old.profileIds,found.id])],activeId:found.id}));}
+  },[profiles,windowLayoutReady,companyId,myParticipantId]);
 
   // --- Subscribe to thread list + auto-open incoming messages ---
   const prevThreadMapRef = useRef<Map<string, number>>(new Map()); // threadId → last updatedAt ms
@@ -487,9 +485,7 @@ function ChatPageInner() {
     if (authLoading || !canViewChat || !myParticipantId || !companyId) return;
     const unsubs = activeThreadIds.map(threadId => watchStaffChat({ action: 'messages', threadId, companyId }, rows => {
       setPaneMessages(prev => ({ ...prev, [threadId]: rows }));
-      setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 150);
     }, error => setToastMsg(error.message), 5000));
-    for (const threadId of activeThreadIds.filter(id => !id.startsWith('announcements_'))) void staffChatCall({ action: 'read', threadId, companyId }).catch(() => {});
     return () => unsubs.forEach(stop => stop());
   }, [activeThreadIds.join(','), myParticipantId, authLoading, companyId, canViewChat]);
 
@@ -529,6 +525,7 @@ function ChatPageInner() {
 
   // --- Profile CRUD ---
   const createProfile = useCallback(async (name: string, layout: string) => {
+    if(windowLayout.locked){setToastMsg('Unlock this tab layout to add a profile.');return;}
     if (!hasCapability(user, 'manageCompany', userCompany)) {
       setToastMsg('You do not have permission to manage monitor profiles.');
       return;
@@ -555,7 +552,7 @@ function ChatPageInner() {
       console.error('[ChatPage] createProfile failed', err);
       setToastMsg('Could not create profile. Check your access.');
     }
-  }, [companyId, myParticipantId, user, userCompany]);
+  }, [companyId, myParticipantId, user, userCompany, windowLayout.locked]);
 
   const saveProfileType = useCallback(async (type: FilterKey) => {
     if (!hasCapability(user, 'manageCompany', userCompany)) {
@@ -613,7 +610,7 @@ function ChatPageInner() {
     if(!lockRequest||lockBusy||!canManageProfiles||!companyId)return;
     const scope=slotScopeRef.current,target=profiles.find(p=>p.id===lockProfileChoice);
     if(lockProfileChoice&&!target){setLockError('That profile is no longer available. Choose another.');return;}
-    if(activeProfile?.locked&&target?.id!==activeProfile.id){setLockError('Unlock the current monitor profile before switching profiles.');return;}
+    if(windowLayout.locked&&(!target||!profileStack.includes(target.id))){setLockError('Unlock this tab layout to add another profile.');return;}
     const layout=GRID_LAYOUTS.find(l=>l.label===(target?.gridLayout||lockLayout))||GRID_LAYOUTS[3],size=layout.cols*layout.rows;
     if(!target&&!lockName.trim()){setLockError('Enter a name for the new profile.');return;}
     if(lockPosition<0||lockPosition>=size||target?.slots[lockPosition]&&!sameAssignment(target.slots[lockPosition],lockRequest.assignment)
@@ -648,23 +645,8 @@ function ChatPageInner() {
     }
   }, [activeProfile, user, userCompany, companyId]);
 
-  const toggleProfileLock = useCallback(async () => {
-    if (!hasCapability(user, 'manageCompany', userCompany)) {
-      setToastMsg('You do not have permission to manage monitor profiles.');
-      return;
-    }
-    if (!activeProfile) return;
-    const db = getFirestoreDb();
-    if (!db) return;
-    try {
-      await staffChatCall({ action: 'saveProfile', companyId, profileId: activeProfile.id, record: { locked: !activeProfile.locked } });
-    } catch (err) {
-      console.error('[ChatPage] toggleProfileLock failed', err);
-      setToastMsg('Could not update profile. Check your access.');
-    }
-  }, [activeProfile, user, userCompany, companyId]);
-
   const deleteProfile = useCallback(async (profileId: string) => {
+    if(windowLayout.locked){setToastMsg('Unlock this tab layout before deleting a saved profile.');return;}
     if (!hasCapability(user, 'manageCompany', userCompany)) {
       setToastMsg('You do not have permission to manage monitor profiles.');
       return;
@@ -678,7 +660,7 @@ function ChatPageInner() {
       console.error('[ChatPage] deleteProfile failed', err);
       setToastMsg('Could not delete profile. Check your access.');
     }
-  }, [user, userCompany, companyId]);
+  }, [user, userCompany, companyId, windowLayout.locked]);
 
   // --- Assign driver or thread to slot ---
   const assignSlot = useCallback((index: number, assignment: SlotAssignment | null) => {
@@ -744,6 +726,19 @@ function ChatPageInner() {
       return null;
     }
   }, [myParticipantId, companyId, user, userCompany]);
+
+  async function openDriverConversation(driverId:string,name:string,audience:'dispatch'|'private',target?:number,expectedScope=placementRef.current.scope){
+    if(lockBusy)return;
+    const state=placementRef.current;if(state.scope!==expectedScope)return;
+    const known=threads.find(thread=>thread.participants?.includes(`driver:${driverId}`)&&(audience==='private'?thread.audience==='private_driver':thread.audience==='dispatch_team'));
+    const open=currentOpen(state);
+    if(known&&target===undefined&&open.includes(known.id)){placeConversation(known.id,name);setShowDriverPicker(false);return;}
+    // Check capacity before creating a conversation, then check the live grid again after the await.
+    const index=target??open.findIndex((id,i)=>!id&&!state.slots[i]&&!state.temporary[i]);
+    if(index<0||target!==undefined&&(state.slots[index]&&!state.temporary[index]||open[index]&&!open.some((id,i)=>!id&&!state.slots[i]&&!state.temporary[i]))){setShowFullGridNotice(true);return;}
+    const id=known?.id||await ensureDriverThread(driverId,name,undefined,audience);
+    if(id&&placeConversation(id,name,target,expectedScope))setShowDriverPicker(false);
+  }
 
   // --- Create group thread ---
   const createGroupThread = useCallback(async () => {
@@ -869,50 +864,63 @@ function ChatPageInner() {
   return (
     <div className="h-dvh bg-[#0a0a0a] text-white flex">
       {/* Left: Sidebar */}
-      <div className="w-80 border-r border-gray-800 flex flex-col">
+      <div data-chat-sidebar className="w-80 border-r border-gray-800 flex flex-col">
         {/* Header — gear opens everything, profile name is just a label */}
         <div className="p-4 border-b border-gray-800">
-          <div className="flex items-center justify-between">
-            <h1 className="text-xl font-bold text-[#FFD700] tracking-wide">WB Chat</h1>
-            <div className="flex items-center gap-2">
-              {/* Setup mode is the monitor-profile CRUD surface (shared display
-                  config) — gate on manageCompany so only managers can enter it. */}
+          <div className="flex items-center justify-between gap-3" data-chat-title-row>
+            <div className="flex items-center gap-3 min-w-0">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#FFD700]/30 bg-[#FFD700]/10 text-[#FFD700]" aria-hidden="true">
+              <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-4 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z" />
+                <path d="M8 9h6M8 13h4M17 3a6 6 0 0 1 5 6" />
+              </svg>
+            </span>
+            <div>
+              <h1 className="text-2xl font-bold text-[#FFD700] tracking-wide leading-tight">WB Chat</h1>
+              <p className="text-[11px] text-gray-500 mt-0.5">Dispatch Communications</p>
+            </div>
+            </div>
               {canManageProfiles && (
               <button
                 onClick={() => { setSetupMode(!setupMode); if (!setupMode) loadDrivers(); }}
-                className={`text-xs px-2 py-1 rounded border transition-colors ${
+                className={`shrink-0 p-1 text-lg transition-colors ${
                   setupMode
-                    ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]'
-                    : 'border-gray-700 text-gray-400 hover:text-white hover:border-gray-500'
+                    ? 'text-[#FFD700]'
+                    : 'text-gray-400 hover:text-[#FFD700]'
                 }`}
                 title={setupMode ? 'Exit setup' : 'Setup grid'}
               >
-                {setupMode ? 'Done' : '⚙'}
+                {setupMode ? <span className="text-xs font-semibold">Done</span> : '⚙'}
               </button>
               )}
-              {profiles.length > 0 && (
-                <div className="relative">
+
+          </div>
+          <div className="mt-3 pt-2.5 border-t border-gray-800" data-chat-header-controls>
+              {profiles.length === 1 && <span className="text-xs text-gray-400 block min-w-0 break-words leading-5" title={profiles[0].name}>Layout: {profiles[0].name}</span>}
+              {profiles.length > 1 && (
+                <div className="relative min-w-0">
                   <button
                     onClick={() => {
                       // Cycle to next profile in stack, or show dropdown if only 1
                       const menu = document.getElementById('profile-menu');
                       if (menu) menu.classList.toggle('hidden');
                     }}
-                    className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+                    className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1 max-w-full text-left break-words"
                   >
-                    {activeProfile?.locked && <span title="Locked">🔒</span>}
+                    {windowLayout.locked && <span title="Tab layout locked">🔒</span>}
                     {activeProfile?.name || 'Select Profile'} ▾
                   </button>
                   <div id="profile-menu" className="hidden absolute right-0 top-full mt-1 bg-[#111] border border-gray-700 rounded-lg overflow-hidden z-20 min-w-[150px] shadow-lg">
                     {profiles.map((p) => (
                       <button
                         key={p.id}
+                        disabled={windowLayout.locked&&!profileStack.includes(p.id)}
                         onClick={() => { bringProfileToTop(p.id); document.getElementById('profile-menu')?.classList.add('hidden'); }}
-                        className={`w-full text-left px-3 py-2 text-sm hover:bg-[#1a1a1a] transition-colors ${
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-[#1a1a1a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
                           activeProfile?.id === p.id ? 'text-[#FFD700] font-bold' : 'text-gray-300'
                         }`}
                       >
-                        {p.locked ? '🔒 ' : ''}{p.name}
+                        {p.name}
                         {profileStack.includes(p.id) && p.id !== activeProfileId && (
                           <span className="text-gray-600 text-[10px] ml-1">stacked</span>
                         )}
@@ -921,15 +929,208 @@ function ChatPageInner() {
                   </div>
                 </div>
               )}
+
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <button onClick={() => openChatWorkspace(true)} title="New chat window" className="ml-auto inline-flex items-center gap-1.5 rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:border-[#FFD700]/50 hover:text-[#FFD700]">
+                New window <span aria-hidden="true">↗</span>
+              </button>
             </div>
           </div>
 
-          <div className="flex justify-end px-3 py-1 border-b border-gray-800">
-            <button onClick={() => openChatWorkspace(true)} title="New chat window" className="text-xs text-gray-400 hover:text-[#FFD700]">New window</button>
+        </div>
+
+        {/* Filter chips */}
+        <div className="flex flex-wrap gap-1.5 px-3 py-2 border-b border-gray-800">
+          {FILTERS.map((f) => {
+            const hasUnread = (unreadByType[f.value] || 0) > 0;
+            const isActive = filter === f.value;
+            return (
+            <button
+              key={f.value}
+              onClick={() => setFilter(f.value)}
+              className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors relative ${
+                isActive
+                  ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]'
+                  : hasUnread
+                    ? 'bg-[#FFD700]/10 border-[#FFD700]/50 text-[#FFD700]/80 animate-pulse'
+                    : 'bg-[#111] border-gray-700 text-gray-400 hover:border-gray-500'
+              }`}
+            >
+              {f.label}
+              {hasUnread && !isActive && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#FFD700]" />
+              )}
+            </button>
+            );
+          })}
+        </div>
+
+        {/* New conversation button — starting a DM is a sendChat action */}
+        {canSendChat && (
+        <div className="px-3 py-2 border-b border-gray-800">
+          <button
+            onClick={() => { setShowDriverPicker(!showDriverPicker); if (!showDriverPicker) loadDrivers(); }}
+            aria-expanded={showDriverPicker}
+            aria-controls="new-conversation-list"
+            className={`w-full py-2 rounded-lg border text-sm font-semibold transition-colors ${
+              showDriverPicker ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]' : 'bg-[#FFD700]/10 border-[#FFD700]/30 text-[#FFD700] hover:bg-[#FFD700]/20'
+            }`}
+          >
+            {showDriverPicker ? 'Close conversation list' : 'New conversation'}
+          </button>
+        </div>
+        )}
+
+        {/* Direct driver picker */}
+        {showDriverPicker ? (
+          <div id="new-conversation-list" className="flex-1 overflow-y-auto bg-[#0d0d0d]">
+            <div className="p-3 text-sm border-b border-gray-800">
+              <label htmlFor="conversation-scope">Conversation audience</label>
+              <select id="conversation-scope" value={newConversationScope} onChange={e => setNewConversationScope(e.target.value as 'dispatch' | 'private')} className="w-full mt-2 p-2 bg-[#222] rounded">
+                <option value="dispatch">Dispatch team — all authorized dispatchers</option>
+                <option value="private">Private — only you and this driver</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-2">Click a driver to use an empty square, or drag to choose one.</p>
+              <p className="text-xs text-gray-400 mt-2">{newConversationScope === 'private' ? 'Private chats cannot be saved in shared monitor profiles. Level reports stay in Dispatch team.' : 'One conversation per driver, across shifts. Level reports appear here.'}</p>
+            </div>
+            <input
+              type="text"
+              value={driverSearch}
+              onChange={(e) => setDriverSearch(e.target.value)}
+              placeholder="Search drivers..."
+              className="w-full px-3 py-2 bg-transparent text-white text-sm placeholder-gray-500 border-b border-gray-800 focus:outline-none sticky top-0 bg-[#0d0d0d] z-10"
+              autoFocus
+            />
+            {filteredDrivers.map((d) => {
+              const hasThread = driversWithThreads.has(d.hash);
+              return (
+              <div
+                key={d.hash}
+                data-chat-driver={d.hash}
+                {...gridDrag.handles({threadId:'',driverId:d.hash,title:d.name,audience:newConversationScope,scope:placementScope},lockBusy)}
+                onClick={() => {void openDriverConversation(d.hash,d.name,newConversationScope);}}
+                onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();void openDriverConversation(d.hash,d.name,newConversationScope);}}}
+                tabIndex={0}
+                title="Click to open in an empty square, or drag to choose a square. On touchscreens, press and hold to drag."
+                style={{userSelect:'none',WebkitTouchCallout:'none'}}
+                className={`w-full text-left px-3 py-3 text-sm hover:bg-[#FFD700]/10 hover:text-white cursor-pointer transition-colors border-b border-gray-800/30 flex items-center justify-between ${hasThread ? 'text-gray-500' : 'text-gray-300'}`}
+                role="button"
+              >
+                <span>{d.name}</span>
+                {hasThread && <span className="text-[10px] text-gray-600">open</span>}
+              </div>
+              );
+            })}
+            {filteredDrivers.length === 0 && (
+              <p className="px-3 py-4 text-xs text-gray-600 text-center">No drivers found</p>
+            )}
           </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto">
+            {filteredThreads.length === 0 && (
+              <div className="text-center py-12 text-gray-600">
+                <p className="text-sm">No active conversations</p>
+              </div>
+            )}
+            {filteredThreads.map((thread) => {
+              const unread = isThreadUnread(thread, myParticipantId);
+              const isOpen = activeThreadIds.includes(thread.id);
+              return (
+                <button
+                  key={thread.id}
+                  data-chat-list-thread={thread.id}
+                  title="Click to open, or drag to a grid position. On touchscreens, press and hold to drag."
+                  {...gridDrag.handles({threadId:thread.id,title:getTitle(thread),scope:`${companyId}:${activeProfileId}:${gridLayout.label}`},lockBusy)}
+                  style={{userSelect:'none',WebkitTouchCallout:'none'}}
+                  onClick={(e) => {
+                    e.stopPropagation();
+
+                    // 1. Already visible in current profile? Just highlight that pane.
+                    const existingIdx = openPanes.findIndex(p => p === thread.id);
+                    if (existingIdx >= 0) {
+                      setHighlightedPane(existingIdx);
+                      return;
+                    }
+
+                    // 2. Thread in another stacked profile (not the current one)? Bring that profile to top.
+                    const ownerProfiles = (threadToProfiles.get(thread.id) || []).filter(pid => pid !== activeProfileId&&(!windowLayout.locked||profileStack.includes(pid)));
+                    if (ownerProfiles.length > 0) {
+                      const inStack = ownerProfiles.sort((a, b) => profileStack.indexOf(b) - profileStack.indexOf(a));
+                      bringProfileToTop(inStack[0]);
+                      return;
+                    }
+
+                    // A click never displaces another conversation, including an unlocked one.
+                    placeConversation(thread.id,getTitle(thread));
+                  }}
+                  className={`w-full text-left px-3 py-3 border-b border-gray-800/50 hover:bg-[#111] transition-colors ${
+                    isOpen ? 'bg-[#111] border-l-2 border-l-[#FFD700]' : ''
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">{threadTypeIcon(thread.type)}</span>
+                    <span className={`flex-1 text-sm truncate ${unread ? 'text-white font-bold' : 'text-gray-300'}`}>
+                      {getTitle(thread)}
+                    </span>
+                    <span className={`text-[10px] ${unread ? 'text-[#FFD700]' : 'text-gray-600'}`}>
+                      {thread.permanent && !thread.lastMessage ? '' : formatChatTime(thread.lastMessage?.timestamp || thread.updatedAt)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5 ml-6">
+                    <span className="text-xs text-gray-500 truncate flex-1">
+                      {thread.type === 'whatsapp_levels' ? 'Browse processed pulls by well or driver' : thread.lastMessage?.text || 'No messages'}
+                    </span>
+                    {unread && <span className="w-2 h-2 rounded-full bg-[#FFD700] flex-shrink-0" />}
+                  </div>
+                  <div className="flex items-center gap-2 ml-6 mt-0.5">
+                    <span className="text-[9px] text-gray-600 uppercase tracking-wider">
+                      {chatAudienceLabel(thread)}
+                    </span>
+                    {!thread.permanent && thread.type !== 'direct' && canSendChat && (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!hasCapability(user, 'sendChat', userCompany)) {
+                            setToastMsg('You do not have permission to change broadcast.');
+                            return;
+                          }
+                          const db = getFirestoreDb();
+                          if (!db) return;
+                          try {
+                            await staffChatCall({ action: 'broadcast', companyId, threadId: thread.id, broadcast: !(thread as any).broadcast });
+                          } catch (err) {
+                            console.error('[ChatPage] broadcast toggle failed', err);
+                            setToastMsg('Could not change broadcast. Check your access.');
+                          }
+                        }}
+                        className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
+                          (thread as any).broadcast
+                            ? 'bg-[#FFD700]/15 text-[#FFD700]'
+                            : 'text-gray-700 hover:text-gray-400'
+                        }`}
+                        title={(thread as any).broadcast ? 'Broadcast ON' : 'Click to enable broadcast'}
+                      >
+                        {(thread as any).broadcast ? '📢 BROADCAST' : '📢'}
+                      </button>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {setupMode&&<aside data-chat-settings-panel aria-label="Profile settings" className="flex min-h-0 flex-col border-r border-gray-800 bg-[#0d0d0d]">
+        <div className="flex items-center justify-between gap-2 p-3 border-b border-gray-700 shrink-0">
+          <h2 className="text-sm font-bold text-[#FFD700]">Profile settings</h2>
+          <button aria-label="Close profile settings" onClick={()=>setSetupMode(false)} className="text-gray-400 hover:text-white px-2">×</button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <p className="text-xs text-gray-400 px-3 pt-3">Click or drag from the list into an empty square. Lock the chat position to save it.</p>
           {/* Setup panel — profiles + grid size + instructions */}
           {setupMode && (
-            <div className="mt-3 space-y-2">
+            <div className="space-y-3 p-3">
               {/* Profile list */}
               <div className="bg-[#111] border border-gray-700 rounded-lg overflow-hidden">
                 <div className="px-2 py-1.5 border-b border-gray-800">
@@ -945,7 +1146,7 @@ function ChatPageInner() {
                     >
                       {p.name} <span className="text-[10px] text-gray-600">{p.gridLayout}</span>
                     </span>
-                    <button onClick={() => deleteProfile(p.id)} className="text-gray-600 hover:text-red-400 text-xs px-1" title="Delete profile">✕</button>
+                    <button disabled={windowLayout.locked} onClick={() => deleteProfile(p.id)} className="text-gray-600 hover:text-red-400 text-xs px-1" title="Delete profile">✕</button>
                   </div>
                 ))}
                 <div className="p-2 border-t border-gray-800">
@@ -955,10 +1156,12 @@ function ChatPageInner() {
                       value={newProfileName}
                       onChange={(e) => setNewProfileName(e.target.value)}
                       placeholder="New profile name..."
+                      disabled={windowLayout.locked}
                       className="flex-1 bg-[#0a0a0a] border border-gray-700 rounded px-2 py-1 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700]/50"
                       onKeyDown={(e) => { if (e.key === 'Enter' && newProfileName.trim()) createProfile(newProfileName, gridLayout.label); }}
                     />
                     <button
+                      disabled={windowLayout.locked}
                       onClick={() => newProfileName.trim() && createProfile(newProfileName, gridLayout.label)}
                       className="px-2 py-1 rounded bg-[#FFD700]/20 text-[#FFD700] text-xs font-semibold hover:bg-[#FFD700]/30"
                     >
@@ -1020,246 +1223,26 @@ function ChatPageInner() {
             </div>
           )}
 
-          {!setupMode && <p className="text-xs text-gray-500 mt-1">Dispatch Communications</p>}
         </div>
-
-        {/* Filter chips */}
-        <div className="flex flex-wrap gap-1.5 px-3 py-2 border-b border-gray-800">
-          {FILTERS.map((f) => {
-            const hasUnread = (unreadByType[f.value] || 0) > 0;
-            const isActive = filter === f.value;
-            return (
-            <button
-              key={f.value}
-              onClick={() => setFilter(f.value)}
-              className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors relative ${
-                isActive
-                  ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]'
-                  : hasUnread
-                    ? 'bg-[#FFD700]/10 border-[#FFD700]/50 text-[#FFD700]/80 animate-pulse'
-                    : 'bg-[#111] border-gray-700 text-gray-400 hover:border-gray-500'
-              }`}
-            >
-              {f.label}
-              {hasUnread && !isActive && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#FFD700]" />
-              )}
-            </button>
-            );
-          })}
-        </div>
-
-        {/* New conversation button — starting a DM is a sendChat action */}
-        {canSendChat && (
-        <div className="px-3 py-2 border-b border-gray-800">
-          <button
-            onClick={() => { setShowDriverPicker(!showDriverPicker); if (!showDriverPicker) loadDrivers(); }}
-            aria-expanded={showDriverPicker}
-            aria-controls="new-conversation-list"
-            className={`w-full py-2 rounded-lg border text-sm font-semibold transition-colors ${
-              showDriverPicker ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]' : 'bg-[#FFD700]/10 border-[#FFD700]/30 text-[#FFD700] hover:bg-[#FFD700]/20'
-            }`}
-          >
-            {showDriverPicker ? 'Close conversation list' : 'New conversation'}
-          </button>
-        </div>
-        )}
-
-        {/* Direct driver picker */}
-        {showDriverPicker ? (
-          <div id="new-conversation-list" className="flex-1 overflow-y-auto bg-[#0d0d0d]">
-            <div className="p-3 text-sm border-b border-gray-800">
-              <label htmlFor="conversation-scope">Conversation audience</label>
-              <select id="conversation-scope" value={newConversationScope} onChange={e => setNewConversationScope(e.target.value as 'dispatch' | 'private')} className="w-full mt-2 p-2 bg-[#222] rounded">
-                <option value="dispatch">Dispatch team — all authorized dispatchers</option>
-                <option value="private">Private — only you and this driver</option>
-              </select>
-              <p className="text-xs text-gray-400 mt-2">{newConversationScope === 'private' ? 'Private chats cannot be saved in shared monitor profiles. Level reports stay in Dispatch team.' : 'One conversation per driver, across shifts. Level reports appear here.'}</p>
-            </div>
-            <input
-              type="text"
-              value={driverSearch}
-              onChange={(e) => setDriverSearch(e.target.value)}
-              placeholder="Search drivers..."
-              className="w-full px-3 py-2 bg-transparent text-white text-sm placeholder-gray-500 border-b border-gray-800 focus:outline-none sticky top-0 bg-[#0d0d0d] z-10"
-              autoFocus
-            />
-            {filteredDrivers.map((d) => {
-              const hasThread = driversWithThreads.has(d.hash);
-              return (
-              <div
-                key={d.hash}
-                onClick={() => { void ensureDriverThread(d.hash, d.name, d.companyId, newConversationScope).then(id => { if (id) setTempSlots(prev => ({ ...prev, [0]: { threadId: id, threadTitle: d.name } })); }); setShowDriverPicker(false); }}
-                className={`w-full text-left px-3 py-3 text-sm hover:bg-[#FFD700]/10 hover:text-white cursor-pointer transition-colors border-b border-gray-800/30 flex items-center justify-between ${hasThread ? 'text-gray-500' : 'text-gray-300'}`}
-                role="button"
-              >
-                <span>{d.name}</span>
-                {hasThread && <span className="text-[10px] text-gray-600">open</span>}
-              </div>
-              );
-            })}
-            {filteredDrivers.length === 0 && (
-              <p className="px-3 py-4 text-xs text-gray-600 text-center">No drivers found</p>
-            )}
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto">
-            {filteredThreads.length === 0 && (
-              <div className="text-center py-12 text-gray-600">
-                <p className="text-sm">No active conversations</p>
-              </div>
-            )}
-            {filteredThreads.map((thread) => {
-              const unread = isThreadUnread(thread, myParticipantId);
-              const isOpen = activeThreadIds.includes(thread.id);
-              return (
-                <button
-                  key={thread.id}
-                  data-chat-list-thread={thread.id}
-                  title="Click to open, or drag to a grid position. On touchscreens, press and hold to drag."
-                  {...gridDrag.handles({threadId:thread.id,title:getTitle(thread),scope:`${companyId}:${activeProfileId}:${gridLayout.label}`},setupMode||lockBusy)}
-                  style={{userSelect:'none',WebkitTouchCallout:'none'}}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (setupMode) return;
-
-                    // 1. Already visible in current profile? Just highlight that pane.
-                    const existingIdx = openPanes.findIndex(p => p === thread.id);
-                    if (existingIdx >= 0) {
-                      setHighlightedPane(existingIdx);
-                      return;
-                    }
-
-                    // 2. Thread in another stacked profile (not the current one)? Bring that profile to top.
-                    const ownerProfiles = (threadToProfiles.get(thread.id) || []).filter(pid => pid !== activeProfileId);
-                    if (ownerProfiles.length > 0) {
-                      const inStack = ownerProfiles.sort((a, b) => profileStack.indexOf(b) - profileStack.indexOf(a));
-                      bringProfileToTop(inStack[0]);
-                      return;
-                    }
-
-                    // 3. Open thread in an available grid slot
-                    const emptyIdx = openPanes.findIndex((p,i) => !p&&!slots[i]);
-                    if (emptyIdx >= 0) {
-                      setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
-                    } else {
-                      const lastIdx = openPanes.findLastIndex((_,i)=>!slots[i]||!!tempSlots[i]);
-                      if(lastIdx<0){setToastMsg('All positions are locked. Unlock a chat or choose another profile.');return;}
-                      setTempSlots(prev => ({ ...prev, [lastIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
-                    }
-                  }}
-                  className={`w-full text-left px-3 py-3 border-b border-gray-800/50 hover:bg-[#111] transition-colors ${
-                    isOpen ? 'bg-[#111] border-l-2 border-l-[#FFD700]' : ''
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-base">{threadTypeIcon(thread.type)}</span>
-                    <span className={`flex-1 text-sm truncate ${unread ? 'text-white font-bold' : 'text-gray-300'}`}>
-                      {getTitle(thread)}
-                    </span>
-                    <span className={`text-[10px] ${unread ? 'text-[#FFD700]' : 'text-gray-600'}`}>
-                      {thread.permanent && !thread.lastMessage ? '' : formatChatTime(thread.lastMessage?.timestamp || thread.updatedAt)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5 ml-6">
-                    <span className="text-xs text-gray-500 truncate flex-1">
-                      {thread.lastMessage?.text || 'No messages'}
-                    </span>
-                    {unread && <span className="w-2 h-2 rounded-full bg-[#FFD700] flex-shrink-0" />}
-                  </div>
-                  <div className="flex items-center gap-2 ml-6 mt-0.5">
-                    <span className="text-[9px] text-gray-600 uppercase tracking-wider">
-                      {chatAudienceLabel(thread)}
-                    </span>
-                    {!thread.permanent && thread.type !== 'direct' && canSendChat && (
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          if (!hasCapability(user, 'sendChat', userCompany)) {
-                            setToastMsg('You do not have permission to change broadcast.');
-                            return;
-                          }
-                          const db = getFirestoreDb();
-                          if (!db) return;
-                          try {
-                            await staffChatCall({ action: 'broadcast', companyId, threadId: thread.id, broadcast: !(thread as any).broadcast });
-                          } catch (err) {
-                            console.error('[ChatPage] broadcast toggle failed', err);
-                            setToastMsg('Could not change broadcast. Check your access.');
-                          }
-                        }}
-                        className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
-                          (thread as any).broadcast
-                            ? 'bg-[#FFD700]/15 text-[#FFD700]'
-                            : 'text-gray-700 hover:text-gray-400'
-                        }`}
-                        title={(thread as any).broadcast ? 'Broadcast ON' : 'Click to enable broadcast'}
-                      >
-                        {(thread as any).broadcast ? '📢 BROADCAST' : '📢'}
-                      </button>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      </aside>}
+      <style jsx>{`
+        [data-chat-settings-panel]{width:288px;flex-shrink:0;}
+        @media(max-width:1100px){[data-chat-settings-panel]{position:fixed;right:0;top:0;bottom:0;z-index:50;max-width:calc(100vw - 16px);border-left:1px solid #374151;}}
+      `}</style>
 
       {/* Right: Profile tab strip + Chat Grid */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Profile tab strip — shows stacked profiles, click to bring to top */}
-        {profileStack.length > 1 && (
-          <div className="flex items-center gap-0.5 bg-[#0d0d0d] border-b border-gray-800 px-1 py-0.5 shrink-0">
-            {profileStack.map((pid) => {
-              const p = profiles.find(pr => pr.id === pid);
-              if (!p) return null;
-              const isTop = pid === activeProfileId;
-              return (
-                <div key={pid} className={`flex items-center gap-1 px-2.5 py-1 rounded-t text-xs cursor-pointer transition-colors ${
-                  isTop ? 'bg-[#1a1a1a] text-[#FFD700] font-bold border-t border-x border-[#FFD700]/30' : 'text-gray-500 hover:text-gray-300 hover:bg-[#111]'
-                }`}>
-                  <span onClick={() => bringProfileToTop(pid)}>
-                    {p.locked ? '🔒 ' : ''}{p.name}
-                  </span>
-                  {isTop && canManageProfiles && (
-                    <button
-                      onClick={toggleProfileLock}
-                      className={`ml-1 text-[10px] transition-colors ${p.locked ? 'text-[#FFD700]' : 'text-gray-600 hover:text-gray-400'}`}
-                      title={p.locked ? 'Unlock profile' : 'Lock profile'}
-                    >
-                      {p.locked ? '🔒' : '🔓'}
-                    </button>
-                  )}
-                  {!isTop && (
-                    <button
-                      onClick={() => setProfileStack(prev => prev.filter(id => id !== pid))}
-                      className="text-gray-600 hover:text-red-400 text-[10px] ml-0.5"
-                      title="Remove from stack"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              );
-            })}
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <div data-chat-window-layout className="flex items-center gap-1 bg-[#0d0d0d] border-b border-gray-800 px-2 py-1 shrink-0">
+          <div className="flex flex-1 min-w-0 gap-1 overflow-x-auto" role="tablist" aria-label="Open monitor profiles">
+            {profileStack.map(pid=>{const p=profiles.find(row=>row.id===pid);if(!p)return null;const pinned=windowLayout.pinnedIds.includes(pid);return <div key={pid} data-window-profile={pid} className={`flex items-center gap-1 rounded px-2 py-1 shrink-0 ${pid===activeProfileId?'bg-[#211e08] text-[#FFD700]':'text-gray-400'}`}>
+              <button role="tab" aria-selected={pid===activeProfileId} onClick={()=>bringProfileToTop(pid)} className="text-xs">{p.name}</button>
+              <button title={pinned?'Unlock profile in this tab':'Lock profile in this tab'} aria-label={`${pinned?'Unlock':'Lock'} ${p.name} in this tab`} onClick={()=>toggleWindowProfilePin(pid)} className="text-xs px-1">{pinned?'🔒':'🔓'}</button>
+              <button title="Remove profile from this tab" aria-label={`Remove ${p.name} from this tab`} disabled={windowLayout.locked&&pinned} onClick={()=>removeWindowProfile(pid)} className="text-xs px-1 disabled:opacity-25 disabled:cursor-not-allowed hover:text-red-400">×</button>
+            </div>;})}
+            {!profileStack.length&&<span className="text-xs text-gray-500 py-1">No profiles open</span>}
           </div>
-        )}
-        {/* Single profile lock toggle when only 1 in stack */}
-        {profileStack.length === 1 && activeProfile && (
-          <div className="flex items-center justify-between bg-[#0d0d0d] border-b border-gray-800 px-3 py-1 shrink-0">
-            <span className="text-xs text-gray-500">{activeProfile.name}</span>
-            {canManageProfiles && (
-            <button
-              onClick={toggleProfileLock}
-              className={`text-xs transition-colors ${activeProfile.locked ? 'text-[#FFD700]' : 'text-gray-600 hover:text-gray-400'}`}
-              title={activeProfile.locked ? 'Unlock profile' : 'Lock profile'}
-            >
-              {activeProfile.locked ? '🔒 Locked' : '🔓 Unlocked'}
-            </button>
-            )}
-          </div>
-        )}
+          <button aria-label={windowLayout.locked?'Unlock tab layout':'Lock tab layout'} title={windowLayout.locked?'Unlock this tab to add or remove profiles freely':'Keep this tab’s current profiles; switching remains available'} disabled={lockBusy} onClick={toggleWindowLock} className={`shrink-0 text-xs px-2 py-1 rounded border ${windowLayout.locked?'text-[#FFD700] border-[#FFD700]/40':'text-gray-400 border-gray-700'}`}>{windowLayout.locked?'🔒 Tab locked':'🔓 Tab unlocked'}</button>
+        </div>
 
       {gridDrag.drag&&<div className="fixed z-[90] pointer-events-none rounded border border-[#FFD700] bg-[#222] px-3 py-2 text-sm text-[#FFD700] shadow-xl" style={{left:gridDrag.drag.x+14,top:gridDrag.drag.y+14,maxWidth:280}}>{gridDrag.drag.payload.title}</div>}
       {lockRequest&&<div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4" onClick={()=>{if(!lockBusy)setLockRequest(null);}}>
@@ -1268,7 +1251,7 @@ function ChatPageInner() {
           <p className="text-sm text-gray-300 mb-4">{lockRequest.assignment.threadTitle||lockRequest.assignment.driverName||'Chat'}</p>
           <label className="block text-sm mb-3">Monitor profile
             <select autoFocus aria-label="Monitor profile" disabled={lockBusy} value={lockProfileChoice} onChange={e=>chooseLockProfile(e.target.value)} className="block w-full mt-1 bg-[#222] border border-gray-600 rounded p-2">
-              {profiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}<option value="">Create a new profile…</option>
+              {profiles.map(p=><option key={p.id} value={p.id} disabled={windowLayout.locked&&!profileStack.includes(p.id)}>{p.name}</option>)}<option value="" disabled={windowLayout.locked}>Create a new profile…</option>
             </select>
           </label>
           {!lockProfileChoice&&<>
@@ -1282,6 +1265,19 @@ function ChatPageInner() {
           <p className="text-xs text-gray-400 mb-3">Profiles remain available in Settings for editing. Unlock a chat before dragging it to another position.</p>
           {lockError&&<p role="alert" className="text-sm text-red-400 mb-3">{lockError}</p>}
           <div className="flex justify-end gap-2"><button disabled={lockBusy} onClick={()=>setLockRequest(null)} className="px-3 py-2 rounded border border-gray-600">Cancel</button><button disabled={lockBusy||lockPosition<0||!lockProfileChoice&&!lockName.trim()} onClick={confirmSlotLock} className="px-3 py-2 rounded bg-[#FFD700] text-black disabled:opacity-50">{lockBusy?'Saving position…':'Save and lock'}</button></div>
+        </section>
+      </div>}
+
+      {showFullGridNotice&&<div className="fixed inset-0 z-[85] bg-black/70 flex items-center justify-center p-4" onClick={()=>setShowFullGridNotice(false)}>
+        <section role="alertdialog" aria-modal="true" aria-labelledby="full-grid-title" className="max-w-md rounded-xl border border-gray-600 bg-[#151515] p-5 text-sm shadow-xl" onClick={e=>e.stopPropagation()} onKeyDown={e=>{if(e.key==='Escape')setShowFullGridNotice(false);}}>
+          <h2 id="full-grid-title" className="text-[#FFD700] font-bold text-lg mb-3">This profile grid is full</h2>
+          <p className="text-gray-200">To add a conversation, unlock and close a chat, increase Grid Size in Settings, switch profiles, or open a new window.</p>
+          <p className="text-gray-400 mt-2">To add another profile to this tab, unlock the tab layout first.</p>
+          <div className="flex flex-wrap justify-end gap-2 mt-4">
+            <button className="border border-gray-600 rounded px-3 py-2" onClick={()=>{setShowFullGridNotice(false);setShowDriverPicker(false);setSetupMode(true);}}>Settings</button>
+            <button className="border border-gray-600 rounded px-3 py-2" onClick={()=>{openChatWorkspace(true);setShowFullGridNotice(false);}}>New window</button>
+            <button autoFocus className="bg-[#FFD700] text-black rounded px-3 py-2" onClick={()=>setShowFullGridNotice(false)}>Got it</button>
+          </div>
         </section>
       </div>}
 
@@ -1306,11 +1302,11 @@ function ChatPageInner() {
           const msgs = threadId ? (paneMessages[threadId] || []) : [];
           const inputText = threadId ? (paneInputs[threadId] || '') : '';
           const lastMsg = msgs[msgs.length - 1];
-          const hasUnread = lastMsg && lastMsg.senderId !== myParticipantId;
+          const hasUnread = thread?.type !== 'whatsapp_levels' && lastMsg && lastMsg.senderId !== myParticipantId;
 
           const pane=(()=>{
           // Setup mode — show slot assignment UI
-          if (setupMode) {
+          if (setupMode && (!threadId || slotPickerIndex===index)) {
             const profileType = activeProfile?.threadType || 'all';
             const isDirectProfile = profileType === 'direct';
             const slotLabel = slot?.driverName || slot?.threadTitle || null;
@@ -1508,7 +1504,7 @@ function ChatPageInner() {
               highlightedPane === index ? 'ring-2 ring-[#FFD700] ring-inset' : ''
             }`}>
               {/* Header: drag here; message text retains native selection. */}
-              <div {...gridDrag.handles({threadId:threadId!,title:thread?getTitle(thread):'Chat',scope:`${companyId}:${activeProfileId}:${gridLayout.label}`},!tempSlots[index]||lockBusy||setupMode)}
+              <div {...gridDrag.handles({threadId:threadId!,title:thread?getTitle(thread):'Chat',scope:`${companyId}:${activeProfileId}:${gridLayout.label}`},!tempSlots[index]||lockBusy)}
                 title={tempSlots[index]?'Drag to move; on touchscreens, press and hold to drag.':'Unlock this chat to move it.'}
                 data-chat-drag-header={threadId} style={{userSelect:'none',WebkitTouchCallout:'none',cursor:tempSlots[index]?'grab':'default'}} className={`flex items-center justify-between px-3 py-2 border-b flex-shrink-0 transition-colors ${
                 hasUnread ? 'bg-[#FFD700]/10 border-[#FFD700]/40' : highlightedPane === index ? 'bg-[#FFD700]/20 border-[#FFD700]/60' : 'bg-[#0d0d0d] border-gray-800'
@@ -1700,7 +1696,9 @@ function ChatPageInner() {
               )}
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-1.5 min-h-0">
+              {thread?.type === 'whatsapp_levels' ? <WhatsappLevelsFeed key={companyId+':'+threadId} scope={`${companyId}:${threadId}`} messages={msgs} participantId={myParticipantId}/> : <>
+              <ChatMessageViewport scope={`${companyId}:${threadId}`} messages={msgs} participantId={myParticipantId}
+                onRead={threadId && !threadId.startsWith('announcements_') ? () => {void staffChatCall({action:'read',threadId,companyId}).catch(()=>{});} : undefined}>
                 {msgs.map((msg) => {
                   if (msg.requiresAcknowledgement) return <AnnouncementMessage key={msg.id} message={msg} />;
                   const isMine = msg.senderId === myParticipantId;
@@ -1709,7 +1707,7 @@ function ChatPageInner() {
                   const isPhoto = msg.type === 'photo' && (msg as any).photoUrl;
                   if (isSystem) {
                     return (
-                      <div key={msg.id} className="flex justify-center my-1">
+                      <div key={msg.id} data-chat-message-id={msg.id} className="flex justify-center my-1">
                         <div onContextMenu={selectChatMessageText} className="bg-[#1a1a1a] border border-gray-700 rounded-lg px-2 py-0.5">
                           <p data-chat-message-text className="text-gray-400 text-xs text-center select-text">{msg.text}</p>
                           <ChatMessageFooter message={msg} />
@@ -1718,7 +1716,7 @@ function ChatPageInner() {
                     );
                   }
                   return (
-                    <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                    <div key={msg.id} data-chat-message-id={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                       <div onContextMenu={selectChatMessageText} className={`max-w-[80%] rounded-xl px-3 py-1.5 ${
                         isMine ? 'bg-[#FFD700] text-black rounded-br-sm' : 'bg-[#1a1a1a] text-gray-200 rounded-bl-sm'
                       }`}>
@@ -1741,8 +1739,7 @@ function ChatPageInner() {
                     </div>
                   );
                 })}
-                <div ref={(el) => { paneEndRefs.current[threadId] = el; }} />
-              </div>
+              </ChatMessageViewport>
 
               {thread?.permanent && <p className="px-3 py-2 text-xs text-[#FFD700] bg-[#211d08]">Post to all drivers, including off shift. Each driver must acknowledge.</p>}
               {/* Input */}
@@ -1778,6 +1775,7 @@ function ChatPageInner() {
                   ➤
                 </button>
               </div>
+              </>}
             </div>
           );
           })();
