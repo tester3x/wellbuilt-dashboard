@@ -25,6 +25,39 @@ test.each(['Drone','Drone 1','Drone1'])('Drone regression: signed intake consume
  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:answer.result.identity})).result.status).toBe('complete');
 });
 
+test.each([
+ ['clear rise', 11, false, true],
+ ['small rise', 12, false, false],
+ ['manual hold', 11, true, false],
+] as const)('signed pull restart: %s', async (_label, shutdownFeet, manualHold, shouldRestart) => {
+ const well = 'Kahuna 5';
+ const shutdownAt = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+ const lastAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+ database.set('packets/processed/off-marker', {
+  wellName: well, dateTimeUTC: shutdownAt, wellDown: true, tankTopInches: shutdownFeet * 12,
+  source: 'whatsapp_watchdog', canonicalProcessingComplete: true,
+  watchdogProvenance: { observationKind: 'top_only', ownershipSource: 'verified_sender_binding' },
+ });
+ database.set('packets/processed/last-pull', {
+  wellName: well, dateTimeUTC: lastAt, tankLevelFeet: 11, tankAfterInches: 110, bblsTaken: 220,
+  canonicalProcessingComplete: true,
+ });
+ database.set('wells/' + well + '/status', { isDown: true, lastPull: { packetId: 'last-pull', dateTimeUTC: lastAt } });
+ if (manualHold) database.get('well_config')[well].shutIn = { resumeRequiresConfirmation: true };
+ const result = await call(ingestWatchdogPullV2, 'ingestWatchdogPullV2', observation());
+ expect(result.result.status).toBe('queued');
+ const packet = database.get('packets/incoming/' + result.result.packetId);
+ expect(packet.bblsTaken).toBe(165);
+ expect(packet.wellDownIsAuthoritative).toBe(shouldRestart);
+ if (shouldRestart) {
+  expect(packet).toMatchObject({ wellDown: false, flowIntervalBarrier: true, watchdogProvenance: {
+   wellRestart: { kind: 'measured_tank_rise', shutdownPacketId: 'off-marker', previousPacketId: 'last-pull' },
+  } });
+ } else {
+  expect(packet.wellDown).toBeUndefined();
+ }
+});
+
 test('armed hold resumes through signed intake once, preserves first report and rejects old backlog',async()=>{
  const policy=documents.get('watchdog_v2_config/laptop'),channel=policy.channels.group;
  policy.heldWells={'Kahuna 5':{state:'on_hold',effectiveAt:new Date(Date.now()-86400000).toISOString(),channels:{group:channel},autoResume:{mode:'next_load_or_level',armedAt:new Date(Date.now()-600000).toISOString()}}};

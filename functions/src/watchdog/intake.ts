@@ -1,5 +1,5 @@
 import {resumeHeldChannel} from './heldChannel';
-import {reportedWellOff} from './reportedWellState';
+import {measuredWellRestart,reportedWellOff} from './reportedWellState';
 import {heldWellLifecycle} from './monitoringHold';
 import {corroborateInferredLevels} from './inferredLevels';
 import {isTimedLevelReporter} from './timedLevelReporter';
@@ -133,6 +133,13 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const packetId=stamp+'_'+mapped.wellName.replace(/\s+/g,'')+'_'+identity.slice(0,6);
  const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,dateTime:watchdogDisplayTime(row.dateTimeUTC),timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:owner?.driverId??null,driverName:owner?.driverName??null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,author:row.author,channelName:typeof channel.name==='string'?channel.name:typeof channel.label==='string'?channel.label:'WhatsApp',...(review?.timeEstimate?{timeEstimate:review.timeEstimate}:{}),...(row.levelOnly?{observationKind:'top_only',measurementTimeSource:review?'reviewed':row.measurementTimeSource}:{}),...(barrels?{barrels}:{}),...(row.inferredSeparator?{parserInference:{kind:'separator_dot',historicallyCorroborated:!review,manuallyReviewed:!!review}}:{}),...(owner?{senderKey,ownerDriverId:owner.driverId,ownershipSource:'verified_sender_binding'}:{}),reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(estimate?{barrelEstimate:estimate,barrelSource}:{}),...(review?{review:{originalTime,originalMeasurements,correctedMeasurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken},...(review.actorUid?{actorUid:review.actorUid}:{}),correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
  if(reportedWellOff(row,!!owner))Object.assign(packet,{wellDown:true,wellDownIsAuthoritative:true});
+ else if(!review && !decision.provisional && policy.heldWells?.[mapped.wellName]?.state!=='on_hold'){
+  const restart=measuredWellRestart(row,config,status,history[mapped.wellName],Date.now());
+  if(restart){
+   Object.assign(packet,{wellDown:false,wellDownIsAuthoritative:true,flowIntervalBarrier:true});
+   Object.assign(packet.watchdogProvenance,{wellRestart:restart});
+  }
+ }
  if(timedLevelReporter)Object.assign(packet.watchdogProvenance,{timedLevelReporter:{senderKey,scope:'configured_channel',measurementTimeSource:'stated',author:row.author}});
  const flowDiagnostic=diagnosticFlowWindow(history[mapped.wellName],{...packet,tankTopInches:Number(row.tankLevelFeet)*12,tankAfterInches:Number(checked.afterFeet)*12},6);
  Object.assign(packet.watchdogProvenance,{flowDiagnostic:{...flowDiagnostic,mode:'shadow',minimumRecoveryInches:6}});
