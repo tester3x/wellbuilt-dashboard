@@ -88,6 +88,7 @@ import {
   type ProjectDataInput,
 } from '@/lib/staffWriteDispatch';
 import { hasCapability, isPlatformAdmin } from '@/lib/auth';
+import { FreshWaterDepotAccess } from '@/components/FreshWaterDepotAccess';
 import {
   filterTicketsForCompany,
   invoiceBelongsToCompany,
@@ -487,6 +488,10 @@ function DispatchPageInner() {
   const [disposalSearch, setDisposalSearch] = useState('');
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
   const [allFreshWaterDepots, setAllFreshWaterDepots] = useState<NdicWell[]>([]);
+  const [depotAccessScope, setDepotAccessScope] = useState('');
+  const depotAccessKey = viewedCompanyId + ':' + (user?.uid ?? '');
+  const canManageDepotAccess = !!viewedCompanyId && viewedCompanyId !== 'wellbuilt-demo'
+    && (isPlatformAdmin(user) || canCreateDispatch || hasCapability(user, 'manageCompany', userCompany));
   const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
   const [customCatalogLocations, setCustomCatalogLocations] = useState<Array<{ locationName: string; company: string; usageCount?: number; latitude?: number; longitude?: number }>>([]);
   const [allOperatorWells, setAllOperatorWells] = useState<NdicWell[]>([]);
@@ -2971,6 +2976,13 @@ function DispatchPageInner() {
                   </button>
                 ))}
                 <span className="flex-1" />
+                {canManageDepotAccess && (
+                  <button type="button" aria-expanded={depotAccessScope === depotAccessKey}
+                    onClick={() => setDepotAccessScope(depotAccessScope === depotAccessKey ? '' : depotAccessKey)}
+                    className="rounded border border-gray-600 px-2.5 py-1 text-xs text-cyan-300 hover:bg-gray-700">
+                    Depot Access
+                  </button>
+                )}
                 {/* Add Pull — dispatch-write capability only (UI containment).
                     The submit path itself is a recorded BLOCKER pending a
                     governed staff pull-ingest callable; this only stops
@@ -2984,6 +2996,10 @@ function DispatchPageInner() {
                 </button>
                 )}
               </div>
+
+              {canManageDepotAccess && depotAccessScope === depotAccessKey && (
+                <FreshWaterDepotAccess key={depotAccessKey} companyId={viewedCompanyId} depots={allFreshWaterDepots} />
+              )}
 
               {(builderTab === 'pw' || builderTab === 'sw') && (
                 <div className="mb-3">
