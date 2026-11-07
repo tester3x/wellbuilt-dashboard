@@ -9,7 +9,15 @@ export const hash=value=>createHash('sha256').update(value).digest('hex');
 export function header(timestamp,author,body){
  const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
  const parts=Object.fromEntries(f.formatToParts(new Date(timestamp)).map(x=>[x.type,x.value]));
- return `[${parts.month}/${parts.day}/${parts.year}, ${parts.hour}:${parts.minute}:${parts.second}] ${String(author).replace(/[\r\n]/g,' ')}: ${body}`;
+ const date=`${parts.month}/${parts.day}/${parts.year}`;let time=`${parts.hour}:${parts.minute}:${parts.second}`;
+ // Retain WhatsApp's exact offset only in the repeated hour. Ordinary headers
+ // stay byte-identical so historical deliveries are not needlessly reparsed.
+ try{chatTimestamp(date,time);}catch(error){
+  if(!String(error.message).includes('Ambiguous or nonexistent'))throw error;
+  const offset=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',timeZoneName:'longOffset'}).formatToParts(new Date(timestamp)).find(p=>p.type==='timeZoneName').value.replace('GMT','UTC');
+  time+=' '+offset;
+ }
+ return `[${date}, ${time}] ${String(author).replace(/[\r\n]/g,' ')}: ${body}`;
 }
 export class Queue{
  constructor(directory){this.directory=directory;mkdirSync(directory,{recursive:true});this.file=path.join(directory,'queue.json');try{this.data=JSON.parse(readFileSync(this.file,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;this.data={version:1,messages:{}};}if(this.data.version!==1)throw Error('Unsupported queue version');}
@@ -21,7 +29,13 @@ export class Queue{
  const rows=deleted?[]:parsePullChat(chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:key+':'+row.id}));
  const notices=deleted?[]:findPullChatNotices(chat);
  const post=splitChat(chat)[0];let postedAt=rows[0]?.postedAt||'';if(!postedAt&&post)try{postedAt=chatTimestamp(post.date,post.time);}catch{}
- this.data.messages[key]={key,id,channel,chat,digest,senderId:senderId||previous?.senderId||null,rows,notices,deleted,edited:!!previous&&(previous.edited||previous.body!==(post?.body||chat)||previous.postedAt!==postedAt),postedAt,author:post?.author||'',body:post?.body||chat,updatedAt:new Date().toISOString()};this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
+ const sameBody=previous?.body===(post?.body||chat);
+ const recoveredClock=previous&&!previous.edited&&sameBody&&!previous.postedAt&&postedAt&&rows.length===previous.rows.length;
+ if(recoveredClock)for(const row of rows){
+  const old=previous.rows.find(r=>r.id===row.id),d=this.data.deliveries?.[row.id];
+  if(!row.issues.length&&old?.issues.some(i=>i.includes('daylight-saving time'))&&d?.status==='review'&&!d.identity&&!d.review&&d.issues?.every(i=>i.includes('daylight-saving time')||i==='Invalid stated pull time'))delete this.data.deliveries[row.id];
+ }
+ this.data.messages[key]={key,id,channel,chat,digest,senderId:senderId||previous?.senderId||null,rows,notices,deleted,edited:!!previous&&(previous.edited||!sameBody||!!previous.postedAt&&previous.postedAt!==postedAt),postedAt,author:post?.author||'',body:post?.body||chat,updatedAt:new Date().toISOString()};this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
  }
  reparseChannels(channelOptions){
  let changed=false;
