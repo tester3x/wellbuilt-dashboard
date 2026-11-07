@@ -57,12 +57,13 @@ function clock(text: string): { hour: number; minute: number; second: number } |
   return { hour, minute, second };
 }
 /** Resolve wall time in the selected zone; reject nonexistent/ambiguous DST times. */
-export function chatTimestamp(date: string, time: string, zone = 'America/Chicago', order: 'mdy' | 'dmy' = 'mdy'): string {
+export function chatTimestamp(date: string, time: string, zone = 'America/Chicago', order: 'mdy' | 'dmy' = 'mdy', referenceUTC?:string): string {
   const pieces = date.split('/').map(Number);
   const year = pieces[2] < 100 ? 2000 + pieces[2] : pieces[2];
   const month = pieces[order === 'mdy' ? 0 : 1];
   const day = pieces[order === 'mdy' ? 1 : 0];
-  const parsedClock = clock(time);
+  const offset = /\s+UTC([+-])(\d{2}):(\d{2})$/.exec(time);
+  const parsedClock = clock(offset ? time.slice(0,offset.index) : time);
   if (!parsedClock) throw new Error('Invalid time');
   const wall = Date.UTC(year, month - 1, day, parsedClock.hour, parsedClock.minute, parsedClock.second);
   const check = new Date(wall);
@@ -78,6 +79,17 @@ export function chatTimestamp(date: string, time: string, zone = 'America/Chicag
     const probe = wall + offset;
     const candidate = wall - (wallAt(probe) - probe);
     if (wallAt(candidate) === wall) candidates.add(candidate);
+  }
+  if(offset){
+    const minutes=Number(offset[2])*60+Number(offset[3]);
+    const instant=wall-(offset[1]==='-'?-minutes:minutes)*60000;
+    if(Number(offset[2])>23||Number(offset[3])>59||!candidates.has(instant))throw new Error('Invalid timezone offset for local time');
+    return new Date(instant).toISOString();
+  }
+  if(candidates.size>1&&referenceUTC&&Number.isFinite(Date.parse(referenceUTC))){
+    const reference=Date.parse(referenceUTC);
+    const nearby=[...candidates].filter(c=>c<=reference+600000&&c>=reference-7200000).sort((a,b)=>Math.abs(a-reference)-Math.abs(b-reference));
+    if(nearby.length&&(!nearby[1]||Math.abs(nearby[0]-reference)!==Math.abs(nearby[1]-reference)))return new Date(nearby[0]).toISOString();
   }
   if (candidates.size !== 1) throw new Error('Ambiguous or nonexistent daylight-saving time');
   return new Date([...candidates][0]).toISOString();
@@ -104,17 +116,26 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
     }
     return parseFeet(value);
   };
+  const droneCanonical = (options.wellNames || []).filter(name => normalizeWell(name) === 'drone');
+  const droneAlias = droneCanonical.length === 1 && !(options.wellNames || []).some(name => normalizeWell(name) === 'drone1') ? droneCanonical[0] : null;
   const pesekCanonical = (options.wellNames || []).find(name => normalizeWell(name) === 'pesek10');
   const predatorMatches = (options.wellNames || []).filter(name => normalizeWell(name) === 'predator1');
   const predatorCanonical = predatorMatches.length === 1 && !(options.wellNames || []).some(name => normalizeWell(name) === 'predator') ? predatorMatches[0] : null;
   // Match only scoped catalogue entries; whitespace is optional, never the well number.
   const canonicalFor = (value: string): string => {
     const normalized = normalizeWell(value);
+    if (droneAlias && normalized === 'drone1') return droneAlias;
     const key = normalized === 'matildabay2' ? 'matilda2' : ['grenli', 'granil'].includes(normalized) ? 'granli' : normalized;
     const names = (options.wellNames || []).filter(name => normalizeWell(name) === key);
     return names.length === 1 ? names[0] : value;
   };
-  const catalogueNames = (options.wellNames || []).filter(Boolean).flatMap(name => normalizeWell(name) === 'matilda2' ? [name, 'Matilda bay 2'] : normalizeWell(name) === 'granli' ? [name, 'Grenli', 'Granil'] : [name]).sort((a, b) => b.length - a.length).map(name => [...name].map(character => /\s/.test(character) ? '[ \t]*' : String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
+  const catalogueNames = (options.wellNames || []).filter(Boolean).flatMap(name => droneAlias && name === droneAlias ? [name, 'Drone 1'] : normalizeWell(name) === 'matilda2' ? [name, 'Matilda bay 2'] : normalizeWell(name) === 'granli' ? [name, 'Grenli', 'Granil'] : [name]).sort((a, b) => b.length - a.length).map(name => {
+    const chars = [...name];
+    return chars.map((character, index) => {
+      const separator = index > 0 && /[a-z]/i.test(chars[index - 1]) && /\d/.test(character) ? '[ \\t]*[-#]?[ \\t]*' : '';
+      return separator + (/\s/.test(character) ? '[ \\t]*' : String.fromCharCode(92) + 'u' + character.charCodeAt(0).toString(16).padStart(4, '0'));
+    }).join('') + (normalizeWell(name) === 'drone' ? '(?![ \\t]*\\d)' : '');
+  });
   const boundary = String.fromCharCode(92) + 'b';
   const namesPattern = catalogueNames.length ? new RegExp(boundary + '(?:' + wellPattern.source + '|' + catalogueNames.join('|') + (pesekCanonical ? '|Pesek(?![ \t]*\\d)' : '') + ')' + boundary, 'ig') : wellPattern;
   for (const message of splitChat(text)) {
@@ -139,7 +160,7 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
           // numbers, prose, foreign names and ambiguous pads remain held.
           const key = normalizeWell(named[1]);
           const candidates = [...new Set(options.wellNames || [])].filter(name =>
-            /[ \t]+\d+$/.test(name) && normalizeWell(name.replace(/[ \t]+\d+$/, '')) === key);
+            /[a-z][ \t#-]*\d+$/i.test(name) && normalizeWell(name.replace(/\d+$/, '').replace(/[ \t#-]+$/, '')) === key);
           segment.body = named[2];
           segment.well = candidates.length === 1 ? candidates[0] : '';
         }
@@ -194,12 +215,12 @@ export function parsePullChat(text: string, options: PullImportOptions = {}): Pu
         const statedHour=Number(clock(explicit)?.hour);
         if (!/[ap]/i.test(explicit) && statedHour >= 1 && statedHour <= 12) {
           const choices = [explicit + ' AM', explicit + ' PM'].map(time => {
-            try { return { time, difference: Math.abs(Date.parse(chatTimestamp(message.date, time, options.timeZone, options.dateOrder)) - Date.parse(postedAt)) }; } catch { return { time, difference: Infinity }; }
+            try { return { time, difference: Math.abs(Date.parse(chatTimestamp(message.date, time, options.timeZone, options.dateOrder, postedAt)) - Date.parse(postedAt)) }; } catch { return { time, difference: Infinity }; }
           }).sort((a, b) => a.difference - b.difference);
           if (choices[0].difference <= 7_200_000) resolved = choices[0].time;
           else issues.push('Pull time lacks AM/PM; confirm');
         }
-        try { eventTime = chatTimestamp(message.date, resolved, options.timeZone, options.dateOrder); } catch { issues.push('Invalid stated pull time'); }
+        try { eventTime = chatTimestamp(message.date, resolved, options.timeZone, options.dateOrder, postedAt); } catch { issues.push('Invalid stated pull time'); }
       }
       if (eventTime && postedAt && (Date.parse(eventTime) > Date.parse(postedAt) + 600_000 || Date.parse(eventTime) < Date.parse(postedAt) - 7_200_000)) issues.push('Stated time is far from the post; confirm the pull date and time');
       if (matches.length > 1 && !explicit) issues.push('Multiple wells in one message; confirm individual pull times');

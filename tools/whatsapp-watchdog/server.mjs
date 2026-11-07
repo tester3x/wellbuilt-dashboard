@@ -11,23 +11,25 @@ import {Transport} from './transport.mjs';
 import {CodexBridge} from './codex-bridge.mjs';
 import {OverlordCommands} from './commands.mjs';
 import {ReviewAlerts} from './alerts.mjs';
-import {RemoteReviews} from './remote-review.mjs';
 import {isIgnoredSender,loadSenderIgnoreRules} from './sender-ignore.mjs';
+import {RemoteReviews} from './remote-review.mjs';
 import {dismissReview} from './dismiss-review.mjs';
 import {createProfileAuth,closeRestoredReceiverTabs} from './profile-auth.mjs';
 import {ReceiverRecovery} from './recovery.mjs';
 import {collectReceiver} from './receiver-history.mjs';
 import {finishSyncedLogin} from './receiver-ready.mjs';
+import {DwyerPhotoIntake,isTallgrassChannel} from './dwyer-photo.mjs';
 const require=createRequire(import.meta.url);
 const {splitChat,parsePullChat,chatTimestamp}=require('../../functions/lib/imports/pullParser.js');
 const root=path.dirname(fileURLToPath(import.meta.url));
 const directory=process.env.WBC_WATCHDOG_DATA||path.join(process.env.LOCALAPPDATA||process.cwd(),'WellBuilt','WhatsAppWatchdog');
 const queue=new Queue(directory);const transport=new Transport(queue);transport.configure();
+const dwyerPhotos=new DwyerPhotoIntake(queue);
+const senderIgnoreRules=loadSenderIgnoreRules(directory);
 const deliveryTimer=setInterval(()=>void transport.tick(paused),10000);deliveryTimer.unref();
 const token=randomBytes(32).toString('hex');
 const configFile=path.join(directory,'channels.json');
 let channels=existsSync(configFile)?JSON.parse(readFileSync(configFile,'utf8')):[];
-const senderIgnoreRules=loadSenderIgnoreRules(directory);
 queue.save();
 queue.data.receiverControl ??= {connect:channels.length>0, watching:channels.length>0};
 const control=queue.data.receiverControl;queue.save();
@@ -55,7 +57,11 @@ async function pollReceiver(){
  if(client!==activeClient)return;
  chats=result.groups;receiverGroups=result.diagnostics;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
  for(const m of result.messages)await commands.receive(m,(id,body)=>client.sendMessage(id,body),{state,paused,transportStatus:transport.status});
- if(!paused)for(const m of newestReceiverMessages(result.messages,Infinity)){const selected=channels.find(c=>c.id===m.channel);if(selected&&!isIgnoredSender(senderIgnoreRules,m.channel,m.senderId))queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:{...selected.options,wellNames:(transport.wells||[]).filter(w=>w.channels?.includes(selected.id)).map(w=>w.wellName)},deleted:m.deleted,senderId:m.senderId});}
+ if(!paused)for(const m of newestReceiverMessages(result.messages,Infinity)){const selected=channels.find(c=>c.id===m.channel);if(!selected||isIgnoredSender(senderIgnoreRules,m.channel,m.senderId))continue;if(m.image&&isTallgrassChannel(selected)){
+   dwyerPhotos.receive(m,async()=>(await activeClient.getMessageById(m.id))?.downloadMedia())?.catch(e=>{error=e.message;});
+   continue;
+  }
+  queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:{...selected.options,wellNames:(transport.wells||[]).filter(w=>w.channels?.includes(selected.id)).map(w=>w.wellName)},deleted:m.deleted,senderId:m.senderId});}
  if(!paused){queue.data.receiverCheckpoints={...queue.data.receiverCheckpoints,...result.covered};queue.save();}
  }catch(e){if(client===pollClient){error='Receiver not ready: '+String(e?.message||e);if(state==='Connected')state='Syncing WhatsApp';}}
  finally{if(client===pollClient)polling=false;}
@@ -67,7 +73,13 @@ const alertTimer=setInterval(()=>{if(client&&state==='Connected'&&!paused)void a
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
 function status(){return {reviewCorrectionsEnabled:true,receiverControl:control,remoteReviewError:remoteReviews.error,reviewAlerts:{enabled:!!queue.data.reviewAlerts?.enabled,groupId:queue.data.reviewAlerts?.groupId||'',lastSentAt:queue.data.reviewAlerts?.lastSentAt||null,error:alerts.error},state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,wellLifecycle:transport.wells||[],enabledAt:transport.config?.enabledAt,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
-async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;if(await commands.receive({id:m.id._serialized||m.id.id,channel:channelId,body:m.body,timestamp:m.timestamp,fromMe:m.fromMe,senderId:m.id?.participant?._serialized||m.author||null,deleted},(id,body)=>client.sendMessage(id,body),{state,paused,transportStatus:transport.status}))return;if(paused)return;const configured=channels.find(c=>c.id===channelId);if(!configured)return;const senderId=m.id?.participant?._serialized||m.author||null;if(isIgnoredSender(senderIgnoreRules,channelId,senderId))return;queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId});}
+async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;if(await commands.receive({id:m.id._serialized||m.id.id,channel:channelId,body:m.body,timestamp:m.timestamp,fromMe:m.fromMe,senderId:m.id?.participant?._serialized||m.author||null,deleted},(id,body)=>client.sendMessage(id,body),{state,paused,transportStatus:transport.status}))return;if(paused)return;const configured=channels.find(c=>c.id===channelId);if(!configured)return;const senderId=m.id?.participant?._serialized||m.author||null;if(isIgnoredSender(senderIgnoreRules,channelId,senderId))return;
+ if(!deleted&&m.type==='image'&&isTallgrassChannel(configured)){
+  await dwyerPhotos.receive({id:m.id._serialized||m.id.id,channel:channelId,body:m.body||'',timestamp:m.timestamp,
+   author:m.author||m.from,senderId},()=>m.downloadMedia());
+  return;
+ }
+ queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
  client=new Client({userAgent:false,authStrategy:createProfileAuth(LocalAuth,{dataPath:path.join(directory,'session')},()=>console.log('[receiver-auth] WhatsApp logged out; preserving live browser profile for QR relinking.')),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
  const current=client;let authenticated=false;state='Connecting';error='';
@@ -120,7 +132,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/overlord-message'){const value=JSON.parse(bytes),group=queue.data.reviewAlerts?.groupId;if(!client||state!=='Connected'||!group||typeof value.text!=='string'||value.text.length<1||value.text.length>3000)throw Error('Alert destination unavailable or invalid message');await client.sendMessage(group,value.text);return respond(res,200,{ok:true});}
  if(url.pathname==='/review-alerts'){const value=JSON.parse(bytes);if(typeof value.enabled!=='boolean'||(value.enabled&&!chats.some(c=>c.id===value.groupId)))throw Error('Choose an available alert group');if(value.enabled&&channels.some(c=>c.id===value.groupId))throw Error('Choose an alert-only group, not a watched route');queue.data.reviewAlerts={...queue.data.reviewAlerts,enabled:value.enabled,groupId:value.groupId||queue.data.reviewAlerts?.groupId||''};queue.save();return respond(res,200,{ok:true});}
  if(url.pathname==='/dismiss-review')return respond(res,200,dismissReview(queue,JSON.parse(bytes)));
- if(url.pathname==='/review'){const value=JSON.parse(bytes);if(typeof value.rowId!=='string'||!['confirm','exclude'].includes(value.decision)||typeof value.reason!=='string'||(value.decision==='exclude'&&value.reason.trim().length<3)||value.reason.length>300)throw Error('Enter a review reason');let at;if(value.decision==='confirm'){if(typeof value.time!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.time))throw Error('Choose a valid measurement time');const [date,time]=value.time.split('T');const [y,m,d]=date.split('-');at=chatTimestamp(m+'/'+d+'/'+y,time);}await transport.review(value.rowId,value.decision,at,value.reason.trim(),value.corrections||{});return respond(res,200,{ok:true});}
+ if(url.pathname==='/review'){const value=JSON.parse(bytes);if(typeof value.rowId!=='string'||!['confirm','exclude'].includes(value.decision)||typeof value.reason!=='string'||(value.decision==='exclude'&&value.reason.trim().length<3)||value.reason.length>300)throw Error('Enter a review reason');let at;if(value.decision==='confirm'&&!value.rowId.endsWith(':photo')){if(typeof value.time!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.time))throw Error('Choose a valid measurement time');const [date,time]=value.time.split('T');const [y,m,d]=date.split('-');at=chatTimestamp(m+'/'+d+'/'+y,time);}await transport.review(value.rowId,value.decision,at,value.reason.trim(),value.corrections||{});return respond(res,200,{ok:true});}
  if(url.pathname==='/refresh-groups'){await loadGroups();return respond(res,200,{ok:true});}
  if(url.pathname==='/connect'){saveControl(true,control.watching);if(client&&['Authentication failed','Connection failed','Disconnected'].includes(state))await restartReceiver();else await connect();return respond(res,200,{ok:true});}
  if(url.pathname==='/stop'){saveControl(false,false);paused=true;state='Stopped';if(client){const old=client;client=null;await old.destroy();}return respond(res,200,{ok:true});}

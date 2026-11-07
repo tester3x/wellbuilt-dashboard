@@ -13,7 +13,7 @@ if($global:starts -ne 1){throw 'Stopped supervisor was not started'}
 $global:taskState='Running';$global:exitDuringStop=$true
 & (Join-Path $PSScriptRoot 'restart-watchdog-worker.ps1')
 if($global:starts -ne 2){throw 'Supervisor exit during worker replacement was missed'}
-$global:workerCommand='node.exe another-server.mjs' 
+$global:workerCommand='node.exe another-server.mjs'
 try{& (Join-Path $PSScriptRoot 'restart-watchdog-worker.ps1');throw 'Unsafe process accepted'}catch{if($_.Exception.Message -notmatch 'unexpected process'){throw}}
 if($global:stops -ne 3){throw 'Unexpected process was stopped'}
 Write-Output 'Remote restart fixtures PASSED: exact port and worker, existing supervisor, unrelated process refusal'
