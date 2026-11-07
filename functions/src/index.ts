@@ -3,7 +3,7 @@ export {reconcileWatchdogAppRecords} from './watchdog/lateAppMatchTrigger';
 import {validateAppMatchDeletion,finishAppMatchDeletion} from './watchdog/appMatchDeletion';
 import { deliverLevelReport } from './levelReportDelivery';
 export { deliverProcessedLevelReport } from './levelReportDelivery';
-import {averageFlowRates} from './flowAverage';
+import {averageFlowRates,recentFlowSamples} from './flowAverage';
 import {calculateInventoryProduction} from './inventoryProduction';
 import {previousPullBottomInches} from './previousPullLevel';
 import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecision';
@@ -761,38 +761,11 @@ async function calculateAFR(wellName: string, newFlowRateDays: number, current?:
   const windowed=effectiveFlow(snapshot.val()||{},flowConfig);
   if(windowed)return windowed.averageDays;
 
-  // Collect rates with timestamps, sort by actual time, take most recent 15
-  const rateEntries: { timestamp: number; rate: number }[] = [];
-
-  snapshot.forEach((child) => {
-    const data = child.val();
-    const key = child.key || '';
-    // Skip edit/delete/history packets
-    if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_') || isProvisionalPull(data)) return;
-    if (data.flowRateDays && data.flowRateDays > 0) {
-      // Sort by timestamp. Prefer dateTimeUTC (always a valid ISO string) over
-      // dateTime (locale-formatted by the WB M client and sometimes malformed,
-      // e.g. "4/11/2026 3 PM" with no minutes — parses to NaN and corrupts sort).
-      let ts = data.dateTimeUTC ? new Date(data.dateTimeUTC).getTime()
-        : data.gaugeTime ? new Date(data.gaugeTime).getTime()
-        : data.dateTime ? new Date(data.dateTime).getTime()
-        : 0;
-      if (isNaN(ts)) ts = 0;
-      rateEntries.push({ timestamp: ts, rate: data.flowRateDays });
-    }
-  });
-
-  // Sort by timestamp ascending (oldest first) and take the most recent 15
-  rateEntries.sort((a, b) => a.timestamp - b.timestamp);
-  const recent = rateEntries.slice(-15);
-  const allRates = recent.map(e => e.rate);
-
-  // Add the new rate
-  if (newFlowRateDays > 0) {
-    allRates.push(newFlowRateDays);
-  }
-
-  return averageFlowRates(allRates,wellName);
+  const history = snapshot.val() || {};
+  const records = current ? {...history, [current.packetId]: {...current, flowRateDays: newFlowRateDays}} : history;
+  const asOf = current ? Date.parse(current.dateTimeUTC) : Date.now();
+  return averageFlowRates(recentFlowSamples(records, asOf), wellName) ||
+    Number(flowConfig.avgFlowRateMinutes) / 1440 || 0;
 }
 
 // Main function: Process incoming pull packets
@@ -1097,7 +1070,9 @@ export const processIncomingPull = functionsV1.database
     if ((data as any).flowIntervalBarrier === true) { flowRateDays=0; flowRate=''; }
     const afr = pipeline ? pipeline.minutesPerFoot / 1440 : demoClock
       ? demoClock.realMinutesPerFoot / 1440
-      : isProvisionalPull(data)?(Number(config.avgFlowRateMinutes)/1440||await calculateAFR(wellName,0)):(windowed&&config.productionRateMode!=='inventory_balance'?windowed.averageDays:await calculateAFR(wellName, flowRateDays, {...data,packetId,tankAfterInches,wellDown:nextIsDown}));
+      : isProvisionalPull(data)?(Number(config.avgFlowRateMinutes)/1440||await calculateAFR(wellName,0)):(windowed&&config.productionRateMode!=='inventory_balance'?windowed.averageDays:await calculateAFR(wellName, flowRateDays, {
+        ...data, packetId, tankAfterInches, timeDifDays, recoveryInches, afrWellDown: nextIsDown,
+      }));
     if (demoClock) {
       flowRateDays = afr;
       flowRate = daysToHMMSS(afr);
@@ -1172,6 +1147,7 @@ export const processIncomingPull = functionsV1.database
       lastPullRevision: initialRevision,
       levelReportDeliveryVersion: 2,
     });
+    processedClean.afrWellDown = nextIsDown;
     await db.ref(`packets/processed/${packetId}`).set(processedClean);
 
     // Materialize queued post-Send correction trail (product: Send is the edit boundary).
@@ -2018,7 +1994,7 @@ export const processDeleteRequest = functionsV1.database
           console.log(`Delete: Rebuilding outgoing for ${wellName} from packet ${latestPacket.packetId || 'unknown'} (dateTimeUTC=${latestPacket.dateTimeUTC})`);
 
           // Recalculate AFR from remaining packets
-          const afr = await calculateAFR(wellName, latestPacket.flowRateDays || 0);
+          const afr = await calculateAFR(wellName, 0);
           console.log(`Delete: AFR for ${wellName} = ${afr}`);
 
           // Calculate windowBblsDay and overnightBblsDay from remaining historical pulls

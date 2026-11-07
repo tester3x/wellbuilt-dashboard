@@ -1,5 +1,5 @@
 import {isProvisionalPull,reportedTrackingBottom} from './barrelDecision';
-import {averageFlowRates} from '../flowAverage';
+import {averageFlowRates,recentFlowSamples} from '../flowAverage';
 export function displayRate(days:number):string {const s=Math.round(days*86400);return `${Math.floor(s/3600)}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;}
 export function displayLevel(inches:number):string {const n=Math.floor(inches+1e-7);return `${Math.floor(n/12)}'${n%12}"`;}
 /** Derived-only repair plan. Keys and original observations are never created/deleted/edited. */
@@ -7,7 +7,7 @@ export function planWatchdogDerivedRepair(history:Record<string,any>) {
  const rows=Object.entries(history).filter(([id,p])=>p.requestType==='pull'&&!p.deleted&&!/^(edit_|delete_|history_)/.test(id)&&Number.isFinite(Date.parse(p.dateTimeUTC)))
   .sort((a,b)=>Date.parse(a[1].dateTimeUTC)-Date.parse(b[1].dateTimeUTC)||a[0].localeCompare(b[0]));
  const patches:Record<string,any>={}, corrected:Record<string,any>={};let previous:any=null,previousBottomChanged=false;
- const seen=new Set<string>(),rates:{at:string;rate:number}[]=[];
+ const seen=new Set<string>();
  for(const [id,p] of rows) {
   const identity=p.packetId||id;if(seen.has(identity))continue;seen.add(identity);
   const next={...p},top=Number(p.tankTopInches??Number(p.tankLevelFeet)*12);
@@ -27,9 +27,9 @@ export function planWatchdogDerivedRepair(history:Record<string,any>) {
   }
   Object.assign(next,patch);corrected[id]=next;
   if(Object.entries(patch).some(([k,v])=>p[k]!==v))patches[id]=patch;
-  if(!barrier&&Number(next.flowRateDays)>0&&Number(next.flowRateDays)<365)rates.push({at:p.dateTimeUTC,rate:Number(next.flowRateDays)});
   previous=next;previousBottomChanged=changed;
  }
- const eligible=rates.slice(-15);
- return {patches,corrected,averageDays:averageFlowRates(eligible.map(x=>x.rate)),flowMeasuredAt:eligible.at(-1)?.at||'',latest:rows.at(-1)?.[0],eligibleSamples:eligible.length};
+ const eligible=recentFlowSamples(corrected).slice(-15);
+ const last=eligible.at(-1);
+ return {patches,corrected,averageDays:averageFlowRates(eligible),flowMeasuredAt:last?.at?new Date(last.at).toISOString():'',latest:rows.at(-1)?.[0],eligibleSamples:eligible.length};
 }

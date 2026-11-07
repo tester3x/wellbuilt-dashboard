@@ -3,6 +3,7 @@ import {join} from 'path';
 import {runInNewContext} from 'vm';
 import {transpileModule,ScriptTarget} from 'typescript';
 import {calculateInventoryProduction} from '../inventoryProduction';
+import {recentFlowSamples} from '../flowAverage';
 const source=readFileSync(join(__dirname,'../index.ts'),'utf8');
 const start=source.indexOf('async function calculateAFR('),end=source.indexOf('\n}',start)+2;
 const js=transpileModule(source.slice(start,end)+'\ncalculateAFR;', {compilerOptions:{target:ScriptTarget.ES2020}}).outputText;
@@ -14,7 +15,7 @@ function fixture(mode?:string){
  const snap={val:()=>records,forEach:(fn:any)=>Object.entries(records).forEach(([key,value])=>fn({key,val:()=>value}))};
  const chain:any={orderByChild:()=>chain,equalTo:()=>chain,once:async()=>snap};
  const calculate=runInNewContext(js,{db:{ref:(key:string)=>key.startsWith('well_config/')?{once:async()=>({val:()=>config})}:chain},
-  calculateInventoryProduction,resolveTankBblPerFoot:()=>120,effectiveFlow:()=>null,isProvisionalPull:()=>false,averageFlowRates:legacy,Date});
+  calculateInventoryProduction,resolveTankBblPerFoot:()=>120,effectiveFlow:()=>null,recentFlowSamples,averageFlowRates:legacy,Date});
  return {calculate,records,legacy};
 }
 test('actual AFR entry point includes the current pull before it is persisted',async()=>{
@@ -28,6 +29,6 @@ test('delete/rebuild entry point reads canonical historical and edited observati
  delete f.records.b;expect(await f.calculate('Example',0)).toBeCloseTo(120/740);
 });
 test('unconfigured wells retain the legacy AFR route',async()=>{
- const f=fixture();expect(await f.calculate('Example',0.07)).toBe(0.1);
- expect(f.legacy).toHaveBeenCalledWith([0.07],'Example');
+ const f=fixture();expect(await f.calculate('Example',0.07,{...p(6,'c'),recoveryInches:20})).toBe(0.1);
+ expect(f.legacy).toHaveBeenCalledWith([expect.objectContaining({rate:0.07,strikeEligible:true})],'Example');
 });

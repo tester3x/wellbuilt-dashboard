@@ -1,5 +1,98 @@
+import {isProvisionalPull} from './watchdog/barrelDecision';
+
 const ANOMALY_RATIO = 2.0;     // 2x off median = excluded from AFR averaging
 const ITREVIEW_RATIO = 1.5;    // 1.5x off median = flagged but included in AFR
+const DAY_MS = 86_400_000;
+const MAX_RECOVERY_DAYS = 3;
+const MAX_STRIKE_SPAN_MS = 3 * DAY_MS;
+const MIN_RECOVERY_INCHES = 3;
+const MAX_STRIKE_RATE_RATIO = 2;
+const REGIME_SHIFT_THRESHOLD = 3;
+
+interface RateSample {
+  rate: number;
+  at: number;
+  sequence: number;
+  strikeEligible: boolean;
+}
+
+interface FlowObservation {
+  packetId?: string;
+  requestType?: string;
+  dateTimeUTC?: string;
+  gaugeTime?: string;
+  dateTime?: string;
+  deleted?: boolean;
+  noLevel?: boolean;
+  wellDown?: boolean | string;
+  afrWellDown?: boolean;
+  flowIntervalBarrier?: boolean;
+  flowRateDays?: number;
+  timeDifDays?: number;
+  recoveryInches?: number;
+}
+
+export function recentFlowSamples(history: Record<string, FlowObservation>, asOf = Infinity): RateSample[] {
+  const observations = Object.entries(history)
+    .filter(([id, row]) => !row.deleted && (!row.requestType || row.requestType === 'pull') &&
+      !/^(edit_|delete_|history_)/.test(id))
+    .map(([id, row]) => ({id, row, at: Date.parse(row.dateTimeUTC || row.gaugeTime || row.dateTime || '') || 0}))
+    .filter(({at}) => at <= asOf)
+    .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+  const seen = new Set<string>();
+  const samples: RateSample[] = [];
+  let downSince: number | undefined;
+  let settlingUntil = 0;
+  let previousAt = 0;
+  let previousUnusable = false;
+  let sequence = 0;
+
+  for (const {id, row, at} of observations) {
+    const identity = row.packetId || id;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    sequence++;
+    const priorAt = previousAt;
+    const priorUnusable = previousUnusable;
+    previousAt = at;
+    previousUnusable = !!(row.noLevel || row.flowIntervalBarrier || isProvisionalPull(row));
+    const down = row.afrWellDown ?? row.wellDown;
+    if (at && (down === true || down === 'true')) {
+      downSince ??= at;
+      continue;
+    }
+    if (downSince !== undefined) {
+      if (!at || (down !== false && down !== 'false') || previousUnusable) continue;
+      const daysToSettle = at - downSince >= DAY_MS ? 2 : 1;
+      settlingUntil = at + daysToSettle * DAY_MS;
+      downSince = undefined;
+      continue;
+    }
+    const rate = row.flowRateDays || 0;
+    if (!Number.isFinite(rate) || rate <= 0 || rate >= 365 || previousUnusable || priorUnusable) continue;
+    const observedDays = priorAt && at > priorAt ? (at - priorAt) / DAY_MS : 0;
+    const elapsedDays = row.timeDifDays && row.timeDifDays > 0 ? row.timeDifDays : observedDays;
+    const intervalStart = at - Math.max(elapsedDays, observedDays) * DAY_MS;
+    const rise = row.recoveryInches ?? (elapsedDays > 0 ? elapsedDays * 12 / rate : undefined);
+    if ((settlingUntil && intervalStart < settlingUntil) ||
+        Math.max(elapsedDays, observedDays) > MAX_RECOVERY_DAYS ||
+        (rise !== undefined && rise < MIN_RECOVERY_INCHES)) continue;
+    // Older records without interval evidence can still contribute to smoothing.
+    samples.push({rate, at, sequence, strikeEligible: at > 0 && elapsedDays > 0 &&
+      rise !== undefined && Number.isFinite(rise)});
+  }
+  return samples.slice(-16);
+}
+
+function confirmsChange(samples: RateSample[], latest: RateSample): boolean {
+  if (samples.length !== REGIME_SHIFT_THRESHOLD || samples.at(-1) !== latest) return false;
+  if (samples.some((sample, index) => !sample.strikeEligible ||
+      sample.sequence !== samples[0].sequence + index ||
+      (index > 0 && sample.at <= samples[index - 1].at))) return false;
+  const rates = samples.map(sample => sample.rate);
+  return latest.at - samples[0].at <= MAX_STRIKE_SPAN_MS &&
+    Math.max(...rates) / Math.min(...rates) <= MAX_STRIKE_RATE_RATIO;
+}
 
 // Calculate median of an array
 function median(arr: number[]): number {
@@ -35,33 +128,29 @@ function getFlowRateAnomalyLevel(flowRate: number, medianRate: number): number {
 //   1. Progressive median — catches outliers as they appear, lets the well's
 //      baseline drift over time (handles legitimate regime changes when paired
 //      with step detection downstream).
-//   1b. Regime-shift detection — if the LAST N pulls were all rejected as Tier-2
-//       anomalies in the SAME direction, the baseline itself is stale (e.g. a
-//       fresh-tank start followed by a long lapse, pump replacement, or workover).
-//       Reseed from the rejection run as the new baseline and recurse. Mirrors
-//       the step detector at lines ~755-778 but operates on rates that filtered
-//       OUT, which the step detector can't see.
+//   1b. A new baseline needs three consecutive Tier-2 rejections in the same
+//       direction, each with reliable recovery evidence and comparable rates.
 //   2. Final pass with the OVERALL median of pass-1 results — catches early
 //      outliers that were grandfathered in before there was enough baseline
 //      data (matches the dashboard's anomaly badges so AFR and the UI agree).
 // Returns rates with Tier 2 anomalies removed.
-const REGIME_SHIFT_THRESHOLD = 3;
-function filterAnomalies(flowRates: number[]): number[] {
+function filterAnomalies(flowRates: RateSample[]): RateSample[] {
   if (flowRates.length < 3) {
     return flowRates;
   }
 
   // Pass 1: progressive (also tracks rejection direction for regime-shift detection)
   const knownRates: number[] = [];
-  const passOne: number[] = [];
+  const passOne: RateSample[] = [];
   // 0 = accepted, +1 = rejected as higher than baseline, -1 = rejected as lower
   const directions: number[] = [];
-  for (const rate of flowRates) {
+  for (const sample of flowRates) {
+    const {rate} = sample;
     if (knownRates.length >= 3) {
       const medianRate = median(knownRates);
       const level = getFlowRateAnomalyLevel(rate, medianRate);
       if (level < 2) {
-        passOne.push(rate);
+        passOne.push(sample);
         knownRates.push(rate);
         directions.push(0);
       } else {
@@ -69,7 +158,7 @@ function filterAnomalies(flowRates: number[]): number[] {
       }
     } else {
       // Not enough baseline yet — include for now; pass 2 will re-check.
-      passOne.push(rate);
+      passOne.push(sample);
       knownRates.push(rate);
       directions.push(0);
     }
@@ -77,7 +166,7 @@ function filterAnomalies(flowRates: number[]): number[] {
 
   // Pass 1b: regime-shift escape. Scan tail for consecutive same-direction
   // Tier-2 rejections. If we find a run of REGIME_SHIFT_THRESHOLD or more,
-  // the baseline is stale — reseed from the rejection run and recurse.
+  // use the latest three once they meet the confirmation checks.
   let runDir = 0;
   let runStart = -1;
   for (let i = directions.length - 1; i >= 0; i--) {
@@ -87,9 +176,10 @@ function filterAnomalies(flowRates: number[]): number[] {
     if (d !== runDir) break;
     runStart = i;
   }
-  if (runStart >= 0 && (directions.length - runStart) >= REGIME_SHIFT_THRESHOLD) {
-    console.log(`[AFR] regime shift detected: ${directions.length - runStart} consecutive ${runDir > 0 ? 'slower' : 'faster'} rejections, reseeding from index ${runStart}`);
-    return filterAnomalies(flowRates.slice(runStart));
+  const recent = flowRates.slice(-REGIME_SHIFT_THRESHOLD);
+  if (runStart >= 0 && directions.length - runStart >= REGIME_SHIFT_THRESHOLD && confirmsChange(recent, flowRates.at(-1)!)) {
+    console.log(`[AFR] regime shift confirmed: three consistent ${runDir > 0 ? 'slower' : 'faster'} readings`);
+    return recent;
   }
 
   // Pass 2: re-check every kept rate against the OVERALL median.
@@ -97,11 +187,11 @@ function filterAnomalies(flowRates: number[]): number[] {
   if (passOne.length < 5) {
     return passOne; // Too few to safely re-filter
   }
-  const overallMedian = median(passOne);
-  const filtered = passOne.filter(rate => getFlowRateAnomalyLevel(rate, overallMedian) < 2);
+  const overallMedian = median(knownRates);
+  const filtered = passOne.filter(({rate}) => getFlowRateAnomalyLevel(rate, overallMedian) < 2);
 
   if (filtered.length < 3) {
-    return flowRates; // Fallback if too many filtered
+    return passOne;
   }
   return filtered;
 }
@@ -111,24 +201,26 @@ function filterAnomalies(flowRates: number[]): number[] {
 // Alpha = 0.4 gives ~60% weight to recent pulls while smoothing noise.
 const EMA_ALPHA = 0.4;
 
-export function averageFlowRates(allRates:number[],wellName="flow"):number {
+export function averageFlowRates(allRates: RateSample[], wellName = "flow"): number {
   if (allRates.length === 0) return 0;
-  if (allRates.length < 3) return allRates[allRates.length - 1];
+  const last = allRates[allRates.length - 1];
+  if (allRates.length < 3) return last.rate;
 
   console.log(`[AFR] ${wellName}: ${allRates.length} raw rates`);
 
   // Filter out anomalies (2x off progressive median) before calculating AFR
-  const rates = filterAnomalies(allRates);
+  const samples = filterAnomalies(allRates);
+  const rates = samples.map(sample => sample.rate);
 
   console.log(`[AFR] ${wellName}: ${rates.length} after anomaly filter`);
 
-  if (rates.length === 0) return allRates[allRates.length - 1];
+  if (rates.length === 0) return last.rate;
   if (rates.length < 3) return rates[rates.length - 1];
 
   // Step detection: Check if last 3 are ALL >10% off in same direction
   // Catches sudden regime changes (e.g., well workover, pump change)
   const STEP_THRESHOLD = 0.10;
-  if (rates.length >= 5) {
+  if (rates.length >= 5 && confirmsChange(samples.slice(-3), last)) {
     const preStepRates = rates.slice(0, -3);
     const recentRates = rates.slice(-3);
     const preStepAvg = preStepRates.reduce((a, b) => a + b, 0) / preStepRates.length;

@@ -1,5 +1,5 @@
 import {canonicalHistory, feetDisplay, rateDisplay, digest, JsonRecord} from './imports/pullImportModel';
-import {historicalAverage} from './imports/historicalAverage';
+import {averageFlowRates, recentFlowSamples} from './flowAverage';
 import {isProvisionalPull} from './watchdog/barrelDecision';
 
 /** A calibration edit corrects calculated removals, never original gauge readings.
@@ -27,17 +27,7 @@ export function recalibratedHistory(history:JsonRecord,bank:number):JsonRecord {
 }
 
 export function recalibratedLegacyRate(history:JsonRecord):number {
- const rates:number[]=[];let previous:JsonRecord|undefined;
- for(const row of canonicalHistory(history)){
-  if(!usable(row)) {previous=undefined;continue;}
-  if(previous){
-   const days=(Date.parse(row.dateTimeUTC)-Date.parse(previous.dateTimeUTC))/86400000;
-   const recovery=Number(row.tankLevelFeet)-Number(previous.tankAfterInches)/12;
-   if(days>0&&days<=30&&recovery>0&&days/recovery<365)rates.push(days/recovery);
-  }
-  previous=row;
- }
- return historicalAverage(rates);
+ return averageFlowRates(recentFlowSamples(history, Date.now()));
 }
 
 function usable(row:JsonRecord):boolean {

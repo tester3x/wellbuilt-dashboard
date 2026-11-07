@@ -1,3 +1,4 @@
+import {averageFlowRates, recentFlowSamples} from '../../flowAverage';
 import {runningPipeline} from '../../pipelineOperation';
 import {isProvisionalPull,reportedTrackingBottom} from '../../watchdog/barrelDecision';
 import { resolveTankBblPerFoot } from '../../tankCalibration';
@@ -403,36 +404,12 @@ export async function prepareEditOutbox(
 
   const flowWindow=effectiveFlow({...prevOutgoingSnap.val(),[originalPacketId]:{...origPacket,packetId:originalPacketId,tankTopInches:newTankTopInches,tankAfterInches:newTankAfterInches,bblsTaken:newBblsTaken,dateTimeUTC:newDateTimeUTC,wellDown:nextEditIsDown}},config);
   if(flowWindow){const sample=flowWindow.results.find(r=>r.packetId===originalPacketId);flowRateDays=sample?.flowRateDays||0;flowRate=flowRateDays?daysToHMMSS(flowRateDays):'';recoveryInches=sample?.recoveryInches||0;timeDifDays=sample?.timeDifDays||0;timeDif=timeDifDays?daysToHMM(timeDifDays):'';}
-  // Calculate AFR across pulls
-  const allPulls: any[] = [];
-  prevOutgoingSnap.forEach((child) => {
-    if (child.key === originalPacketId) {
-      allPulls.push({
-        dateTimeUTC: newDateTimeUTC,
-        flowRateDays,
-        tankTopInches: newTankTopInches,
-      });
-    } else {
-      allPulls.push(child.val());
-    }
-  });
-
-  allPulls.sort((a, b) => new Date(b.dateTimeUTC).getTime() - new Date(a.dateTimeUTC).getTime());
-  const validRates: number[] = [];
-  for (const p of allPulls) {
-    const fr = isProvisionalPull(p)?0:Number(p.flowRateDays) || 0;
-    if (fr > 0 && fr < 365) {
-      validRates.push(fr);
-      if (validRates.length >= 5) break;
-    }
-  }
-  let afr = validRates.length > 0 ? validRates.reduce((sum, r) => sum + r, 0) / validRates.length : 0;
-  if (afr === 0 && Number(origPacket.flowRateDays) > 0) {
-    afr = Number(origPacket.flowRateDays);
-  }
-  if (afr === 0 && flowRateDays > 0) {
-    afr = flowRateDays;
-  }
+  const afrHistory = {...prevOutgoingSnap.val(), [originalPacketId]: {
+    ...origPacket, dateTimeUTC: newDateTimeUTC, flowRateDays, timeDifDays, recoveryInches,
+    afrWellDown: editIsAuthoritative ? nextEditIsDown : origPacket.afrWellDown,
+  }};
+  let afr = averageFlowRates(recentFlowSamples(afrHistory, Date.now()), wellName) ||
+    Number(config.avgFlowRateMinutes) / 1440 || 0;
 
   if(flowWindow)afr=flowWindow.averageDays;
   const pipeline=runningPipeline(config);
@@ -460,7 +437,7 @@ export async function prepareEditOutbox(
       }
     });
   }
-  if (!hasOutgoing || (allPulls.length > 0 && allPulls[0].dateTimeUTC === newDateTimeUTC)) {
+  if (!hasOutgoing || !Object.values(afrHistory).some((pull: any) => Date.parse(pull.dateTimeUTC) > editedTime)) {
     isLatestPull = true;
   }
 
@@ -642,6 +619,7 @@ export async function executeEditOutbox(
     const updates: Record<string, any> = {
       ...outbox.measurements,
       ...outbox.trailSummary,
+      ...(outbox.editIsAuthoritative ? {afrWellDown: outbox.nextEditIsDown} : {}),
       activeEditEventId: outbox.eventId,
     };
 
