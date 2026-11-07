@@ -81,7 +81,7 @@ async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;if(
  }
  queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
- client=new Client({userAgent:false,authStrategy:createProfileAuth(LocalAuth,{dataPath:path.join(directory,'session')},()=>console.log('[receiver-auth] WhatsApp logged out; preserving live browser profile for QR relinking.')),puppeteer:{headless:true,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
+ client=new Client({userAgent:false,authStrategy:createProfileAuth(LocalAuth,{dataPath:path.join(directory,'session')},()=>console.log('[receiver-auth] WhatsApp logged out; preserving live browser profile for QR relinking.')),puppeteer:{headless:true,timeout:120000,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
  const current=client;let authenticated=false;state='Connecting';error='';
  // Startup stages contain no messages or credentials; distinguish a browser
  // launch stall from authentication or WhatsApp injection when recovering.
