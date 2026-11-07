@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync,rmdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
@@ -103,4 +103,67 @@ test('private Tallgrass crop reads 6.4 ft', {skip:!process.env.WBC_DWYER_OCR_FIX
   assert.deepEqual(result,gauge);
   const row = photoEvidence({body:'Hauled 140 barrels',gauge:result});
   assert.equal(row.tankLevelFeet.toFixed(2),'7.77');
+});
+
+test('four private photo framings reach the test queue once per run', {skip:!process.env.WBC_DWYER_QUEUE_FIXTURES}, async t => {
+  // The manifest is supplied locally so customer images stay out of Git.
+  const fixtures=JSON.parse(process.env.WBC_DWYER_QUEUE_FIXTURES);
+  assert.equal(fixtures.length,4);
+  const testChannel='tallgrass-isolated-test';
+  for (let pass=1;pass<=2;pass++) {
+    const directory=mkdtempSync(path.join(tmpdir(),'watchdog-dwyer-framing-'));
+    t.after(()=>{
+      for (const file of ['queue.json','queue.json.tmp']) rmSync(path.join(directory,file),{force:true});
+      rmdirSync(directory);
+    });
+    const queue=new Queue(directory);
+    const start=Math.min(...fixtures.map(f=>Date.parse(f.postedAt)));
+    assert.ok(Number.isFinite(start));
+    queue.data.dwyerPhotoStartedAt=start;
+    queue.data.dwyerDeliveryStartedAt=start;
+    const intake=new DwyerPhotoIntake(queue);
+    const messages=fixtures.map((fixture,index)=>({
+      id:'isolated-'+index,channel:testChannel,timestamp:Date.parse(fixture.postedAt)/1000,
+      body:'Bottom',author:'Fixture driver',
+    }));
+    for (const [index,message] of messages.entries()) {
+      const image=readFileSync(fixtures[index].path);
+      await intake.receive(message,()=>({mimetype:'image/jpeg',data:image.toString('base64')}));
+    }
+    assert.equal(queue.reviewInbox().length,0);
+    const sends=[];
+    const received=new Map();
+    const transport=new Transport(queue);
+    transport.secret='mock-only';
+    transport.config={enabled:true,enabledAt:0};
+    transport.lastLifecycleCheck=Date.now();
+    transport.request=async(endpoint,body)=>{
+      if (endpoint==='ingestWatchdogPullV2') {
+        assert.equal(body.chatId,testChannel);
+        assert.equal(body.dwyerPhoto.tagVerified,true);
+        const index=messages.findIndex(m=>m.id===body.messageId);
+        assert.equal(body.dwyerPhoto.bottomFeet,fixtures[index].bottomFeet);
+        assert.ok(!received.has(body.dwyerPhoto.imageDigest));
+        const receipt={status:'complete',identity:body.dwyerPhoto.imageDigest,packetId:body.messageId};
+        received.set(receipt.identity,receipt);
+        sends.push(body.dwyerPhoto.bottomFeet);
+        return {...receipt,status:'queued'};
+      }
+      assert.equal(endpoint,'getWatchdogPullReceiptV2');
+      assert.ok(received.has(body.identity));
+      return received.get(body.identity);
+    };
+    await transport.tick(false);
+    assert.deepEqual(sends,fixtures.map(f=>f.bottomFeet));
+    assert.equal(Object.values(queue.data.deliveries).filter(d=>d.status==='complete').length,4);
+    const restored=new Queue(directory);
+    const reopened=new DwyerPhotoIntake(restored);
+    for (const message of messages) {
+      assert.equal(reopened.receive(message,()=>assert.fail('duplicate download')),undefined);
+    }
+    transport.queue=restored;
+    await transport.tick(false);
+    assert.equal(sends.length,4);
+    t.diagnostic('Test queue pass '+pass+': four completed receipts, zero duplicate sends');
+  }
 });
