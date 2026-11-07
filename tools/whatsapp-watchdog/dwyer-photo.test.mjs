@@ -35,6 +35,10 @@ test('uncertain identification, quantity, and limits do not supply measurements'
     assert.equal(row.tankLevelFeet,null);
   }
   assert.equal(photoEvidence({body:'Hauled 140 bbl',gauge,bank:{...dwyerBank,maxHaulBarrels:120}}).bblsTaken,null);
+  const overCap = photoEvidence({body:'Hauled 141 bbl',gauge});
+  assert.equal(overCap.bblsTaken,null);
+  assert.equal(overCap.tankLevelFeet,null);
+  assert.ok(overCap.issues.some(issue=>issue.includes('140 bbl Tallgrass cap')));
 });
 
 test('live/history overlap, duplicate media, expiry and restart stay in local review', async t => {

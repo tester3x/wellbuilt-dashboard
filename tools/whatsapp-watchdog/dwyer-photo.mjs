@@ -4,7 +4,7 @@ import {hash,header} from './core.mjs';
 
 // Effective Dwyer configuration verified for this intake. Review-only estimates
 // retain the snapshot so they can be checked against the configuration at haul time.
-export const dwyerBank = {activeTanks:4,bblPerFootPerTank:25.5,defaultBarrels:140};
+export const dwyerBank = {activeTanks:4,bblPerFootPerTank:25.5,defaultBarrels:140,maxHaulBarrels:140};
 const maxImageBytes = 12 * 1024 * 1024;
 const require = createRequire(import.meta.url);
 export const isTallgrassChannel = channel => /\btallgrass\b/i.test(channel.name || '');
@@ -75,6 +75,8 @@ export function photoEvidence({body,gauge,imageDigest,bank=dwyerBank}) {
   const confirmedBarrels = identified && quantities.length===1 && Number.isFinite(quantity) && quantity>0
     && (bank.maxHaulBarrels==null || quantity<=bank.maxHaulBarrels) ? quantity : null;
   if (confirmedBarrels===null) issues.push('Confirm actual barrels hauled. The configured default is not a reported haul');
+  if (Number.isFinite(quantity) && quantity>bank.maxHaulBarrels)
+    issues.push('Reported quantity exceeds the '+bank.maxHaulBarrels+' bbl Tallgrass cap');
   const bblPerFoot = bank.activeTanks*bank.bblPerFootPerTank;
   const estimatedTopFeet = bottom!==null && confirmedBarrels!==null && Number.isFinite(bblPerFoot) && bblPerFoot>0
     ? bottom+confirmedBarrels/bblPerFoot : null;
