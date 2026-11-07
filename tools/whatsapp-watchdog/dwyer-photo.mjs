@@ -19,6 +19,97 @@ const tags = [
 ];
 const wtr3Value = [502/900,1155/1600,84/900,50/1600];
 
+// Locate the two rows of blue water tanks before reading the lower-right tank.
+// The exact LT-5103 tag is still required; color alone cannot identify a tank.
+async function locateWaterTank(input) {
+  const {data,info:{width,height}} = await input.clone().resize({width:450,height:900,fit:'inside'})
+    .removeAlpha().toColourspace('srgb').raw().toBuffer({resolveWithObject:true});
+  const seen = new Uint8Array(width*height);
+  const blue = i => data[i*3+2]>105 && data[i*3+2]>data[i*3]+50 && data[i*3+2]>data[i*3+1]+35;
+  const tanks = [];
+  for (let i=0;i<seen.length;i++) {
+    if (seen[i] || !blue(i)) continue;
+    const pending = [i];
+    seen[i]=1;
+    let left=width,right=0,top=height,bottom=0,count=0;
+    while (pending.length) {
+      const index=pending.pop(), x=index%width, y=Math.floor(index/width);
+      left=Math.min(left,x); right=Math.max(right,x);
+      top=Math.min(top,y); bottom=Math.max(bottom,y); count++;
+      for (const next of [x>0?index-1:-1,x+1<width?index+1:-1,index-width,index+width]) {
+        if (next<0 || next>=seen.length || seen[next] || !blue(next)) continue;
+        seen[next]=1;
+        pending.push(next);
+      }
+    }
+    const span=right-left+1, depth=bottom-top+1;
+    if (span>=width*.06 && span<=width*.34 && depth>=4 && count>=span*depth*.63)
+      tanks.push({left,bottom:bottom+1,span});
+  }
+  if (tanks.length!==4) return null;
+  tanks.sort((a,b)=>a.bottom-b.bottom);
+  const upper=tanks.slice(0,2).sort((a,b)=>a.left-b.left);
+  const lower=tanks.slice(2).sort((a,b)=>a.left-b.left);
+  const target=lower[1], span=target.span;
+  if (lower[0].bottom-upper[1].bottom<2*span ||
+      Math.abs(lower[0].bottom-target.bottom)>.3*span ||
+      Math.abs(upper[0].bottom-upper[1].bottom)>.3*span ||
+      lower.some((tank,i)=>Math.abs(tank.left-upper[i].left)>.5*span) ||
+      tanks.some(tank=>Math.abs(tank.span-span)>.3*span)) return null;
+  return {target,width,height};
+}
+
+async function readLocatedGauge(input, width, height, worker, sharp) {
+  const located=await locateWaterTank(input);
+  if (!located) return {tagVerified:false,bottomFeet:null};
+  const {left,bottom,span}=located.target;
+  const scaleX=width/located.width, scaleY=height/located.height;
+  async function crop(dx,dy,w,h) {
+    const rect={left:Math.round((left+dx*span)*scaleX),top:Math.round((bottom+dy*span)*scaleY),
+      width:Math.round(w*span*scaleX),height:Math.round(h*span*scaleY)};
+    if (rect.left<0 || rect.top<0 || rect.left+rect.width>width || rect.top+rect.height>height) return null;
+    // Shrink first to suppress the fine monitor pattern in the photos.
+    const reduced=await input.clone().extract(rect).resize({width:75}).greyscale().png().toBuffer();
+    return sharp(reduced).resize({width:350}).median(3).normalise().png().toBuffer();
+  }
+  async function recognize(buf, threshold) {
+    const binary=await sharp(buf).threshold(threshold).png().toBuffer();
+    const inverted=await sharp(binary).negate().png().toBuffer();
+    const padded=await sharp(inverted).extend({top:24,bottom:24,left:24,right:24,background:'white'}).png().toBuffer();
+    return (await worker.recognize(padded)).data;
+  }
+  await worker.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'});
+  let tagVerified=false;
+  for (const offset of [-2.39,-2.32,-2.25]) {
+    const tag=await crop(-.05,offset,.9,.29);
+    if (!tag) continue;
+    for (const threshold of [115,145,175]) {
+      const {text,confidence}=await recognize(tag,threshold);
+      if (text.replace(/[^A-Z0-9]/g,'')==='LT5103' && confidence>=50) {
+        tagVerified=true;
+        break;
+      }
+    }
+    if (tagVerified) break;
+  }
+  if (!tagVerified) return {tagVerified:false,bottomFeet:null};
+  await worker.setParameters({tessedit_char_whitelist:'0123456789.'});
+  const readings=[];
+  for (const cropWidth of [.76,.83]) {
+    const display=await crop(.03,.82,cropWidth,.42);
+    if (!display) continue;
+    const values=new Set();
+    for (const threshold of [140,150,160]) {
+      const {text,confidence}=await recognize(display,threshold);
+      const value=text.trim();
+      if (/^\d{1,2}\.\d$/.test(value) && confidence>=48) values.add(value);
+    }
+    if (values.size!==1) return {tagVerified:true,bottomFeet:null};
+    readings.push([...values][0]);
+  }
+  return {tagVerified:true,bottomFeet:readings.length===2 && readings[0]===readings[1]?Number(readings[0]):null};
+}
+
 export async function readDwyerGauge(image) {
   const [{default:sharp},{createWorker,PSM}] = await Promise.all([import('sharp'),import('tesseract.js')]);
   const input = sharp(image,{limitInputPixels:24_000_000});
@@ -45,7 +136,7 @@ export async function readDwyerGauge(image) {
     }
     for (const [tag,region,threshold] of tags) {
       const label = (await readTag(region,threshold)).replace(/[^A-Z0-9]/g,'');
-      if (label !== tag) return {tagVerified:false,bottomFeet:null};
+      if (label !== tag) return await readLocatedGauge(input,width,height,worker,sharp);
     }
     await worker.setParameters({tessedit_char_whitelist:'0123456789.'});
     const display = await crop(wtr3Value,400);
@@ -58,7 +149,9 @@ export async function readDwyerGauge(image) {
       const value = data.text.trim();
       if (/^\d{1,2}\.\d$/.test(value) && data.confidence>=50) readings.push(value);
     }
-    return {tagVerified:true,bottomFeet:readings.length>=2&&new Set(readings).size===1?Number(readings[0]):null};
+    if (readings.length>=2 && new Set(readings).size===1)
+      return {tagVerified:true,bottomFeet:Number(readings[0])};
+    return await readLocatedGauge(input,width,height,worker,sharp);
   } finally { await worker.terminate(); }
 }
 
