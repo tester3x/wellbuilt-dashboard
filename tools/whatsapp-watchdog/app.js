@@ -46,8 +46,17 @@ function reviewControls(row,post,card){
 
  const delivery=current.deliveries?.[row.id];if(!(delivery?.status==='review'||delivery?.needsReview))return;
  const dismissBox=node('div','',card),dismissFeedback=node('p','',dismissBox);dismissFeedback.setAttribute('role','status');
- const dismissButton=node('button','Dismiss review; keep records',dismissBox);
+ const dismissButton=node('button',row.photo?'Dismiss photo review':'Dismiss review; keep records',dismissBox);
  dismissButton.onclick=()=>action(()=>api('/dismiss-review',JSON.stringify({rowId:row.id,category:'archived',reason:'Dismissed manually; existing WB M record and original estimate retained'})),dismissButton,'Review cleared. Recorded loads and estimates are unchanged.',dismissFeedback);
+ if(row.photo){
+  const {observedBottom,estimatedTop,confirmedBarrels,configuredDefaultBarrels,driverReportedStart}=row.photo;
+  if(observedBottom)node('p','WTR 3 / LT-5103 OCR bottom: '+observedBottom.feet+' decimal ft',card);
+  if(estimatedTop)node('p','Estimated top: '+estimatedTop.feet.toFixed(2)+' decimal ft at '+estimatedTop.bblPerFoot+' bbl/ft',card);
+  if(driverReportedStart)node('p','Driver-reported start: '+driverReportedStart.feet+' decimal ft',card);
+  node('p',(confirmedBarrels===null?'Actual haul needs confirmation':confirmedBarrels+' bbl reported hauled')+
+   ' / '+configuredDefaultBarrels+' bbl configured default',card);
+  return;
+ }
  if(!canReviewPost(post,row.id))return;
  row={...row,...delivery.measurements};
  const box=node('div','',card);node('p',row.wellName+' · Review measurement time (Central)',box);

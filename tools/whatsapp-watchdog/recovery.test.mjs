@@ -48,15 +48,19 @@ test('late WhatsApp sync behind a healthy polling watermark is reconciled by ori
  const now=200000, id='late-post', channel='group';
  const late={id:{id,remote:{_serialized:channel},participant:'test-sender@lid'},t:now-6*3600,body:'Test well\n10-0\n8-9\n185'};
  const current={id:{id:'current',remote:{_serialized:channel}},t:now-5,body:'latest'};
+ const photo={id:{id:'image',remote:{_serialized:channel}},t:now-60,type:'image',body:'thumbnail-not-caption'};
  const chat={id:{server:'g.us',_serialized:channel},msgs:{getModelsArray:()=>[current]}};
  globalThis.window={AuthStore:{AppState:{state:'CONNECTED'}},require(name){
-  if(name==='WAWebCollections')return {Chat:{getModelsArray:()=>[chat]},Msg:{getModelsArray:()=>[late],on(){}}};
+  if(name==='WAWebCollections')return {Chat:{getModelsArray:()=>[chat]},Msg:{getModelsArray:()=>[late,photo],on(){}}};
   return {async loadEarlierMsgs(){return [];}};
  }};
  try{
   const first=await collectReceiver({ids:[channel],checkpoints:{[channel]:now-4},now});
   const found=first.messages.filter(m=>m.id===id);assert.equal(found.length,1);
   assert.equal(found[0].senderId,'test-sender@lid');assert.equal(found[0].timestamp,late.t);
+  const recoveredPhoto=first.messages.find(m=>m.id==='image');
+  assert.equal(recoveredPhoto.image,true);
+  assert.equal(recoveredPhoto.body,'');
   const replay=await collectReceiver({ids:[channel],checkpoints:{[channel]:now},now:now+5});
   assert.equal(replay.messages.filter(m=>m.id===id).length,1);
  }finally{delete globalThis.window;}

@@ -4,7 +4,7 @@ import {createHash,createHmac,randomBytes} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import path from 'node:path';
-export function orderedDeliveryRows(messages){return Object.values(messages).filter(m=>!m.deleted&&!m.edited&&!m.id.startsWith('export:')).flatMap(message=>message.rows.map((row,index)=>({message,row,index}))).sort((a,b)=>(Date.parse(a.row.dateTimeUTC)||0)-(Date.parse(b.row.dateTimeUTC)||0)||a.row.id.localeCompare(b.row.id));}
+export function orderedDeliveryRows(messages){return Object.values(messages).filter(m=>!m.deleted&&!m.edited&&!m.photoOnly&&!m.id.startsWith('export:')).flatMap(message=>message.rows.map((row,index)=>({message,row,index}))).sort((a,b)=>(Date.parse(a.row.dateTimeUTC)||0)-(Date.parse(b.row.dateTimeUTC)||0)||a.row.id.localeCompare(b.row.id));}
 export function repeatedSenderReport(queue,message,row){
  if(!message.senderId)return null;
  const at=Date.parse(row.postedAt||row.dateTimeUTC);
@@ -54,6 +54,7 @@ export class Transport{
   const index=message?.rows.findIndex(r=>r.id===rowId),row=message?.rows[index];
   const previous=this.queue.data.deliveries?.[rowId];
   if(!row||!canReviewPost(message,this.queue.data.deliveries,rowId)||!(previous?.status==='review'||previous?.needsReview))throw Error('This entry is not available for review');
+  if(message.photoOnly&&decision!=='exclude')throw Error('Photo evidence is review-only');
   if(previous.identity&&previous.needsReview){
    if(!this.secret||!this.config?.enabled)throw Error('Transport unavailable');
    this.busy=true;try{const value=await this.request('reviewWatchdogDeliveredPullV2',{identity:previous.identity,decision,review:{...Object.fromEntries(Object.entries(corrections).filter(([k])=>['tankLevelFeet','bottomLevelFeet','bblsTaken','actorUid'].includes(k))),confirmed:true,dateTimeUTC,reason}});

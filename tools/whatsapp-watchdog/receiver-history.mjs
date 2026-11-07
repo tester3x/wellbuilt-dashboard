@@ -50,7 +50,7 @@ export async function collectReceiver({ids, checkpoints, now}) {
           throw Error('WhatsApp history page unavailable');
         }
         if(!loaded.length){window.__wellBuiltHistory[id]=now;break;}
-        const times=loaded.filter(m=>typeof m.body==='string'&&m.body.trim()&&!m.isNotification)
+        const times=loaded.filter(m=>(m.type==='image'||typeof m.body==='string'&&m.body.trim())&&!m.isNotification)
           .map(m=>Number(m.t)).filter(Number.isFinite);
         pageOldest=Math.min(pageOldest,...times);
         if(page>0&&pageOldest>=previousOldest&&pageOldest>since)throw Error('WhatsApp history did not advance; checkpoint preserved');
@@ -58,11 +58,11 @@ export async function collectReceiver({ids, checkpoints, now}) {
       if (window.__wellBuiltHistory[id] !== now) throw Error('WhatsApp history exceeds catch-up batch; retrying without advancing checkpoint');
     }
     for (const m of all.values()) {
-      if (typeof m.body !== 'string' || !Number.isFinite(Number(m.t)) || Number(m.t) < since) continue;
+      if ((m.type !== 'image' && typeof m.body !== 'string') || !Number.isFinite(Number(m.t)) || Number(m.t) < since) continue;
       messages.push({id:m.id._serialized || m.id.id, channel:id, timestamp:Number(m.t), fromMe:!!m.id.fromMe,
         senderId:(typeof m.id?.participant === 'string' ? m.id.participant : m.id?.participant?._serialized) ||
           (typeof m.author === 'string' ? m.author : m.author?._serialized) || null,
-        author:m.notifyName || m.author?._serialized || m.from?._serialized || 'Driver', body:m.body, deleted:m.type === 'revoked'});
+        author:m.notifyName || m.author?._serialized || m.from?._serialized || 'Driver', body:m.type==='image'?(m.caption||''):m.body, image:m.type==='image', deleted:m.type === 'revoked'});
     }
     covered[id] = now;
     window.__wellBuiltHistory[id] = now;

@@ -21,6 +21,14 @@ Dependency whatsapp-web.js 1.34.7 uses WhatsApp Web, not an official Meta ingest
 
 Tests: npm test --prefix tools/whatsapp-watchdog. Tests persisted duplicate detection, edits, deletion and ambiguous multi-well messages against the real parser.
 
+### Tallgrass Dwyer photo review
+
+Images posted after the feature first starts in an already watched group whose saved name contains “Tallgrass” go to the local Needs review inbox. Live capture and receiver catch-up share the same WhatsApp message ID. OCR runs locally using the dependencies in the lockfile. It verifies the known panel crop with three water-gauge tags and the WTR 3 label. Different framing, expired media and unreadable levels require manual review. The local queue stores the caption, extracted evidence and image hash. Review the original photo in WhatsApp.
+
+WTR 3 (LT-5103) is the reported bottom in decimal feet. The effective Dwyer configuration verified for this intake is four equalizing tanks at 25.5 bbl/ft each. A caption with an explicit completed haul (for example, a line reading `Hauled 140 barrels`) allows an estimated top using the 102 bbl/ft bank. The 140 bbl default, actual haul, optional haul limit and any separately stated start remain distinct. Review the photo alongside any text report before recording the haul. Photo review can be dismissed locally and is excluded from pull delivery, text exports, remote review sync and review alerts.
+
+To check the private sample locally, set `WBC_DWYER_OCR_FIXTURE` to its absolute path and run the Watchdog tests. The expected observed bottom is 6.4 ft. With 140 confirmed barrels, the estimated top is 7.77 ft.
+
 Automatic transport uses ingestWatchdogPullV2/getWatchdogPullReceiptV2, with server-selected channel/well scope, a deployment activation cutoff and a Windows DPAPI protected endpoint signing key. No Firebase or administrator credential is available to the daemon. Export sample rows, edits, missing bottoms and parser/setup warnings are held. Completion requires the owned packet identity, exact observation and canonical completion marker. Local Pause also pauses transport. Server and client cutoffs prevent historical replay. Current deployment activation and policy are private evidence under TicketTimeExpo/output/watchdog-auto-ingest-20261002.
 
 
