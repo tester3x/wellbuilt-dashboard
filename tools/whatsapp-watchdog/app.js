@@ -49,12 +49,28 @@ function reviewControls(row,post,card){
  const dismissButton=node('button',row.photo?'Dismiss photo review':'Dismiss review; keep records',dismissBox);
  dismissButton.onclick=()=>action(()=>api('/dismiss-review',JSON.stringify({rowId:row.id,category:'archived',reason:'Dismissed manually; existing WB M record and original estimate retained'})),dismissButton,'Review cleared. Recorded loads and estimates are unchanged.',dismissFeedback);
  if(row.photo){
-  const {observedBottom,estimatedTop,confirmedBarrels,configuredDefaultBarrels,driverReportedStart}=row.photo;
+  const {observedBottom,estimatedTop,confirmedBarrels,standardBarrels,configuredDefaultBarrels,driverReportedStart}=row.photo;
   if(observedBottom)node('p','WTR 3 / LT-5103 OCR bottom: '+observedBottom.feet+' decimal ft',card);
   if(estimatedTop)node('p','Estimated top: '+estimatedTop.feet.toFixed(2)+' decimal ft at '+estimatedTop.bblPerFoot+' bbl/ft',card);
   if(driverReportedStart)node('p','Driver-reported start: '+driverReportedStart.feet+' decimal ft',card);
-  node('p',(confirmedBarrels===null?'Actual haul needs confirmation':confirmedBarrels+' bbl reported hauled')+
+  node('p',(confirmedBarrels!==null?confirmedBarrels+' bbl reported hauled':standardBarrels?standardBarrels+' bbl Tallgrass standard':'Haul evidence needs review')+
    ' / '+configuredDefaultBarrels+' bbl configured default',card);
+  if(!row.photo.canSend||delivery.identity||!canReviewPost(post,row.id))return;
+  const photoBox=node('div','',card);
+  const bottom=node('input','',photoBox),barrels=node('input','',photoBox),reason=node('input','',photoBox);
+  for(const [field,label,value] of [[bottom,'Confirmed WTR 3 bottom (decimal ft)',observedBottom?.feet],[barrels,'Confirmed actual haul (bbl)',confirmedBarrels]]){
+   field.type='number';field.min='0';field.step='any';field.placeholder=label;field.setAttribute('aria-label',label);field.value=value??'';
+  }
+  barrels.max='140';
+  reason.placeholder='How were the well, gauge and haul verified?';reason.maxLength=300;
+  const feedback=node('p','',photoBox);feedback.setAttribute('role','status');
+  const send=node('button','Confirm Dwyer and send to WB M',photoBox);
+  send.onclick=()=>action(()=>{
+   if(bottom.value===''||Number(bottom.value)<0||barrels.value===''||Number(barrels.value)<=0||Number(barrels.value)>140||reason.value.trim().length<3)
+    throw Error('Enter the verified WTR 3 bottom, actual barrels up to 140, and a verification reason.');
+   return api('/review',JSON.stringify({rowId:row.id,decision:'confirm',reason:reason.value,
+    corrections:{bottomLevelFeet:Number(bottom.value),bblsTaken:Number(barrels.value)}}));
+  },send,'Submitted to Watchdog intake. Check the delivery status for the result.',feedback);
   return;
  }
  if(!canReviewPost(post,row.id))return;

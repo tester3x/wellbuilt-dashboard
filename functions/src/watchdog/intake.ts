@@ -1,3 +1,4 @@
+import {dwyerPhotoObservation} from './dwyerPhoto';
 import {resumeHeldChannel} from './heldChannel';
 import {measuredWellRestart,reportedWellOff} from './reportedWellState';
 import {heldWellLifecycle} from './monitoringHold';
@@ -17,10 +18,26 @@ import * as admin from 'firebase-admin';
 import {createHash} from 'crypto';
 import {verifyHmacHeaders} from './auth';
 import {parsePullChat,findPullChatNotices} from '../imports/pullParser';
-import {reviewPulls,digest,type JsonRecord} from '../imports/pullImportModel';
+import {reviewPulls,digest,canonicalHistory,type JsonRecord} from '../imports/pullImportModel';
 const options={region:'us-central1',timeoutSeconds:60,memory:'256MiB' as const,secrets:['WATCHDOG_HMAC_KEY_V1']};
 const sha=(s:string)=>createHash('sha256').update(s).digest('hex');
 const root='watchdog_v2_deliveries';
+async function enqueuePhotoPacket(db:admin.database.Database,entryRef:admin.firestore.DocumentReference,entry:JsonRecord){
+ if(!entry.pendingPhotoPacket)return;
+ const {packetId,payloadDigest,pendingPhotoPacket}=entry;
+ const [done,rejected]=await Promise.all(['processed','rejected'].map(branch=>db.ref('packets/'+branch+'/'+packetId).once('value')));
+ if(!done.exists()&&!rejected.exists()){
+  const result=await db.ref('packets/incoming/'+packetId).transaction(current=>current?
+   (digest(current)===payloadDigest?current:undefined):pendingPhotoPacket);
+  if(!result.committed)throw Error('incoming_conflict');
+ }
+ await admin.firestore().runTransaction(async tx=>{
+  const current=(await tx.get(entryRef)).data();
+  if(!current?.pendingPhotoPacket)return;
+  const {pendingPhotoPacket:_,...settled}=current;
+  tx.set(entryRef,settled);
+ });
+}
 export async function authenticate(req:any,endpoint:string){
  if(req.method!=='POST')throw Error('method_not_allowed');
  if(req.headers['x-watchdog-key-id']!=='V1')throw Error('unknown_key');
@@ -36,15 +53,20 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  try{
  await authenticate(req,'ingestWatchdogPullV2');
  const body=req.body as JsonRecord;
- if(!body||Object.keys(body).some(k=>!['chatId','messageId','chat','rowIndex','review','defaultBbls','senderId'].includes(k))||typeof body.chatId!=='string'||typeof body.messageId!=='string'||typeof body.chat!=='string'||body.chat.length>6000||!Number.isInteger(body.rowIndex)||body.rowIndex<0||body.rowIndex>10)throw Error('invalid_observation');
+ if(!body||Object.keys(body).some(k=>!['chatId','messageId','chat','rowIndex','review','defaultBbls','senderId','dwyerPhoto'].includes(k))||typeof body.chatId!=='string'||typeof body.messageId!=='string'||typeof body.chat!=='string'||body.chat.length>6000||!Number.isInteger(body.rowIndex)||body.rowIndex<0||body.rowIndex>10)throw Error('invalid_observation');
  const policy=(await admin.firestore().doc('watchdog_v2_config/laptop').get()).data();
  if(!policy?.enabled)throw Error('transport_disabled');
- const channel=policy.channels?.[body.chatId]||await resumeHeldChannel(body,policy);if(!channel)throw Error('channel_not_allowed');
+ const isPhoto=Object.prototype.hasOwnProperty.call(body,'dwyerPhoto');
+ const channel=policy.channels?.[body.chatId]||(!isPhoto&&await resumeHeldChannel(body,policy));if(!channel)throw Error('channel_not_allowed');
  const fallback=Object.prototype.hasOwnProperty.call(body,'defaultBbls')?body.defaultBbls:channel.defaultBbls;
  if(fallback!=null&&fallback!==0&&(!Number.isFinite(fallback)||fallback<=0||fallback>1000))throw Error('invalid_barrel_fallback');
- const rows=parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined,driverDefaultBbls:channel.driverDefaultBbls||{}});
+ const db=admin.database();
+ const configs=isPhoto?(await db.ref('well_config').once('value')).val()||{}:null;
+ const photo=isPhoto?dwyerPhotoObservation(body,channel,configs.Dwyer):null;
+ if(photo?.issue){res.json({ok:true,status:'review',issues:[photo.issue]});return;}
+ const rows=photo?.row?[photo.row]:parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[],defaultBbls:fallback>0?fallback:undefined,driverDefaultBbls:channel.driverDefaultBbls||{}});
  let row=rows[body.rowIndex];if(!row)throw Error('missing_pull');
- if(!body.review&&Date.parse(row.postedAt)<=Date.parse(channel.resumeAfterPostedAt)){res.json({ok:true,status:'ignored',issues:['Report predates the armed monitoring resume']});return;}
+ if((photo||!body.review)&&Date.parse(row.postedAt)<=Date.parse(channel.resumeAfterPostedAt)){res.json({ok:true,status:'ignored',issues:['Report predates the armed monitoring resume']});return;}
  const senderKey=body.senderId===undefined?null:watchdogSenderKey(body.senderId);
  const timedLevelReporter=isTimedLevelReporter(channel,senderKey,row);
  // Pumper rounds listing many gauges are not driver load observations.
@@ -58,21 +80,21 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
   }
  }
  const originalTime=row.dateTimeUTC;
- const review=body.review?normalizeReviewReason(row,body.review):null;
+ const review=!photo&&body.review?normalizeReviewReason(row,body.review):null;
  const originalMeasurements={tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken};
  row=applyReviewCorrections(row,review);
 
  if(Date.parse(row.postedAt)<Math.max(policy.enabledAt,channel.enabledAt||0)||Date.parse(row.dateTimeUTC)<Math.max(policy.enabledAt,channel.enabledAt||0)) {res.json({ok:true,status:'before_activation'});return;}
- if(findPullChatNotices(body.chat).length||row.issues.some(issue=>issue!=='Inferred level separator needs historical validation'&&issue!=='Missing barrels'&&!(row.levelOnly&&issue==='Confirm measurement time for top-only reading'))) {res.json({ok:true,status:'review',issues:row.issues.length?row.issues:['Tank setup needs review']});return;}
- const db=admin.database();const configs=(await db.ref('well_config').once('value')).val()||{};
- const mapped=reviewPulls([row],configs,{}, {},new Set())[0];
- if(!channel.wells?.includes(mapped.wellName)||configs[mapped.wellName]?.companyId&&configs[mapped.wellName].companyId!=='liquid-gold')throw Error('well_not_allowed');
+ if((!photo&&findPullChatNotices(body.chat).length)||row.issues.some(issue=>issue!=='Inferred level separator needs historical validation'&&issue!=='Missing barrels'&&!(row.levelOnly&&issue==='Confirm measurement time for top-only reading'))) {res.json({ok:true,status:'review',issues:row.issues.length?row.issues:['Tank setup needs review']});return;}
+ const catalog=configs||(await db.ref('well_config').once('value')).val()||{};
+ const mapped=reviewPulls([row],catalog,{}, {},new Set())[0];
+ if(!channel.wells?.includes(mapped.wellName)||catalog[mapped.wellName]?.companyId&&catalog[mapped.wellName].companyId!=='liquid-gold')throw Error('well_not_allowed');
  if(policy.archivedWells?.[mapped.wellName]){res.json({ok:true,status:'archived',issues:['Monitoring ended for this well']});return;}
  const binding=senderKey?policy.senderBindings?.[senderKey]:null;
  if(binding&&(typeof binding.driverId!=='string'||!/^[a-zA-Z0-9_-]{8,128}$/.test(binding.driverId)))throw Error('sender_binding_invalid');
  const profile=binding?(await db.ref('drivers/profiles/'+binding.driverId).once('value')).val():null;
  let owner;
- try { owner=resolveWatchdogOwner(binding,profile,mapped.wellName,configs[mapped.wellName]); }
+ try { owner=resolveWatchdogOwner(binding,profile,mapped.wellName,catalog[mapped.wellName]); }
  catch(error) {
   const code=String((error as Error).message);
   if(!['sender_well_out_of_scope','sender_driver_unavailable','sender_binding_invalid'].includes(code))throw error;
@@ -90,8 +112,24 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
    if(!corroborateInferredLevels({...row,wellName:mapped.wellName},history[mapped.wellName],mapped.bank)){res.json({ok:true,status:'review',issues:row.issues});return;}
    row={...row,issues:row.issues.filter(issue=>issue!=='Inferred level separator needs historical validation'&&issue!=='Missing barrels')};
  }
- const config=configs[mapped.wellName],status=(await db.ref('wells/'+mapped.wellName+'/status').once('value')).val();
- const noDefault=parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[]})[body.rowIndex];
+ const photoIdentity=photo?.proof?digest(['dwyer_gauge_photo',body.chatId,photo.proof.imageDigest]):null;
+ const photoRef=photoIdentity?admin.firestore().collection(root).doc(photoIdentity):null;
+ const ownedPhoto=photoRef?(await photoRef.get()).data():null;
+ if(ownedPhoto&&photoRef){
+  await enqueuePhotoPacket(db,photoRef,ownedPhoto);
+  res.json({ok:true,status:'queued',identity:photoIdentity,packetId:ownedPhoto.packetId});return;
+ }
+ const possiblePhotoRepeat=(row.wellName==='Dwyer')&&canonicalHistory(history[mapped.wellName]).some(other=>{
+  if(!photo&&!other.watchdogProvenance?.dwyerPhoto)return false;
+  const gap=Math.abs(Date.parse(other.dateTimeUTC||other.gaugeTime||other.dateTime)-Date.parse(row.dateTimeUTC));
+  const bottom=other.watchdogProvenance?.reportedBottomFeet??other.bottomLevelFeet;
+  return gap<=30*60000&&bottom!=null&&row.bottomLevelFeet!=null&&Math.abs(Number(bottom)-row.bottomLevelFeet)<=1/12;
+ });
+ if(possiblePhotoRepeat && !(review || photo&&body.review)){
+  res.json({ok:true,status:'review',issues:['Possible matching Dwyer photo or text pull; confirm a separate haul or exclude']});return;
+ }
+ const config=catalog[mapped.wellName],status=(await db.ref('wells/'+mapped.wellName+'/status').once('value')).val();
+ const noDefault=photo?.row??parsePullChat(body.chat,{levelNotation:'feet_inches',defaultWell:channel.defaultWell||'',wellNames:channel.wells||[]})[body.rowIndex];
  const writtenBarrels=review?.bblsTaken!=null&&review.bblsTaken!==originalMeasurements.bblsTaken?review.bblsTaken:noDefault?.bblsTaken??null;
  const earlyAppMatch=matchExistingAppPull({...row,wellName:mapped.wellName,bblsTaken:writtenBarrels},history[mapped.wellName],owner?.driverId??null,mapped.bank,writtenBarrels!==null);
  if(earlyAppMatch.status==='matched'){res.json({ok:true,status:'duplicate',alreadyRecorded:true,matchedPacketId:earlyAppMatch.packetIds[0],matchedDateTimeUTC:earlyAppMatch.dateTimeUTC,issues:['Already recorded through the app; original gauge time preserved']});return;}
@@ -99,7 +137,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const decision=decideBarrels({written:review?.bblsTaken??noDefault?.bblsTaken??null,fallback:row.bblsTaken,top:row.tankLevelFeet,bottom:row.bottomLevelFeet,bank:mapped.bank,rateMinutesPerFoot:Number(status?.calculated?.flowRateMinutes),isDown:status?.isDown!==false,rateMeasuredAt:status?.calculated?.flowRateMeasuredAtUTC||status?.lastPull?.dateTimeUTC||'',measuredAt:row.dateTimeUTC,maxLoadBbls:channel.maxLoadBbls,driverCapacity,wellLimit:channel.wellLoadLimits?.[mapped.wellName],fixedDefaultBbls:fixedDriverDefault(channel,body.senderId,row.author),fixedDefaultConfirmed:fixedDriverDefaultConfirmed(channel,body.senderId,row.author)});
  if(!decision){res.json({ok:true,status:'review',issues:['Missing barrels and valid bottom; cannot estimate safely']});return;}
  row={...row,bblsTaken:decision.bbls,issues:row.issues.filter(issue=>issue!=='Missing barrels')};
- const checked=reviewPulls([row],configs,history,{},new Set())[0];
+ const checked=reviewPulls([row],catalog,history,{},new Set())[0];
  const confirmedFixed=decision.source==='default'&&!decision.provisional&&fixedDriverDefaultConfirmed(channel,body.senderId,row.author);
  if(decision.provisional&&row.bottomLevelFeet!==null){
   checked.afterFeet=row.bottomLevelFeet;
@@ -108,32 +146,35 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  }
  const appMatch=matchExistingAppPull({...row,wellName:mapped.wellName},history[mapped.wellName],owner?.driverId??null,mapped.bank);
  if(appMatch.status==='matched'){res.json({ok:true,status:'duplicate',alreadyRecorded:true,matchedPacketId:appMatch.packetIds[0],matchedDateTimeUTC:appMatch.dateTimeUTC,issues:['Already recorded through the app; original gauge time preserved']});return;}
- if(appMatch.status==='review'&&!review){res.json({ok:true,status:'review',candidatePacketIds:appMatch.packetIds,issues:['Possible app pull already recorded within 90 minutes; confirm separate load or exclude this report']});return;}
+ if(appMatch.status==='review'&&!review&&!(photo&&body.review)){res.json({ok:true,status:'review',candidatePacketIds:appMatch.packetIds,issues:['Possible app pull already recorded within 90 minutes; confirm separate load or exclude this report']});return;}
  if(!decision.provisional&&config.flowWindowMinimumRecoveryInches&&row.bottomLevelFeet!==null){
   const reported=row.bottomLevelFeet;
   if(!Number.isFinite(reported)||reported<0||reported>Number(row.tankLevelFeet)||Math.abs(reported-Number(checked.afterFeet))*12>2){res.json({ok:true,status:'review',issues:['Reported bottom differs from calibrated removal by more than two inches; confirm levels and barrels']});return;}
   // Known barrels retain calibrated removal; the posted bottom is comparison only.
  }
- const estimate=decision.estimate,barrelSource=decision.source;
- const barrels=decision.provisional?{status:'provisional',source:barrelSource,needsReview:decision.needsReview,issues:decision.issues,limit:decision.limit,selectedBbls:decision.bbls}:confirmedFixed?{status:'confirmed',source:'owner_fixed_load',needsReview:false,issues:[],limit:decision.limit,selectedBbls:decision.bbls,confirmedAt:Date.now()}:null;
+ const ownerStandard=photo?.proof?.barrelSource==='owner_standard';
+ const estimate=photo?null:decision.estimate,barrelSource=ownerStandard?'default':decision.source;
+ const barrels=decision.provisional?{status:'provisional',source:barrelSource,needsReview:decision.needsReview,issues:decision.issues,limit:decision.limit,selectedBbls:decision.bbls}
+  :ownerStandard?{status:'confirmed',source:'owner_fixed_load',needsReview:false,issues:[],limit:photo?.proof?.haulLimitBbls??140,selectedBbls:decision.bbls}
+  :confirmedFixed?{status:'confirmed',source:'owner_fixed_load',needsReview:false,issues:[],limit:decision.limit,selectedBbls:decision.bbls,confirmedAt:Date.now()}:null;
 
- if(review&&checked.status==='review'){
+ if((review||photo&&body.review)&&checked.status==='review'){
    checked.issues=checked.issues.filter(issue=>issue!=='Possible existing pull within 30 minutes; check time and barrels, then confirm or exclude');
    if(!checked.issues.length)checked.status='ready';
  }
 
  const aggregateMatches=possibleAggregateOverlap({...row,wellName:mapped.wellName},history[mapped.wellName],owner?.driverId??null);
  if(aggregateMatches.length){res.json({ok:true,status:'review',issues:['Possible load already included in a combined manual pull; reconcile the combined entry before sending'],aggregatePacketIds:aggregateMatches,estimate,barrelSource});return;}
- const identity=digest([mapped.wellName,row.dateTimeUTC,row.tankLevelFeet,row.bottomLevelFeet,decision.provisional?'provisional':row.bblsTaken]);
+ const identity=photoIdentity??digest([mapped.wellName,row.dateTimeUTC,row.tankLevelFeet,row.bottomLevelFeet,decision.provisional?'provisional':row.bblsTaken]);
  const entryRef=admin.firestore().collection(root).doc(identity);
  const prior=(await entryRef.get()).data();
  if(!prior&&checked.status!=='ready'){res.json({ok:true,status:checked.status,issues:checked.issues,estimate,barrelSource});return;}
  if(prior){res.json({ok:true,status:'queued',identity,packetId:prior.packetId,estimate:prior.estimate,barrelSource:prior.barrelSource,needsReview:prior.barrels?.needsReview===true,measurements:{tankLevelFeet:prior.top,bottomLevelFeet:prior.reportedBottomFeet??prior.bottom,bblsTaken:prior.bbl,dateTimeUTC:prior.dateTimeUTC}});return;}
  const stamp=new Date(row.dateTimeUTC).toISOString().replace(/[-:]/g,'').slice(0,15).replace('T','_');
  const packetId=stamp+'_'+mapped.wellName.replace(/\s+/g,'')+'_'+identity.slice(0,6);
- const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,dateTime:watchdogDisplayTime(row.dateTimeUTC),timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:owner?.driverId??null,driverName:owner?.driverName??null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,author:row.author,channelName:typeof channel.name==='string'?channel.name:typeof channel.label==='string'?channel.label:'WhatsApp',...(review?.timeEstimate?{timeEstimate:review.timeEstimate}:{}),...(row.levelOnly?{observationKind:'top_only',measurementTimeSource:review?'reviewed':row.measurementTimeSource}:{}),...(barrels?{barrels}:{}),...(row.inferredSeparator?{parserInference:{kind:'separator_dot',historicallyCorroborated:!review,manuallyReviewed:!!review}}:{}),...(owner?{senderKey,ownerDriverId:owner.driverId,ownershipSource:'verified_sender_binding'}:{}),reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(estimate?{barrelEstimate:estimate,barrelSource}:{}),...(review?{review:{originalTime,originalMeasurements,correctedMeasurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken},...(review.actorUid?{actorUid:review.actorUid}:{}),correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
+ const packet={packetId,idempotencyKey:packetId,requestType:'pull',wellName:mapped.wellName,tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:checked.afterFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC,dateTime:watchdogDisplayTime(row.dateTimeUTC),timezone:'America/Chicago',companyId:'liquid-gold',source:'whatsapp_watchdog',driverId:owner?.driverId??null,driverName:owner?.driverName??null,wellDownIsAuthoritative:false,watchdogProvenance:{principalId:'laptop-watchdog-v2',observationDigest:identity,author:row.author,channelName:typeof channel.name==='string'?channel.name:typeof channel.label==='string'?channel.label:'WhatsApp',...(review?.timeEstimate?{timeEstimate:review.timeEstimate}:{}),...(row.levelOnly?{observationKind:'top_only',measurementTimeSource:review?'reviewed':row.measurementTimeSource}:{}),...(barrels?{barrels}:{}),...(row.inferredSeparator?{parserInference:{kind:'separator_dot',historicallyCorroborated:!review,manuallyReviewed:!!review}}:{}),...(owner?{senderKey,ownerDriverId:owner.driverId,ownershipSource:'verified_sender_binding'}:{}),reportedBottomFeet:row.bottomLevelFeet,bblPerFoot:checked.bank,...(photo?.proof?{dwyerPhoto:photo.proof}:{}),...(estimate?{barrelEstimate:estimate,barrelSource}:{}),...(review?{review:{originalTime,originalMeasurements,correctedMeasurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken},...(review.actorUid?{actorUid:review.actorUid}:{}),correctedTime:row.dateTimeUTC,reason:review.reason.trim(),confirmedAt:new Date().toISOString()}}:{})}};
  if(reportedWellOff(row,!!owner))Object.assign(packet,{wellDown:true,wellDownIsAuthoritative:true});
- else if(!review && !decision.provisional && policy.heldWells?.[mapped.wellName]?.state!=='on_hold'){
+ else if(!photo && !review && !decision.provisional && policy.heldWells?.[mapped.wellName]?.state!=='on_hold'){
   const restart=measuredWellRestart(row,config,status,history[mapped.wellName],Date.now());
   if(restart){
    Object.assign(packet,{wellDown:false,wellDownIsAuthoritative:true,flowIntervalBarrier:true});
@@ -144,9 +185,12 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const flowDiagnostic=diagnosticFlowWindow(history[mapped.wellName],{...packet,tankTopInches:Number(row.tankLevelFeet)*12,tankAfterInches:Number(checked.afterFeet)*12},6);
  Object.assign(packet.watchdogProvenance,{flowDiagnostic:{...flowDiagnostic,mode:'shadow',minimumRecoveryInches:6}});
  const payloadDigest=digest(packet);
- await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('payload_conflict');return;}tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:row.tankLevelFeet,bottom:checked.afterFeet,bbl:row.bblsTaken,principalId:'laptop-watchdog-v2',flowDiagnostic,messageHash:sha(body.chatId+':'+body.messageId),estimate,barrelSource,barrels,reportedBottomFeet:row.bottomLevelFeet,createdAt:Date.now()});});
+ await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('payload_conflict');return;}tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:row.tankLevelFeet,bottom:checked.afterFeet,bbl:row.bblsTaken,principalId:'laptop-watchdog-v2',flowDiagnostic,messageHash:sha(body.chatId+':'+body.messageId),estimate,barrelSource,barrels,reportedBottomFeet:row.bottomLevelFeet,createdAt:Date.now(),...(photo?{pendingPhotoPacket:packet}:{})});});
+ if(photo){await enqueuePhotoPacket(db,entryRef,{packetId,payloadDigest,pendingPhotoPacket:packet});}
+ else {
  const done=await db.ref('packets/processed/'+packetId).once('value');
  if(!done.exists()){const transaction=await db.ref('packets/incoming/'+packetId).transaction(current=>{if(current){if(digest(current)!==payloadDigest)return;return current;}return packet;});if(!transaction.committed)throw Error('incoming_conflict');}
+ }
  res.json({ok:true,status:'queued',identity,packetId,estimate,barrelSource,flowDiagnostic,needsReview:barrels?.needsReview===true,issues:barrels?.issues||[],measurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC}});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });

@@ -44,8 +44,9 @@ export class Queue{
  this.data.messages[key]={key,id,channel,chat,digest,senderId:senderId||previous?.senderId||null,rows,notices,deleted,edited:!!previous&&(previous.edited||!sameBody||!!previous.postedAt&&previous.postedAt!==postedAt),postedAt,author:photoEvidence?author:post?.author||'',body:photoEvidence?body:post?.body||chat,updatedAt:new Date().toISOString(),...(photoEvidence||previous?.photoOnly?{photoOnly:true,photoPending}: {})};
  if(photoEvidence){
   this.data.deliveries??={};
-  if(!sameBody||!this.data.deliveries[rows[0].id]?.reviewDismissal)
-   this.data.deliveries[rows[0].id]={status:'review',issues:photoEvidence.issues};
+  const delivery=this.data.deliveries[rows[0].id];
+  if(!delivery?.identity && (!sameBody||!delivery?.reviewDismissal))
+   this.data.deliveries[rows[0].id]=photoEvidence.photo.autoSend?{status:'retry'}:{status:'review',issues:photoEvidence.issues};
  }
  this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
  }

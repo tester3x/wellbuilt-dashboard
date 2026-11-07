@@ -72,23 +72,29 @@ export function photoEvidence({body,gauge,imageDigest,bank=dwyerBank}) {
   // planned load, or number next to the gauge is insufficient.
   const quantities = [...body.matchAll(/^\s*(?:dwyer\s*[-:]?\s*)?(?:i\s+)?(?:hauled|pulled|took)\s+(\d+(?:\.\d+)?)\s*(?:bbls?|barrels?)\.?\s*$/gim)];
   const quantity = Number(quantities[0]?.[1]);
-  const confirmedBarrels = identified && quantities.length===1 && Number.isFinite(quantity) && quantity>0
+  const mentioned = [...body.matchAll(/\b(\d+(?:\.\d+)?)\s*(?:bbls?|barrels?)\b/gi)];
+  const bareQuantities = [...body.matchAll(/^\s*(\d{3}(?:\.\d+)?)\s*$/gm)];
+  const conflicting = quantities.length>1 || [...mentioned,...bareQuantities].some(match=>Number(match[1])!==bank.defaultBarrels);
+  const confirmedBarrels = identified && !conflicting && quantities.length===1 && Number.isFinite(quantity) && quantity>0
     && (bank.maxHaulBarrels==null || quantity<=bank.maxHaulBarrels) ? quantity : null;
-  if (confirmedBarrels===null) issues.push('Confirm actual barrels hauled. The configured default is not a reported haul');
+  const standardBarrels = identified && !conflicting && confirmedBarrels===null &&
+    (bank.maxHaulBarrels==null || bank.defaultBarrels<=bank.maxHaulBarrels) ? bank.defaultBarrels : null;
+  const selectedBarrels = confirmedBarrels??standardBarrels;
+  if (selectedBarrels===null) issues.push('Resolve conflicting haul evidence or confirm the Dwyer report');
   if (Number.isFinite(quantity) && quantity>bank.maxHaulBarrels)
     issues.push('Reported quantity exceeds the '+bank.maxHaulBarrels+' bbl Tallgrass cap');
   const bblPerFoot = bank.activeTanks*bank.bblPerFootPerTank;
-  const estimatedTopFeet = bottom!==null && confirmedBarrels!==null && Number.isFinite(bblPerFoot) && bblPerFoot>0
-    ? bottom+confirmedBarrels/bblPerFoot : null;
+  const estimatedTopFeet = bottom!==null && selectedBarrels!==null && Number.isFinite(bblPerFoot) && bblPerFoot>0
+    ? bottom+selectedBarrels/bblPerFoot : null;
   const starts = [...body.matchAll(/^\s*(?:start(?:ed)?(?:\s+at)?|top)\s*:?\s*(\d+(?:\.\d+)?)\s*(?:ft|feet)\.?\s*$/gim)];
   const driverReportedStart = identified && starts.length===1 ? {feet:Number(starts[0][1]),source:'caption'} : null;
   return {
     wellName:identified?'Dwyer':'Well needs review',
-    bottomLevelFeet:bottom,tankLevelFeet:estimatedTopFeet,bblsTaken:confirmedBarrels,issues,
+    bottomLevelFeet:bottom,tankLevelFeet:estimatedTopFeet,bblsTaken:selectedBarrels,issues,
     photo:{imageDigest,tagVerified:!!gauge?.tagVerified,
       observedBottom:bottom===null?null:{feet:bottom,source:'ocr',gauge:'WTR 3 / LT-5103'},
-      estimatedTop:estimatedTopFeet===null?null:{feet:estimatedTopFeet,source:'bottom_plus_confirmed_haul',bblPerFoot},
-      confirmedBarrels,configuredDefaultBarrels:bank.defaultBarrels,driverReportedStart,bank},
+      estimatedTop:estimatedTopFeet===null?null:{feet:estimatedTopFeet,source:standardBarrels===null?'bottom_plus_confirmed_haul':'bottom_plus_standard_haul',bblPerFoot},
+      confirmedBarrels,standardBarrels,configuredDefaultBarrels:bank.defaultBarrels,driverReportedStart,bank},
   };
 }
 
@@ -99,6 +105,7 @@ export class DwyerPhotoIntake {
     this.queue=queue;
     this.recognize=recognize;
     queue.data.dwyerPhotoStartedAt ??= Date.now();
+    queue.data.dwyerDeliveryStartedAt ??= Date.now();
   }
   receive(message,download) {
     if (!Number.isFinite(message.timestamp) || message.timestamp*1000 < this.queue.data.dwyerPhotoStartedAt) return;
@@ -142,6 +149,9 @@ export class DwyerPhotoIntake {
         Math.abs(Date.parse(post.postedAt)-message.timestamp*1000)<=90000 &&
         post.rows.some(row=>row.wellName==='Dwyer'))));
     if (possibleDuplicate) evidence.issues.push('Possible duplicate Dwyer report in this group');
+    evidence.photo.canSend = !!imageDigest && message.timestamp*1000>=this.queue.data.dwyerDeliveryStartedAt;
+    evidence.photo.autoSend = evidence.photo.canSend && !!gauge?.tagVerified &&
+      evidence.bottomLevelFeet!==null && evidence.bblsTaken!==null && !possibleDuplicate;
     this.queue.ingest({...message,photoEvidence:evidence});
   }
 }

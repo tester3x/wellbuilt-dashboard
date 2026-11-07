@@ -13,6 +13,58 @@ async function call(endpoint:any,name:string,body:any,tampered=false){const rawB
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});database.set('packets/outgoing/response_existing',{wellName:'Kahuna 5',wellDown:false,currentLevel:'12',lastPullPacketId:'actual-pull',flowRate:'1:00:00'});});
 const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
 
+function photoObservation(caption:string){
+ documents.get('watchdog_v2_config/laptop').channels.group.wells=['Dwyer'];
+ database.set('well_config',{Dwyer:{activeTanks:4,bblPerFoot:102,tankHeight:20,companyId:'liquid-gold',route:'Tallgrass',equalizedTanks:true,pullBbls:140}});
+ const request=observation();
+ return {...request,chat:request.chat.replace(/Driver:[\s\S]*/,'Driver: '+caption),
+  dwyerPhoto:{imageDigest:'a'.repeat(64),tagVerified:true,bottomFeet:6.4}};
+}
+
+test('Dwyer photo creates one governed packet and retains measurement provenance on retry',async()=>{
+ const request=photoObservation('Bottom\nHauled 140 barrels\nStart: 7.8 ft');
+ const first=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request)).result;
+ expect(first.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+first.packetId);
+ expect(packet).toMatchObject({wellName:'Dwyer',tankLevelFeet:6.4+140/102,bblsTaken:140,
+  watchdogProvenance:{reportedBottomFeet:6.4,dwyerPhoto:{gauge:'WTR 3 / LT-5103',bankBblPerFoot:102,
+   barrelSource:'driver_caption',topSource:'bottom_plus_actual_haul',measurementTimeSource:'whatsapp_post',driverReportedStartFeet:7.8}}});
+ expect(packet.bottomLevelFeet).toBeCloseTo(6.4);
+ const replay=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...request,messageId:'forwarded'})).result;
+ expect(replay.packetId).toBe(first.packetId);
+ database.set('packets/processed/'+first.packetId,{...packet,tankAfterInches:76.8,canonicalProcessingBottomInches:76.8,canonicalProcessingComplete:true});
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.identity})).result.status).toBe('complete');
+});
+
+test('Dwyer photo without a stated haul uses the owner standard as provenance',async()=>{
+ const request=photoObservation('Bottom');
+ const result=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request)).result;
+ expect(result.status).toBe('queued');
+ expect(database.get('packets/incoming/'+result.packetId)).toMatchObject({bblsTaken:140,
+  watchdogProvenance:{dwyerPhoto:{barrelSource:'owner_standard',topSource:'bottom_plus_standard_haul'}}});
+});
+
+test('Dwyer photo holds conflicting or above-cap volume and requires a verified review to send',async()=>{
+ for(const caption of ['130 bbl','Hauled 141 bbl']){
+  const held=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',photoObservation(caption))).result;
+  expect(held.status).toBe('review');
+ }
+ const request=photoObservation('130 bbl');
+ const review={confirmed:true,reason:'Driver confirmed the haul and gauge',bottomLevelFeet:6.4,bblsTaken:140};
+ const result=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...request,review})).result;
+ expect(result.status).toBe('queued');
+ expect(database.get('packets/incoming/'+result.packetId).watchdogProvenance.dwyerPhoto.barrelSource).toBe('office_confirmed');
+});
+
+test('Dwyer photo holds a matching text report already in the canonical queue',async()=>{
+ const request=photoObservation('Hauled 140 bbl');
+ const previous=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),
+  chat:request.chat.replace(/Driver:[\s\S]*/, 'Driver: Dwyer\nTop 7\'9"\nBottom 6\'5"\n140 bbl')})).result;
+ expect(previous.status).toBe('queued');
+ const photo=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request)).result;
+ expect(photo).toMatchObject({status:'review',issues:[expect.stringContaining('matching Dwyer')]});
+});
+
 test.each(['Drone','Drone 1','Drone1'])('Drone regression: signed intake consumes whole %s heading and keeps calculated bottom',async heading=>{
  documents.get('watchdog_v2_config/laptop').channels.group.wells=['Drone'];
  database.set('well_config',{Drone:{numTanks:2,activeTanks:2,bblPerFoot:40,tankHeight:20,companyId:'liquid-gold'}});
