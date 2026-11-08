@@ -9,6 +9,34 @@ const maxImageBytes = 12 * 1024 * 1024;
 const require = createRequire(import.meta.url);
 export const isTallgrassChannel = channel => /\btallgrass\b/i.test(channel.name || '');
 
+// Puppeteer serializes this function into the already connected receiver page.
+// Synced group posts may have a bare ID that whatsapp-web.js cannot resolve.
+export async function downloadDwyerChatImage({channel,id,maxBytes}) {
+  const {Chat}=window.require('WAWebCollections');
+  const chat=Chat.get(channel)||Chat.getModelsArray().find(group=>group.id?._serialized===channel);
+  const matches=chat?.msgs?.getModelsArray().filter(message=>message.type==='image' &&
+    (message.id?._serialized===id || message.id?.id===id));
+  if (matches?.length!==1) return;
+  const [message]=matches;
+  const mimetype=message.mimetype;
+  if (!mimetype?.startsWith('image/') || !message.directPath || !message.mediaKey ||
+      message.size>maxBytes || message.mediaData?.mediaStage==='REUPLOADING') return;
+  const downloadQpl={addAnnotations(){return this;},addPoint(){return this;}};
+  const bytes=await window.require('WAWebDownloadManager').downloadManager.downloadAndMaybeDecrypt({
+    directPath:message.directPath,encFilehash:message.encFilehash,filehash:message.filehash,
+    mediaKey:message.mediaKey,mediaKeyTimestamp:message.mediaKeyTimestamp,
+    type:message.type,mimetype,signal:AbortSignal.timeout(10000),downloadQpl,
+  });
+  if (!bytes?.byteLength || bytes.byteLength>maxBytes) return;
+  return {mimetype,data:await window.WWebJS.arrayBufferToBase64Async(bytes)};
+}
+
+export async function downloadDwyerMedia(client,channel,id,downloadLegacy) {
+  const media=await client.pupPage.evaluate(downloadDwyerChatImage,{channel,id,maxBytes:maxImageBytes})
+    .catch(()=>undefined);
+  return media?.data ? media : downloadLegacy?.();
+}
+
 // Each region is relative to the verified Tallgrass panel crop. Check the
 // panel's tags before using these regions. Other layouts go to review.
 const tags = [
@@ -19,9 +47,9 @@ const tags = [
 ];
 const wtr3Value = [502/900,1155/1600,84/900,50/1600];
 
-// Locate the two rows of blue water tanks before reading the lower-right tank.
-// The exact LT-5103 tag is still required; color alone cannot identify a tank.
-async function locateWaterTank(input) {
+// Tank graphics give us candidate search boxes at any position in the frame.
+// Only the LT-5103 tag identifies WTR 3. Other tanks can be outside the photo.
+async function locateWaterTankCandidates(input) {
   const {data,info:{width,height}} = await input.clone().resize({width:450,height:900,fit:'inside'})
     .removeAlpha().toColourspace('srgb').raw().toBuffer({resolveWithObject:true});
   const seen = new Uint8Array(width*height);
@@ -43,28 +71,17 @@ async function locateWaterTank(input) {
       }
     }
     const span=right-left+1, depth=bottom-top+1;
-    if (span>=width*.06 && span<=width*.34 && depth>=4 && count>=span*depth*.63)
+    if (span>=width*.06 && span<=width*.85 && depth>=4 && count>=span*depth*.63)
       tanks.push({left,bottom:bottom+1,span});
   }
-  if (tanks.length!==4) return null;
-  tanks.sort((a,b)=>a.bottom-b.bottom);
-  const upper=tanks.slice(0,2).sort((a,b)=>a.left-b.left);
-  const lower=tanks.slice(2).sort((a,b)=>a.left-b.left);
-  const target=lower[1], span=target.span;
-  if (lower[0].bottom-upper[1].bottom<2*span ||
-      Math.abs(lower[0].bottom-target.bottom)>.3*span ||
-      Math.abs(upper[0].bottom-upper[1].bottom)>.3*span ||
-      lower.some((tank,i)=>Math.abs(tank.left-upper[i].left)>.5*span) ||
-      tanks.some(tank=>Math.abs(tank.span-span)>.3*span)) return null;
-  return {target,width,height};
+  return {tanks,width,height};
 }
 
 async function readLocatedGauge(input, width, height, worker, sharp) {
-  const located=await locateWaterTank(input);
-  if (!located) return {tagVerified:false,bottomFeet:null};
-  const {left,bottom,span}=located.target;
+  const located=await locateWaterTankCandidates(input);
+  if (!located.tanks.length || located.tanks.length>12) return {tagVerified:false,bottomFeet:null};
   const scaleX=width/located.width, scaleY=height/located.height;
-  async function crop(dx,dy,w,h) {
+  async function crop({left,bottom,span},dx,dy,w,h) {
     const rect={left:Math.round((left+dx*span)*scaleX),top:Math.round((bottom+dy*span)*scaleY),
       width:Math.round(w*span*scaleX),height:Math.round(h*span*scaleY)};
     if (rect.left<0 || rect.top<0 || rect.left+rect.width>width || rect.top+rect.height>height) return null;
@@ -79,24 +96,28 @@ async function readLocatedGauge(input, width, height, worker, sharp) {
     return (await worker.recognize(padded)).data;
   }
   await worker.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'});
-  let tagVerified=false;
-  for (const offset of [-2.39,-2.32,-2.25]) {
-    const tag=await crop(-.05,offset,.9,.29);
-    if (!tag) continue;
-    for (const threshold of [115,145,175]) {
-      const {text,confidence}=await recognize(tag,threshold);
-      if (text.replace(/[^A-Z0-9]/g,'')==='LT5103' && confidence>=50) {
-        tagVerified=true;
-        break;
+  async function matchesTag(tank) {
+    for (const offset of [-2.39,-2.32,-2.25]) {
+      const tag=await crop(tank,-.05,offset,.9,.29);
+      if (!tag) continue;
+      for (const threshold of [115,145,175]) {
+        const {text,confidence}=await recognize(tag,threshold);
+        if (text.replace(/[^A-Z0-9]/g,'')==='LT5103' && confidence>=50) return true;
       }
     }
-    if (tagVerified) break;
+    return false;
   }
-  if (!tagVerified) return {tagVerified:false,bottomFeet:null};
+  let target=null;
+  for (const tank of located.tanks) {
+    if (!await matchesTag(tank)) continue;
+    if (target) return {tagVerified:false,bottomFeet:null};
+    target=tank;
+  }
+  if (!target) return {tagVerified:false,bottomFeet:null};
   await worker.setParameters({tessedit_char_whitelist:'0123456789.'});
   const readings=[];
   for (const cropWidth of [.76,.83]) {
-    const display=await crop(.03,.82,cropWidth,.42);
+    const display=await crop(target,.03,.82,cropWidth,.42);
     if (!display) continue;
     const values=new Set();
     for (const threshold of [140,150,160]) {
