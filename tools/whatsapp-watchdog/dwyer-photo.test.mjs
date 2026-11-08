@@ -43,6 +43,35 @@ test('synced Dwyer image downloads by exact group and bare ID with its MIME type
   assert.equal(downloadCalls,1);
 });
 
+test('retry restores only the selected download failure under its original photo identity', async t => {
+  const dir=mkdtempSync(path.join(tmpdir(),'watchdog-dwyer-retry-'));
+  t.after(()=>{rmSync(path.join(dir,'queue.json'),{force:true});rmdirSync(dir);});
+  const queue=new Queue(dir);
+  const timestamp=Date.now()/1000;
+  queue.data.dwyerPhotoStartedAt=timestamp*1000-1000;
+  queue.data.dwyerDeliveryStartedAt=timestamp*1000-1000;
+  const intake=new DwyerPhotoIntake(queue,async()=>({...gauge,bottomFeet:7.8}));
+  const message={id:'original',channel:'tallgrass',timestamp,body:'',author:'Fixture'};
+  await intake.receive(message,()=>undefined);
+  await intake.receive({...message,id:'unrelated'},()=>undefined);
+  const [held,unrelated]=Object.values(queue.data.messages);
+  const rowId=held.rows[0].id;
+  const previous=queue.data.deliveries[rowId];
+  assert.equal(previous.status,'review');
+  await assert.rejects(intake.retryHeldPhoto(held,7.7,()=>media),/expected WTR 3/);
+  assert.equal(queue.data.messages[held.key],held);
+  assert.equal(queue.data.deliveries[rowId],previous);
+  await intake.retryHeldPhoto(held,7.8,()=>media);
+  const recovered=queue.data.messages[held.key];
+  assert.equal(recovered.rows[0].id,rowId);
+  assert.equal(recovered.postedAt,held.postedAt);
+  assert.equal(recovered.rows[0].photo.observedBottom.feet,7.8);
+  assert.equal(queue.data.deliveries[rowId].status,'retry');
+  assert.equal(queue.data.messages[unrelated.key],unrelated);
+  assert.equal(queue.data.deliveries[unrelated.rows[0].id].status,'review');
+  assert.throws(()=>intake.retryHeldPhoto(recovered,7.8,()=>media),/unsent download failure/);
+});
+
 test('Dwyer uses the WTR 3 decimal reading and all four equalizing tanks', () => {
   assert.equal(isTallgrassChannel({name:'Tallgrass Water'}),true);
   assert.equal(isTallgrassChannel({name:'Other Water'}),false);

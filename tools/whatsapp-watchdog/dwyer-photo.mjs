@@ -231,12 +231,29 @@ export class DwyerPhotoIntake {
     const pendingEvidence = photoEvidence({body:message.body});
     pendingEvidence.issues.push('Photo processing pending');
     this.queue.ingest({...post,photoEvidence:pendingEvidence,photoPending:true});
-    const job = this.tail.then(()=>this.capture(post,download)).finally(()=>this.pending.delete(key));
+    return this.scheduleCapture(key,post,download);
+  }
+  retryHeldPhoto(post,expectedBottomFeet,download) {
+    const row=post?.rows?.[0];
+    const delivery=this.queue.data.deliveries?.[row?.id];
+    const timestamp=Date.parse(post?.postedAt)/1000;
+    if (!post?.photoOnly || post.deleted || post.edited || post.photoPending ||
+        !Number.isFinite(timestamp) || timestamp*1000<this.queue.data.dwyerDeliveryStartedAt ||
+        row?.photo?.imageDigest || delivery?.status!=='review' || delivery.identity ||
+        delivery.review || delivery.reviewDismissal || this.pending.has(post.key)) {
+      throw Error('This photo is not an unsent download failure');
+    }
+    if (!Number.isFinite(expectedBottomFeet) || expectedBottomFeet<0) throw Error('Confirm the visible WTR 3 reading first');
+    const message={...post,timestamp};
+    return this.scheduleCapture(post.key,message,download,{post,row,delivery,expectedBottomFeet});
+  }
+  scheduleCapture(key,post,download,retry) {
+    const job = this.tail.then(()=>this.capture(post,download,retry)).finally(()=>this.pending.delete(key));
     this.tail=job.catch(()=>{});
     this.pending.set(key,job);
     return job;
   }
-  async capture(message,download) {
+  async capture(message,download,retry) {
     let gauge,imageDigest;
     try {
       let timer;
@@ -255,6 +272,14 @@ export class DwyerPhotoIntake {
     }
     const evidence = photoEvidence({body:message.body,gauge,imageDigest});
     const key = hash(message.channel+'\0'+message.id);
+    if (retry) {
+      if (this.queue.data.messages[key]!==retry.post || this.queue.data.deliveries[retry.row.id]!==retry.delivery) {
+        throw Error('Photo review changed during retry');
+      }
+      if (!imageDigest || !gauge?.tagVerified || gauge.bottomFeet!==retry.expectedBottomFeet) {
+        throw Error('Recovered photo did not verify the expected WTR 3 reading');
+      }
+    }
     if (this.queue.data.messages[key]?.deleted) return;
     const possibleDuplicate = Object.values(this.queue.data.messages).find(post=>
       post.key!==key && post.channel===message.channel && !post.deleted &&
