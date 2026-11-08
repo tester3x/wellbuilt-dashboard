@@ -139,6 +139,7 @@ const server=http.createServer(async(req,res)=>{try{
   const post=typeof rowId==='string'&&rowId.endsWith(':photo')?queue.data.messages[rowId.slice(0,-6)]:null;
   const activeClient=client;
   if(!activeClient||state!=='Connected'||paused||post?.rows?.[0]?.id!==rowId||
+     isIgnoredSender(senderIgnoreRules,post?.channel,post?.senderId)||
      !channels.some(channel=>channel.id===post?.channel&&isTallgrassChannel(channel))){
     throw Error('Choose an existing photo in a watched Tallgrass group');
   }
