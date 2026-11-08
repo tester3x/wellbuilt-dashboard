@@ -78,6 +78,7 @@ async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;if(
   const id=m.id._serialized||m.id.id;
   const activeClient=client;
 
+  await dwyerPhotos.receive({id,channel:channelId,body:m.body||'',timestamp:m.timestamp,
    author:m.author||m.from,senderId},()=>downloadDwyerMedia(activeClient,channelId,id,()=>m.downloadMedia()));
   return;
  }
