@@ -93,6 +93,7 @@ export function materialBirthFieldsMatch(a: Record<string, unknown>, b: Record<s
   if (norm(a.jobType) !== norm(b.jobType)) return false;
   if (norm(a.jobTypeId) !== norm(b.jobTypeId)) return false;
   if (norm(a.waterTemperature) !== norm(b.waterTemperature)) return false;
+  if (norm(a.freshWaterAccount) !== norm(b.freshWaterAccount)) return false;
   if (norm(a.serviceType) !== norm(b.serviceType)) return false;
   if (norm(a.packageId) !== norm(b.packageId)) return false;
   if (norm(a.splitGroupId) !== norm(b.splitGroupId)) return false;

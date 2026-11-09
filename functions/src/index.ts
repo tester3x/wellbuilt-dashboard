@@ -60,6 +60,8 @@ import {
 
 
 admin.initializeApp();
+
+export { staffFreshWaterPurchases } from './security/staffFreshWaterPurchases';
 admin.firestore().settings({ ignoreUndefinedProperties: true });
 const db = admin.database();
 

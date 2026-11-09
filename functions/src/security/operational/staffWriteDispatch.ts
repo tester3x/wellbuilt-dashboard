@@ -19,6 +19,7 @@ export const DISPATCH_CREATE_ALLOWLIST = [
   'jobTypeId',
   'serviceType',
   'waterTemperature',
+  'freshWaterAccount',
   'packageId',
   'status',
   'notes',
@@ -57,7 +58,7 @@ export const DISPATCH_CREATE_ALLOWLIST = [
 ] as const;
 
 export const DISPATCH_UPDATE_ALLOWLIST = [
-  ...DISPATCH_CREATE_ALLOWLIST.filter((k) => k !== 'packageId'),
+  ...DISPATCH_CREATE_ALLOWLIST.filter((k) => k !== 'packageId' && k !== 'freshWaterAccount'),
   'totalBBL',
   'invoiceNumber',
   'reassignedTo',
@@ -256,6 +257,14 @@ export function evaluateStaffWriteDispatch(input: {
 }): StaffWriteResult {
   const record = input.record || {};
   if (record.waterTemperature !== undefined && record.waterTemperature !== 'hot' && record.waterTemperature !== 'cold') return { ok: false, reason: 'invalid_water_temperature', field: 'waterTemperature' };
+
+  if (record.freshWaterAccount !== undefined) {
+    const serviceType = asString(record.serviceType ?? input.job?.serviceType);
+    if ((record.freshWaterAccount !== 'customer' && record.freshWaterAccount !== 'company')
+      || !/^(fresh[\s_-]*water(?:[\s_-]*tank[\s_-]*refill)?|fw)$/i.test(serviceType)) {
+      return { ok: false, reason: 'invalid_fresh_water_account', field: 'freshWaterAccount' };
+    }
+  }
 
   for (const key of DECLINE_FIELDS) {
     if (key in record && record[key] !== undefined) {

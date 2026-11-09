@@ -26,6 +26,22 @@ function ts(ms: number) {
 }
 
 describe('status transition table', () => {
+  it('saves a valid depot account on Fresh Water assignments only', () => {
+    const record = { wellName: 'Depot', serviceType: 'Fresh Water', freshWaterAccount: 'customer' };
+    const create = { op: 'create', job: null, ...lg } as const;
+    expect(evaluateStaffWriteDispatch({ ...create, record }).ok).toBe(true);
+    expect(evaluateStaffWriteDispatch({
+      ...create, record: { ...record, serviceType: 'Production Water' },
+    })).toMatchObject({ ok: false, reason: 'invalid_fresh_water_account' });
+    expect(evaluateStaffWriteDispatch({
+      ...create, record: { ...record, freshWaterAccount: 'other' },
+    })).toMatchObject({ ok: false, reason: 'invalid_fresh_water_account' });
+    expect(serializeStaffDispatchRecord(record, DISPATCH_CREATE_ALLOWLIST)).toMatchObject({
+      record: { freshWaterAccount: 'customer' },
+    });
+    expect(DISPATCH_UPDATE_ALLOWLIST).not.toContain('freshWaterAccount');
+  });
+
   it('publishes the exact create / cancel / update contract', () => {
     expect([...CREATE_STATUSES]).toEqual(['pending']);
     expect([...CANCEL_ALLOWED_FROM]).toEqual([

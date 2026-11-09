@@ -1,5 +1,8 @@
 'use client';
-import { freshWaterLabel } from '@/lib/freshWater';
+import { freshWaterLabel, isFreshWaterJob } from '@/lib/freshWater';
+import { hasCapability } from '@/lib/auth';
+import { useAuth } from '@/contexts/AuthContext';
+import { FreshWaterPurchases } from './FreshWaterPurchases';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -13,6 +16,7 @@ interface Props {
 
 export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) {
   const router = useRouter();
+  const { user, userCompany } = useAuth();
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
   const [siblings, setSiblings] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +69,12 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
           <h2 className="text-white font-semibold">Invoice Detail</h2>
           <div className="w-8" />
         </div>
+
+        {user?.companyId === ticket.companyId && !!ticket.companyId && isFreshWaterJob(ticket.type)
+          && hasCapability(user, 'viewBilling', userCompany) && (
+            <FreshWaterPurchases key={ticket.id} ticketId={ticket.id}
+              canEdit={!isVoid && hasCapability(user, 'editBilling', userCompany)} />
+          )}
 
         {loading ? (
           <div className="bg-[#FAFAF8] rounded-lg p-8 text-center text-gray-500">Loading...</div>

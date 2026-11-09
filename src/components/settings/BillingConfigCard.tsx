@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { FRESH_WATER_ACCOUNTS, freshWaterAccount, type FreshWaterAccount } from '@/lib/freshWater';
+import { loadFreshWaterDefaults, saveFreshWaterDefault } from '@/lib/freshWaterDefaults';
 import {
   type CompanyConfig,
   type OperatorBillingConfig,
@@ -28,8 +30,24 @@ export function BillingConfigCard({ company, onSave, canEdit }: Props) {
   const [config, setConfig] = useState<OperatorBillingConfig>(DEFAULT_CONFIG);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [defaults, setDefaults] = useState<Map<string, FreshWaterAccount>>();
+  const [depotOverride, setDepotOverride] = useState<FreshWaterAccount | ''>();
+  const savedDepotAccount = defaults?.get(editOperator?.trim().toLowerCase() ?? '') ?? '';
+  const depotAccount = depotOverride ?? savedDepotAccount;
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [accountMessage, setAccountMessage] = useState('');
 
   const operators = company.assignedOperators || [];
+
+  useEffect(() => {
+    let cancelled = false;
+    loadFreshWaterDefaults(company.id).then(result => {
+      if (!cancelled) setDefaults(result);
+    }).catch(() => {
+      if (!cancelled) setAccountMessage('Could not load the depot account settings.');
+    });
+    return () => { cancelled = true; };
+  }, [company.id]);
 
   const openConfig = (operator: string) => {
     if (!canEdit) return;
@@ -37,7 +55,29 @@ export function BillingConfigCard({ company, onSave, canEdit }: Props) {
     const existing = company.billingConfig?.[operator];
     setConfig(existing ? { ...existing } : { ...DEFAULT_CONFIG });
     setEditOperator(operator);
+    setDepotOverride(undefined);
+    if (defaults) setAccountMessage('');
   };
+
+  async function saveDepotAccount() {
+    if (!canEdit || !editOperator || accountSaving || !defaults) return;
+    setAccountSaving(true);
+    setAccountMessage('');
+    try {
+      await saveFreshWaterDefault(company.id, editOperator, depotAccount || null);
+      const updated = new Map(defaults);
+      const operator = editOperator.trim().toLowerCase();
+      if (depotAccount) updated.set(operator, depotAccount);
+      else updated.delete(operator);
+      setDefaults(updated);
+      setDepotOverride(undefined);
+      setAccountMessage('Depot account saved.');
+    } catch {
+      setAccountMessage('Could not save the depot account. Try again.');
+    } finally {
+      setAccountSaving(false);
+    }
+  }
 
   const save = async () => {
     if (!canEdit) return;
@@ -120,7 +160,7 @@ export function BillingConfigCard({ company, onSave, canEdit }: Props) {
       {/* Config Modal */}
       {editOperator && (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 max-h-[90dvh] overflow-y-auto">
             <h3 className="text-white font-medium mb-1">Billing Configuration</h3>
             <p className="text-gray-400 text-xs mb-4">
               {company.name} → {editOperator}
@@ -139,6 +179,29 @@ export function BillingConfigCard({ company, onSave, canEdit }: Props) {
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
                 </select>
+              </div>
+
+              <div className="rounded border border-gray-600 p-3 text-xs">
+                <label className="block text-gray-400">
+                  Default Fresh Water depot account
+                  <select
+                    value={depotAccount}
+                    onChange={e => setDepotOverride(freshWaterAccount(e.target.value) ?? '')}
+                    disabled={!defaults || accountSaving}
+                    className="mt-1 w-full px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600"
+                  >
+                    <option value="">No default</option>
+                    {FRESH_WATER_ACCOUNTS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <p className="my-2 text-gray-400">Dispatch can change this for an individual job.</p>
+                <button type="button" onClick={saveDepotAccount} disabled={!defaults || accountSaving || depotAccount === savedDepotAccount}
+                  className="rounded bg-blue-700 px-3 py-2 text-white disabled:opacity-50">
+                  {accountSaving ? 'Saving…' : 'Save depot account'}
+                </button>
+                {accountMessage && <span role="status" className="ml-2 text-gray-200">{accountMessage}</span>}
               </div>
 
               {/* Fuel Surcharge Method */}

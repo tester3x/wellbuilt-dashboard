@@ -1,4 +1,15 @@
 /** Temperature is billing metadata; the Fresh Water job/payroll category never changes. */
+export const FRESH_WATER_ACCOUNTS = [
+  { value: 'customer', label: 'Customer account' },
+  { value: 'company', label: 'Our company account' },
+] as const;
+
+export type FreshWaterAccount = (typeof FRESH_WATER_ACCOUNTS)[number]['value'];
+
+export function freshWaterAccount(value: unknown): FreshWaterAccount | undefined {
+  return value === 'customer' || value === 'company' ? value : undefined;
+}
+
 export type WaterTemperature = 'hot' | 'cold';
 export function isFreshWaterJob(type: unknown): boolean {
   return typeof type === 'string' && /^(fresh[\s_-]*water(?:[\s_-]*tank[\s_-]*refill)?|fw)$/i.test(type.trim());

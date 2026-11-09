@@ -194,7 +194,7 @@ export default function SettingsPage() {
             <SWDDirectoryCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <RateSheetsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)}
               onCreateJobType={label => setNewJobTypeRequest({ label, key: Date.now() })} />
-            <BillingConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'editBilling', userCompany)} />
+            <BillingConfigCard key={company.id} company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'editBilling', userCompany)} />
             <TicketTemplateCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <PayrollTemplateCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <PayConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />

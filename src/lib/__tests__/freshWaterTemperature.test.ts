@@ -5,6 +5,30 @@ import { freshWaterFields, freshWaterLabel, canChooseHotWater, freshWaterDepotSe
 import { combinedLocationResults, dropoffSourcesForBuilderOperator } from '../builderWellSearch.ts';
 import { executeServiceWorkWorkflow, createServiceWorkWorkflow } from '../serviceWorkWorkflowCore.ts';
 import { DispatchCreationCoordinator, materialBirthFieldsMatch } from '../staffWriteDispatchCore.ts';
+
+test('the chosen depot account is attached only to Fresh Water and is part of retry identity', async () => {
+  for (const serviceType of ['Fresh Water', 'Production Water']) {
+    const records: Record<string, unknown>[] = [];
+    await executeServiceWorkWorkflow({
+      workflow: createServiceWorkWorkflow(),
+      coordinator: new DispatchCreationCoordinator(),
+      invoke: async payload => {
+        records.push(payload.record as Record<string, unknown>);
+        return { ok: true, dispatchId: 'test' };
+      },
+      selectedDrivers: [{ key: 'driver-1', id: 'driver-1', displayName: 'Driver' }],
+      wellName: 'Test depot',
+      ndicWellName: '',
+      serviceType,
+      freshWaterAccount: 'company',
+      packageId: 'water-hauling',
+      assignedBy: 'test',
+    });
+    assert.equal(records.length, 1);
+    assert.equal(records[0].freshWaterAccount, serviceType === 'Fresh Water' ? 'company' : undefined);
+  }
+  assert.equal(materialBirthFieldsMatch({ freshWaterAccount: 'company' }, { freshWaterAccount: 'customer' }), false);
+});
 test('FWD remains available across operator filtering, without becoming SWD',()=>{const s=dropoffSourcesForBuilderOperator({wells:[],operatorWells:[],disposalMatches:[],depotMatches:[{well_name:'State depot',catalogId:'nd-dwr:1'},{well_name:'State depot',catalogId:'nd-dwr:2'}]},'Selected oil company');const rows=combinedLocationResults('State',s);assert.equal(rows.length,2);assert.ok(rows.every(r=>r.kind==='FWD'));});
 test('Fresh Water is unchanged for payroll; hot/cold is explicit billing metadata',()=>{assert.deepEqual(freshWaterFields('Production Water','hot'),{});assert.equal(freshWaterLabel('Fresh Water',undefined),'Fresh Water');assert.equal(freshWaterLabel('Fresh Water','hot'),'Fresh Water · Hot');assert.equal(materialBirthFieldsMatch({waterTemperature:'hot'},{waterTemperature:'cold'}),false);});
 test('actual builder workflow carries both temperatures in governed dispatch payload',async()=>{for(const temperature of ['hot','cold'] as const){const sent:Record<string,unknown>[]=[];await executeServiceWorkWorkflow({workflow:createServiceWorkWorkflow(),coordinator:new DispatchCreationCoordinator(),invoke:async payload=>{sent.push(payload);return {ok:true,dispatchId:'test'};},selectedDrivers:[{key:'driver-1',id:'driver-1',displayName:'Driver'}],wellName:'State depot',ndicWellName:'',serviceType:'Fresh Water',waterTemperature:temperature,packageId:'water-hauling',assignedBy:'test'});assert.equal(sent.length,1);const record=sent[0].record as Record<string,unknown>;assert.equal(record.serviceType,'Fresh Water');assert.equal(record.waterTemperature,temperature);assert.equal(record.jobType,'service');}});

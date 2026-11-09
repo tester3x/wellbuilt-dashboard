@@ -1,5 +1,6 @@
 'use client';
-import { canChooseHotWater, freshWaterFields } from '@/lib/freshWater';
+import { FRESH_WATER_ACCOUNTS, canChooseHotWater, freshWaterAccount, freshWaterFields, isFreshWaterJob, type FreshWaterAccount } from '@/lib/freshWater';
+import { loadFreshWaterDefaults } from '@/lib/freshWaterDefaults';
 import { FreshWaterRate } from '@/components/FreshWaterRate';
 
 import { useEffect, useState, useMemo, useCallback, useRef, Suspense, type ReactNode } from 'react';
@@ -133,6 +134,7 @@ interface DispatchJob {
   jobType: 'pw' | 'service';
   jobTypeId?: string;
   serviceType?: string;
+  freshWaterAccount?: FreshWaterAccount;
   packageId?: string;  // Job package ID (e.g. 'water-hauling', 'aggregate')
   packetRevision?: number;
   status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined' | 'dismissed';
@@ -532,6 +534,25 @@ function DispatchPageInner() {
   const [swHotWater, setSwHotWater] = useState(false);
   const [swPickupChoice, setSwPickupChoice] = useState<{ value: string; kind?: string; catalogId?: string } | null>(null);
   const [swServiceType, setSwServiceType] = useState('');
+  const [swAccountDefaults, setSwAccountDefaults] = useState<{
+    companyId: string; accounts: Map<string, FreshWaterAccount> | null;
+  }>();
+  const [swAccountOverride, setSwAccountOverride] = useState<FreshWaterAccount | ''>();
+  const swOperator = operatorForBuilderWell(swWellName, allOperatorWells) || builderOperator;
+  const currentAccountDefaults = swAccountDefaults?.companyId === viewedCompanyId ? swAccountDefaults : undefined;
+  const swDefaultAccount = currentAccountDefaults?.accounts?.get(swOperator.trim().toLowerCase());
+  const swAccount = swAccountOverride ?? swDefaultAccount;
+  useEffect(() => { setSwAccountOverride(undefined); }, [viewedCompanyId, swOperator, swServiceType]);
+  useEffect(() => {
+    if (!viewedCompanyId || !canCreateDispatch) return;
+    let cancelled = false;
+    loadFreshWaterDefaults(viewedCompanyId, true).then(accounts => {
+      if (!cancelled) setSwAccountDefaults({ companyId: viewedCompanyId, accounts });
+    }).catch(() => {
+      if (!cancelled) setSwAccountDefaults({ companyId: viewedCompanyId, accounts: null });
+    });
+    return () => { cancelled = true; };
+  }, [viewedCompanyId, canCreateDispatch, user?.uid]);
   const swCanChooseHotWater = canChooseHotWater(swServiceType, swWellName, swPickupChoice
     ? { name: swPickupChoice.value, kind: swPickupChoice.kind } : null);
   useEffect(() => { setSwHotWater(false); }, [swServiceType, swWellName, swPickupChoice?.catalogId]);
@@ -1017,6 +1038,7 @@ function DispatchPageInner() {
 
         if (companyId) {
           companyConfig = await loadCompanyById(companyId);
+          if (cancelled) return;
           setAssignedBuilderOperators(companyConfig?.assignedOperators || []);
           activeFilter = companyConfig?.activePackages || [];
 
@@ -1757,6 +1779,10 @@ function DispatchPageInner() {
 
   async function submitServiceWork() {
     if (!swWellName.trim() || !swServiceType.trim() || swDriverHashes.size === 0) return;
+    if (isFreshWaterJob(swServiceType) && canCreateDispatch && viewedCompanyId && !currentAccountDefaults) {
+      setSwError('Loading the customer’s depot account. Try again in a moment.');
+      return;
+    }
     if (swServiceType === 'Fresh Water Tank Refill' && swSplitTicket) {
       setSwError('Fresh water tank refills are single-load jobs. Turn off Split Ticket.');
       return;
@@ -1851,6 +1877,7 @@ function DispatchPageInner() {
         operator: linkedOperator || builderOperator,
         serviceType: trimmedServiceType,
         ...freshWaterFields(trimmedServiceType, swCanChooseHotWater && swHotWater ? 'hot' : 'cold'),
+        freshWaterAccount: freshWaterAccount(swAccount),
         packageId: swPackageId,
         customJobTypes: customJobTypesList,
         dropoff: swDropoff.trim() || undefined,
@@ -2401,6 +2428,7 @@ function DispatchPageInner() {
       if (loadsToReassign > 1) newJob.loadCount = loadsToReassign;
       // Carry over service work fields
       if (reassignJob.serviceType) newJob.serviceType = reassignJob.serviceType;
+      if (reassignJob.freshWaterAccount) newJob.freshWaterAccount = reassignJob.freshWaterAccount;
       if (reassignJob.serviceGroupId) newJob.serviceGroupId = reassignJob.serviceGroupId;
       if (reassignJob.assignedDrivers) newJob.assignedDrivers = reassignJob.assignedDrivers;
       if (reassignJob.disposalLegalDesc) newJob.disposalLegalDesc = reassignJob.disposalLegalDesc;
@@ -2738,6 +2766,7 @@ function DispatchPageInner() {
             ndicWellName: editSwJob.ndicWellName || '',
             jobType: 'service',
             serviceType: editSwJob.serviceType || '',
+            ...(editSwJob.freshWaterAccount ? { freshWaterAccount: editSwJob.freshWaterAccount } : {}),
             status: 'pending',
             notes: editSwNotes || '',
             priority: 5,
@@ -3318,6 +3347,24 @@ function DispatchPageInner() {
                             <input type="checkbox" checked={swHotWater} onChange={e => setSwHotWater(e.target.checked)} />
                             Hot Water
                           </label>}
+                          {isFreshWaterJob(swServiceType) && (
+                            <label className="block mt-2 text-xs text-gray-400">
+                              Fresh Water depot account
+                              <select
+                                value={swAccount ?? ''}
+                                onChange={e => setSwAccountOverride(freshWaterAccount(e.target.value) ?? '')}
+                                className="mt-1 w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm"
+                              >
+                                <option value="">Unspecified</option>
+                                {FRESH_WATER_ACCOUNTS.map(option => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                              {currentAccountDefaults?.accounts === null && (
+                                <span className="mt-1 block text-amber-300">Customer default unavailable. Select the account for this job.</span>
+                              )}
+                            </label>
+                          )}
                         </div>
                         {user?.role === 'demo_viewer' && !swSplitTicket && (
                           <label className="block text-xs text-gray-400">Planned BBLs
