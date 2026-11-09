@@ -2,6 +2,7 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver } from './requireDriverAuth';
+import { readFreshWaterDefault } from './freshWaterAccountDefaults';
 import { driverMayJoinProject, evaluateDriverDispatchBirth } from './operational/createDriverDispatch';
 import { parsePacketRef } from './operational/dispatchPacketPin';
 import { checkWell, loadAuthorizedWellNames, loadVerifiedRevision } from './operational/dispatchPinRuntime';
@@ -70,8 +71,13 @@ export const createDriverDispatchIfAbsent = httpsV2.onCall(
       if (decided.result === 'already_exists') {
         return { result: 'already_exists' as const, dispatchId };
       }
+      const jobType = decided.fields?.jobTypeId;
+      const account = jobType === 'fresh-water' || jobType === 'fresh-water-tank-refill' || jobType === 'fw'
+        ? await readFreshWaterDefault(fs, driver.companyId as string, decided.fields?.operator, ref => tx.get(ref))
+        : null;
       tx.create(ref, {
         ...decided.fields,
+        ...(account ? { freshWaterAccount: account } : {}),
         assignedAt: FieldValue.serverTimestamp(),
       });
       return { result: 'created' as const, dispatchId };

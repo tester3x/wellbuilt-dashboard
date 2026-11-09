@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
+import { freshWaterDefaultRef, freshWaterDefaultsCollection, normalizeFreshWaterCustomer, readFreshWaterDefault } from './freshWaterAccountDefaults';
 
 const companyStatuses = ['awaiting_bill', 'ready_to_rebill', 'billed_back', 'not_reimbursable'];
 
@@ -13,10 +14,10 @@ export const staffFreshWaterPurchases = onCall(async request => {
       : input.forDispatch === true ? 'manageDrivers' : 'viewBilling';
     const { uid, companyId } = await requireTrustedCompanyCapability(request.auth?.uid, capability);
     if (input.companyId !== companyId) throw new HttpsError('permission-denied', 'Customer settings unavailable.');
-    const company = getFirestore().collection('companies').doc(companyId);
-    const defaults = company.collection('fresh_water_defaults');
+    const db = getFirestore();
+    const company = db.collection('companies').doc(companyId);
     if (op === 'listDefaults') {
-      const snapshot = await defaults.get();
+      const snapshot = await freshWaterDefaultsCollection(db, companyId).get();
       return { defaults: snapshot.docs.map(doc => {
         const { operator, account } = doc.data();
         return { operator, account };
@@ -27,12 +28,12 @@ export const staffFreshWaterPurchases = onCall(async request => {
         || (account !== null && account !== 'customer' && account !== 'company')) {
       throw new HttpsError('invalid-argument', 'Choose a customer and a valid depot account.');
     }
-    const name = operator.trim().toLowerCase();
+    const name = normalizeFreshWaterCustomer(operator);
     const operators: unknown = (await company.get()).data()?.assignedOperators;
-    if (!Array.isArray(operators) || !operators.some(value => typeof value === 'string' && value.trim().toLowerCase() === name)) {
+    if (!Array.isArray(operators) || !operators.some(value => normalizeFreshWaterCustomer(value) === name)) {
       throw new HttpsError('not-found', 'Customer unavailable.');
     }
-    const ref = defaults.doc(createHash('sha256').update(name).digest('hex'));
+    const ref = freshWaterDefaultRef(db, companyId, name);
     if (account === null) await ref.delete();
     else await ref.set({ operator: name, account, updatedBy: uid, updatedAt: FieldValue.serverTimestamp() });
     return { account };
@@ -63,14 +64,16 @@ export const staffFreshWaterPurchases = onCall(async request => {
     const dispatchId = typeof ticket.dispatchId === 'string' ? ticket.dispatchId : '';
     const dispatchRead = dispatchId && !dispatchId.includes('/') && dispatchId !== '.' && dispatchId !== '..'
       ? db.collection('dispatches').doc(dispatchId).get() : Promise.resolve(undefined);
-    const [snapshot, dispatchSnapshot] = await Promise.all([
+    const [snapshot, dispatchSnapshot, customerDefault] = await Promise.all([
       purchases.where('ticketId', '==', ticketId).get(),
       dispatchRead,
+      !dispatchId ? readFreshWaterDefault(db, companyId, ticket.operator || ticket.company, ref => ref.get()) : null,
     ]);
     const dispatch = dispatchSnapshot?.data();
     const plannedAccount = dispatch?.companyId === companyId ? dispatch?.freshWaterAccount : null;
     return {
       plannedAccount: plannedAccount === 'customer' || plannedAccount === 'company' ? plannedAccount : null,
+      customerDefault,
       purchases: snapshot.docs.map(doc => {
         const { receipt, account, amountCents, status, invoiceRef, revision } = doc.data();
         return { id: doc.id, receipt, account, amountCents, status, invoiceRef, revision };

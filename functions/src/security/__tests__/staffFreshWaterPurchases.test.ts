@@ -1,8 +1,31 @@
+import * as admin from 'firebase-admin';
 import { getFirestore } from 'firebase-admin/firestore';
+import { createDriverDispatchIfAbsent } from '../createDriverDispatchCallable';
 import { staffFreshWaterPurchases } from '../staffFreshWaterPurchases';
 import { requireTrustedCompanyCapability } from '../trustedStaffAuthority';
 
 jest.mock('../trustedStaffAuthority', () => ({ requireTrustedCompanyCapability: jest.fn() }));
+jest.mock('firebase-admin', () => ({ firestore: jest.fn() }));
+jest.mock('../requireDriverAuth', () => ({
+  requireSecureDriver: async () => ({ driverId: 'driver', companyId: 'test-hauler' }),
+}));
+jest.mock('../operational/dispatchPinRuntime', () => ({
+  loadAuthorizedWellNames: async () => new Set(['Test depot']),
+  checkWell: () => ({ ok: true }),
+  loadVerifiedRevision: async () => ({
+    ok: true,
+    envelope: {
+      packageId: 'water-hauling',
+      revision: 4,
+      contentHash: 'c'.repeat(64),
+      policyHash: 'a'.repeat(64),
+      jobTypes: [
+        { jobTypeId: 'fresh-water', label: 'Fresh Water' },
+        { jobTypeId: 'pw', label: 'Production Water' },
+      ],
+    },
+  }),
+}));
 jest.mock('firebase-admin/firestore', () => ({
   getFirestore: jest.fn(),
   FieldValue: { serverTimestamp: () => 'server-time' },
@@ -30,7 +53,7 @@ beforeEach(() => {
   data.set('companies/test-hauler', { assignedOperators: ['Test Operator'] });
   authority.mockResolvedValue({ uid: 'staff', companyId: 'test-hauler' });
 
-  const snapshot = (path: string) => ({ id: path.split('/').at(-1), data: () => data.get(path) });
+  const snapshot = (path: string) => ({ id: path.split('/').at(-1), exists: data.has(path), data: () => data.get(path) });
   const collection = (path: string) => ({
     doc: (id: string) => ({
       id, path: path + '/' + id, get: async () => snapshot(path + '/' + id),
@@ -44,13 +67,48 @@ beforeEach(() => {
         key.startsWith(path + '/') && row[field] === value).map(([key]) => snapshot(key)) }),
     }),
   });
-  jest.mocked(getFirestore).mockReturnValue({
+  const firestore = {
     collection,
     runTransaction: async (fn: Function) => fn({
       get: async (ref: { path: string }) => snapshot(ref.path),
       set: (ref: { path: string }, value: Record<string, unknown>) => { data.set(ref.path, value); },
+      create: (ref: { path: string }, value: Record<string, unknown>) => {
+        if (data.has(ref.path)) throw new Error('already exists');
+        data.set(ref.path, value);
+      },
     }),
-  } as unknown as ReturnType<typeof getFirestore>);
+  } as unknown as ReturnType<typeof getFirestore>;
+  jest.mocked(getFirestore).mockReturnValue(firestore);
+  jest.mocked(admin.firestore).mockReturnValue(firestore);
+});
+
+test('driver-created Fresh Water snapshots the customer default at first sync', async () => {
+  const save = { op: 'saveDefault', companyId: 'test-hauler', operator: 'Test Operator', account: 'customer' };
+  await run(save);
+  const create = (dispatchId: string, jobTypeId: string, extra = {}) => createDriverDispatchIfAbsent.run({
+    data: {
+      dispatchId,
+      packetRef: { packageId: 'water-hauling', revision: 4 },
+      record: { wellName: 'Test depot', ndicWellName: 'Test depot', operator: '  TEST OPERATOR ', jobTypeId, ...extra },
+    },
+  } as Parameters<typeof createDriverDispatchIfAbsent.run>[0]);
+  await expect(create('driver-fresh', 'fresh-water')).resolves.toMatchObject({ result: 'created' });
+  expect(data.get('dispatches/driver-fresh')).toMatchObject({ freshWaterAccount: 'customer', source: 'driver' });
+  await run({ ...save, account: 'company' });
+  await expect(create('driver-fresh', 'fresh-water')).resolves.toMatchObject({ result: 'already_exists' });
+  expect(data.get('dispatches/driver-fresh')?.freshWaterAccount).toBe('customer');
+  await expect(create('driver-pw', 'pw')).resolves.toMatchObject({ result: 'created' });
+  expect(data.get('dispatches/driver-pw')).not.toHaveProperty('freshWaterAccount');
+  await expect(create('driver-override', 'fresh-water', { freshWaterAccount: 'company' }))
+    .rejects.toMatchObject({ code: 'invalid-argument' });
+});
+
+test('unlinked Fresh Water tickets show the current customer default without inventing an assignment', async () => {
+  await run({ op: 'saveDefault', companyId: 'test-hauler', operator: 'Test Operator', account: 'company' });
+  data.set('tickets/manual', { type: 'Fresh Water', companyId: 'test-hauler', operator: 'Test Operator' });
+  await expect(run({ op: 'list', ticketId: 'manual' })).resolves.toMatchObject({
+    plannedAccount: null, customerDefault: 'company',
+  });
 });
 
 test('stores the depot default privately and clears it without changing the customer billing configuration', async () => {

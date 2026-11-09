@@ -27,6 +27,7 @@ type Purchase = {
 export function FreshWaterPurchases({ ticketId, canEdit }: { ticketId: string; canEdit: boolean }) {
   const [purchases, setPurchases] = useState<Purchase[] | null>(null);
   const [plannedAccount, setPlannedAccount] = useState<FreshWaterAccount>();
+  const [customerDefault, setCustomerDefault] = useState<FreshWaterAccount>();
   const [editing, setEditing] = useState<Purchase>();
   const [receipt, setReceipt] = useState('');
   const [account, setAccount] = useState<FreshWaterAccount | ''>('');
@@ -39,15 +40,19 @@ export function FreshWaterPurchases({ ticketId, canEdit }: { ticketId: string; c
 
   useEffect(() => {
     let cancelled = false;
-    const load = httpsCallable<{ op: 'list'; ticketId: string }, { purchases: Purchase[]; plannedAccount: unknown }>(
+    const load = httpsCallable<{ op: 'list'; ticketId: string }, {
+      purchases: Purchase[]; plannedAccount: unknown; customerDefault: unknown;
+    }>(
       getFirebaseFunctions(), 'staffFreshWaterPurchases',
     );
     load({ op: 'list', ticketId }).then(({ data }) => {
       if (cancelled) return;
       const planned = freshWaterAccount(data.plannedAccount);
+      const customerAccount = freshWaterAccount(data.customerDefault);
       setPurchases(data.purchases);
       setPlannedAccount(planned);
-      setAccount(previous => previous || planned || '');
+      setCustomerDefault(customerAccount);
+      setAccount(previous => previous || planned || customerAccount || '');
     }).catch(() => {
       if (!cancelled) setError('Could not load depot receipts.');
     });
@@ -57,7 +62,7 @@ export function FreshWaterPurchases({ ticketId, canEdit }: { ticketId: string; c
   function edit(purchase?: Purchase) {
     setEditing(purchase);
     setReceipt(purchase?.receipt ?? '');
-    setAccount(purchase?.account ?? plannedAccount ?? '');
+    setAccount(purchase?.account ?? plannedAccount ?? customerDefault ?? '');
     setAmount(purchase?.amountCents == null ? '' : (purchase.amountCents / 100).toFixed(2));
     setStatus(purchase?.status === 'customer_billed' ? 'awaiting_bill' : purchase?.status ?? 'awaiting_bill');
     setInvoiceRef(purchase?.invoiceRef ?? '');
@@ -102,6 +107,9 @@ export function FreshWaterPurchases({ ticketId, canEdit }: { ticketId: string; c
       <h3 className="font-semibold text-white">Fresh Water purchases</h3>
       {plannedAccount && (
         <p>Account on the assignment · {FRESH_WATER_ACCOUNTS.find(option => option.value === plannedAccount)?.label}</p>
+      )}
+      {customerDefault && (
+        <p>Current customer default · {FRESH_WATER_ACCOUNTS.find(option => option.value === customerDefault)?.label}</p>
       )}
       {!purchases && !error && <p>Loading depot receipts…</p>}
       {error && <p role="alert" className="text-red-300">{error}</p>}
