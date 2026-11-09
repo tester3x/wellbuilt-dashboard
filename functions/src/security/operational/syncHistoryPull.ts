@@ -9,6 +9,7 @@ import { historyPullDigest, historyPullEvidence, historyPullKey, historyPullRout
 
 const millis = (value: unknown) => Date.parse(typeof value === 'string' ? value : '') || 0;
 const revisionOf = (row: HistoryRecord | undefined) => row?.revision?.toMillis?.();
+const retryWindowMs = 20 * 60 * 1000;
 
 type SyncResult = string | { status: string; packetId: string; dateTimeUTC: string };
 
@@ -154,10 +155,15 @@ export const syncHistoryPull = onDocumentWritten({
     ![invoice, ticket].some(row => row.haulGroupId || row.splitChainId || row.splitChainSeq || row.splitGroupId ||
       row.dispatchSplitGroupId || row.dispatchSplitSequence || row.transferSourceDocId || row.transferredTo ||
       row.transferredToHash || row.lockedForTransfer || row.billingInvoiceId || row.payrollTimesheetId)) {
-    result = await reconcileHistoryPull(intent, ticket, invoice, async () => {
-      const latest = (await after.ref.get()).data();
-      return latest?.status === 'pending' && revisionOf(latest) === revision;
-    });
+    try {
+      result = await reconcileHistoryPull(intent, ticket, invoice, async () => {
+        const latest = (await after.ref.get()).data();
+        return latest?.status === 'pending' && revisionOf(latest) === revision;
+      });
+    } catch (error) {
+      if (Date.now() - revision < retryWindowMs) throw error;
+      console.warn('History pull reconciliation requires review after retries', { ticketId: event.params.ticketId });
+    }
   }
   await fs.runTransaction(async tx => {
     const live = (await tx.get(after.ref)).data();
