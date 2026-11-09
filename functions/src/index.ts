@@ -5,6 +5,7 @@ import {averageFlowRates} from './flowAverage';
 import {calculateInventoryProduction} from './inventoryProduction';
 import {previousPullBottomInches} from './previousPullLevel';
 import {isProvisionalPull,reportedTrackingBottom} from './watchdog/barrelDecision';
+export { syncHistoryPull } from './security/operational/syncHistoryPull';
 import {calculateOvernightProductionSample, overnightReadingProof, recordedBottomFeet} from './overnightProduction';
 import { resolveTankBblPerFoot } from './tankCalibration';
 import {refreshFlowWindow} from './refreshFlowWindow';
