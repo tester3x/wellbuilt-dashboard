@@ -236,7 +236,9 @@ export const getWatchdogPullReceiptV2=https.onRequest(options,async(req,res)=>{
  const hasSnapshot=typeof snapshotBottom==='number'&&Number.isFinite(snapshotBottom);
  const expectedBottom=hasSnapshot?snapshotBottom:entry.bottom*12;
  const snapshotOwned=!hasSnapshot||(packet.watchdogProvenance?.observationDigest===identity&&packet.watchdogProvenance?.principalId===entry.principalId);
- const matched=packet&&snapshotOwned&&packet.wellName===entry.wellName&&packet.dateTimeUTC===entry.dateTimeUTC&&Number(packet.tankLevelFeet)===entry.top&&Number(packet.bblsTaken)===entry.bbl&&Math.abs(Number(packet.tankAfterInches)-expectedBottom)<0.01;
+ const sameMeasurementTime=packet&&typeof packet.dateTimeUTC==='string'&&typeof entry.dateTimeUTC==='string'
+  &&Date.parse(packet.dateTimeUTC)===Date.parse(entry.dateTimeUTC);
+ const matched=packet&&snapshotOwned&&packet.wellName===entry.wellName&&sameMeasurementTime&&Number(packet.tankLevelFeet)===entry.top&&Number(packet.bblsTaken)===entry.bbl&&Math.abs(Number(packet.tankAfterInches)-expectedBottom)<0.01;
  res.json({ok:true,identity,packetId:entry.packetId,estimate:entry.estimate,barrelSource:entry.barrelSource,needsReview:entry.barrels?.needsReview===true,issues:entry.barrels?.issues||[],measurements:{tankLevelFeet:entry.top,bottomLevelFeet:entry.reportedBottomFeet??entry.bottom,bblsTaken:entry.bbl,dateTimeUTC:entry.dateTimeUTC},correctionPending:!!entry.pendingReview,status:matched&&packet.canonicalProcessingComplete===true?'complete':packet?'incomplete':'queued'});
  }catch(e){res.status(400).json({ok:false,error:String((e as Error).message)});}
 });

@@ -248,6 +248,25 @@ test('admin multiwell top-only batch is ignored without creating pulls or timing
  expect([...database.keys()].some(k=>k.startsWith('packets/incoming/'))).toBe(false);
 });
 test('rejects invalid signature and unconfigured channel',async()=>{expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation(),true)).code).toBe(400);expect(database.size).toBe(2);expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chatId:'other'})).result.error).toBe('channel_not_allowed');});
+test('receipt accepts equivalent timestamp formatting without rewriting or requeueing the pull',async()=>{
+ const identity='a'.repeat(64),packetId='processed-fixture',wellName='Kahuna 5';
+ const entry={identity,packetId,wellName,principalId:'laptop-watchdog-v2',
+  dateTimeUTC:'2026-10-01T03:09:00.000Z',top:9,bottom:8,bbl:185};
+ const packet={wellName,dateTimeUTC:'2026-10-01T03:09:00Z',tankLevelFeet:9,bblsTaken:185,
+  tankAfterInches:89.5,canonicalProcessingBottomInches:89.5,canonicalProcessingComplete:true,
+  watchdogProvenance:{observationDigest:identity,principalId:entry.principalId}};
+ const key='packets/processed/'+packetId;
+ documents.set('watchdog_v2_deliveries/'+identity,entry);
+ database.set(key,packet);
+ const read=async()=> (await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity})).result;
+ expect(await read()).toMatchObject({status:'complete',identity,packetId});
+ expect(database.get(key)).toEqual(packet);
+ expect([...database.keys()].filter(key=>key.startsWith('packets/incoming/'))).toEqual([]);
+ database.set(key,{...packet,dateTimeUTC:'2026-10-01T03:09:00.001Z'});
+ expect(await read()).toMatchObject({status:'incomplete'});
+ database.set(key,{...packet,dateTimeUTC:'invalid'});
+ expect(await read()).toMatchObject({status:'incomplete'});
+});
 test('queues once, retries preserve packet, and receipt requires exact bottom and completion',async()=>{const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(first.result.status).toBe('queued');const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.driverId).toBeNull();const again=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(again.result.packetId).toBe(first.result.packetId);const receipt={identity:first.result.identity};database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('complete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:140,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');});
 test('accepts missing bottom and suppresses activation history',async()=>{expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chat:observation().chat.replace('Bottom 11.125\n','')})).result.status).toBe('queued');documents.get('watchdog_v2_config/laptop').enabledAt=Date.now()+1000;expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation())).result.status).toBe('before_activation');});
 
