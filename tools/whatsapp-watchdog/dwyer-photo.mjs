@@ -81,10 +81,15 @@ async function readLocatedGauge(input, width, height, worker, sharp) {
   const located=await locateWaterTankCandidates(input);
   if (!located.tanks.length || located.tanks.length>12) return {tagVerified:false,bottomFeet:null};
   const scaleX=width/located.width, scaleY=height/located.height;
-  async function crop({left,bottom,span},dx,dy,w,h) {
+  function cropBounds({left,bottom,span},dx,dy,w,h) {
     const rect={left:Math.round((left+dx*span)*scaleX),top:Math.round((bottom+dy*span)*scaleY),
       width:Math.round(w*span*scaleX),height:Math.round(h*span*scaleY)};
     if (rect.left<0 || rect.top<0 || rect.left+rect.width>width || rect.top+rect.height>height) return null;
+    return rect;
+  }
+  async function crop(tank,dx,dy,w,h) {
+    const rect=cropBounds(tank,dx,dy,w,h);
+    if (!rect) return null;
     // Shrink first to suppress the fine monitor pattern in the photos.
     const reduced=await input.clone().extract(rect).resize({width:75}).greyscale().png().toBuffer();
     return sharp(reduced).resize({width:350}).median(3).normalise().png().toBuffer();
@@ -115,7 +120,8 @@ async function readLocatedGauge(input, width, height, worker, sharp) {
   }
   if (!target) return {tagVerified:false,bottomFeet:null};
   await worker.setParameters({tessedit_char_whitelist:'0123456789.'});
-  const readings=[];
+  const readings=new Set();
+  let ordinaryCrops=0;
   for (const cropWidth of [.76,.83]) {
     const display=await crop(target,.03,.82,cropWidth,.42);
     if (!display) continue;
@@ -125,10 +131,46 @@ async function readLocatedGauge(input, width, height, worker, sharp) {
       const value=text.trim();
       if (/^\d{1,2}\.\d$/.test(value) && confidence>=48) values.add(value);
     }
-    if (values.size!==1) return {tagVerified:true,bottomFeet:null};
-    readings.push([...values][0]);
+    if (values.size===1) ordinaryCrops++;
+    for (const value of values) readings.add(value);
   }
-  return {tagVerified:true,bottomFeet:readings.length===2 && readings[0]===readings[1]?Number(readings[0]):null};
+  if (readings.size>1) return {tagVerified:true,bottomFeet:null};
+  if (ordinaryCrops===2) return {tagVerified:true,bottomFeet:Number([...readings][0])};
+
+  // Faint monitor digits can disappear under a single global threshold.
+  // Subtract the nearby background and require agreement across cutoffs.
+  let repeatable=false;
+  const displayCrops=[
+    {rect:cropBounds(target,.12,.84,.64,.38),favorYellow:true},
+    {rect:cropBounds(target,.13,.88,.58,.32),favorYellow:false},
+  ];
+  for (const {rect,favorYellow} of displayCrops) {
+    if (!rect) continue;
+    const {data,info}=await input.clone().extract(rect).removeAlpha().toColourspace('srgb')
+      .raw().toBuffer({resolveWithObject:true});
+    const raw={width:info.width,height:info.height,channels:1};
+    const signal=Buffer.alloc(raw.width*raw.height);
+    for (let i=0;i<signal.length;i++) {
+      const r=data[i*3],g=data[i*3+1],b=data[i*3+2];
+      signal[i]=Math.round(favorYellow?(r+g)/2:(r+2*g+b)/4);
+    }
+    const smooth=sharp(signal,{raw}).greyscale().blur(.85).raw();
+    const [detail,background]=await Promise.all([smooth.clone().toBuffer(),smooth.clone().blur(5).toBuffer()]);
+    let votes=0;
+    for (const cutoff of [4,6,8]) {
+      const binary=Buffer.from(detail.map((pixel,i)=>pixel-background[i]>=cutoff?0:255));
+      const padded=await sharp(binary,{raw}).resize({width:320})
+        .extend({top:24,bottom:24,left:24,right:24,background:'white'}).png().toBuffer();
+      const {data:{text,confidence}}=await worker.recognize(padded);
+      const value=text.trim();
+      if (/^\d{1,2}\.\d$/.test(value) && confidence>=58) {
+        readings.add(value);
+        votes++;
+      }
+    }
+    repeatable ||= votes>=2;
+  }
+  return {tagVerified:true,bottomFeet:repeatable && readings.size===1?Number([...readings][0]):null};
 }
 
 export async function readDwyerGauge(image) {
@@ -239,9 +281,9 @@ export class DwyerPhotoIntake {
     const timestamp=Date.parse(post?.postedAt)/1000;
     if (!post?.photoOnly || post.deleted || post.edited || post.photoPending ||
         !Number.isFinite(timestamp) || timestamp*1000<this.queue.data.dwyerDeliveryStartedAt ||
-        row?.photo?.imageDigest || delivery?.status!=='review' || delivery.identity ||
+        !row?.photo || row.photo.observedBottom || delivery?.status!=='review' || delivery.identity ||
         delivery.review || delivery.reviewDismissal || this.pending.has(post.key)) {
-      throw Error('This photo is not an unsent download failure');
+      throw Error('This photo is not an unsent photo reading failure');
     }
     if (!Number.isFinite(expectedBottomFeet) || expectedBottomFeet<0) throw Error('Confirm the visible WTR 3 reading first');
     const message={...post,timestamp};
@@ -279,14 +321,28 @@ export class DwyerPhotoIntake {
       if (!imageDigest || !gauge?.tagVerified || gauge.bottomFeet!==retry.expectedBottomFeet) {
         throw Error('Recovered photo did not verify the expected WTR 3 reading');
       }
+      if (retry.row.photo.imageDigest && imageDigest!==retry.row.photo.imageDigest) {
+        throw Error('Recovered image does not match the held photo');
+      }
     }
     if (this.queue.data.messages[key]?.deleted) return;
-    const possibleDuplicate = Object.values(this.queue.data.messages).find(post=>
-      post.key!==key && post.channel===message.channel && !post.deleted &&
-      ((imageDigest && post.rows.some(row=>row.photo?.imageDigest===imageDigest)) ||
-       (message.senderId && post.senderId===message.senderId &&
-        Math.abs(Date.parse(post.postedAt)-message.timestamp*1000)<=90000 &&
-        post.rows.some(row=>row.wellName==='Dwyer'))));
+    const postedAt=message.timestamp*1000;
+    const possibleDuplicate = Object.values(this.queue.data.messages).some(post=>{
+      if (post.key===key || post.channel!==message.channel || post.deleted) return false;
+      const otherTime=Date.parse(post.postedAt);
+      const nearSameSender=message.senderId && post.senderId===message.senderId &&
+        Math.abs(otherTime-postedAt)<=90000;
+      return post.rows.some(row=>{
+        if (!(imageDigest && row.photo?.imageDigest===imageDigest) &&
+            !(nearSameSender && row.wellName==='Dwyer')) return false;
+        if (!retry) return true;
+        const delivery=this.queue.data.deliveries?.[row.id];
+        if (delivery?.status==='excluded') return false;
+        // A later unsent duplicate must not prevent recovery of the first report.
+        return !!(delivery?.identity || delivery?.review || delivery?.status==='complete' ||
+          row.photo?.autoSend || otherTime<postedAt || (otherTime===postedAt && post.key<key));
+      });
+    });
     if (possibleDuplicate) evidence.issues.push('Possible duplicate Dwyer report in this group');
     evidence.photo.canSend = !!imageDigest && message.timestamp*1000>=this.queue.data.dwyerDeliveryStartedAt;
     evidence.photo.autoSend = evidence.photo.canSend && !!gauge?.tagVerified &&

@@ -69,7 +69,7 @@ test('retry restores only the selected download failure under its original photo
   assert.equal(queue.data.deliveries[rowId].status,'retry');
   assert.equal(queue.data.messages[unrelated.key],unrelated);
   assert.equal(queue.data.deliveries[unrelated.rows[0].id].status,'review');
-  assert.throws(()=>intake.retryHeldPhoto(recovered,7.8,()=>media),/unsent download failure/);
+  assert.throws(()=>intake.retryHeldPhoto(recovered,7.8,()=>media),/unsent photo reading failure/);
 });
 
 test('Dwyer uses the WTR 3 decimal reading and all four equalizing tanks', () => {
@@ -246,4 +246,59 @@ test('four private photo framings reach the test queue once per run', {skip:!pro
     assert.equal(sends.length,4);
     t.diagnostic('Test queue pass '+pass+': four completed receipts, zero duplicate sends');
   }
+});
+
+test('recover the two faint WTR 3 readings and send only the first post for each haul', async t => {
+  const directory=mkdtempSync(path.join(tmpdir(),'watchdog-dwyer-faint-'));
+  t.after(()=>{rmSync(path.join(directory,'queue.json'),{force:true});rmdirSync(directory);});
+  const queue=new Queue(directory);
+  const firstAt=Date.parse('2026-11-09T12:50:47Z')/1000;
+  queue.data.dwyerPhotoStartedAt=queue.data.dwyerDeliveryStartedAt=firstAt*1000;
+  const originals=process.env.WBC_DWYER_AM_IMAGES?.split('|');
+  if (originals) assert.equal(originals.length,2);
+  const images=originals?.map(p=>readFileSync(p)) ?? [Buffer.from('first gauge'),Buffer.from('second gauge')];
+  const readings=[9.2,7.7];
+  const capture=new DwyerPhotoIntake(queue,async()=>({tagVerified:true,bottomFeet:null}));
+  const recover=new DwyerPhotoIntake(queue,originals?readDwyerGauge:async image=>({
+    tagVerified:true,bottomFeet:readings[images.findIndex(original=>original.equals(image))],
+  }));
+  const mediaFor=index=>({mimetype:'image/jpeg',data:images[index].toString('base64')});
+  const starts=[firstAt,Date.parse('2026-11-09T14:20:04Z')/1000];
+  const channel='tallgrass-isolated-test';
+  for (const [index,timestamp] of starts.entries()) {
+    const post={channel,timestamp,body:'Bottom',author:'Fixture driver',senderId:'fixture'};
+    await capture.receive({...post,id:'original-'+index},()=>mediaFor(index));
+    await capture.receive({...post,id:'repeat-'+index,timestamp:timestamp+3},()=>mediaFor(index));
+  }
+  const posts=Object.values(queue.data.messages);
+  for (const [index,bottom] of readings.entries()) {
+    const first=posts.find(p=>p.id==='original-'+index);
+    const repeat=posts.find(p=>p.id==='repeat-'+index);
+    if (!originals) {
+      await assert.rejects(recover.retryHeldPhoto(first,readings[1-index],()=>mediaFor(1-index)),/does not match/);
+    }
+    await recover.retryHeldPhoto(first,bottom,()=>mediaFor(index));
+    await recover.retryHeldPhoto(repeat,bottom,()=>mediaFor(index));
+    assert.equal(queue.data.messages[first.key].rows[0].bottomLevelFeet,bottom);
+    assert.equal(queue.data.deliveries[first.rows[0].id].status,'retry');
+    assert.equal(queue.data.deliveries[repeat.rows[0].id].status,'review');
+  }
+  const sent=[];
+  const transport=new Transport(queue);
+  transport.secret='mock-only';
+  transport.config={enabled:true,enabledAt:0};
+  transport.lastLifecycleCheck=Date.now();
+  transport.request=async(endpoint,body)=>{
+    if (endpoint==='ingestWatchdogPullV2') {
+      sent.push([body.messageId,body.dwyerPhoto.bottomFeet]);
+      return {status:'queued',identity:body.messageId};
+    }
+    assert.equal(endpoint,'getWatchdogPullReceiptV2');
+    return {status:'complete',identity:body.identity};
+  };
+  await transport.tick(false);
+  transport.queue=new Queue(directory);
+  await transport.tick(false);
+  assert.deepEqual(sent,[['original-0',9.2],['original-1',7.7]]);
+  assert.equal(Object.values(transport.queue.data.deliveries).filter(d=>d.status==='complete').length,2);
 });
