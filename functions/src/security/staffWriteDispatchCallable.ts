@@ -1,6 +1,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
+import { isFreshWaterDispatchJob, resolveFreshWaterAccount } from './freshWaterAccountDefaults';
 import {
   requireTrustedCompanyCapability,
   TRUSTED_CAPABILITY_MANAGE_DRIVERS,
@@ -247,8 +248,12 @@ export const staffWriteDispatch = httpsV2.onCall(
         if (replay.result === 'already_exists') {
           return { result: 'already_exists' as const, dispatchId: id.dispatchId };
         }
+        const account = isFreshWaterDispatchJob(jobType.jobTypeId)
+          ? fields.freshWaterAccount ?? await resolveFreshWaterAccount(fs, decided.companyId, fields.operator, ref => tx.get(ref))
+          : null;
         tx.create(ref, {
           ...fields,
+          ...(account ? { freshWaterAccount: account } : {}),
           ...binding,
           jobTypeId: jobType.jobTypeId,
           jobType: typeof fields.jobType === 'string' && fields.jobType.trim()

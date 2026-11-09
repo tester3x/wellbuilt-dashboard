@@ -14,14 +14,18 @@ export function freshWaterDefaultRef(db: Firestore, companyId: string, customer:
     .doc(createHash('sha256').update(customer).digest('hex'));
 }
 
-export async function readFreshWaterDefault(
+export function isFreshWaterDispatchJob(jobTypeId: unknown): boolean {
+  return jobTypeId === 'fresh-water' || jobTypeId === 'fresh-water-tank-refill' || jobTypeId === 'fw';
+}
+
+export async function resolveFreshWaterAccount(
   db: Firestore,
   companyId: string,
   operator: unknown,
   read: (ref: DocumentReference) => ReturnType<DocumentReference['get']>,
-): Promise<'customer' | 'company' | null> {
+): Promise<'customer' | 'company'> {
   const name = normalizeFreshWaterCustomer(operator);
-  if (!name) return null;
+  if (!name) return 'company';
   const { account } = (await read(freshWaterDefaultRef(db, companyId, name))).data() ?? {};
-  return account === 'customer' || account === 'company' ? account : null;
+  return account === 'customer' ? 'customer' : 'company';
 }

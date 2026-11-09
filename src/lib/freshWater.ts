@@ -1,7 +1,7 @@
 /** Temperature is billing metadata; the Fresh Water job/payroll category never changes. */
 export const FRESH_WATER_ACCOUNTS = [
   { value: 'customer', label: 'Customer account' },
-  { value: 'company', label: 'Our company account' },
+  { value: 'company', label: 'Hauler account' },
 ] as const;
 
 export type FreshWaterAccount = (typeof FRESH_WATER_ACCOUNTS)[number]['value'];

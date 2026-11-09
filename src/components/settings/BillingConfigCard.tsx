@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { FRESH_WATER_ACCOUNTS, freshWaterAccount, type FreshWaterAccount } from '@/lib/freshWater';
+import type { FreshWaterAccount } from '@/lib/freshWater';
 import { loadFreshWaterDefaults, saveFreshWaterDefault } from '@/lib/freshWaterDefaults';
 import {
   type CompanyConfig,
@@ -31,8 +31,8 @@ export function BillingConfigCard({ company, onSave, canEdit }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [defaults, setDefaults] = useState<Map<string, FreshWaterAccount>>();
-  const [depotOverride, setDepotOverride] = useState<FreshWaterAccount | ''>();
-  const savedDepotAccount = defaults?.get(editOperator?.trim().toLowerCase() ?? '') ?? '';
+  const [depotOverride, setDepotOverride] = useState<'customer' | ''>();
+  const savedDepotAccount = defaults?.get(editOperator?.trim().toLowerCase() ?? '') === 'customer' ? 'customer' : '';
   const depotAccount = depotOverride ?? savedDepotAccount;
   const [accountSaving, setAccountSaving] = useState(false);
   const [accountMessage, setAccountMessage] = useState('');
@@ -182,21 +182,16 @@ export function BillingConfigCard({ company, onSave, canEdit }: Props) {
               </div>
 
               <div className="rounded border border-gray-600 p-3 text-xs">
-                <label className="block text-gray-400">
-                  Default Fresh Water depot account
-                  <select
-                    value={depotAccount}
-                    onChange={e => setDepotOverride(freshWaterAccount(e.target.value) ?? '')}
+                <label className="flex items-center gap-2 text-gray-200">
+                  <input
+                    type="checkbox"
+                    checked={depotAccount === 'customer'}
+                    onChange={e => setDepotOverride(e.target.checked ? 'customer' : '')}
                     disabled={!defaults || accountSaving}
-                    className="mt-1 w-full px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600"
-                  >
-                    <option value="">No default</option>
-                    {FRESH_WATER_ACCOUNTS.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
+                  />
+                  Customer pays the Fresh Water depot directly
                 </label>
-                <p className="my-2 text-gray-400">Dispatch can change this for an individual job.</p>
+                <p className="my-2 text-gray-400">When off, Fresh Water jobs use the hauler’s account.</p>
                 <button type="button" onClick={saveDepotAccount} disabled={!defaults || accountSaving || depotAccount === savedDepotAccount}
                   className="rounded bg-blue-700 px-3 py-2 text-white disabled:opacity-50">
                   {accountSaving ? 'Saving…' : 'Save depot account'}

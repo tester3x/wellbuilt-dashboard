@@ -106,10 +106,10 @@ export function FreshWaterPurchases({ ticketId, canEdit }: { ticketId: string; c
     <section className="my-3 space-y-3 rounded-lg bg-gray-800 p-4 text-sm text-gray-200">
       <h3 className="font-semibold text-white">Fresh Water purchases</h3>
       {plannedAccount && (
-        <p>Account on the assignment · {FRESH_WATER_ACCOUNTS.find(option => option.value === plannedAccount)?.label}</p>
+        <p>Expected depot bill · {FRESH_WATER_ACCOUNTS.find(option => option.value === plannedAccount)?.label}</p>
       )}
       {customerDefault && (
-        <p>Current customer default · {FRESH_WATER_ACCOUNTS.find(option => option.value === customerDefault)?.label}</p>
+        <p>Expected depot bill · {FRESH_WATER_ACCOUNTS.find(option => option.value === customerDefault)?.label} (current customer setting)</p>
       )}
       {!purchases && !error && <p>Loading depot receipts…</p>}
       {error && <p role="alert" className="text-red-300">{error}</p>}

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
+import { FreshWaterBilling } from '@/components/FreshWaterBilling';
 import { loadAllCompanies, updateCompanyFields, type CompanyConfig, type DoeRegion, DOE_REGIONS, STATE_TO_PADD } from '@/lib/companySettings';
 import { hasCapability } from '@/lib/auth';
 import { buildDoeRegion } from '@/lib/companySettingsCore';
@@ -52,7 +53,7 @@ import {
   type PayPeriod,
 } from '@/lib/billing';
 
-type SubTab = 'receivables' | 'fuel' | 'export';
+type SubTab = 'receivables' | 'fresh-water' | 'fuel' | 'export';
 
 const RECEIVABLES_SCROLLBAR_CSS = `
 [data-billing-scroll="receivables"] {
@@ -82,7 +83,7 @@ export default function BillingPage() {
   const canEditBilling = hasCapability(user, 'editBilling', userCompany);
 
   // Sub-tab
-  const [activeTab, setActiveTab] = useDashboardViewState<SubTab>('section', 'receivables', ['receivables', 'fuel', 'export']);
+  const [activeTab, setActiveTab] = useDashboardViewState<SubTab>('section', 'receivables', ['receivables', 'fresh-water', 'fuel', 'export']);
 
   // Shared state
   const [companies, setCompanies] = useState<Map<string, CompanyConfig>>(new Map());
@@ -433,7 +434,7 @@ export default function BillingPage() {
           <div className="flex flex-wrap items-center gap-3 min-w-0">
             <img src="/billing-icon.png" alt="WB Billing" className="w-14 h-14 lg:w-28 lg:h-28 shrink-0" />
             <h2 className="text-xl font-semibold text-white shrink-0">Billing</h2>
-            <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1 shrink-0">
+            <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1 shrink-0 max-w-full overflow-x-auto">
               <button
                 onClick={() => setActiveTab('receivables')}
                 className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
@@ -444,6 +445,16 @@ export default function BillingPage() {
               >
                 Receivables
               </button>
+              {user.companyId && hasCapability(user, 'viewBilling', userCompany) && (
+                <button
+                  onClick={() => setActiveTab('fresh-water')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
+                    activeTab === 'fresh-water' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  Fresh Water
+                </button>
+              )}
               <button
                 onClick={() => setActiveTab('fuel')}
                 className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
@@ -506,6 +517,10 @@ export default function BillingPage() {
 
         {error && (
           <div className="mb-4 p-3 bg-red-900/50 text-red-200 rounded-lg shrink-0">{error}</div>
+        )}
+
+        {activeTab === 'fresh-water' && user.companyId && hasCapability(user, 'viewBilling', userCompany) && (
+          <FreshWaterBilling key={user.companyId} companyId={user.companyId} canEdit={canEditBilling} />
         )}
 
         {/* ─── Receivables Tab ─── */}

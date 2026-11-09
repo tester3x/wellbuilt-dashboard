@@ -2,12 +2,12 @@ import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from './firebase';
 import { freshWaterAccount, type FreshWaterAccount } from './freshWater';
 
-export async function loadFreshWaterDefaults(companyId: string, forDispatch = false) {
+export async function loadFreshWaterDefaults(companyId: string) {
   const load = httpsCallable<
-    { op: 'listDefaults'; companyId: string; forDispatch: boolean },
+    { op: 'listDefaults'; companyId: string },
     { defaults: { operator: string; account: unknown }[] }
   >(getFirebaseFunctions(), 'staffFreshWaterPurchases');
-  const { data } = await load({ op: 'listDefaults', companyId, forDispatch });
+  const { data } = await load({ op: 'listDefaults', companyId });
   const defaults = new Map<string, FreshWaterAccount>();
   for (const { operator, account } of data.defaults) {
     const value = freshWaterAccount(account);

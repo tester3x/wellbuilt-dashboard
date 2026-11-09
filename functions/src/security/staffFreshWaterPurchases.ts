@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
-import { freshWaterDefaultRef, freshWaterDefaultsCollection, normalizeFreshWaterCustomer, readFreshWaterDefault } from './freshWaterAccountDefaults';
+import { freshWaterDefaultRef, freshWaterDefaultsCollection, normalizeFreshWaterCustomer, resolveFreshWaterAccount } from './freshWaterAccountDefaults';
 
 const companyStatuses = ['awaiting_bill', 'ready_to_rebill', 'billed_back', 'not_reimbursable'];
 
@@ -10,8 +10,7 @@ export const staffFreshWaterPurchases = onCall(async request => {
   const input = request.data ?? {};
   const { op, ticketId } = input;
   if (op === 'listDefaults' || op === 'saveDefault') {
-    const capability = op === 'saveDefault' ? 'editBilling'
-      : input.forDispatch === true ? 'manageDrivers' : 'viewBilling';
+    const capability = op === 'saveDefault' ? 'editBilling' : 'viewBilling';
     const { uid, companyId } = await requireTrustedCompanyCapability(request.auth?.uid, capability);
     if (input.companyId !== companyId) throw new HttpsError('permission-denied', 'Customer settings unavailable.');
     const db = getFirestore();
@@ -64,16 +63,17 @@ export const staffFreshWaterPurchases = onCall(async request => {
     const dispatchId = typeof ticket.dispatchId === 'string' ? ticket.dispatchId : '';
     const dispatchRead = dispatchId && !dispatchId.includes('/') && dispatchId !== '.' && dispatchId !== '..'
       ? db.collection('dispatches').doc(dispatchId).get() : Promise.resolve(undefined);
-    const [snapshot, dispatchSnapshot, customerDefault] = await Promise.all([
+    const [snapshot, dispatchSnapshot] = await Promise.all([
       purchases.where('ticketId', '==', ticketId).get(),
       dispatchRead,
-      !dispatchId ? readFreshWaterDefault(db, companyId, ticket.operator || ticket.company, ref => ref.get()) : null,
     ]);
     const dispatch = dispatchSnapshot?.data();
-    const plannedAccount = dispatch?.companyId === companyId ? dispatch?.freshWaterAccount : null;
+    const assigned = dispatch?.companyId === companyId ? dispatch?.freshWaterAccount : null;
+    const plannedAccount = assigned === 'customer' || assigned === 'company' ? assigned : null;
     return {
-      plannedAccount: plannedAccount === 'customer' || plannedAccount === 'company' ? plannedAccount : null,
-      customerDefault,
+      plannedAccount,
+      customerDefault: plannedAccount ? null
+        : await resolveFreshWaterAccount(db, companyId, ticket.operator || ticket.company, ref => ref.get()),
       purchases: snapshot.docs.map(doc => {
         const { receipt, account, amountCents, status, invoiceRef, revision } = doc.data();
         return { id: doc.id, receipt, account, amountCents, status, invoiceRef, revision };

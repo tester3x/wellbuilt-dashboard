@@ -13,7 +13,7 @@
  * entire workflow succeeds AND UI completion is confirmed, or the user cancels.
  */
 
-import { freshWaterAccount, freshWaterFields, isFreshWaterJob, type FreshWaterAccount } from './freshWater.ts';
+import { freshWaterFields } from './freshWater.ts';
 import {
   DispatchCreationCoordinator,
   mintDispatchId,
@@ -65,7 +65,6 @@ export interface ExecuteServiceWorkInput {
   operator?: string;
   serviceType: string;
   waterTemperature?: 'hot' | 'cold';
-  freshWaterAccount?: FreshWaterAccount;
   packageId?: string;
   dropoff?: string;
   splitABbls?: string | number; // Total load picked up on A.
@@ -304,8 +303,6 @@ export async function executeServiceWorkWorkflow(
           jobType: 'service',
           serviceType: serviceType.trim(),
           ...freshWaterFields(serviceType, input.waterTemperature),
-          ...(isFreshWaterJob(serviceType) && freshWaterAccount(input.freshWaterAccount)
-            ? { freshWaterAccount: input.freshWaterAccount } : {}),
           // The SW builder is a service workflow. A water-hauling label here is
           // still hourly service work and must never bind to the PW packet type.
           jobTypeId: serviceType.trim().toLowerCase() === 'production water'

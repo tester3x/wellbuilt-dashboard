@@ -2,9 +2,13 @@ import * as admin from 'firebase-admin';
 import { getFirestore } from 'firebase-admin/firestore';
 import { createDriverDispatchIfAbsent } from '../createDriverDispatchCallable';
 import { staffFreshWaterPurchases } from '../staffFreshWaterPurchases';
+import { staffWriteDispatch } from '../staffWriteDispatchCallable';
 import { requireTrustedCompanyCapability } from '../trustedStaffAuthority';
 
-jest.mock('../trustedStaffAuthority', () => ({ requireTrustedCompanyCapability: jest.fn() }));
+jest.mock('../trustedStaffAuthority', () => ({
+  requireTrustedCompanyCapability: jest.fn(),
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS: 'manageDrivers',
+}));
 jest.mock('firebase-admin', () => ({ firestore: jest.fn() }));
 jest.mock('../requireDriverAuth', () => ({
   requireSecureDriver: async () => ({ driverId: 'driver', companyId: 'test-hauler' }),
@@ -97,17 +101,45 @@ test('driver-created Fresh Water snapshots the customer default at first sync', 
   await run({ ...save, account: 'company' });
   await expect(create('driver-fresh', 'fresh-water')).resolves.toMatchObject({ result: 'already_exists' });
   expect(data.get('dispatches/driver-fresh')?.freshWaterAccount).toBe('customer');
+  await run({ ...save, account: null });
+  await expect(create('driver-fresh-hauler', 'fresh-water')).resolves.toMatchObject({ result: 'created' });
+  expect(data.get('dispatches/driver-fresh-hauler')?.freshWaterAccount).toBe('company');
   await expect(create('driver-pw', 'pw')).resolves.toMatchObject({ result: 'created' });
   expect(data.get('dispatches/driver-pw')).not.toHaveProperty('freshWaterAccount');
   await expect(create('driver-override', 'fresh-water', { freshWaterAccount: 'company' }))
     .rejects.toMatchObject({ code: 'invalid-argument' });
 });
 
-test('unlinked Fresh Water tickets show the current customer default without inventing an assignment', async () => {
-  await run({ op: 'saveDefault', companyId: 'test-hauler', operator: 'Test Operator', account: 'company' });
+test('staff assignments inherit the customer setting or use the hauler account with no dispatcher choice', async () => {
+  const create = (dispatchId: string) => staffWriteDispatch.run({
+    auth: { uid: 'staff' },
+    data: {
+      op: 'create',
+      dispatchId,
+      packetRef: { packageId: 'water-hauling', revision: 4 },
+      record: {
+        wellName: 'Test depot', ndicWellName: 'Test depot', operator: 'Test Operator',
+        jobType: 'service', jobTypeId: 'fresh-water', serviceType: 'Fresh Water',
+      },
+    },
+  } as Parameters<typeof staffWriteDispatch.run>[0]);
+  await expect(create('staff-hauler')).resolves.toMatchObject({ result: 'created' });
+  expect(data.get('dispatches/staff-hauler')?.freshWaterAccount).toBe('company');
+  await run({ op: 'saveDefault', companyId: 'test-hauler', operator: 'Test Operator', account: 'customer' });
+  await expect(create('staff-customer')).resolves.toMatchObject({ result: 'created' });
+  expect(data.get('dispatches/staff-customer')?.freshWaterAccount).toBe('customer');
+  await expect(create('staff-hauler')).resolves.toMatchObject({ result: 'already_exists' });
+  expect(data.get('dispatches/staff-hauler')?.freshWaterAccount).toBe('company');
+});
+
+test('unlinked Fresh Water tickets show the current rule without inventing an assignment', async () => {
   data.set('tickets/manual', { type: 'Fresh Water', companyId: 'test-hauler', operator: 'Test Operator' });
   await expect(run({ op: 'list', ticketId: 'manual' })).resolves.toMatchObject({
     plannedAccount: null, customerDefault: 'company',
+  });
+  await run({ op: 'saveDefault', companyId: 'test-hauler', operator: 'Test Operator', account: 'customer' });
+  await expect(run({ op: 'list', ticketId: 'manual' })).resolves.toMatchObject({
+    plannedAccount: null, customerDefault: 'customer',
   });
 });
 
@@ -117,9 +149,9 @@ test('stores the depot default privately and clears it without changing the cust
   await expect(run({ ...save, operator: 'Unknown Operator' })).rejects.toMatchObject({ code: 'not-found' });
   await expect(run(save)).resolves.toEqual({ account: 'customer' });
   expect(authority).toHaveBeenLastCalledWith('staff', 'editBilling');
-  const list = { op: 'listDefaults', companyId: 'test-hauler', forDispatch: true };
+  const list = { op: 'listDefaults', companyId: 'test-hauler' };
   await expect(run(list)).resolves.toEqual({ defaults: [{ operator: 'test operator', account: 'customer' }] });
-  expect(authority).toHaveBeenLastCalledWith('staff', 'manageDrivers');
+  expect(authority).toHaveBeenLastCalledWith('staff', 'viewBilling');
   await run({ ...save, account: null });
   await expect(run(list)).resolves.toEqual({ defaults: [] });
   expect(data.get('companies/test-hauler')).toEqual({ assignedOperators: ['Test Operator'] });

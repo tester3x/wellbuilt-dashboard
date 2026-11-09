@@ -6,27 +6,7 @@ import { combinedLocationResults, dropoffSourcesForBuilderOperator } from '../bu
 import { executeServiceWorkWorkflow, createServiceWorkWorkflow } from '../serviceWorkWorkflowCore.ts';
 import { DispatchCreationCoordinator, materialBirthFieldsMatch } from '../staffWriteDispatchCore.ts';
 
-test('the chosen depot account is attached only to Fresh Water and is part of retry identity', async () => {
-  for (const serviceType of ['Fresh Water', 'Production Water']) {
-    const records: Record<string, unknown>[] = [];
-    await executeServiceWorkWorkflow({
-      workflow: createServiceWorkWorkflow(),
-      coordinator: new DispatchCreationCoordinator(),
-      invoke: async payload => {
-        records.push(payload.record as Record<string, unknown>);
-        return { ok: true, dispatchId: 'test' };
-      },
-      selectedDrivers: [{ key: 'driver-1', id: 'driver-1', displayName: 'Driver' }],
-      wellName: 'Test depot',
-      ndicWellName: '',
-      serviceType,
-      freshWaterAccount: 'company',
-      packageId: 'water-hauling',
-      assignedBy: 'test',
-    });
-    assert.equal(records.length, 1);
-    assert.equal(records[0].freshWaterAccount, serviceType === 'Fresh Water' ? 'company' : undefined);
-  }
+test('an existing Fresh Water account is part of a reassigned job’s retry identity', () => {
   assert.equal(materialBirthFieldsMatch({ freshWaterAccount: 'company' }, { freshWaterAccount: 'customer' }), false);
 });
 test('FWD remains available across operator filtering, without becoming SWD',()=>{const s=dropoffSourcesForBuilderOperator({wells:[],operatorWells:[],disposalMatches:[],depotMatches:[{well_name:'State depot',catalogId:'nd-dwr:1'},{well_name:'State depot',catalogId:'nd-dwr:2'}]},'Selected oil company');const rows=combinedLocationResults('State',s);assert.equal(rows.length,2);assert.ok(rows.every(r=>r.kind==='FWD'));});
