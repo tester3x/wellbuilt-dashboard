@@ -3578,6 +3578,7 @@ export { removeSplitLeg } from './security/removeSplitLegCallable';
 export { resolveExhaustedSplitFamily } from './security/resolveExhaustedSplitFamilyCallable';
 export { declineSplitFamily } from './security/declineSplitFamilyCallable';
 export { startPickupSplit } from './security/startPickupSplitCallable';
+export { correctPickupJobType } from './security/correctPickupJobTypeCallable';
 export { getDriverPayroll } from './security/getDriverPayroll';
 
 export {
