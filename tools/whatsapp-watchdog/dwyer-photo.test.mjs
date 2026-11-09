@@ -271,7 +271,8 @@ test('recover the two faint WTR 3 readings and send only the first post for each
     await capture.receive({...post,id:'repeat-'+index,timestamp:timestamp+3},()=>mediaFor(index));
   }
   const posts=Object.values(queue.data.messages);
-  for (const [index,bottom] of readings.entries()) {
+  async function recoverHaul(index) {
+    const bottom=readings[index];
     const first=posts.find(p=>p.id==='original-'+index);
     const repeat=posts.find(p=>p.id==='repeat-'+index);
     if (!originals) {
@@ -283,6 +284,7 @@ test('recover the two faint WTR 3 readings and send only the first post for each
     assert.equal(queue.data.deliveries[first.rows[0].id].status,'retry');
     assert.equal(queue.data.deliveries[repeat.rows[0].id].status,'review');
   }
+  await recoverHaul(0);
   const sent=[];
   const transport=new Transport(queue);
   transport.secret='mock-only';
@@ -291,12 +293,19 @@ test('recover the two faint WTR 3 readings and send only the first post for each
   transport.request=async(endpoint,body)=>{
     if (endpoint==='ingestWatchdogPullV2') {
       sent.push([body.messageId,body.dwyerPhoto.bottomFeet]);
+      // OCR completes for the second photo while the sender is using a snapshot
+      // of the queue and waiting for the first photo's cloud response.
+      if (body.messageId==='original-0') await recoverHaul(1);
       return {status:'queued',identity:body.messageId};
     }
     assert.equal(endpoint,'getWatchdogPullReceiptV2');
     return {status:'complete',identity:body.identity};
   };
   await transport.tick(false);
+  assert.deepEqual(sent,[['original-0',9.2]]);
+  const repeat=posts.find(p=>p.id==='repeat-1');
+  delete queue.data.deliveries[repeat.rows[0].id];
+  queue.save();
   transport.queue=new Queue(directory);
   await transport.tick(false);
   assert.deepEqual(sent,[['original-0',9.2],['original-1',7.7]]);
