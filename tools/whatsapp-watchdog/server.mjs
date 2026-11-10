@@ -136,7 +136,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/review-alerts'){const value=JSON.parse(bytes);if(typeof value.enabled!=='boolean'||(value.enabled&&!chats.some(c=>c.id===value.groupId)))throw Error('Choose an available alert group');if(value.enabled&&channels.some(c=>c.id===value.groupId))throw Error('Choose an alert-only group, not a watched route');queue.data.reviewAlerts={...queue.data.reviewAlerts,enabled:value.enabled,groupId:value.groupId||queue.data.reviewAlerts?.groupId||''};queue.save();return respond(res,200,{ok:true});}
  if(url.pathname==='/dismiss-review')return respond(res,200,dismissReview(queue,JSON.parse(bytes)));
  if(url.pathname==='/retry-dwyer-photo'){
-  const {rowId,expectedBottomFeet}=JSON.parse(bytes);
+  const {rowId,expectedBottomFeet,reviewImageDigest}=JSON.parse(bytes);
   const post=typeof rowId==='string'&&rowId.endsWith(':photo')?queue.data.messages[rowId.slice(0,-6)]:null;
   const activeClient=client;
   if(!activeClient||state!=='Connected'||paused||post?.rows?.[0]?.id!==rowId||
@@ -145,7 +145,7 @@ const server=http.createServer(async(req,res)=>{try{
     throw Error('Choose an existing photo in a watched Tallgrass group');
   }
   await dwyerPhotos.retryHeldPhoto(post,expectedBottomFeet,
-    ()=>downloadDwyerMedia(activeClient,post.channel,post.id,async()=>(await activeClient.getMessageById(post.id))?.downloadMedia()));
+    ()=>downloadDwyerMedia(activeClient,post.channel,post.id,async()=>(await activeClient.getMessageById(post.id))?.downloadMedia()),reviewImageDigest);
   return respond(res,200,{status:queue.data.deliveries[rowId]?.status});
  }
  if(url.pathname==='/review'){const value=JSON.parse(bytes);if(typeof value.rowId!=='string'||!['confirm','exclude'].includes(value.decision)||typeof value.reason!=='string'||(value.decision==='exclude'&&value.reason.trim().length<3)||value.reason.length>300)throw Error('Enter a review reason');let at;if(value.decision==='confirm'&&!value.rowId.endsWith(':photo')){if(typeof value.time!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.time))throw Error('Choose a valid measurement time');const [date,time]=value.time.split('T');const [y,m,d]=date.split('-');at=chatTimestamp(m+'/'+d+'/'+y,time);}await transport.review(value.rowId,value.decision,at,value.reason.trim(),value.corrections||{});return respond(res,200,{ok:true});}

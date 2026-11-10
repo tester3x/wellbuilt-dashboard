@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {runInNewContext} from 'node:vm';
-import {Queue,header} from './core.mjs';
+import {Queue,header,hash} from './core.mjs';
 import {DwyerPhotoIntake,downloadDwyerChatImage,downloadDwyerMedia,dwyerBank,isTallgrassChannel,photoEvidence,readDwyerGauge} from './dwyer-photo.mjs';
 import {Transport,orderedDeliveryRows} from './transport.mjs';
 
@@ -70,6 +70,31 @@ test('retry restores only the selected download failure under its original photo
   assert.equal(queue.data.messages[unrelated.key],unrelated);
   assert.equal(queue.data.deliveries[unrelated.rows[0].id].status,'review');
   assert.throws(()=>intake.retryHeldPhoto(recovered,7.8,()=>media),/unsent photo reading failure/);
+});
+
+test('an exact, visually reviewed photo cannot send until confirmed', async t => {
+  const dir=mkdtempSync(path.join(tmpdir(),'watchdog-dwyer-verified-review-'));
+  t.after(()=>{rmSync(path.join(dir,'queue.json'),{force:true});rmdirSync(dir);});
+  const queue=new Queue(dir),timestamp=Date.now()/1000;
+  queue.data.dwyerPhotoStartedAt=timestamp*1000-1000;
+  queue.data.dwyerDeliveryStartedAt=timestamp*1000-1000;
+  let bottomFeet=6.6;
+  const intake=new DwyerPhotoIntake(queue,async()=>({tagVerified:true,bottomFeet}));
+  await intake.receive({id:'original',channel:'tallgrass',timestamp,body:'',author:'Fixture'},()=>undefined);
+  const [held]=Object.values(queue.data.messages);
+  const digest=hash(Buffer.from(media.data,'base64'));
+  await assert.rejects(intake.retryHeldPhoto(held,6.8,()=>media,digest),/expected WTR 3/);
+  bottomFeet=null;
+  await assert.rejects(intake.retryHeldPhoto(held,6.8,()=>media,'0'.repeat(64)),/reviewed photo/);
+  await assert.rejects(intake.retryHeldPhoto(held,6.8,()=>media),/expected WTR 3/);
+  await intake.retryHeldPhoto(held,6.8,()=>media,digest);
+  const recovered=queue.data.messages[held.key], [row]=recovered.rows;
+  assert.equal(row.id,held.rows[0].id);
+  assert.equal(recovered.postedAt,held.postedAt);
+  assert.deepEqual(row.photo.observedBottom,{feet:6.8,source:'review',gauge:'WTR 3 / LT-5103'});
+  assert.equal(row.photo.canSend,true);
+  assert.equal(row.photo.autoSend,false);
+  assert.equal(queue.data.deliveries[row.id].status,'review');
 });
 
 test('Dwyer uses the WTR 3 decimal reading and all four equalizing tanks', () => {

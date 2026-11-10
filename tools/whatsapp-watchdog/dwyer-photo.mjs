@@ -280,7 +280,7 @@ export class DwyerPhotoIntake {
     this.queue.ingest({...post,photoEvidence:pendingEvidence,photoPending:true});
     return this.scheduleCapture(key,post,download);
   }
-  retryHeldPhoto(post,expectedBottomFeet,download) {
+  retryHeldPhoto(post,expectedBottomFeet,download,reviewImageDigest) {
     const row=post?.rows?.[0];
     const delivery=this.queue.data.deliveries?.[row?.id];
     const timestamp=Date.parse(post?.postedAt)/1000;
@@ -291,8 +291,10 @@ export class DwyerPhotoIntake {
       throw Error('This photo is not an unsent photo reading failure');
     }
     if (!Number.isFinite(expectedBottomFeet) || expectedBottomFeet<0) throw Error('Confirm the visible WTR 3 reading first');
+    if (reviewImageDigest!==undefined && (typeof reviewImageDigest!=='string' ||
+        !/^[a-f0-9]{64}$/.test(reviewImageDigest))) throw Error('Invalid reviewed photo fingerprint');
     const message={...post,timestamp};
-    return this.scheduleCapture(post.key,message,download,{post,row,delivery,expectedBottomFeet});
+    return this.scheduleCapture(post.key,message,download,{post,row,delivery,expectedBottomFeet,reviewImageDigest});
   }
   scheduleCapture(key,post,download,retry) {
     const job = this.tail.then(()=>this.capture(post,download,retry)).finally(()=>this.pending.delete(key));
@@ -317,13 +319,18 @@ export class DwyerPhotoIntake {
       // Even when WhatsApp has expired the media or OCR fails, preserve the
       // candidate for a reviewer who can look up the original post.
     }
-    const evidence = photoEvidence({body:message.body,gauge,imageDigest});
+    let reviewedBottom=false;
     const key = hash(message.channel+'\0'+message.id);
     if (retry) {
       if (this.queue.data.messages[key]!==retry.post || this.queue.data.deliveries[retry.row.id]!==retry.delivery) {
         throw Error('Photo review changed during retry');
       }
-      if (!imageDigest || !gauge?.tagVerified || gauge.bottomFeet!==retry.expectedBottomFeet) {
+      reviewedBottom=retry.reviewImageDigest!==undefined;
+      if (reviewedBottom && imageDigest!==retry.reviewImageDigest) {
+        throw Error('Recovered image does not match the reviewed photo');
+      }
+      if (!imageDigest || !gauge?.tagVerified ||
+          (gauge.bottomFeet!==retry.expectedBottomFeet && !(reviewedBottom && gauge.bottomFeet===null))) {
         throw Error('Recovered photo did not verify the expected WTR 3 reading');
       }
       if (retry.row.photo.imageDigest && imageDigest!==retry.row.photo.imageDigest) {
@@ -331,6 +338,9 @@ export class DwyerPhotoIntake {
       }
     }
     if (this.queue.data.messages[key]?.deleted) return;
+    const evidence=photoEvidence({body:message.body,gauge:reviewedBottom
+      ? {...gauge,bottomFeet:retry.expectedBottomFeet} : gauge,imageDigest});
+    if (reviewedBottom) evidence.photo.observedBottom.source='review';
     const postedAt=message.timestamp*1000;
     const possibleDuplicate = Object.values(this.queue.data.messages).some(post=>{
       if (post.key===key || post.channel!==message.channel || post.deleted) return false;
@@ -350,7 +360,7 @@ export class DwyerPhotoIntake {
     });
     if (possibleDuplicate) evidence.issues.push('Possible duplicate Dwyer report in this group');
     evidence.photo.canSend = !!imageDigest && message.timestamp*1000>=this.queue.data.dwyerDeliveryStartedAt;
-    evidence.photo.autoSend = evidence.photo.canSend && !!gauge?.tagVerified &&
+    evidence.photo.autoSend = !reviewedBottom && evidence.photo.canSend && !!gauge?.tagVerified &&
       evidence.bottomLevelFeet!==null && evidence.bblsTaken!==null && !possibleDuplicate;
     this.queue.ingest({...message,photoEvidence:evidence});
   }
