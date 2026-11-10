@@ -15,10 +15,11 @@ test('synced Dwyer image downloads by exact group and bare ID with its MIME type
   const id='short-image-id',channel='tallgrass-test';
   const photo={id:{id},type:'image',mimetype:'image/jpeg',directPath:'test',mediaKey:'test',size:3};
   const messages=[photo];
+  const image=Buffer.alloc(100_000,0xc8);
   let downloadCalls=0;
   const group={id:{_serialized:channel},msgs:{getModelsArray:()=>messages}};
   const download=runInNewContext(`(${downloadDwyerChatImage})`,{
-    AbortSignal,
+    AbortSignal,btoa,
     window:{
       require(name){
         if (name==='WAWebCollections') return {Chat:{get:()=>undefined,getModelsArray:()=>[group]}};
@@ -27,16 +28,15 @@ test('synced Dwyer image downloads by exact group and bare ID with its MIME type
           downloadCalls++;
           assert.equal(options.mimetype,'image/jpeg');
           assert.equal(options.type,'image');
-          return Buffer.from('jpg');
+          return image;
         }}};
       },
-      WWebJS:{arrayBufferToBase64Async:bytes=>bytes.toString('base64')},
     },
   });
   const client={pupPage:{evaluate:(_fn,args)=>download(args)}};
   const result=await downloadDwyerMedia(client,channel,id,()=>assert.fail('used the serialized-ID fallback'));
   assert.equal(result.mimetype,'image/jpeg');
-  assert.equal(result.data,Buffer.from('jpg').toString('base64'));
+  assert.equal(result.data,image.toString('base64'));
   assert.equal(await downloadDwyerMedia(client,'other-group',id),undefined);
   messages.push({...photo});
   assert.equal(await downloadDwyerMedia(client,channel,id),undefined);

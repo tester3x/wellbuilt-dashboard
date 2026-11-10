@@ -28,7 +28,12 @@ export async function downloadDwyerChatImage({channel,id,maxBytes}) {
     type:message.type,mimetype,signal:AbortSignal.timeout(10000),downloadQpl,
   });
   if (!bytes?.byteLength || bytes.byteLength>maxBytes) return;
-  return {mimetype,data:await window.WWebJS.arrayBufferToBase64Async(bytes)};
+  const image=new Uint8Array(bytes);
+  let binary='';
+  for (let offset=0;offset<image.length;offset+=8192) {
+    binary+=String.fromCharCode(...image.subarray(offset,offset+8192));
+  }
+  return {mimetype,data:btoa(binary)};
 }
 
 export async function downloadDwyerMedia(client,channel,id,downloadLegacy) {
