@@ -22,6 +22,17 @@ try {
  # No existing listener: launch the receiver below.
 } finally { $existingReceiver.Dispose() }
 if($alreadyListening){Write-StartupPhase 'existing receiver owns reconnect and saved monitoring intent';exit 0}
+function Stop-WatchdogBrowser {
+ $profile=Join-Path $env:WBC_WATCHDOG_DATA 'session\session'
+ $pattern='(?i)(?:^|\s)--user-data-dir=(?:"'+[regex]::Escape($profile)+'"|'+[regex]::Escape($profile)+')(?=\s|$)'
+ $browsers=Get-CimInstance Win32_Process -Filter "Name='msedge.exe' OR Name='chrome.exe'" |
+  Where-Object { $_.CommandLine -match $pattern -and $_.CommandLine -notmatch '(?:^|\s)--type=' }
+ foreach($browser in $browsers){
+  Write-StartupPhase ('clearing Watchdog browser process '+$browser.ProcessId)
+  try { & taskkill.exe /PID $browser.ProcessId /T /F 2>$null | Out-Null } catch { Write-StartupPhase 'browser cleanup raced with exit; continuing recovery' }
+ }
+}
+
 # Keep supervising after the first successful connection. A Node crash must not
 # exhaust Task Scheduler's three-retry allowance and leave watching stopped.
 while($true){
@@ -50,11 +61,6 @@ while($true){
  }
  $node.WaitForExit()
  Write-StartupPhase ('receiver exited '+$node.ExitCode+'; restarting')
- # A crashed Node process can leave its own Chromium child holding the profile.
- # Match both the parent PID and our exact data directory; never touch user Edge.
- $profile=Join-Path $env:WBC_WATCHDOG_DATA 'session\session'
- $browsers=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($node.Id)" | Where-Object {($_.Name -eq 'msedge.exe' -or $_.Name -eq 'chrome.exe') -and $_.CommandLine -and $_.CommandLine.Contains($profile) -and $_.CommandLine.Contains('--user-data-dir')})
- foreach($browser in $browsers){try{& taskkill.exe /PID $browser.ProcessId /T /F 2>$null | Out-Null}catch{Write-StartupPhase 'browser cleanup raced with exit; continuing recovery'}}
  if($Once){break}
  Start-Sleep -Seconds 10
 }
