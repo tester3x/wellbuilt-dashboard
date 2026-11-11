@@ -107,13 +107,18 @@ async function readLocatedGauge(input, width, height, worker, sharp) {
   }
   await worker.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'});
   async function matchesTag(tank) {
+    let matchingCrops=0;
     for (const offset of [-2.39,-2.32,-2.25]) {
+      let exact=false;
       const tag=await crop(tank,-.05,offset,.9,.29);
       if (!tag) continue;
       for (const threshold of [115,145,175]) {
         const {text,confidence}=await recognize(tag,threshold);
-        if (text.replace(/[^A-Z0-9]/g,'')==='LT5103' && confidence>=50) return true;
+        if (text.replace(/[^A-Z0-9]/g,'')!=='LT5103') continue;
+        if (confidence>=50) return true;
+        exact=true;
       }
+      if (exact && ++matchingCrops>=2) return true;
     }
     return false;
   }
@@ -175,7 +180,50 @@ async function readLocatedGauge(input, width, height, worker, sharp) {
     }
     repeatable ||= votes>=2;
   }
-  return {tagVerified:true,bottomFeet:repeatable && readings.size===1?Number([...readings][0]):null};
+  if (repeatable && readings.size===1) return {tagVerified:true,bottomFeet:Number([...readings][0])};
+  // The display's faint strokes can sit on a brightness gradient. Normalize
+  // each scan line and strengthen existing pixels around the decimal point.
+  const faintReadings = [];
+  for (const rect of [cropBounds(target,.154,.754,.546,.331),cropBounds(target,.192,.777,.477,.277)]) {
+    if (!rect || rect.width<25 || rect.height<15) break;
+    const {width,height}=rect;
+    const raw={width,height,channels:1};
+    const pixels=await input.clone().extract(rect).blur(1).toColourspace('b-w').raw().toBuffer();
+    const signal=Buffer.alloc(pixels.length);
+    for (let y=0;y<height;y++) {
+      const start=y*width;
+      const row=pixels.subarray(start,start+width);
+      const baseline=Buffer.from(row).sort()[Math.floor(width*.23)];
+      for (let x=0;x<width;x++) signal[start+x]=Math.max(0,row[x]-baseline);
+    }
+    const votes=new Map();
+    for (const threshold of [8,12,14]) {
+      const enhanced=Buffer.from(signal);
+      const decimalRight=Math.floor(width*.60);
+      for (let y=Math.floor(height*.59);y<Math.floor(height*.84);y++) {
+        for (let x=Math.floor(width*.45);x<decimalRight;x++) {
+          if (signal[y*width+x]<threshold) continue;
+          for (let dy=-2;dy<=2;dy++) {
+            for (let dx=-2;dx<=2;dx++) {
+              if (x+dx<decimalRight) enhanced[(y+dy)*width+x+dx]=255;
+            }
+          }
+        }
+      }
+      const binary=await sharp(enhanced,{raw}).threshold(threshold).negate().png().toBuffer();
+      const padded=await sharp(binary).resize({width:300})
+        .extend({top:25,bottom:25,left:25,right:25,background:'white'}).png().toBuffer();
+      const {data:{text,confidence}}=await worker.recognize(padded);
+      const value=text.trim();
+      if (/^\d{1,2}\.\d$/.test(value) && confidence>=58) votes.set(value,(votes.get(value)||0)+1);
+    }
+    if (votes.size!==1) break;
+    const [[value,count]]=votes;
+    if (count<2) break;
+    faintReadings.push(value);
+  }
+  const agreed=faintReadings.length===2 && faintReadings[0]===faintReadings[1];
+  return {tagVerified:true,bottomFeet:agreed && (!readings.size || readings.has(faintReadings[0]))?Number(faintReadings[0]):null};
 }
 
 export async function readDwyerGauge(image) {
