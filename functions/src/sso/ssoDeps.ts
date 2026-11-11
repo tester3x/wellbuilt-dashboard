@@ -35,6 +35,7 @@ export interface AuthoritativeDriver {
    * Never a login or display name copied into this field.
    */
   legalName?: string | null;
+  role?: 'admin' | 'viewer' | 'driver';
 }
 
 /** The stored authorization-code record. Never contains the raw code. */

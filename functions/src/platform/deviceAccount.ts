@@ -27,7 +27,7 @@ async function snapshot(deps:DeviceAccountDeps,owner:{uid:string;driverId:string
   return d.ok||d.refusal==='active_shift_required';
  });
  return {version:1 as const,grantId,owner,establishedAtMs,checkedAtMs:deps.nowMs(),allowedApps,
-  profile:{displayName:driver.displayName,legalName:driver.legalName||null}};
+  profile:{displayName:driver.displayName,legalName:driver.legalName||null,...(driver.role?{role:driver.role}:{})}};
 }
 export async function issueDeviceAccount(deps:DeviceAccountDeps,auth:SsoAuthContext,raw:unknown){
  request(raw,['version']);

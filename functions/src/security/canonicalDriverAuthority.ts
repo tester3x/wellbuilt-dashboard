@@ -29,6 +29,7 @@ export type CanonicalDriverAuthority = {
    * look dead. Liveness is decided by `active` alone, exactly as before.
    */
   displayName: string | null;
+  role?: 'admin' | 'viewer' | 'driver';
   credentialsActive: boolean;
   profileActive: boolean;
   /**
@@ -46,6 +47,7 @@ export type CanonicalDriverRecordReaders = {
     active: boolean;
     companyId: string | null;
     displayName?: string | null;
+    role?: 'admin' | 'viewer' | 'driver';
   }>;
 };
 
@@ -79,6 +81,7 @@ export async function loadCanonicalDriverAuthority(
     // Normalized through the canonical protocol helper so the server can
     // never hold a name in a shape it would refuse to send.
     displayName: normalizeSsoDisplayName(profile.displayName),
+    ...(profile.role ? { role: profile.role } : {}),
     credentialsActive,
     profileActive,
     active: credentialsActive && profileActive,
@@ -104,6 +107,8 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
         active?: boolean;
         companyId?: unknown;
         displayName?: unknown;
+        isAdmin?: unknown;
+        isViewer?: unknown;
       };
       const companyId =
         typeof val.companyId === 'string' && val.companyId.trim().length > 0
@@ -117,6 +122,7 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
         // profile's own displayName is read — no other profile field, and
         // never the legacy approved namespace.
         displayName: typeof val.displayName === 'string' ? val.displayName : null,
+        role: val.isAdmin === true ? 'admin' : val.isViewer === true ? 'viewer' : 'driver',
       };
     },
   };
@@ -136,6 +142,7 @@ export async function getAuthoritativeDriverForSso(
   companyId: string | null;
   active: boolean;
   displayName: string | null;
+  role?: CanonicalDriverAuthority['role'];
 } | null> {
   const auth = await loadCanonicalDriverAuthority(driverId, readers);
   if (!auth) return null;
@@ -144,5 +151,6 @@ export async function getAuthoritativeDriverForSso(
     companyId: auth.companyId,
     active: auth.active,
     displayName: auth.displayName,
+    ...(auth.role ? { role: auth.role } : {}),
   };
 }
