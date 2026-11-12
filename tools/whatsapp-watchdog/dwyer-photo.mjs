@@ -223,10 +223,47 @@ async function readLocatedGauge(input, width, height, worker, sharp) {
     faintReadings.push(value);
   }
   const agreed=faintReadings.length===2 && faintReadings[0]===faintReadings[1];
+  // Yellow monitor digits can disappear into gray scan lines. Verify a
+  // tightly cropped decimal independently in color and luminance.
+  if (!agreed && !readings.size && width===900) {
+    const rect=cropBounds(target,.115,.77,.574,.328);
+    if (rect) {
+      const raw={width:rect.width,height:rect.height,channels:1};
+      const rgb=await input.clone().extract(rect).removeAlpha().toColourspace('srgb').raw().toBuffer();
+      const values=[];
+      for (const yellow of [true,false]) {
+        const signal=Buffer.alloc(raw.width*raw.height);
+        for (let i=0;i<signal.length;i++) {
+          const [r,g,b]=rgb.subarray(i*3,i*3+3);
+          signal[i]=yellow?Math.max(0,Math.round((r+g)/2)-b):Math.round((r+2*g+b)/4);
+        }
+        const filtered=sharp(signal,{raw}).greyscale().blur(.65).raw();
+        const [detail,background]=await Promise.all([filtered.clone().toBuffer(),filtered.clone().blur(4).toBuffer()]);
+        const binary=Buffer.from(detail.map((v,i)=>v-background[i]>=(yellow?3:10)?0:255));
+        const padded=await sharp(binary,{raw}).resize({width:270})
+          .extend({top:24,bottom:24,left:24,right:24,background:'white'}).png().toBuffer();
+        const {data:{text,confidence}}=await worker.recognize(padded);
+        const value=text.trim().replace(/\.$/,'');
+        if (/^\d{1,2}\.\d$/.test(value) && confidence>=58) values.push(value);
+      }
+      if (values.length===2 && values[0]===values[1]) return {tagVerified:true,bottomFeet:Number(values[0])};
+    }
+  }
   return {tagVerified:true,bottomFeet:agreed && (!readings.size || readings.has(faintReadings[0]))?Number(faintReadings[0]):null};
 }
 
 export async function readDwyerGauge(image) {
+  const result=await readDwyerGaugeAtResolution(image);
+  if (result.bottomFeet!==null) return result;
+  const {default:sharp}=await import('sharp');
+  const input=sharp(image,{limitInputPixels:24_000_000});
+  if ((await input.metadata()).width<=900) return result;
+  const normalized=await input.resize({width:900}).png().toBuffer();
+  const retry=await readDwyerGaugeAtResolution(normalized);
+  return retry.tagVerified?retry:result;
+}
+
+async function readDwyerGaugeAtResolution(image) {
   const [{default:sharp},{createWorker,PSM}] = await Promise.all([import('sharp'),import('tesseract.js')]);
   const input = sharp(image,{limitInputPixels:24_000_000});
   const {width,height} = await input.metadata();
