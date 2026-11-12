@@ -53,12 +53,15 @@ async function pollReceiver(){
   if(times.length)checkpoints[id]=Math.max(...times);
  }
  const ids=[...new Set([...(paused?[]:channels.map(c=>c.id)),queue.data.reviewAlerts?.groupId].filter(Boolean))];
- const result=await activeClient.pupPage.evaluate(collectReceiver,{ids,checkpoints,now:Math.floor(Date.now()/1000)});
+ const result=await activeClient.pupPage.evaluate(collectReceiver,{ids,checkpoints,now:Math.floor(Date.now()/1000),pairedPhotoChannels:channels.filter(isTallgrassChannel).map(c=>c.id)});
  if(client!==activeClient)return;
  chats=result.groups;receiverGroups=result.diagnostics;lastReceiverCheck=new Date().toISOString();receiverMode='Polling synced messages';state='Connected';error='';
  for(const m of result.messages)await commands.receive(m,(id,body)=>client.sendMessage(id,body),{state,paused,transportStatus:transport.status});
  if(!paused)for(const m of newestReceiverMessages(result.messages,Infinity)){const selected=channels.find(c=>c.id===m.channel);if(!selected||isIgnoredSender(senderIgnoreRules,m.channel,m.senderId))continue;if(m.image&&isTallgrassChannel(selected)){
-   dwyerPhotos.receive(m,()=>downloadDwyerMedia(activeClient,m.channel,m.id,async()=>(await activeClient.getMessageById(m.id))?.downloadMedia()))?.catch(e=>{error=e.message;});
+   const download=id=>downloadDwyerMedia(activeClient,m.channel,id,async()=>(await activeClient.getMessageById(id))?.downloadMedia());
+   dwyerPhotos.receive(m,async()=>m.photoMediaId
+    ? (await download(m.photoMediaId).catch(()=>undefined)) || download(m.id)
+    : download(m.id))?.catch(e=>{error=e.message;});
    continue;
   }
   queue.ingest({id:m.id,channel:m.channel,chat:header(m.timestamp*1000,m.author,m.body),options:{...selected.options,wellNames:(transport.wells||[]).filter(w=>w.channels?.includes(selected.id)).map(w=>w.wellName)},deleted:m.deleted,senderId:m.senderId});}
@@ -75,11 +78,7 @@ function status(){return {reviewCorrectionsEnabled:true,receiverControl:control,
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;if(await commands.receive({id:m.id._serialized||m.id.id,channel:channelId,body:m.body,timestamp:m.timestamp,fromMe:m.fromMe,senderId:m.id?.participant?._serialized||m.author||null,deleted},(id,body)=>client.sendMessage(id,body),{state,paused,transportStatus:transport.status}))return;if(paused)return;const configured=channels.find(c=>c.id===channelId);if(!configured)return;const senderId=m.id?.participant?._serialized||m.author||null;if(isIgnoredSender(senderIgnoreRules,channelId,senderId))return;
  if(!deleted&&m.type==='image'&&isTallgrassChannel(configured)){
-  const id=m.id._serialized||m.id.id;
-  const activeClient=client;
-
-  await dwyerPhotos.receive({id,channel:channelId,body:m.body||'',timestamp:m.timestamp,
-   author:m.author||m.from,senderId},()=>downloadDwyerMedia(activeClient,channelId,id,()=>m.downloadMedia()));
+  // History polling resolves linked SD and HD media before enqueueing the post.
   return;
  }
  queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId});}

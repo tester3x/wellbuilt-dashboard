@@ -1,5 +1,5 @@
 // Self-contained: Puppeteer serializes this function into the WhatsApp page.
-export async function collectReceiver({ids, checkpoints, now}) {
+export async function collectReceiver({ids, checkpoints, now, pairedPhotoChannels=[]}) {
   if (window.AuthStore?.AppState?.state !== 'CONNECTED') throw Error('WhatsApp is not connected');
   const collections = window.require('WAWebCollections');
   const groups = collections.Chat.getModelsArray().filter(c => c.id?.server === 'g.us');
@@ -57,12 +57,27 @@ export async function collectReceiver({ids, checkpoints, now}) {
       }
       if (window.__wellBuiltHistory[id] !== now) throw Error('WhatsApp history exceeds catch-up batch; retrying without advancing checkpoint');
     }
+    const pairPhotos=pairedPhotoChannels.includes(id);
+    const hdByParent=new Map();
+    if (pairPhotos) {
+      for (const image of all.values()) {
+        if (image.type!=='image' || image.pairedMediaType!=='HD_IMAGE_CHILD') continue;
+        const parentId=image.parentMsgKey?.id;
+        if (parentId) hdByParent.set(parentId, image.id._serialized || image.id.id);
+      }
+    }
     for (const m of all.values()) {
+      if (pairPhotos && m.type==='image' && m.pairedMediaType==='HD_IMAGE_CHILD') continue;
+      const photoMediaId=pairPhotos && m.type==='image' && m.pairedMediaType==='SD_IMAGE_PARENT'
+        ? hdByParent.get(m.id?.id) : undefined;
+      // Wait for the companion upload before attempting OCR on the SD copy.
+      if (pairPhotos && m.type==='image' && m.pairedMediaType==='SD_IMAGE_PARENT' &&
+          !photoMediaId && now-Number(m.t)<90) continue;
       if ((m.type !== 'image' && typeof m.body !== 'string') || !Number.isFinite(Number(m.t)) || Number(m.t) < since) continue;
       messages.push({id:m.id._serialized || m.id.id, channel:id, timestamp:Number(m.t), fromMe:!!m.id.fromMe,
         senderId:(typeof m.id?.participant === 'string' ? m.id.participant : m.id?.participant?._serialized) ||
           (typeof m.author === 'string' ? m.author : m.author?._serialized) || null,
-        author:m.notifyName || m.author?._serialized || m.from?._serialized || 'Driver', body:m.type==='image'?(m.caption||''):m.body, image:m.type==='image', deleted:m.type === 'revoked'});
+        author:m.notifyName || m.author?._serialized || m.from?._serialized || 'Driver', body:m.type==='image'?(m.caption||''):m.body, photoMediaId, image:m.type==='image', deleted:m.type === 'revoked'});
     }
     covered[id] = now;
     window.__wellBuiltHistory[id] = now;
