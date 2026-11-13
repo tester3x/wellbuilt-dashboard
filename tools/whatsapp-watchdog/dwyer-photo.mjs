@@ -395,11 +395,19 @@ export class DwyerPhotoIntake {
         Promise.resolve().then(download),
         new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Photo download timed out')),15000);timer.unref();}),
       ]).finally(()=>clearTimeout(timer));
-      if (!media?.mimetype?.startsWith('image/') || !media.data ||
-          media.data.length > Math.ceil(maxImageBytes*4/3)) throw Error('Image unavailable');
-      const image = Buffer.from(media.data,'base64');
-      imageDigest = hash(image);
-      gauge = await this.recognize(image);
+      for (const candidate of Array.isArray(media) ? media : [media]) {
+        if (!candidate?.mimetype?.startsWith('image/') || !candidate.data ||
+            candidate.data.length > Math.ceil(maxImageBytes*4/3)) continue;
+        const image = Buffer.from(candidate.data,'base64');
+        const digest = hash(image);
+        if (retry?.reviewImageDigest && digest!==retry.reviewImageDigest) continue;
+        const reading = await this.recognize(image).catch(()=>null);
+        if (!imageDigest || reading?.tagVerified) {
+          imageDigest = digest;
+          gauge = reading;
+        }
+        if (reading?.tagVerified && Number.isFinite(reading.bottomFeet)) break;
+      }
     } catch {
       // Even when WhatsApp has expired the media or OCR fails, preserve the
       // candidate for a reviewer who can look up the original post.
@@ -418,7 +426,7 @@ export class DwyerPhotoIntake {
           (gauge.bottomFeet!==retry.expectedBottomFeet && !(reviewedBottom && gauge.bottomFeet===null))) {
         throw Error('Recovered photo did not verify the expected WTR 3 reading');
       }
-      if (retry.row.photo.imageDigest && imageDigest!==retry.row.photo.imageDigest) {
+      if (!reviewedBottom && retry.row.photo.imageDigest && imageDigest!==retry.row.photo.imageDigest) {
         throw Error('Recovered image does not match the held photo');
       }
     }

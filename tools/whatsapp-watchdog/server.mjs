@@ -60,7 +60,7 @@ async function pollReceiver(){
  if(!paused)for(const m of newestReceiverMessages(result.messages,Infinity)){const selected=channels.find(c=>c.id===m.channel);if(!selected||isIgnoredSender(senderIgnoreRules,m.channel,m.senderId))continue;if(m.image&&isTallgrassChannel(selected)){
    const download=id=>downloadDwyerMedia(activeClient,m.channel,id,async()=>(await activeClient.getMessageById(id))?.downloadMedia());
    dwyerPhotos.receive(m,async()=>m.photoMediaId
-    ? (await download(m.photoMediaId).catch(()=>undefined)) || download(m.id)
+    ? Promise.all([m.photoMediaId,m.id].map(id=>download(id).catch(()=>undefined)))
     : download(m.id))?.catch(e=>{error=e.message;});
    continue;
   }
