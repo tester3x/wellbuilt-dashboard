@@ -3784,3 +3784,4 @@ export { staffWritePrimaryRouteAssignment, staffGetPrimaryRouteAssignments } fro
 export { createEmployeeInvitation, getEmployeeInvitation, requestEmployeeJoin, getEmployeeJoinStatus, listEmployeeJoinRequests, resolveEmployeeJoin } from "./security/employeeOnboarding";
 
 export {jsaGetShiftPreview} from './jsaReceipt/jsaShiftPreviewCallable';
+export { jsaOffShiftPeriod } from './jsaReceipt/jsaOffShiftPeriod';
