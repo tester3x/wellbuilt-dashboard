@@ -17,7 +17,7 @@ export const jsaFinalizeShiftContext=onDocumentWritten('driver_shift_authority/{
     const state=decideResolve((authority.data()||null) as ShiftAuthorityRecord|null,{driverId,companyId});
     const old=(await tx.get(active)).data() as JsaWorkPeriod|undefined;
     if(!old||old.companyId!==companyId||old.driverId!==driverId||old.state!=='open'||state.state==='unverifiable')return;
-    if(!old.shiftId){if(state.state==='open'){const attached={...old,shiftId:state.periodId};tx.set(active,attached);tx.set(db.doc('jsa_work_periods/'+old.id),attached);}return;}
+    if(!old.shiftId&&state.state!=='open')return;
     if(state.state==='open'&&state.periodId===old.shiftId)return;
     const finalized={...old,state:'finalized',finalizedAtMs:Date.now(),finalizationReason:'shift_ended'};
     tx.set(active,finalized);tx.set(db.doc('jsa_work_periods/'+old.id),finalized);
