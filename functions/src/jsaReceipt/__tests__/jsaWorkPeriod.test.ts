@@ -4,10 +4,11 @@ const first=()=>advanceJsaWorkPeriod(null,input).current;
 test('pre-shift context survives midnight without starting HOS',()=>{
  const old=first();expect(advanceJsaWorkPeriod(old,{...input,day:'2026-10-19',now:2,newId:'b'.repeat(48)}).current).toEqual(old);
 });
-test('clock-in attaches the same signed context; same shift after midnight retains identity',()=>{
+test('clock-in finalizes off-shift context and starts a fresh period; same shift after midnight retains identity',()=>{
  const shift={state:'open' as const,periodId:'2026-10-18_220000',originLocalDate:input.day};
- const attached=advanceJsaWorkPeriod(first(),{...input,shift}).current;
- expect(attached.id).toBe('a'.repeat(48));expect(attached.shiftId).toBe(shift.periodId);
+ const {current:attached,finalized}=advanceJsaWorkPeriod(first(),{...input,shift,newId:'b'.repeat(48)});
+ expect(finalized).toMatchObject({id:'a'.repeat(48),state:'finalized',shiftId:null});
+ expect(attached.id).toBe('b'.repeat(48));expect(attached.shiftId).toBe(shift.periodId);
  expect(advanceJsaWorkPeriod(attached,{...input,shift,day:'2026-10-19'}).current).toEqual(attached);
 });
 test('verified end or another shift finalizes only the old context and requires a fresh read',()=>{
