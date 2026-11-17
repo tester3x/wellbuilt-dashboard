@@ -27,13 +27,22 @@ export function validatePhotoSnapshot(body: any) {
 }
 
 async function matchingReceipts(messageHash: string) {
-  const deliveries = await admin.firestore().collection('watchdog_v2_deliveries').where('messageHash', '==', messageHash).get();
-  const receipts = await Promise.all(deliveries.docs.map(async doc => {
+  const [deliveries, reservations] = await Promise.all([
+    admin.firestore().collection('watchdog_v2_deliveries').where('messageHash', '==', messageHash).get(),
+    admin.firestore().collection('watchdog_message_deliveries').where('messageHash', '==', messageHash).get(),
+  ]);
+  const entries = new Map<string, any>();
+  for (const doc of deliveries.docs) entries.set(doc.data().packetId, {...doc.data(), identity: doc.id});
+  for (const doc of reservations.docs) {
     const entry = doc.data();
+    if (!entries.has(entry.packetId)) entries.set(entry.packetId, entry);
+  }
+  const receipts = await Promise.all([...entries.values()].map(async entry => {
     const packet = (await admin.database().ref('packets/processed/' + entry.packetId).once('value')).val();
-    return {identity: doc.id, packetId: entry.packetId, wellName: entry.wellName,
-      recorded: !!packet && packet.source === 'whatsapp_watchdog' && packet.packetId === entry.packetId &&
-        packet.watchdogProvenance?.observationDigest === doc.id,
+    const appMatch = entry.identity === 'app:' + entry.packetId;
+    return {identity: entry.identity, packetId: entry.packetId, wellName: packet?.wellName ?? entry.wellName ?? null,
+      recorded: !!packet && packet.packetId === entry.packetId && (appMatch ||
+        packet.source === 'whatsapp_watchdog' && packet.watchdogProvenance?.observationDigest === entry.identity),
       bottomFeet: packet ? Number(packet.tankAfterInches) / 12 : null, bbls: packet?.bblsTaken ?? null};
   }));
   const recordedCount = new Set(receipts.filter(item => item.recorded).map(item => item.packetId)).size;

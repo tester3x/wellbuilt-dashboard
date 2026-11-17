@@ -26,6 +26,69 @@ async function call(endpoint:any,name:string,body:any,tampered=false){const rawB
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});database.set('packets/outgoing/response_existing',{wellName:'Kahuna 5',wellDown:false,currentLevel:'12',lastPullPacketId:'actual-pull',flowRate:'1:00:00'});});
 const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
 
+function photoObservation(caption:string){
+ documents.get('watchdog_v2_config/laptop').channels.group.wells=['Dwyer'];
+ database.set('well_config',{Dwyer:{activeTanks:4,bblPerFoot:102,tankHeight:20,companyId:'liquid-gold',route:'Tallgrass',equalizedTanks:true,pullBbls:140}});
+ const request=observation();
+ return {...request,chat:request.chat.replace(/Driver:[\s\S]*/,'Driver: '+caption),
+  dwyerPhoto:{imageDigest:'a'.repeat(64),tagVerified:true,bottomFeet:6.4}};
+}
+
+test('Dwyer photo creates one governed packet and retains measurement provenance on retry',async()=>{
+ const request=photoObservation('Bottom\nHauled 140 barrels\nStart: 7.8 ft');
+ const first=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request)).result;
+ expect(first.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+first.packetId);
+ expect(packet).toMatchObject({wellName:'Dwyer',tankLevelFeet:6.4+140/102,bblsTaken:140,
+  watchdogProvenance:{reportedBottomFeet:6.4,dwyerPhoto:{gauge:'WTR 3 / LT-5103',bankBblPerFoot:102,
+   barrelSource:'driver_caption',topSource:'bottom_plus_actual_haul',measurementTimeSource:'whatsapp_post',driverReportedStartFeet:7.8}}});
+ expect(packet.bottomLevelFeet).toBeCloseTo(6.4);
+ const replay=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...request,messageId:'forwarded'})).result;
+ expect(replay.packetId).toBe(first.packetId);
+ database.set('packets/processed/'+first.packetId,{...packet,tankAfterInches:76.8,canonicalProcessingBottomInches:76.8,canonicalProcessingComplete:true});
+ expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.identity})).result.status).toBe('complete');
+});
+
+test('Dwyer photo without a stated haul uses the owner standard as provenance',async()=>{
+ const request=photoObservation('Bottom');
+ const result=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request)).result;
+ expect(result.status).toBe('queued');
+ expect(database.get('packets/incoming/'+result.packetId)).toMatchObject({bblsTaken:140,
+  watchdogProvenance:{dwyerPhoto:{barrelSource:'owner_standard',topSource:'bottom_plus_standard_haul'}}});
+});
+
+test('same photo message cannot create another load after a changed gauge and image digest', async()=>{
+ const request=photoObservation('Hauled 140 bbl');
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request);
+ expect(first.result.status).toBe('queued');
+ const changed=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{
+  ...request,dwyerPhoto:{...request.dwyerPhoto,imageDigest:'b'.repeat(64),bottomFeet:8},
+ });
+ expect(changed.result.error).toBe('message_already_reserved_for_another_delivery');
+ expect([...database.keys()].filter(key=>key.startsWith('packets/incoming/'))).toHaveLength(1);
+});
+
+test('Dwyer photo holds conflicting or above-cap volume and requires a verified review to send',async()=>{
+ for(const caption of ['130 bbl','Hauled 141 bbl']){
+  const held=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',photoObservation(caption))).result;
+  expect(held.status).toBe('review');
+ }
+ const request=photoObservation('130 bbl');
+ const review={confirmed:true,reason:'Driver confirmed the haul and gauge',bottomLevelFeet:6.4,bblsTaken:140};
+ const result=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...request,review})).result;
+ expect(result.status).toBe('queued');
+ expect(database.get('packets/incoming/'+result.packetId).watchdogProvenance.dwyerPhoto.barrelSource).toBe('office_confirmed');
+});
+
+test('Dwyer photo holds a matching text report already in the canonical queue',async()=>{
+ const request=photoObservation('Hauled 140 bbl');
+ const previous=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),
+  chat:request.chat.replace(/Driver:[\s\S]*/, 'Driver: Dwyer\nTop 7\'9"\nBottom 6\'5"\n140 bbl')})).result;
+ expect(previous.status).toBe('queued');
+ const photo=(await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request)).result;
+ expect(photo).toMatchObject({status:'review',issues:[expect.stringContaining('matching Dwyer')]});
+});
+
 test('one WhatsApp message cannot issue another packet after its parsed top changes', async () => {
  const body=observation();
  const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
@@ -33,6 +96,17 @@ test('one WhatsApp message cannot issue another packet after its parsed top chan
  const retry=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,chat:body.chat.replace('Top 12.5','Top 12.6')});
  expect(retry.code).toBe(400);
  expect(retry.result.error).toBe('message_already_reserved_for_another_delivery');
+ expect([...database.keys()].filter(key=>key.startsWith('packets/incoming/'))).toHaveLength(1);
+});
+
+test('a second message matched to an existing packet cannot later create a changed load', async () => {
+ const body=observation();
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ const alias={...body,messageId:'second-report-same-load'};
+ const matched=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',alias);
+ expect(matched.result.packetId).toBe(first.result.packetId);
+ const changed=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...alias,chat:alias.chat.replace('Top 12.5','Top 12.6')});
+ expect(changed.result.error).toBe('message_already_reserved_for_another_delivery');
  expect([...database.keys()].filter(key=>key.startsWith('packets/incoming/'))).toHaveLength(1);
 });
 
@@ -72,14 +146,14 @@ test('armed hold resumes through signed intake once, preserves first report and 
  expect(JSON.stringify(database.get('well_config'))).toBe(configBefore);
 });
 
-test('confirmed fixed-load intake preserves actual reported bottom and ordinary defaults remain provisional',async()=>{
+test('confirmed fixed-load intake preserves reported bottom provenance and calibrated removal',async()=>{
  const c=documents.get('watchdog_v2_config/laptop').channels.group;
  c.driverDefaultBbls={'123456789@lid':165};c.driverDefaultModes={'123456789@lid':'confirmed_fixed_load'};
  const body={...observation(),senderId:'123456789@lid',chat:observation().chat.replace(/Top[\s\S]*$/,'Top 12\u2032 0\u2033\nBottom 10\u2032 0\u2033')};
  const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
  expect(answer.result.status).toBe('queued');
  const packet=database.get('packets/incoming/'+answer.result.packetId);
- expect(packet).toMatchObject({bblsTaken:165,bottomLevelFeet:10,watchdogProvenance:{barrels:{status:'confirmed',source:'owner_fixed_load'}}});
+ expect(packet).toMatchObject({bblsTaken:165,bottomLevelFeet:10.625,watchdogProvenance:{reportedBottomFeet:10,barrels:{status:'confirmed',source:'owner_fixed_load'}}});
  database.delete('packets/incoming/'+answer.result.packetId);
  c.driverDefaultModes['123456789@lid']='fixed_load';
  const ordinary=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,messageId:'legacy'});
@@ -186,10 +260,22 @@ test('admin multiwell top-only batch is ignored without creating pulls or timing
  expect([...database.keys()].some(k=>k.startsWith('packets/incoming/'))).toBe(false);
 });
 test('rejects invalid signature and unconfigured channel',async()=>{expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation(),true)).code).toBe(400);expect(database.size).toBe(2);expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chatId:'other'})).result.error).toBe('channel_not_allowed');});
-test('queues once, retries preserve packet, and receipt requires exact bottom and completion',async()=>{const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(first.result.status).toBe('queued');const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.driverId).toBeNull();const again=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(again.result.packetId).toBe(first.result.packetId);const receipt={identity:first.result.identity};database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:133.5,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('complete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:140,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');});
+test('queues once, retries preserve packet, and receipt requires exact bottom and completion',async()=>{const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(first.result.status).toBe('queued');const packet=database.get('packets/incoming/'+first.result.packetId);expect(packet.driverId).toBeNull();const again=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation());expect(again.result.packetId).toBe(first.result.packetId);const receipt={identity:first.result.identity};database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:(12+5/12-165/120)*12});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:(12+5/12-165/120)*12,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('complete');database.set('packets/processed/'+first.result.packetId,{...packet,tankAfterInches:140,canonicalProcessingComplete:true});expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',receipt)).result.status).toBe('incomplete');});
 test('accepts missing bottom and suppresses activation history',async()=>{expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),chat:observation().chat.replace('Bottom 11.125\n','')})).result.status).toBe('queued');documents.get('watchdog_v2_config/laptop').enabledAt=Date.now()+1000;expect((await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',observation())).result.status).toBe('before_activation');});
 
-test('reported bottom never overrides calibrated bottom, and impossible removal is held',async()=>{const request={...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 20')};const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',request);expect(answer.result.status).toBe('queued');const packet=database.get('packets/incoming/'+answer.result.packetId);expect(packet.bottomLevelFeet).toBe(11.125);expect(packet.watchdogProvenance.reportedBottomFeet).toBe(20);const invalid=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...observation(),messageId:'other',chat:observation().chat.replace('Top 12.5','Top 1')});expect(invalid.result.status).toBe('review');expect(invalid.result.issues).toContain('Load exceeds water below the reported top');});
+test('reported bottom is validated and calibrated removal remains authoritative',async()=>{
+ const body=observation();
+ const invalidBottom=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,chat:body.chat.replace('Bottom 11.125','Bottom 20')});
+ expect(invalidBottom.result.status).toBe('review');
+ const valid=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,chat:body.chat.replace('Bottom 11.125','Bottom 10')});
+ expect(valid.result.status).toBe('queued');
+ const packet=database.get('packets/incoming/'+valid.result.packetId);
+ expect(packet.bottomLevelFeet).toBeCloseTo(12+5/12-165/120,10);
+ expect(packet.watchdogProvenance.reportedBottomFeet).toBe(10);
+ const impossible=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,messageId:'other',chat:body.chat.replace('Top 12.5','Top 1').replace('Bottom 11.125\n','')});
+ expect(impossible.result.status).toBe('review');
+ expect(impossible.result.issues).toContain('Load exceeds water below the reported top');
+});
 test('review retains corrected time and audit but cannot bypass invalid top or future time',async()=>{
  const body=observation();const corrected=new Date(Date.now()-600000).toISOString();const review={confirmed:true,dateTimeUTC:corrected,reason:'Driver confirmed actual measurement'};
  const accepted=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review});expect(accepted.result.status).toBe('queued');const packet=database.get('packets/incoming/'+accepted.result.packetId);expect(packet.dateTimeUTC).toBe(corrected);expect(packet.watchdogProvenance.review.correctedTime).toBe(corrected);expect(packet.watchdogProvenance.review.originalTime).not.toBe(corrected);
@@ -197,7 +283,7 @@ test('review retains corrected time and audit but cannot bypass invalid top or f
  const future=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review:{...review,dateTimeUTC:new Date(Date.now()+3600000).toISOString()}});expect(future.result.status).toBe('review');
 });
 test('explicit review clears only nearby-pull warning, never exact duplicates',async()=>{
- const body=observation();const now=Date.now();database.set('packets/processed/previous',{packetId:'previous',wellName:'Kahuna 5',dateTimeUTC:new Date(now-600000).toISOString(),tankLevelFeet:12.5,bblsTaken:165});
+ const body=observation();const now=Date.now();database.set('packets/processed/previous',{packetId:'previous',wellName:'Kahuna 5',dateTimeUTC:new Date(now-600000).toISOString(),tankLevelFeet:12+5/12,bblsTaken:165});
  const held=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);expect(held.result.status).toBe('review');
  const review={confirmed:true,dateTimeUTC:new Date(now).toISOString(),reason:'Confirmed separate load'};
  const accepted=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,review});expect(accepted.result.status).toBe('queued');
@@ -237,14 +323,14 @@ test('queued observations include shadow diagnostics without changing canonical 
  const packet=database.get('packets/incoming/'+answer.result.packetId);
  expect(packet.watchdogProvenance.flowDiagnostic.mode).toBe('shadow');
  expect(packet.watchdogProvenance.flowDiagnostic.minimumRecoveryInches).toBe(6);
- expect(packet.flowRateDays).toBeUndefined();expect(packet.bottomLevelFeet).toBe(11.125);
+ expect(packet.flowRateDays).toBeUndefined();expect(packet.bottomLevelFeet).toBeCloseTo(12+5/12-165/120,10);
 });
-test('enabled well uses corroborated reported bottom and receipt recognizes it',async()=>{
+test('enabled well compares reported bottom and receipt recognizes calibrated removal',async()=>{
  database.get('well_config')['Kahuna 5'].flowWindowMinimumRecoveryInches=6;
  const body={...observation(),chat:observation().chat.replace('Bottom 11.125','Bottom 11.2')};
  const answer=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);const packet=database.get('packets/incoming/'+answer.result.packetId);
- expect(packet.bottomLevelFeet).toBe(11.2);
- database.set('packets/processed/'+answer.result.packetId,{...packet,tankAfterInches:134.4,canonicalProcessingComplete:true});
+ expect(packet.bottomLevelFeet).toBeCloseTo(12+5/12-165/120,10);
+ database.set('packets/processed/'+answer.result.packetId,{...packet,tankAfterInches:(12+5/12-165/120)*12,canonicalProcessingComplete:true});
  expect((await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:answer.result.identity})).result.status).toBe('complete');
 });
 test('enabled well holds an uncorroborated bottom instead of changing tank math',async()=>{
@@ -310,7 +396,7 @@ test('review creates an edit of the same provisional packet, and receipt finaliz
  // Retry the same correction after a lost response, without another pull or edit.
  expect((await call(reviewWatchdogDeliveredPullV2,'reviewWatchdogDeliveredPullV2',{identity:first.result.identity,decision:'confirm',review})).result.packetId).toBe(first.result.packetId);
  database.set('packets/editOutbox/'+event,{completed:true,originalPacketId:first.result.packetId});
- database.set(path,{...packet,bblsTaken:140,tankAfterInches:133.5,canonicalProcessingComplete:true,outgoingCommittedEventId:event});
+ database.set(path,{...packet,tankLevelFeet:review.tankLevelFeet,bblsTaken:140,tankAfterInches:(review.tankLevelFeet-140/120)*12,canonicalProcessingComplete:true,outgoingCommittedEventId:event});
  const final=await call(getWatchdogPullReceiptV2,'getWatchdogPullReceiptV2',{identity:first.result.identity});expect(final.result).toMatchObject({status:'complete',needsReview:false});expect(database.get(path).watchdogProvenance.barrels.status).toBe('confirmed');
 });
 test('load policy cannot escape watched wells or accept invalid capacities',async()=>{
