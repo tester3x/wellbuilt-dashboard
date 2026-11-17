@@ -9,8 +9,7 @@ the `messageHash` on existing Watchdog delivery records.
 
 - Deploy only `syncWatchdogPhotoInboxV2`, `listWatchdogPhotoInbox`, and the reconciled
   `ingestWatchdogPullV2`. Preserve all deployed Dwyer and Good Shepherd routing
-  changes before compiling that intake function. This checkout's text intake is
-  not evidence of the current HP/photo intake release source.
+  changes before compiling that intake function. See the reconciled baseline below.
 - Confirm the Functions service account can sign Storage URLs and access its
   default private bucket. No public Storage rule changes are required.
 - Uploads use ten-minute, immutable-object signed URLs. Completion verifies size,
@@ -47,12 +46,37 @@ the `messageHash` on existing Watchdog delivery records.
 5. Verify an unavailable old photo does not block newer photos. Check
    `remotePhotoInboxError` and `remotePhotoInboxEnabled` on `/status`.
 
+## Reconciled live baseline — November 17, 2026
+
+The cloud deployment archive was read through the Cloud Functions API. Live
+ingestWatchdogPullV2 revision ingestwatchdogpullv2-00049-wib was ACTIVE, last
+updated 2026-11-07T01:03:01.752379124Z. Its compiled JavaScript contains Dwyer
+photo intake changes missing from the TypeScript source stored in that archive.
+The prepared source now retains those compiled behaviors. A recursive comparison
+of 23 compiled relative dependencies found only the intended intake message-ID
+additions. Source reconciliation includes verified well restart, late app-match,
+shorthand parser, and Dwyer photo transaction recovery changes. Existing receipt
+and core remote-review functions must not be redeployed merely because they
+share the intake source module.
+
+The seven intake failures were stale fixtures/expectations. Known barrel loads
+use calibrated removal while retaining reported-bottom provenance. Feet-and-inches
+input 12.5 means 12 feet 5 inches in this intake lane. The invalid-bottom fixture
+failed validation before the removal check, the nearby-pull fixture used a
+different numeric top, and the edit fixture had not applied its corrected top.
+Tests now exercise those contracts without weakening production calibration or
+validation.
+
 ## Validation on the laptop
 
-TypeScript compilation passed. Eight new backend unit checks, one signed-intake
-changed-OCR duplicate regression, and two worker sync tests passed. The complete
-Watchdog Jest run has 117 passing checks and seven failing existing intake checks.
-Those same seven fail with the new message reservation call removed. They concern
-existing calibration/receipt expectations and require reconciliation with the
-actual live backend before release. No backend deployment, HP installation,
-photo upload, live load submission, or resend was performed during preparation.
+TypeScript compilation passed. All 146 Watchdog backend tests and both worker
+photo-sync tests passed. A changed-gauge/image photo regression proves that a
+second observation from the same WhatsApp message cannot issue another packet.
+An alias-message retry is also reserved to its original delivery. Inbox lookup
+includes reservations linked to existing app-created loads.
+
+The backend is prepared for scoped deployment when home. HP installation still
+requires the pinned-host/source/overlay check and additive server patch. No
+backend deployment, HP installation, photo upload, live load submission, or
+resend occurred during preparation. Live Storage URL signing and original-photo
+upload remain installation acceptance checks.
