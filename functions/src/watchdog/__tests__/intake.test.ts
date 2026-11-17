@@ -4,7 +4,20 @@ const snap=(value:any)=>({val:()=>value,exists:()=>value!==undefined});
 const doc=(key:string)=>({key,get:async()=>({exists:documents.has(key),data:()=>documents.get(key)})});
 jest.mock('firebase-functions/v2/https',()=>({onRequest:(_opts:any,fn:any)=>fn}));
 jest.mock('firebase-admin',()=>({
- firestore:()=>({doc,collection:(p:string)=>({doc:(id:string)=>doc(p+'/'+id)}),runTransaction:async(fn:any)=>fn({get:(ref:any)=>ref.get(),set:(ref:any,value:any)=>documents.set(ref.key,value),create:(ref:any,value:any)=>{if(documents.has(ref.key))throw Error('exists');documents.set(ref.key,value);}})}),
+ firestore:()=>({
+  doc,
+  collection:(path:string)=>({
+   doc:(id:string)=>doc(path+'/'+id),
+   where:(field:string,_operator:string,value:any)=>({
+    get:async()=>({docs:[...documents].filter(([key,entry])=>key.startsWith(path+'/')&&entry[field]===value).map(([key,entry])=>({id:key.split('/').pop(),data:()=>entry}))})
+   })
+  }),
+  runTransaction:async(fn:any)=>fn({
+   get:(ref:any)=>ref.get(),
+   set:(ref:any,value:any)=>documents.set(ref.key,value),
+   create:(ref:any,value:any)=>{if(documents.has(ref.key))throw Error('exists');documents.set(ref.key,value);}
+  })
+ }),
  database:()=>({ref:(key:string)=>({once:async()=>snap(database.get(key)),set:async(value:any)=>{database.set(key,value);},update:async(values:any)=>{const data=database.get(key)||{};for(const [path,value]of Object.entries(values)){const parts=path.split('/');let parent=data;for(const name of parts.slice(0,-1))parent=parent[name]??={};parent[parts[parts.length-1]]=value;}database.set(key,data);},orderByChild:()=>({equalTo:(well:string)=>({once:async()=>snap(Object.fromEntries([...database].filter(([k,v])=>k.startsWith(key+'/')&&v.wellName===well).map(([k,v])=>[k.split('/').pop(),v])))})}),transaction:async(fn:any)=>{const next=fn(database.get(key)||null);if(next===undefined)return {committed:false};database.set(key,next);return {committed:true};}})})
 }));
 import {ingestWatchdogPullV2,getWatchdogPullReceiptV2,stopWatchdogWellV2,getWatchdogWellLifecycleV2,reviewWatchdogDeliveredPullV2,setWatchdogBarrelPolicyV2} from '../intake';
@@ -12,6 +25,16 @@ import {evaluateIncomingPull} from '../../packetGuards';
 async function call(endpoint:any,name:string,body:any,tampered=false){const rawBody=Buffer.from(JSON.stringify(body)),timestamp=String(Date.now()),nonce=randomBytes(16).toString('hex');const signature=createHmac('sha256','synthetic-only-key').update(`v1:${name}:POST:${timestamp}:${nonce}:${createHash('sha256').update(rawBody).digest('hex')}`).digest('hex');const req={method:'POST',body,rawBody,headers:{'x-watchdog-key-id':'V1','x-watchdog-timestamp':timestamp,'x-watchdog-nonce':nonce,'x-watchdog-signature':tampered?'0'.repeat(64):signature}};let code=200,result:any;const res={status:(n:number)=>{code=n;return res;},json:(v:any)=>{result=v;return res;}};await (endpoint as any)(req,res);return {code,result};}
 beforeEach(()=>{documents.clear();database.clear();process.env.WATCHDOG_HMAC_KEY_V1='synthetic-only-key';documents.set('watchdog_v2_config/laptop',{enabled:true,enabledAt:Date.now()-3600000,channels:{group:{wells:['Kahuna 5']}}});database.set('well_config',{'Kahuna 5':{bblPerFoot:120,tankHeight:25,companyId:'liquid-gold'}});database.set('packets/outgoing/response_existing',{wellName:'Kahuna 5',wellDown:false,currentLevel:'12',lastPullPacketId:'actual-pull',flowRate:'1:00:00'});});
 const observation=()=>{const d=new Date();const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});const p=Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));return {chatId:'group',messageId:'message',rowIndex:0,chat:`[${p.month}/${p.day}/${p.year}, ${p.hour}:${p.minute}:${p.second}] Driver: Kahuna 5\nTop 12.5\nBottom 11.125\n165 bbl`};};
+
+test('one WhatsApp message cannot issue another packet after its parsed top changes', async () => {
+ const body=observation();
+ const first=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',body);
+ expect(first.result.status).toBe('queued');
+ const retry=await call(ingestWatchdogPullV2,'ingestWatchdogPullV2',{...body,chat:body.chat.replace('Top 12.5','Top 12.6')});
+ expect(retry.code).toBe(400);
+ expect(retry.result.error).toBe('message_already_reserved_for_another_delivery');
+ expect([...database.keys()].filter(key=>key.startsWith('packets/incoming/'))).toHaveLength(1);
+});
 
 test.each(['Drone','Drone 1','Drone1'])('Drone regression: signed intake consumes whole %s heading and keeps calculated bottom',async heading=>{
  documents.get('watchdog_v2_config/laptop').channels.group.wells=['Drone'];

@@ -13,6 +13,7 @@ import {watchdogSenderKey,resolveWatchdogOwner} from './senderOwnership';
 import {decideBarrels,fixedDriverDefault,fixedDriverDefaultConfirmed} from './barrelDecision';
 import * as https from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
+import {reserveMessage} from './messageReservation';
 import {createHash} from 'crypto';
 import {verifyHmacHeaders} from './auth';
 import {parsePullChat,findPullChatNotices} from '../imports/pullParser';
@@ -136,7 +137,7 @@ export const ingestWatchdogPullV2=https.onRequest(options,async(req,res)=>{
  const flowDiagnostic=diagnosticFlowWindow(history[mapped.wellName],{...packet,tankTopInches:Number(row.tankLevelFeet)*12,tankAfterInches:Number(checked.afterFeet)*12},6);
  Object.assign(packet.watchdogProvenance,{flowDiagnostic:{...flowDiagnostic,mode:'shadow',minimumRecoveryInches:6}});
  const payloadDigest=digest(packet);
- await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('payload_conflict');return;}tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:row.tankLevelFeet,bottom:checked.afterFeet,bbl:row.bblsTaken,principalId:'laptop-watchdog-v2',flowDiagnostic,messageHash:sha(body.chatId+':'+body.messageId),estimate,barrelSource,barrels,reportedBottomFeet:row.bottomLevelFeet,createdAt:Date.now()});});
+ await admin.firestore().runTransaction(async tx=>{const previous=await tx.get(entryRef);if(previous.exists){if(previous.data()?.payloadDigest!==payloadDigest)throw Error('payload_conflict');return;}await reserveMessage(tx,{channel:body.chatId,messageId:body.messageId,rowIndex:body.rowIndex,identity,packetId});tx.create(entryRef,{identity,packetId,payloadDigest,wellName:mapped.wellName,dateTimeUTC:row.dateTimeUTC,top:row.tankLevelFeet,bottom:checked.afterFeet,bbl:row.bblsTaken,principalId:'laptop-watchdog-v2',flowDiagnostic,rowIndex:body.rowIndex,messageHash:sha(body.chatId+':'+body.messageId),estimate,barrelSource,barrels,reportedBottomFeet:row.bottomLevelFeet,createdAt:Date.now()});});
  const done=await db.ref('packets/processed/'+packetId).once('value');
  if(!done.exists()){const transaction=await db.ref('packets/incoming/'+packetId).transaction(current=>{if(current){if(digest(current)!==payloadDigest)return;return current;}return packet;});if(!transaction.committed)throw Error('incoming_conflict');}
  res.json({ok:true,status:'queued',identity,packetId,estimate,barrelSource,flowDiagnostic,needsReview:barrels?.needsReview===true,issues:barrels?.issues||[],measurements:{tankLevelFeet:row.tankLevelFeet,bottomLevelFeet:row.bottomLevelFeet,bblsTaken:row.bblsTaken,dateTimeUTC:row.dateTimeUTC}});
