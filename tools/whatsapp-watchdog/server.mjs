@@ -12,6 +12,7 @@ import {CodexBridge} from './codex-bridge.mjs';
 import {OverlordCommands} from './commands.mjs';
 import {ReviewAlerts} from './alerts.mjs';
 import {RemoteReviews} from './remote-review.mjs';
+import {PhotoInbox} from './photo-inbox.mjs';
 import {isIgnoredSender,loadSenderIgnoreRules} from './sender-ignore.mjs';
 import {dismissReview} from './dismiss-review.mjs';
 import {createProfileAuth,closeRestoredReceiverTabs} from './profile-auth.mjs';
@@ -61,11 +62,23 @@ async function pollReceiver(){
  finally{if(client===pollClient)polling=false;}
 }
 const remoteReviews=new RemoteReviews(queue,transport);
+const photoInbox = new PhotoInbox(queue, transport, async post => {
+ const activeClient = client;
+ if (!activeClient || state !== 'Connected') throw Error('WhatsApp is not connected');
+ // Photo-enabled HP installs have the synced-message downloader. Keep this
+ // integration compatible with text-only workers until their photo lane lands.
+ let downloader;
+ try { downloader = await import('./dwyer-photo.mjs'); }
+ catch (error) { if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error; }
+ const legacy = async () => (await activeClient.getMessageById(post.id))?.downloadMedia();
+ return downloader ? downloader.downloadDwyerMedia(activeClient, post.channel, post.id, legacy) : legacy();
+});
+const photoInboxTimer=setInterval(()=>{if(!paused&&queue.data.remotePhotoInboxEnabled===true)void photoInbox.tick(channels);},30000);photoInboxTimer.unref();
 const remoteReviewTimer=setInterval(()=>{if(!paused&&queue.data.remoteReviewsEnabled===true)void remoteReviews.tick(channels);},30000);remoteReviewTimer.unref();
 const alerts=new ReviewAlerts(queue);
 const alertTimer=setInterval(()=>{if(client&&state==='Connected'&&!paused)void alerts.tick((id,body)=>client.sendMessage(id,body),Object.fromEntries(channels.map(c=>[c.id,c.name])));},10000);alertTimer.unref();
 const receiverTimer=setInterval(()=>void pollReceiver(),4000);receiverTimer.unref();
-function status(){return {reviewCorrectionsEnabled:true,receiverControl:control,remoteReviewError:remoteReviews.error,reviewAlerts:{enabled:!!queue.data.reviewAlerts?.enabled,groupId:queue.data.reviewAlerts?.groupId||'',lastSentAt:queue.data.reviewAlerts?.lastSentAt||null,error:alerts.error},state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,wellLifecycle:transport.wells||[],enabledAt:transport.config?.enabledAt,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
+function status(){return {reviewCorrectionsEnabled:true,receiverControl:control,remoteReviewError:remoteReviews.error,remotePhotoInboxError:photoInbox.error,remotePhotoInboxEnabled:queue.data.remotePhotoInboxEnabled===true,reviewAlerts:{enabled:!!queue.data.reviewAlerts?.enabled,groupId:queue.data.reviewAlerts?.groupId||'',lastSentAt:queue.data.reviewAlerts?.lastSentAt||null,error:alerts.error},state,paused,error,qr,channels,chats,receiverMode,lastReceiverCheck,receiverGroups,transportStatus:transport.status,wellLifecycle:transport.wells||[],enabledAt:transport.config?.enabledAt,deliveries:queue.data.deliveries||{},livePosts:queue.liveFeed(channels.map(c=>c.id)),...queue.snapshot()};}
 function respond(res,code,value,type='application/json'){res.writeHead(code,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(type==='application/json'?JSON.stringify(value):value);}
 async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;const senderId=m.id?.participant?._serialized||m.author||null;if(await commands.receive({id:m.id._serialized||m.id.id,channel:channelId,body:m.body,timestamp:m.timestamp,fromMe:m.fromMe,senderId,deleted},(id,body)=>client.sendMessage(id,body),{state,paused,transportStatus:transport.status}))return;if(paused)return;const configured=channels.find(c=>c.id===channelId);if(!configured||isIgnoredSender(senderIgnoreRules,channelId,senderId))return;queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId});}
 async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
@@ -116,6 +129,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/well-lifecycle'){return respond(res,200,await transport.lifecycle());}
  if(url.pathname==='/refresh-receipts'){if(Object.keys(JSON.parse(bytes.toString('utf8')||'{}')).length)throw Error('Invalid receipt refresh request');return respond(res,200,await transport.reconcileReceipts());}
  if(url.pathname==='/retry-pending'){if(Object.keys(JSON.parse(bytes.toString('utf8')||'{}')).length)throw Error('Invalid retry request');if(paused)throw Error('Watchdog is paused; resume watching first');if(transport.busy)throw Error('Delivery is already running; refresh health shortly');await transport.tick(false);if(transport.status.startsWith('Retry pending:'))throw Error(transport.status);return respond(res,200,{ok:true});}
+ if(url.pathname==='/remote-photo-inbox'){const value=JSON.parse(bytes);if(typeof value.enabled!=='boolean')throw Error('Invalid photo inbox setting');queue.data.remotePhotoInboxEnabled=value.enabled;queue.save();return respond(res,200,{ok:true});}
  if(url.pathname==='/remote-reviews'){const value=JSON.parse(bytes);if(typeof value.enabled!=='boolean')throw Error('Invalid remote review setting');queue.data.remoteReviewsEnabled=value.enabled;queue.save();return respond(res,200,{ok:true});}
  if(url.pathname==='/overlord-message'){const value=JSON.parse(bytes),group=queue.data.reviewAlerts?.groupId;if(!client||state!=='Connected'||!group||typeof value.text!=='string'||value.text.length<1||value.text.length>3000)throw Error('Alert destination unavailable or invalid message');await client.sendMessage(group,value.text);return respond(res,200,{ok:true});}
  if(url.pathname==='/review-alerts'){const value=JSON.parse(bytes);if(typeof value.enabled!=='boolean'||(value.enabled&&!chats.some(c=>c.id===value.groupId)))throw Error('Choose an available alert group');if(value.enabled&&channels.some(c=>c.id===value.groupId))throw Error('Choose an alert-only group, not a watched route');queue.data.reviewAlerts={...queue.data.reviewAlerts,enabled:value.enabled,groupId:value.groupId||queue.data.reviewAlerts?.groupId||''};queue.save();return respond(res,200,{ok:true});}
