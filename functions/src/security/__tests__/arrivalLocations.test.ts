@@ -36,12 +36,12 @@ import { driverArrivalLocationsHandler as driver, reviewArrivalLocationsHandler 
 const req = (uid: string, data: any): any => ({ auth: { uid }, data });
 const proposal = () => ({ action: 'propose', requestId: 'request-1', jobId: 'job-1', locationName: 'New Pad',
   locationType: 'place', latitude: 48, longitude: -103, accuracy: 10, observedAt: new Date().toISOString(), companyId: 'company-b' });
-beforeEach(() => mockRows.clear());
+beforeEach(() => {mockRows.clear();mockRows.set('invoices/job-1',{companyId:'company-a',driverId:'driver-id-a'});});
 test('driver proposal is tenant-bound, idempotent and never publishes a saved point', async () => {
   const body = proposal(); await driver(req('driver-a', body)); await driver(req('driver-a', body));
-  expect(mockRows.size).toBe(1);
-  expect([...mockRows.keys()][0]).toContain('companies/company-a/arrival_location_requests/');
-  expect([...mockRows.values()][0].status).toBe('pending');
+  expect([...mockRows.keys()].filter(key=>key.includes('arrival_location_requests'))).toHaveLength(1);
+  expect([...mockRows.keys()].some(key=>key.startsWith('companies/company-a/arrival_location_requests/'))).toBe(true);
+  expect([...mockRows].find(([key])=>key.includes('arrival_location_requests'))![1].status).toBe('pending');
   expect((await driver(req('driver-a', { action: 'list' })) as any).items).toHaveLength(0);
   await expect(driver(req('driver-a', { ...body, latitude: 49 }))).rejects.toThrow('reused');
 });

@@ -68,7 +68,11 @@ export async function driverArrivalLocationsHandler(request: CallableRequest<any
   const id = hash(driver.driverId + '/' + requestId);
   const ref = company.collection('arrival_location_requests').doc(id);
   await admin.firestore().runTransaction(async tx => {
-    const prior = await tx.get(ref);
+    const [prior, job] = await Promise.all([tx.get(ref), tx.get(admin.firestore().collection('invoices').doc(jobId))]);
+    if (!job.exists || job.get('companyId') !== driver.companyId
+        || (job.get('driverId') || job.get('driverHash')) !== driver.driverId) {
+      throw new HttpsError('permission-denied', 'Job is not yours');
+    }
     if (prior.exists) {
       const old = prior.data()!;
       if (old.driverId !== driver.driverId || old.jobId !== jobId || old.locationName !== name
