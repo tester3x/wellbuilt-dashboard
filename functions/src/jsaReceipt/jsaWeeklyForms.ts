@@ -1,11 +1,12 @@
 import {jsaNumber} from './jsaNumber';
-import { parseAuthPrincipal, requireAudience, JSA_APP_JSA } from './jsaReceiptCore';
+import { parseAuthPrincipal, requireAudience, JSA_APP_JSA, decideInvoiceJobFields } from './jsaReceiptCore';
 import { JSA_JOB_ACK_METHOD } from '@tester3x/wellbuilt-contracts';
 
 type Row = Record<string, any>;
 export type WeeklyJsaDeps = {
   list(collection: string, companyId: string, driverId: string): Promise<Row[]>;
   artifact(requestId: string): Promise<Row | null>;
+  job?(id:string): Promise<Row|null>;
 };
 /** Historical read only. An ended shift never becomes a new current shift. */
 export async function readWeeklyJsaForms(deps: WeeklyJsaDeps, auth: {uid?:string|null;claims?:Record<string,unknown>}, body: unknown) {
@@ -19,7 +20,7 @@ export async function readWeeklyJsaForms(deps: WeeklyJsaDeps, auth: {uid?:string
   const dateOf = (ms:number) => { const parts=formatter.formatToParts(ms),part=(t:string)=>parts.find(p=>p.type===t)?.value;return `${part('year')}-${part('month')}-${part('day')}`; };
   const owned = (r:Row) => r.companyId===p.companyId && r.driverId===p.driverId;
   const inside = (ms:unknown):ms is number => typeof ms==='number' && Number.isFinite(ms) && dateOf(ms)>=b.startDate && dateOf(ms)<=b.endDate;
-  const collections = ['jsa_governed_requests','jsas','jsa_job_acknowledgments',`jsa_standalone_companies/${p.companyId}/drivers/${p.driverId}/records`];
+  const collections = ['jsa_governed_requests','jsas','jsa_job_acknowledgments',`jsa_standalone_companies/${p.companyId}/drivers/${p.driverId}/records`,'jsa_job_read_coverage'];
   const batches = await Promise.all(collections.map(c=>deps.list(c,p.companyId,p.driverId)));
   if (batches.some(rows=>rows.length>2000 || rows.some(r=>!owned(r)))) throw new Error('scope_or_size');
   const records: Row[] = [], missing: string[] = [];
@@ -27,7 +28,14 @@ export async function readWeeklyJsaForms(deps: WeeklyJsaDeps, auth: {uid?:string
     if(r.state!=='completed'||!inside(r.completedAtMs)||!['read_completed','read_and_acknowledged','acknowledged'].includes(r.action))continue;
     const artifact = await deps.artifact(r.requestId);
     if (!artifact || !owned(artifact) || artifact.requestId!==r.requestId || artifact.jobRef!==r.jobRef || artifact.action!==r.action || !artifact.snapshot?.signature?.data) { missing.push(`${dateOf(r.completedAtMs)}: signed artifact unavailable for ${r.requestId}`);continue; }
-    records.push({id:r.requestId,kind:r.action==='acknowledged'?'jsa_ack':'jsa_read',date:dateOf(r.completedAtMs),completedAt:new Date(r.completedAtMs).toISOString(),shiftId:r.binding?.periodId||r.binding?.associatedPeriodId||null,jobRef:r.jobRef,record:{...artifact.snapshot,jsaNumber:jsaNumber('JSA-'+r.requestId,r.completedAtMs,r.jsaNumber),id:r.requestId,driverName:artifact.snapshot.printedName,timestamp:new Date(r.completedAtMs).toISOString(),date:dateOf(r.completedAtMs),signatureImage:'data:image/png;base64,'+artifact.snapshot.signature.data},source:'governed'});
+    // Separate read-only history context. Never add inferred locations to signed content.
+    const job=deps.job&&r.jobRef?await deps.job(r.jobRef):null;
+    if(job&&!decideInvoiceJobFields({expectedCompanyId:p.companyId,expectedDriverId:p.driverId,invoice:{...job,exists:true}}).ok)throw Error('scope_or_size');
+    const display=(v:unknown)=>typeof v==='string'?v.slice(0,300):'';
+    const coveredJobs:Row[]=job?[{jobRef:r.jobRef,wellName:display(job.wellName),dropOff:display(job.hauledTo||job.disposal),jobType:display(job.commodityType||job.jobType),recordedAtMs:r.completedAtMs,source:'linked_job'}]:[];
+    for(const stop of [...batches[2],...batches[4]])if(stop.fullReadId===r.requestId&&['acknowledged','scope_read'].includes(stop.method)&&Number.isFinite(stop.recordedAtMs)&&stop.recordedAtMs>=r.completedAtMs&&stop.job)
+      coveredJobs.push({jobRef:display(stop.jobRef),wellName:display(stop.job.wellName),dropOff:display(stop.job.dropOff),jobType:display(stop.job.jobType),recordedAtMs:stop.recordedAtMs,source:'recorded_addition'});
+    records.push({historyContext:{coveredJobs},id:r.requestId,kind:r.action==='acknowledged'?'jsa_ack':'jsa_read',date:dateOf(r.completedAtMs),completedAt:new Date(r.completedAtMs).toISOString(),shiftId:r.binding?.periodId||r.binding?.associatedPeriodId||null,jobRef:r.jobRef,record:{...artifact.snapshot,jsaNumber:jsaNumber('JSA-'+r.requestId,r.completedAtMs,r.jsaNumber),id:r.requestId,driverName:artifact.snapshot.printedName,timestamp:new Date(r.completedAtMs).toISOString(),date:dateOf(r.completedAtMs),signatureImage:'data:image/png;base64,'+artifact.snapshot.signature.data},source:'governed'});
   }
   for (const r of batches[1]) {
     const ms = Date.parse(r.timestamp);

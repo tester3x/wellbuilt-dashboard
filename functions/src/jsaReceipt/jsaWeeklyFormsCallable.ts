@@ -18,7 +18,7 @@ export const jsaWeeklyForms = https.onCall({timeoutSeconds:60,memory:'512MiB',en
         cursor=page.size===100?page.docs[page.docs.length-1]:undefined;
       }while(cursor);
       return rows;
-    },async artifact(id){const d=await db.collection('jsa_governed_artifacts').doc(id).get();return d.exists?d.data()!:null;},
+    },async job(id){if(typeof id!=='string'||!/^[A-Za-z0-9._-]{1,128}$/.test(id))throw Error('scope_or_size');const d=await db.collection('invoices').doc(id).get();return d.exists?d.data()!:null;},async artifact(id){const d=await db.collection('jsa_governed_artifacts').doc(id).get();return d.exists?d.data()!:null;},
   },{uid:request.auth.uid,claims:request.auth.token},request.data);}
   catch(error){const reason=error instanceof Error?error.message:'';throw new https.HttpsError(reason==='not_authorized'?'permission-denied':reason==='invalid_period'?'invalid-argument':'failed-precondition','Historical JSA forms are unavailable.');}
 });

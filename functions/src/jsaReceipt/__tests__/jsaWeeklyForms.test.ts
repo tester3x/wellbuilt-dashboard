@@ -37,3 +37,12 @@ test('overnight acknowledgement retains the server-selected full read even when 
  const out=await readWeeklyJsaForms(deps({list:async c=>c==='jsa_governed_requests'?[{...scope,requestId:'night-read',state:'completed',action:'read_and_acknowledged',completedAtMs:ms-1000,jobRef:'job1',binding:{shiftState:'independent',policyDay:'2026-10-11',associatedPeriodId:'2026-10-11_210000'}}]:c==='jsa_job_acknowledgments'?[{...scope,id:'night-ack',recordedAtMs:ms,policyDay:'2026-10-12',periodId:'2026-10-11_210000',fullReadId:'night-read',jobRef:'job2',method:'acknowledged'}]:[],artifact:async()=>({...scope,requestId:'night-read',jobRef:'job1',action:'read_and_acknowledged',snapshot:{signature:{data:'example'}}})}),auth,body);
  expect(out.records.find(r=>r.id==='night-ack')).toMatchObject({fullReadId:'night-read'});
 });
+
+test('history context includes owned linked destinations and exact recorded additions without changing the signed snapshot',async()=>{
+ const snapshot={signature:{data:'example'},printedName:'Driver',locations:[]};const before=JSON.stringify(snapshot);
+ const request={...scope,requestId:'r1',state:'completed',action:'read_and_acknowledged',completedAtMs:ms,jobRef:'job1',binding:{periodId:'2026-10-12_080000'}};
+ const out=await readWeeklyJsaForms(deps({job:async()=>({...scope,wellName:'Thor 1',hauledTo:'Hydro Clear',commodityType:'pw'}),artifact:async()=>({...scope,requestId:'r1',jobRef:'job1',action:request.action,snapshot}),list:async c=>c==='jsa_governed_requests'?[request]:c==='jsa_job_read_coverage'?[{...scope,fullReadId:'r1',method:'scope_read',recordedAtMs:ms+1000,jobRef:'job2',job:{wellName:'Gabriel 1',dropOff:'WO Watford',jobType:'sw'}},{...scope,fullReadId:'other',method:'scope_read',recordedAtMs:ms+2000,job:{wellName:'Unrelated'}}]:[]}),auth,body);
+ expect(out.records[0].record.locations).toEqual([]);expect(JSON.stringify(snapshot)).toBe(before);
+ expect(out.records[0].historyContext.coveredJobs).toEqual([expect.objectContaining({wellName:'Thor 1',dropOff:'Hydro Clear',source:'linked_job'}),expect.objectContaining({wellName:'Gabriel 1',dropOff:'WO Watford',source:'recorded_addition'})]);
+});
+test('linked job from another driver cannot leak into history',async()=>{await expect(readWeeklyJsaForms(deps({job:async()=>({companyId:'c1',driverId:'other',wellName:'Private'})}),auth,body)).rejects.toThrow('scope_or_size');});
