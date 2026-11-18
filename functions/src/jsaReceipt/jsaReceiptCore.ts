@@ -453,6 +453,7 @@ export interface RequestContextView {
    */
   wellName?: string;
   jobType?: string;
+  operator?: string;
 }
 
 /**
@@ -531,11 +532,13 @@ export interface InvoiceJobSnapshot {
   driverHash?: unknown;
   wellName?: unknown;
   commodityType?: unknown;
+  operator?: unknown;
 }
 
 export interface InvoiceJobFields {
   wellName: string;
   jobType?: string;
+  operator?: string;
 }
 
 function boundedDisplay(v: unknown, max: number): string | null {
@@ -589,10 +592,8 @@ export function decideInvoiceJobFields(input: {
     && !jobType) {
     return hidden;
   }
-  return {
-    ok: true,
-    value: jobType ? { wellName, jobType } : { wellName },
-  };
+  const operator = boundedDisplay(input.invoice.operator, 300);
+  return { ok: true, value: { wellName, ...(jobType ? { jobType } : {}), ...(operator ? { operator } : {}) } };
 }
 
 export function applyJobDisplayFields(
@@ -603,6 +604,7 @@ export function applyJobDisplayFields(
     ...view,
     wellName: fields.wellName,
     ...(fields.jobType ? { jobType: fields.jobType } : {}),
+    ...(fields.operator ? { operator: fields.operator } : {}),
   };
 }
 
