@@ -5,8 +5,36 @@ const request={...owner,requestId,jobRef:'job',binding:{jsaPeriodId:period},stat
 const rows:Record<string,any[]>={jsa_work_periods:[{...owner,id:period,shiftId,state:'open'}],jsa_governed_requests:[request]};
 const deps=(extra:Partial<HomeDeps>={}):HomeDeps=>({shift:async()=>({state:'open',periodId:shiftId}),list:async c=>rows[c]||[],artifact:async()=>({...request,snapshot,receiptHandle:'secret',actorUidHash:'secret'}),...extra});
 const body={protocolVersion:1,operation:'status'};
-test('off shift always New without consulting stale open rows',async()=>{
+test('off shift without a current work period is New without consulting stale open rows',async()=>{
  const out=await readJsaHomeState(deps({shift:async()=>({state:'none'}),list:async()=>{throw Error('must not read history')}}),owner,body);expect(out.action).toBe('new');expect(out.active).toBeNull();
+});
+
+const offShiftPeriod={...owner,id:period,shiftId:null,state:'open'};
+test('open off-shift signed read gives Resume without creating a shift or changing its signature',async()=>{
+ const d=deps({shift:async()=>({state:'none'}),activeOffShiftPeriod:async()=>offShiftPeriod});
+ const before=JSON.stringify(snapshot);
+ const status=await readJsaHomeState(d,owner,body);
+ expect(status).toMatchObject({shiftState:'none',shiftId:null,jsaPeriodId:period,action:'resume',active:{id:requestId}});
+ expect(JSON.stringify(status)).not.toContain('signed note');
+ const read:any=await readJsaHomeState(d,owner,{...body,operation:'read'});
+ expect(read.record.signatureImage).toMatch(/^data:image\/png/);expect(JSON.stringify(snapshot)).toBe(before);
+});
+test('an off-shift standalone JSA resumes only within its exact active period',async()=>{
+ const out=await readJsaHomeState(deps({shift:async()=>({state:'none'}),activeOffShiftPeriod:async()=>offShiftPeriod,
+  list:async c=>c==='standalone'?[{...owner,id:'standalone',jsaPeriodId:period,state:'open',signedAtMs:200,snapshot,job:{wells:[]}}]:[]}),owner,body);
+ expect(out).toMatchObject({action:'resume',shiftId:null,active:{kind:'standalone'}});
+});
+test.each([{...offShiftPeriod,state:'finalized'},{...offShiftPeriod,shiftId}])('ended or shift-associated period does not resume off shift',async p=>{
+ const out=await readJsaHomeState(deps({shift:async()=>({state:'none'}),activeOffShiftPeriod:async()=>p,list:async()=>{throw Error('must not read history');}}),owner,body);
+ expect(out.action).toBe('new');
+});
+test('off-shift home never borrows a previous period or unbound legacy read',async()=>{
+ const out=await readJsaHomeState(deps({shift:async()=>({state:'none'}),activeOffShiftPeriod:async()=>offShiftPeriod,
+  list:async c=>c==='jsa_governed_requests'?[{...request,binding:{jsaPeriodId:'old'}},{...request,binding:{}}]:[]}),owner,body);
+ expect(out.action).toBe('new');
+});
+test.each(['companyId','driverId'])('foreign off-shift period %s is refused',async key=>{
+ await expect(readJsaHomeState(deps({shift:async()=>({state:'none'}),activeOffShiftPeriod:async()=>({...offShiftPeriod,[key]:'other'})}),owner,body)).rejects.toThrow('scope_or_size');
 });
 test('current shift signed read gives Resume and status omits signed content',async()=>{
  const out=await readJsaHomeState(deps(),owner,body);expect(out.action).toBe('resume');expect(out.active?.id).toBe(requestId);expect(JSON.stringify(out)).not.toContain('signed note');expect(JSON.stringify(out)).not.toContain('secret');

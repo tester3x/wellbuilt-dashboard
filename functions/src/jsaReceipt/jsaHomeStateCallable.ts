@@ -16,10 +16,15 @@ export const jsaHomeState=https.onCall({timeoutSeconds:30,memory:'256MiB',enforc
  const db=admin.firestore(),store=shiftJsaSummaryStore(db),hash=(s:string)=>createHash('sha256').update(s).digest('hex');
  try{return await readJsaHomeState({
   shift:async()=>decideResolve(((await db.doc('driver_shift_authority/'+owner.driverId).get()).data()||null) as ShiftAuthorityRecord|null,owner),
+  activeOffShiftPeriod:async()=>{
+   const key=hash(JSON.stringify([owner.companyId,owner.driverId]));
+   const snap=await db.doc('jsa_active_work_periods/'+key).get();
+   return snap.exists?snap.data()!:null;
+  },
   list:async(collection,shiftId,periodIds)=>{
    if(collection!=='standalone')return store.list(collection,owner.companyId,owner.driverId,{shiftId,periodIds});
    const path=`jsa_standalone_companies/${hash(owner.companyId)}/drivers/${hash(owner.driverId)}/records`;
-   const filters:[string,string][]=[['shiftId',shiftId],...periodIds.map(id=>['jsaPeriodId',id] as [string,string])];
+   const filters:[string,string][]=[...(shiftId?[['shiftId',shiftId] as [string,string]]:[]),...periodIds.map(id=>['jsaPeriodId',id] as [string,string])];
    const pages=await Promise.all(filters.map(([f,v])=>db.collection(path).where('companyId','==',owner.companyId).where('driverId','==',owner.driverId).where(f,'==',v).limit(2001).get()));
    return [...new Map(pages.flatMap(p=>p.docs.map(d=>[d.id,{...d.data(),id:d.id}] as const))).values()];
   },artifact:store.artifact,
