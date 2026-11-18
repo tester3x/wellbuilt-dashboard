@@ -1,0 +1,9 @@
+{
+  "sourceCommit": "4f4fd94bf2c3c661833b343e84bb39071438e2d2",
+  "function": "jsaWeeklyForms",
+  "project": "wellbuilt-sync",
+  "deployed": true,
+  "checks": "14 export tests and TypeScript passed",
+  "scope": "Verified owned linked job operator in separate history context; signed snapshot untouched",
+  "hostingDeployed": false
+}
