@@ -4,41 +4,53 @@ import {parseArtifactInput} from './jsaArtifactCore';
 type Row=Record<string,any>;
 export type HomeDeps={
   shift():Promise<{state:'none'|'open'|'unverifiable';periodId?:string}>;
+  activeOffShiftPeriod?():Promise<Row|null>;
   list(collection:string,shiftId:string,periodIds:string[]):Promise<Row[]>;
   artifact(id:string):Promise<Row|null>;
   job?(id:string):Promise<Row|null>;
   companyName?():Promise<string>;
 };
-/** No date-derived scope and no lifecycle mutations. Off shift always starts
- * with New JSA; historical/open standalone records remain in their own list. */
+/** No date-derived scope or lifecycle mutations. Off-shift Resume uses only
+ * the driver's current open work period, never arbitrary historical open rows. */
 export async function readJsaHomeState(deps:HomeDeps,owner:{companyId:string;driverId:string},body:unknown){
  const b=body as Row;
  if(!b||Array.isArray(b)||Object.keys(b).some(k=>!['protocolVersion','operation'].includes(k))||b.protocolVersion!==1||!['status','read'].includes(b.operation))throw Error('invalid_input');
  const shift=await deps.shift();
  if(shift.state==='unverifiable')throw Error('shift_unavailable');
- const base={protocolVersion:1,...owner,shiftState:shift.state,shiftId:shift.periodId||null};
- if(shift.state==='none')return {...base,action:'new',active:null};
- if(!shift.periodId||!/^\d{4}-\d{2}-\d{2}_\d{6}$/.test(shift.periodId))throw Error('shift_unavailable');
+ const base={protocolVersion:1,...owner,shiftState:shift.state,shiftId:shift.state==='open'?shift.periodId||null:null};
  const owned=(r:Row)=>r.companyId===owner.companyId&&r.driverId===owner.driverId;
  const checked=(rows:Row[])=>{if(rows.length>2000||rows.some(r=>!owned(r)))throw Error('scope_or_size');return rows;};
- const periods=checked(await deps.list('jsa_work_periods',shift.periodId,[])).filter(r=>r.shiftId===shift.periodId&&r.state==='open');
+ let periods:Row[];
+ if(shift.state==='none'){
+  const period=await deps.activeOffShiftPeriod?.();
+  if(!period)return {...base,action:'new',active:null};
+  if(!owned(period))throw Error('scope_or_size');
+  if(period.state!=='open'||period.shiftId!=null)return {...base,action:'new',active:null};
+  if(typeof period.id!=='string'||!/^[a-f0-9]{48}$/.test(period.id))throw Error('scope_or_size');
+  periods=[period];
+ }else{
+  if(!shift.periodId||!/^\d{4}-\d{2}-\d{2}_\d{6}$/.test(shift.periodId))throw Error('shift_unavailable');
+  periods=checked(await deps.list('jsa_work_periods',shift.periodId,[])).filter(r=>r.shiftId===shift.periodId&&r.state==='open');
+ }
+ const scopeShift=shift.state==='open'?shift.periodId!:'';
+ const scopeBase={...base,...(shift.state==='none'?{jsaPeriodId:periods[0].id}:{})};
  const ids=periods.map(r=>r.id);if(ids.length>20)throw Error('scope_or_size');
- const [requests,standalone]=await Promise.all(['jsa_governed_requests','standalone'].map(c=>deps.list(c,shift.periodId!,ids).then(checked)));
- const inScope=(r:Row)=>r.binding?.jsaPeriodId?ids.includes(r.binding.jsaPeriodId):r.binding?.associatedPeriodId===shift.periodId||r.binding?.periodId===shift.periodId;
+ const [requests,standalone]=await Promise.all(['jsa_governed_requests','standalone'].map(c=>deps.list(c,scopeShift,ids).then(checked)));
+ const inScope=(r:Row)=>r.binding?.jsaPeriodId?ids.includes(r.binding.jsaPeriodId):shift.state==='open'&&(r.binding?.associatedPeriodId===scopeShift||r.binding?.periodId===scopeShift);
  const reads=requests.filter(r=>inScope(r)&&r.state==='completed'&&['read_completed','read_and_acknowledged'].includes(r.action)&&Number.isFinite(r.completedAtMs)).sort((a,b)=>a.completedAtMs-b.completedAtMs||String(a.requestId).localeCompare(String(b.requestId)));
  if(reads.length){
   const r=reads[0],a=await deps.artifact(r.requestId);
   const parsed=a&&parseArtifactInput({requestId:r.requestId,snapshot:a.snapshot});
   if(!a||!owned(a)||a.requestId!==r.requestId||a.jobRef!==r.jobRef||a.action!==r.action||!parsed?.ok)throw Error('record_unavailable');
   const active={kind:'governed',id:r.requestId,jsaNumber:jsaNumber('JSA-'+r.requestId,r.completedAtMs,r.jsaNumber)};
-  if(b.operation!=='read')return {...base,action:'resume',active};
-  return {...base,action:'resume',active,record:await governedJsaDocument(deps,owner,r,shift.periodId,ids)};
+  if(b.operation!=='read')return {...scopeBase,action:'resume',active};
+  return {...scopeBase,action:'resume',active,record:await governedJsaDocument(deps,owner,r,scopeShift,ids)};
  }
- const open=standalone.filter(r=>r.state==='open'&&(r.jsaPeriodId?ids.includes(r.jsaPeriodId):r.shiftId===shift.periodId)).sort((a,b)=>a.signedAtMs-b.signedAtMs||String(a.id).localeCompare(String(b.id)))[0];
- if(!open)return {...base,action:'new',active:null};
+ const open=standalone.filter(r=>r.state==='open'&&(r.jsaPeriodId?ids.includes(r.jsaPeriodId):shift.state==='open'&&r.shiftId===scopeShift)).sort((a,b)=>a.signedAtMs-b.signedAtMs||String(a.id).localeCompare(String(b.id)))[0];
+ if(!open)return {...scopeBase,action:'new',active:null};
  const record=standaloneJsaDocument(open);
  const active={kind:'standalone',id:open.id,jsaNumber:record.jsaNumber};
- return {...base,action:'resume',active,...(b.operation==='read'?{record}:{})};
+ return {...scopeBase,action:'resume',active,...(b.operation==='read'?{record}:{})};
 }
 
 /** Shared saved-document projection for WB JSA and the read-only WB T viewer. */
