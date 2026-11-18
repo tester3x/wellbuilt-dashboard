@@ -742,5 +742,14 @@ for (const [label, world, expectOk] of MATRIX) {
   }
 }
 
+{
+  const invoice={exists:true,companyId:'co1',driverId:'drv1',wellName:'Well',operator:' Verified operator '};
+  const resolved=decideInvoiceJobFields({expectedCompanyId:'co1',expectedDriverId:'drv1',invoice});
+  const view=resolved.ok?applyJobDisplayFields({requestId:RID,state:'pending',intent:'read',jobRef:'job',groupRef:null},resolved.value):null;
+  check('owner-verified invoice operator survives protected get',view?.operator==='Verified operator');
+  check('foreign operator is never exposed',!decideInvoiceJobFields({expectedCompanyId:'co1',expectedDriverId:'other',invoice}).ok);
+  const tooLong=decideInvoiceJobFields({expectedCompanyId:'co1',expectedDriverId:'drv1',invoice:{...invoice,operator:'x'.repeat(301)}});
+  check('operator output is bounded without breaking old sparse job reads',tooLong.ok&&tooLong.value.operator===undefined);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
