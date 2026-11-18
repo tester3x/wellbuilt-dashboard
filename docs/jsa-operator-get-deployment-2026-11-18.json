@@ -1,0 +1,29 @@
+{
+  "function": "jsaGetReadRequest",
+  "sourceCommit": "48d54e82b02018ed381a72b7e4ac56caaf475eb2",
+  "project": "wellbuilt-sync",
+  "state": "ACTIVE",
+  "updateTime": "2026-11-18T09:35:51.680182843Z",
+  "region": "us-central1",
+  "scope": "Only protected JSA get callable; no Hosting/rules/other Functions deployment",
+  "liveSourceVerification": [
+    {
+      "file": "src/jsaReceipt/jsaReceiptCore.ts",
+      "byteMatch": true
+    },
+    {
+      "file": "src/jsaReceipt/jsaReceiptHandlers.ts",
+      "byteMatch": true
+    },
+    {
+      "file": "src/jsaReceipt/jsaReceiptCallables.ts",
+      "byteMatch": true
+    },
+    {
+      "file": "lib/jsaReceipt/jsaReceiptCore.js",
+      "byteMatch": true
+    }
+  ],
+  "checks": "Functions TypeScript build and governed receipt142/142; existing auth and rate-limiter source matched prior live archive; GET handler unchanged, approved numbering metadata delta outside GET mutation path reviewed",
+  "device": "S24 JSA117 normal handoff protected get succeeded; same pending JSA restored. User has not yet retried Submit. Signed records unchanged."
+}
