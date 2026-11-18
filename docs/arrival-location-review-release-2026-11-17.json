@@ -1,0 +1,20 @@
+{
+  "hostingSource": "7649f289c2ae805d2e6359f2b2c844fa06501ec5",
+  "hostingVerifiedAt": "2026-11-18T03:30:09.198Z",
+  "verifiedArtifactCount": 408,
+  "functions": {
+    "reviewArrivalLocations": {
+      "sourceCommit": "499ba1f099f3976b28de0e10c2370ece9b313c3d",
+      "status": "ACTIVE; scoped Firebase create succeeded"
+    },
+    "driverArrivalLocations": {
+      "sourceCommit": "d8e44eed",
+      "status": "ACTIVE; scoped Firebase update succeeded with own-job binding"
+    }
+  },
+  "tests": "5 request/review/history security tests, Functions TypeScript, Dashboard TypeScript, full certified Hosting retained regressions and all-route render checks including /location-review; 408 live files byte matched.",
+  "unauthenticatedProbes": "Both callables refused unauthenticated list requests with401 UNAUTHENTICATED.",
+  "behavior": "Driver proposals are owner/job/company bound, idempotent and pending only. Trusted dispatch/company admin reviews map point, optional corrected coordinates, type and radius; only approved requests publish company verified arrival location. Drop-off history is append-only and retains prior canonical events and captured coordinates. No real proposal, approval, rejection, JSA or ticket mutation performed by release tests.",
+  "rules": "No database/Firestore/Storage rules deployed.",
+  "separateSource": "Release began at freshly fetched approved Dashboard b65a69b7; only scoped location-review changes cherry-picked from e75fc221. Prior unpublished Fresh Water/Watchdog/JSA code remains preserved on codex/fresh-water-purchases-20261109, not wholesale deployed."
+}
