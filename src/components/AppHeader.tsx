@@ -161,6 +161,9 @@ export function AppHeader() {
               </div>
             </details>
           )}
+          {(hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany)) && (
+            <Link href="/location-review" className="rounded-lg bg-gray-700 px-2.5 py-1.5 text-xs text-yellow-400 hover:bg-gray-600">Location Review{pendingLocations > 0 ? ' (' + pendingLocations + ')' : ''}</Link>
+          )}
           <button
             onClick={async () => {
               await signOut();
@@ -183,9 +186,6 @@ export function AppHeader() {
 
         {/* Main navigation keeps its own centered row. */}
         <div className="contents">
-          {(hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany)) && (
-            <Link href="/location-review" className="px-3 py-2 text-sm text-yellow-400 hover:underline">Location Review{pendingLocations > 0 ? ' (' + pendingLocations + ')' : ''}</Link>
-          )}
           <nav aria-label="Main navigation" className="order-3 flex w-full min-w-0 flex-wrap justify-center gap-x-1 gap-y-0">
             {TABS.filter(tab => {
               if (tab.id === 'equipment') return hasEQuipmentAccess(user, userCompany);
