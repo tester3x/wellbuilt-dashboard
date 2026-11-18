@@ -23,6 +23,7 @@ export const AUTH_ROUTES = [
   '/performance/route',
   '/performance/well',
   '/photo-review',
+  '/location-review',
   '/register',
   '/join',
   '/welcome',

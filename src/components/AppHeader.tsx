@@ -11,7 +11,8 @@ import { getRoleLabel, hasCapability, hasEQuipmentAccess, hasRole, isPlatformAdm
 import { NotificationBell } from './NotificationBell';
 import { ChatIcon } from './chat/ChatIcon';
 import { ChatSidebar } from './chat/ChatSidebar';
-import { getFirebaseDatabase } from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFunctions, getFirebaseDatabase } from '@/lib/firebase';
 import { rememberedTabHref, rememberTabHref } from '@/lib/dashboardReturnState';
 
 export function AppHeader() {
@@ -19,6 +20,17 @@ export function AppHeader() {
   const pathname = usePathname();
   const router = useRouter();
   const activeTabId = getActiveTab(pathname);
+  const canReviewLocations = hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany);
+  const [pendingLocations, setPendingLocations] = useState(0);
+  useEffect(() => {
+    if (!user || !canReviewLocations) { setPendingLocations(0); return; }
+    let cancelled = false;
+    const refresh = () => { void httpsCallable(getFirebaseFunctions(), 'reviewArrivalLocations')({ action: 'list' })
+      .then(response => { if (!cancelled) setPendingLocations(((response.data as { items: unknown[] }).items || []).length); })
+      .catch(() => {}); };
+    refresh(); const timer = setInterval(refresh, 60000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [user?.uid, canReviewLocations]);
   const [pendingDriverCount, setPendingDriverCount] = useState(0);
   const [chatOpen, setChatOpen] = useState(false);
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
@@ -171,6 +183,9 @@ export function AppHeader() {
 
         {/* Main navigation keeps its own centered row. */}
         <div className="contents">
+          {(hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany)) && (
+            <Link href="/location-review" className="px-3 py-2 text-sm text-yellow-400 hover:underline">Location Review{pendingLocations > 0 ? ' (' + pendingLocations + ')' : ''}</Link>
+          )}
           <nav aria-label="Main navigation" className="order-3 flex w-full min-w-0 flex-wrap justify-center gap-x-1 gap-y-0">
             {TABS.filter(tab => {
               if (tab.id === 'equipment') return hasEQuipmentAccess(user, userCompany);

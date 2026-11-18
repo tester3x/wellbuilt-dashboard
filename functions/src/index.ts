@@ -3782,3 +3782,4 @@ export { staffWritePrimaryRouteAssignment, staffGetPrimaryRouteAssignments } fro
 export { createEmployeeInvitation, getEmployeeInvitation, requestEmployeeJoin, getEmployeeJoinStatus, listEmployeeJoinRequests, resolveEmployeeJoin } from "./security/employeeOnboarding";
 
 export {jsaGetShiftPreview} from './jsaReceipt/jsaShiftPreviewCallable';
+export { driverArrivalLocations, reviewArrivalLocations } from './security/arrivalLocations';
