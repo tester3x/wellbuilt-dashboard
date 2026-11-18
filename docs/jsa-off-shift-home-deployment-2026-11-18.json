@@ -1,0 +1,28 @@
+{
+  "sourceCommit": "801e18d76465de079c2d0f0b79d09b32257f202c",
+  "project": "wellbuilt-sync",
+  "function": "jsaHomeState",
+  "state": "ACTIVE",
+  "updateTime": "2026-11-18T16:47:06.148208351Z",
+  "scope": "Only dashboard:jsaHomeState deployed; no rules, hosting or lifecycle mutations",
+  "deployedSourceByteProof": [
+    {
+      "file": "src/jsaReceipt/jsaHomeState.ts",
+      "byteMatch": true
+    },
+    {
+      "file": "src/jsaReceipt/jsaHomeStateCallable.ts",
+      "byteMatch": true
+    },
+    {
+      "file": "src/jsaReceipt/jsaShiftSummaryStore.ts",
+      "byteMatch": true
+    },
+    {
+      "file": "lib/jsaReceipt/jsaHomeState.js",
+      "byteMatch": true
+    }
+  ],
+  "verification": "S24 118 home resumes its current open off-shift JSA after job completion; signed artifact unchanged and period remains open",
+  "tests": "49 backend regressions passed; Functions TypeScript build passed"
+}
