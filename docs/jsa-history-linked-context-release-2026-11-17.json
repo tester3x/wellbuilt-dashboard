@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "0def5a3c",
+  "function": "jsaWeeklyForms",
+  "project": "wellbuilt-sync",
+  "deployed": true,
+  "tests": "14 Jest cases plus TypeScript passed",
+  "verification": "JSA Android108 on S24 and Fold displays owned linked locations and recorded exact-fullRead additions; original artifact snapshot locations remains empty",
+  "dataMutation": false,
+  "hostingDeployed": false
+}
