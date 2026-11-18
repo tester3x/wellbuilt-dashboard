@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "00c2ee8011df26da0cd2447a9c2beb57f1dad13d",
+  "function": "jsaDisplayCorrections",
+  "project": "wellbuilt-sync",
+  "state": "ACTIVE",
+  "unauthenticatedStatus": 401,
+  "tests": "9 owner/validation/storage tests and TypeScript passed",
+  "scope": "Separate append-only supplemental confirmations, actor identity and signature fingerprint, exact account-scoped list. No original JSA storage mutations or rules changes.",
+  "hostingDeployed": false
+}

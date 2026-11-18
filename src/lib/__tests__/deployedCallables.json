@@ -1,8 +1,8 @@
 {
   "capturedAt": "2026-10-30",
   "project": "wellbuilt-sync",
-  "source": "Existing deployment inventory plus successful scoped Firebase deployment of four fresh-water callables on 2026-10-27; scoped owner signup deployment and live unauthenticated refusal probes on 2026-10-29, source ab549a426d54f55146b62eb0946b2496b9c8ce84; October30 scoped employee onboarding deployment and ACTIVE inventory; existing Watchdog timed-call endpoints independently confirmed ACTIVE, no Watchdog operations/deployments performed.; scoped arrival-location proposal/review callables successfully deployed from499ba1f0 and verified ACTIVE 2026-11-18T03:23:54.566Z.",
-  "count": 241,
+  "source": "Existing deployment inventory plus successful scoped Firebase deployment of four fresh-water callables on 2026-10-27; scoped owner signup deployment and live unauthenticated refusal probes on 2026-10-29, source ab549a426d54f55146b62eb0946b2496b9c8ce84; October30 scoped employee onboarding deployment and ACTIVE inventory; existing Watchdog timed-call endpoints independently confirmed ACTIVE, no Watchdog operations/deployments performed.; scoped arrival-location proposal/review callables successfully deployed from499ba1f0 and verified ACTIVE 2026-11-18T03:23:54.566Z.; scoped jsaDisplayCorrections deployment from00c2ee80 independently verified ACTIVE with unauthenticated401 on2026-11-18.",
+  "count": 242,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -132,6 +132,7 @@
     "jsaAcknowledgeJob",
     "jsaCompleteReadRequest",
     "jsaConsumeReadResult",
+    "jsaDisplayCorrections",
     "jsaGetReadRequest",
     "jsaManageTemplate",
     "jsaPersistGovernedArtifact",
