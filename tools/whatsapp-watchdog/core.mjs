@@ -22,26 +22,39 @@ export function header(timestamp,author,body){
 export class Queue{
  constructor(directory){this.directory=directory;mkdirSync(directory,{recursive:true});this.file=path.join(directory,'queue.json');try{this.data=JSON.parse(readFileSync(this.file,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;this.data={version:1,messages:{}};}if(this.data.version!==1)throw Error('Unsupported queue version');}
  save(){const tmp=this.file+'.tmp';writeFileSync(tmp,JSON.stringify(this.data),{mode:0o600});renameSync(tmp,this.file);}
- ingest({id,channel,chat,options={},deleted=false,senderId}){
+ ingest({id,channel,chat,options={},deleted=false,senderId,photoEvidence,photoPending=false,body,author,timestamp}){
  if(!id||!channel||typeof chat!=='string'||chat.length>2000000)throw Error('Invalid message');
- const key=hash(channel+'\0'+id),digest=hash(chat+'\0'+deleted+'\0'+JSON.stringify(options)+'\0'+(senderId||''));const previous=this.data.messages[key];
+ const key=hash(channel+'\0'+id),previous=this.data.messages[key];
+ if(previous?.photoOnly&&!deleted&&!photoEvidence)return {duplicate:true};
+ const digest=hash(chat+'\0'+deleted+'\0'+JSON.stringify(options)+'\0'+(senderId||'')+(photoEvidence?JSON.stringify([photoEvidence,photoPending]):''));
  if(previous?.digest===digest)return {duplicate:true};
- const rows=deleted?[]:parsePullChat(chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:key+':'+row.id}));
- const notices=deleted?[]:findPullChatNotices(chat);
- const post=splitChat(chat)[0];let postedAt=rows[0]?.postedAt||'';if(!postedAt&&post)try{postedAt=chatTimestamp(post.date,post.time);}catch{}
- const sameBody=previous?.body===(post?.body||chat);
+ const post=splitChat(chat)[0];
+ let postedAt='';if(post)try{postedAt=chatTimestamp(post.date,post.time);}catch{}
+ if(photoEvidence)postedAt=new Date(timestamp*1000).toISOString();
+ const rows=deleted?[]:photoEvidence?[{...photoEvidence,id:key+':photo',postedAt,dateTimeUTC:postedAt}]
+  :parsePullChat(chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:key+':'+row.id}));
+ const notices=deleted||photoEvidence?[]:findPullChatNotices(chat);
+ postedAt=rows[0]?.postedAt||postedAt;
+ const sameBody=previous?.body===(photoEvidence?body:post?.body||chat);
  const recoveredClock=previous&&!previous.edited&&sameBody&&!previous.postedAt&&postedAt&&rows.length===previous.rows.length;
  if(recoveredClock)for(const row of rows){
   const old=previous.rows.find(r=>r.id===row.id),d=this.data.deliveries?.[row.id];
   if(!row.issues.length&&old?.issues.some(i=>i.includes('daylight-saving time'))&&d?.status==='review'&&!d.identity&&!d.review&&d.issues?.every(i=>i.includes('daylight-saving time')||i==='Invalid stated pull time'))delete this.data.deliveries[row.id];
  }
- this.data.messages[key]={key,id,channel,chat,digest,senderId:senderId||previous?.senderId||null,rows,notices,deleted,edited:!!previous&&(previous.edited||!sameBody||!!previous.postedAt&&previous.postedAt!==postedAt),postedAt,author:post?.author||'',body:post?.body||chat,updatedAt:new Date().toISOString()};this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
+ this.data.messages[key]={key,id,channel,chat,digest,senderId:senderId||previous?.senderId||null,rows,notices,deleted,edited:!!previous&&(previous.edited||!sameBody||!!previous.postedAt&&previous.postedAt!==postedAt),postedAt,author:photoEvidence?author:post?.author||'',body:photoEvidence?body:post?.body||chat,updatedAt:new Date().toISOString(),...(photoEvidence||previous?.photoOnly?{photoOnly:true,photoPending}: {})};
+ if(photoEvidence){
+  this.data.deliveries??={};
+  const delivery=this.data.deliveries[rows[0].id];
+  if(!delivery?.identity && (!sameBody||!delivery?.reviewDismissal))
+   this.data.deliveries[rows[0].id]=photoEvidence.photo.autoSend?{status:'retry'}:{status:'review',issues:photoEvidence.issues};
+ }
+ this.save();return {duplicate:false,rows:rows.length,notices:notices.length};
  }
  reparseChannels(channelOptions){
  let changed=false;
  for(const message of Object.values(this.data.messages)){
   const options=channelOptions[message.channel];
-  if(!options||message.deleted||message.edited||message.id.startsWith('export:'))continue;
+  if(!options||message.deleted||message.edited||message.photoOnly||message.id.startsWith('export:'))continue;
   let rows=parsePullChat(message.chat,{...options,levelNotation:'feet_inches'}).map(row=>({...row,id:message.key+':'+row.id})).map(row=>{const d=this.data.deliveries?.[row.id];return d&&(['duplicate','excluded','archived','before_activation'].includes(d.status)||(d.status==='complete'&&!d.needsReview))?message.rows.find(old=>old.id===row.id)||row:row;});
   const estimated=combinedPullTimes({...message,rows},this.data);if(estimated)rows=estimated.map(row=>{const d=this.data.deliveries?.[row.id];return d&&(['duplicate','excluded','archived','before_activation'].includes(d.status)||(d.status==='complete'&&!d.needsReview)||d.review)?message.rows.find(old=>old.id===row.id)||row:row;});
    if(JSON.stringify(rows)!==JSON.stringify(message.rows)){message.rows=rows;changed=true;}
@@ -54,7 +67,7 @@ export class Queue{
  reviewInbox(){return Object.values(this.data.messages).flatMap(post=>post.rows.filter(row=>(this.data.deliveries?.[row.id]?.status==='review'||this.data.deliveries?.[row.id]?.needsReview)).map(row=>({post:{...post,rows:[row]},row}))).sort((a,b)=>Date.parse(a.post.postedAt||a.post.updatedAt)-Date.parse(b.post.postedAt||b.post.updatedAt));}
  snapshot(){const messages=Object.values(this.data.messages);return {reviewInbox:this.reviewInbox(),messageCount:messages.length,pullCount:messages.reduce((n,m)=>n+m.rows.length,0),messages:messages.filter(m=>m.rows.length||m.notices.length||m.deleted).slice(-200).reverse()};}
  liveFeed(channels){const selected=new Set(channels),counts=new Map();return Object.values(this.data.messages).filter(m=>selected.has(m.channel)&&!m.id.startsWith('export:')).sort((a,b)=>Date.parse(b.postedAt||b.updatedAt)-Date.parse(a.postedAt||a.updatedAt)).filter(m=>{const count=counts.get(m.channel)||0;counts.set(m.channel,count+1);return count<100;});}
- export(channel){return Object.values(this.data.messages).filter(m=>m.channel===channel&&!m.deleted&&(m.rows.length||m.notices.length)).sort((a,b)=>Date.parse(a.rows[0]?.postedAt||a.updatedAt)-Date.parse(b.rows[0]?.postedAt||b.updatedAt)).map(m=>m.chat).join('\n');}
+ export(channel){return Object.values(this.data.messages).filter(m=>m.channel===channel&&!m.deleted&&!m.photoOnly&&(m.rows.length||m.notices.length)).sort((a,b)=>Date.parse(a.rows[0]?.postedAt||a.updatedAt)-Date.parse(b.rows[0]?.postedAt||b.updatedAt)).map(m=>m.chat).join('\n');}
 }
 
 export function newestReceiverMessages(messages,limit=100){const unique=new Map();for(const m of messages)unique.set(m.channel+'\0'+m.id,m);const counts=new Map();return [...unique.values()].sort((a,b)=>b.timestamp-a.timestamp).filter(m=>{const count=counts.get(m.channel)||0;counts.set(m.channel,count+1);return count<limit;});}
