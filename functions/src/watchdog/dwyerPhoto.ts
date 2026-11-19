@@ -14,6 +14,8 @@ export function dwyerPhotoObservation(body: JsonRecord, channel: JsonRecord, con
  const posts = splitChat(body.chat);
  if (posts.length!==1 || !posts[0].author) throw Error('invalid_dwyer_photo');
  const post = posts[0];
+ if (/\b(?:21[-\s]?15H?|41[-\s]?15H?)\b/i.test(post.body))
+  return {issue:'Good Shepherd identifier requires its own pad review, not a Dwyer load'};
  const postedAt = chatTimestamp(post.date,post.time);
  const review = body.review;
  if (review && (review.confirmed!==true || typeof review.reason!=='string' ||

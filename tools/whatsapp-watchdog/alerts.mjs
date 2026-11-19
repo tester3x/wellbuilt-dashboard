@@ -2,7 +2,7 @@ export class ReviewAlerts {
  constructor(queue){this.queue=queue;this.busy=false;this.error='';}
  async tick(send,groupNames={},now=Date.now()){
   const config=this.queue.data.reviewAlerts;if(this.busy||!config?.enabled||!config.groupId)return;
-  const entries=this.queue.reviewInbox(),ledger=config.notified||{},fresh=entries.filter(e=>!ledger[e.row.id]);
+  const entries=this.queue.reviewInbox().filter(e=>!e.post.photoOnly),ledger=config.notified||{},fresh=entries.filter(e=>!ledger[e.row.id]);
   if(!fresh.length)return;
   if(now-(config.lastAttemptAt||0)<60000)return;
   this.busy=true;config.lastAttemptAt=now;this.queue.save();
