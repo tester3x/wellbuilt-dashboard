@@ -77,7 +77,7 @@ into this base. Three conflicts were reconciled retaining photo intake, private
 photo mirroring and sender-ignore behavior. Unrelated application implementations
 were not copied or merged from the HP branch.
 
-Functions TypeScript build passed. All 167 Watchdog backend tests passed before
-the final report endpoint addition; rerun on the final source. Worker tests
+Functions TypeScript build passed. All 167 Watchdog backend tests passed on
+the final source, including the report endpoint export. Worker tests
 reported 79 passed, 3 optional tests skipped. Host installation, live reporting,
 failover and physical photo acceptance remain unverified.
