@@ -3783,3 +3783,4 @@ export { createEmployeeInvitation, getEmployeeInvitation, requestEmployeeJoin, g
 
 export {jsaGetShiftPreview} from './jsaReceipt/jsaShiftPreviewCallable';
 export { driverArrivalLocations, reviewArrivalLocations } from './security/arrivalLocations';
+export { driverJobExceptions, reviewJobExceptions } from './security/jobExceptions';

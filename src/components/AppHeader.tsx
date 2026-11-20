@@ -25,8 +25,11 @@ export function AppHeader() {
   useEffect(() => {
     if (!user || !canReviewLocations) { setPendingLocations(0); return; }
     let cancelled = false;
-    const refresh = () => { void httpsCallable(getFirebaseFunctions(), 'reviewArrivalLocations')({ action: 'list' })
-      .then(response => { if (!cancelled) setPendingLocations(((response.data as { items: unknown[] }).items || []).length); })
+    const refresh = () => { void Promise.all([
+      httpsCallable(getFirebaseFunctions(), 'reviewArrivalLocations')({ action: 'list' }),
+      httpsCallable(getFirebaseFunctions(), 'reviewJobExceptions')({ action: 'list' }),
+    ])
+      .then(responses => { if (!cancelled) setPendingLocations(responses.reduce((total, response) => total + ((response.data as { items: unknown[] }).items || []).length, 0)); })
       .catch(() => {}); };
     refresh(); const timer = setInterval(refresh, 60000);
     return () => { cancelled = true; clearInterval(timer); };

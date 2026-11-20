@@ -116,6 +116,7 @@ if (process.env.NEXT_PUBLIC_WATCHDOG_REMOTE_REVIEW !== 'disabled') {
 
 // 5. Mechanical Guardrail Tests Execution
 execSync('node tools/test-header-badge-stacking.mjs', { stdio: 'inherit' });
+execSync('node tools/test-job-exception-review.cjs', { stdio: 'inherit' });
 execSync('node tools/test-dispatch-announcements.cjs', { stdio: 'inherit' });
 execSync('node tools/test-announcements-ui.mjs', { stdio: 'inherit' });
 execSync('node tools/test-whatsapp-levels-ui.mjs', { stdio: 'inherit' });
