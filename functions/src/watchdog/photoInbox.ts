@@ -64,6 +64,7 @@ export const syncWatchdogPhotoInboxV2 = https.onRequest({region: 'us-central1', 
       tx.set(ref, {companyId, messageHash, channel: body.channel, messageId: body.messageId,
         imageDigest: body.imageDigest, mimeType: body.mimeType, bytes: body.bytes,
         objectPath, caption: body.caption, postedAt: body.postedAt, rows: body.rows,
+        sourceEdited:previous?.sourceEdited===true||body.edited===true||!!previous&&(previous.caption!==body.caption||previous.postedAt!==body.postedAt),
         ...(typeof body.chat==='string'&&body.chat.length<=6000?{chat:body.chat}:{}),
         ...(typeof body.senderId==='string'&&/^\d{5,25}@(lid|c\.us)$/.test(body.senderId)?{senderId:body.senderId}:{}),
         updatedAt: Date.now(), createdAt: previous?.createdAt ?? Date.now()}, {merge: true});

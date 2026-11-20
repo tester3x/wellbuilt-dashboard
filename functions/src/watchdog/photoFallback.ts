@@ -59,6 +59,8 @@ export const processWatchdogPhotoFallback=onDocumentWritten({document:'watchdog_
   read:(bytes,pass)=>readCloudDwyerGauge(bytes,item.mimeType,pass),
   save:async result=>{await job.set({...result,updatedAt:Date.now()},{merge:true});await imageCache.set({...result,updatedAt:Date.now()},{merge:true});},
   deliver:async bottom=>{
+   const latest=(await event.data!.after.ref.get()).data();
+   if(!latest||latest.sourceEdited||latest.imageDigest!==item.imageDigest||latest.caption!==item.caption||latest.postedAt!==item.postedAt)throw Error('photo_changed_during_inference');
    const chat=typeof item.chat==='string'?item.chat:item.caption;
    const result=await signedIntake('ingestWatchdogPullV2',{chatId:item.channel,messageId:item.messageId,chat,rowIndex:0,...(item.senderId?{senderId:item.senderId}:{}),dwyerPhoto:{imageDigest:item.imageDigest,tagVerified:true,bottomFeet:bottom}});
    // No reviewed barrels/top override: existing calibration, haul evidence,

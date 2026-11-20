@@ -19,6 +19,7 @@ export function sourcePhotoChat(item:PhotoItem){
 }
 export function fallbackEligibility(item:PhotoItem,policy:any){
  if(policy?.enabled!==true||!Number.isFinite(policy.enabledAfterMs)||Date.parse(item.postedAt)<policy.enabledAfterMs)return 'not_armed';
+ if(item.sourceEdited===true)return 'edited_source';
  if(item.photoReady!==true||!/^([a-f0-9]{64})$/.test(item.imageDigest)||!['image/jpeg','image/png','image/webp'].includes(item.mimeType)||!Number.isInteger(item.bytes)||item.bytes<1||item.bytes>12*1024*1024)return 'invalid_photo';
  if(!Array.isArray(item.rows)||item.rows.length!==1)return 'ambiguous_rows';
  const row=item.rows[0],photo=row.photo;

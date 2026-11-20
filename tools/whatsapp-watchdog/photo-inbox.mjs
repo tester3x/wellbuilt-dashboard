@@ -59,7 +59,7 @@ export class PhotoInbox {
             if (media.data.length > 16 * 1024 * 1024) throw Error('Photo exceeds inbox limit');
             const bytes = Buffer.from(media.data, 'base64');
             snapshot = {channel: post.channel, messageId: post.id, postedAt: post.postedAt || post.updatedAt,
-              caption: post.body || post.chat || '', chat:post.chat,
+              caption: post.body || post.chat || '', chat:post.chat,edited:!!post.edited,
               ...(post.senderId?{senderId:post.senderId}:{}),rows: post.rows, mimeType: media.mimetype,
               bytes: bytes.length, imageDigest: createHash('sha256').update(bytes).digest('hex')};
             const prepared = await this.transport.request('syncWatchdogPhotoInboxV2', snapshot);
