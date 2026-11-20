@@ -26,7 +26,7 @@ export function validatePhotoSnapshot(body: any) {
   return messageHash;
 }
 
-async function matchingReceipts(messageHash: string) {
+export async function matchingPhotoReceipts(messageHash: string) {
   const [deliveries, reservations] = await Promise.all([
     admin.firestore().collection('watchdog_v2_deliveries').where('messageHash', '==', messageHash).get(),
     admin.firestore().collection('watchdog_message_deliveries').where('messageHash', '==', messageHash).get(),
@@ -58,22 +58,27 @@ export const syncWatchdogPhotoInboxV2 = https.onRequest({region: 'us-central1', 
     if (!policy?.enabled || !policy.channels?.[body.channel]) throw Error('channel_not_allowed');
     const ref = admin.firestore().doc(collection + '/' + messageHash);
     const objectPath = 'watchdog-review-photos/' + companyId + '/' + messageHash + '/' + body.imageDigest;
-    await admin.firestore().runTransaction(async tx => {
+    const prior=await admin.firestore().runTransaction(async tx => {
       const previous = (await tx.get(ref)).data();
       if (previous && (previous.messageId !== body.messageId || previous.channel !== body.channel || previous.imageDigest !== body.imageDigest)) throw Error('photo_identity_conflict');
       tx.set(ref, {companyId, messageHash, channel: body.channel, messageId: body.messageId,
         imageDigest: body.imageDigest, mimeType: body.mimeType, bytes: body.bytes,
         objectPath, caption: body.caption, postedAt: body.postedAt, rows: body.rows,
+        ...(typeof body.chat==='string'&&body.chat.length<=6000?{chat:body.chat}:{}),
+        ...(typeof body.senderId==='string'&&/^\d{5,25}@(lid|c\.us)$/.test(body.senderId)?{senderId:body.senderId}:{}),
         updatedAt: Date.now(), createdAt: previous?.createdAt ?? Date.now()}, {merge: true});
+      return previous;
     });
     const file = admin.storage().bucket().file(objectPath);
     if (body.complete === true) {
       const [metadata] = await file.getMetadata();
       if (Number(metadata.size) !== body.bytes || metadata.contentType !== body.mimeType) throw Error('photo_upload_mismatch');
-      const [contents] = await file.download({validation: 'crc32c'});
-      if (createHash('sha256').update(contents).digest('hex') !== body.imageDigest) throw Error('photo_digest_mismatch');
-      await ref.update({photoReady: true});
-      res.json({ok: true, messageHash, ...await matchingReceipts(messageHash)});
+      if(!prior?.photoReady||prior.photoGeneration!==metadata.generation){
+        const [contents] = await file.download({validation: 'crc32c'});
+        if (createHash('sha256').update(contents).digest('hex') !== body.imageDigest) throw Error('photo_digest_mismatch');
+        await ref.update({photoReady: true,photoGeneration:metadata.generation});
+      }
+      res.json({ok: true, messageHash, ...await matchingPhotoReceipts(messageHash)});
       return;
     }
     const [uploadUrl] = await file.getSignedUrl({version: 'v4', action: 'write', expires: Date.now() + 10 * 60 * 1000, contentType: body.mimeType,
@@ -91,7 +96,7 @@ export const listWatchdogPhotoInbox = https.onCall({region: 'us-central1', timeo
     const item = doc.data();
     let photoUrl: string | null = null;
     if (item.photoReady) [photoUrl] = await admin.storage().bucket().file(item.objectPath).getSignedUrl({version: 'v4', action: 'read', expires: Date.now() + 10 * 60 * 1000});
-    return {id: doc.id, ...item, photoUrl, ...await matchingReceipts(item.messageHash)};
+    return {id: doc.id, ...item, photoUrl, ...await matchingPhotoReceipts(item.messageHash)};
   }));
   return {rows, truncated: snapshot.size === 50};
 });

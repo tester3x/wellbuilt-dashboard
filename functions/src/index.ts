@@ -3760,6 +3760,7 @@ export { staffWriteWaterOrder } from './security/staffWriteWaterOrder';
 
 export {syncWatchdogReviewV2,listWatchdogReviews,decideWatchdogReview,resolveWatchdogRejectedReview} from './watchdog/remoteReview';
 export {syncWatchdogPhotoInboxV2,listWatchdogPhotoInbox} from './watchdog/photoInbox';
+export {processWatchdogPhotoFallback} from './watchdog/photoFallback';
 export {reportWatchdogWorkerV2,claimWatchdogMessageV2,listWatchdogWorkerReports} from './watchdog/workerCoordination';
 export {getWatchdogAgentHealth,requestWatchdogRecovery,syncWatchdogAgentV2} from './watchdog/remoteAgent';
 export {staffGetDispatchDriverSignals} from './security/dispatchDriverSignals';
