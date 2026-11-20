@@ -37,3 +37,19 @@ server endpoints. No app UI/native code changed in this server release, so an
 APK rebuild would not contain the new authority rule. Device end-to-end testing
 remains distinct from the simulated-clock tests. No current real job was closed
 or signed by this change, and no historical period was manually repaired.
+
+## Deployment
+
+Source c2511cba0ec02dbf462f53737b776902281ce772 was committed, pushed,
+freshly fetched and built clean before scoped deployment. Independently verified
+ACTIVE after deployment: jsaFinalizeShiftContext, jsaResolveJobShiftEvidence,
+jsaRegisterJobShiftReadRequest, jsaAcknowledgeJobShift,
+jsaRecordJobShiftReadCoverage, jsaHomeState and jsaStandalone. All seven report
+Node22 and Firebase source hash eea6a2e536306dc28d2430d385f92ea6c8d5d844.
+No Hosting, rules, HOS/shift functions or unrelated Functions were deployed.
+
+Tickets414 and JSA120 were read back from S24 using ADB; no install or UI action
+was necessary for the server release. Real device shift transitions and the
+long-duration observation remain to be tested. No device end-to-end pass is
+claimed from the simulated-clock or store tests. The change is prospective;
+an earlier already-attached period was not manually unlinked or rewritten.
