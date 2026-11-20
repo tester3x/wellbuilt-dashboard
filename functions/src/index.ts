@@ -3639,6 +3639,7 @@ export {
   adminGetWellPerformance,
   dismissDispatch,
   staffWriteDispatch,
+  staffExternalAssignmentDelivery,
   createDriverDispatchIfAbsent,
   acceptDriverDispatch,
   resolveExecutionBinding,

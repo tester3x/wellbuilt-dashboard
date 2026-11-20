@@ -54,6 +54,7 @@ import { adminGetDashboardCatalog, adminGetDemoDriverRoster, adminGetWellPool, c
 import { canViewGovernedWellPool, docBelongsToTenant, viewedCompanyId as resolveViewedCompanyId } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { LoadTransferPanel } from '@/components/LoadTransferPanel';
+import { ExternalAssignmentDeliveryPanel } from '@/components/ExternalAssignmentDeliveryPanel';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -2945,7 +2946,15 @@ function DispatchPageInner() {
           })}
         </nav>
 
-        {workspaceTab === 'jobs' && <LoadTransferPanel companyId={viewedCompanyId || null} />}
+        {workspaceTab === 'jobs' && <>
+          <ExternalAssignmentDeliveryPanel
+            canManage={canCreateDispatch && hasCapability(user, 'manageDrivers')}
+            jobs={dispatches
+              .filter(job => Boolean(job.id) && ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused'].includes(job.status))
+              .map(job => ({ id: job.id as string, wellName: job.wellName, driverName: job.driverName, status: job.status }))}
+          />
+          <LoadTransferPanel companyId={viewedCompanyId || null} />
+        </>}
 
         <div className={`dispatch-workspace${queueDetached ? ' is-queue-detached' : ''}${jobsDetached ? ' is-jobs-detached' : ''}`}>
 

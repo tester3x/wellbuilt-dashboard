@@ -42,6 +42,7 @@ export {
 } from './adminDashboardCatalog';
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
+export { staffExternalAssignmentDelivery } from './externalAssignmentDeliveryCallable';
 export { createDriverDispatchIfAbsent } from './createDriverDispatchCallable';
 export { acceptDriverDispatch } from './acceptDriverDispatchCallable';
 export { resolveExecutionBinding } from './resolveExecutionBindingCallable';
