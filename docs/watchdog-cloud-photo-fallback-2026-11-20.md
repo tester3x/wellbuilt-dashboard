@@ -44,8 +44,56 @@ https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/
 https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/control-generated-output
 
 Read-only live evaluation used the two privately held originals, with no intake
-calls. Both model passes agreed on each image, but one result disagreed with the
-earlier human-entered value. That ground-truth discrepancy requires verification;
-it is not a passed accuracy test. Auto delivery must remain off until resolved.
-Private images, outputs and receipts stay outside Git. No existing receipt was
-changed during this evaluation.
+calls. Both independent passes agreed on each image. One result disagreed with
+the earlier manually entered value; the owner subsequently confirmed the cloud
+reading. Both fixtures now match confirmed readings. The existing affected
+receipt was separately corrected through the canonical edit pipeline and its
+message ledger reconciled after completion; no replacement load was submitted.
+Private images, readings, correction audit and receipts stay outside Git.
+
+A deployed-runtime test cloned one verified private original into an explicitly
+synthetic inbox item with allowDelivery false. The function's own ADC identity,
+Storage digest check and both model reads succeeded. Both results matched the
+confirmed fixture. No message delivery or reservation was created. The synthetic
+inbox item, job and Storage object were removed after verification; the actual
+inference cache and budget count remain as evidence of model work performed.
+
+Edited source snapshots and any non-OCR hold (including duplicate warnings)
+remain review. Source identity is checked again immediately before intake.
+All 172 Watchdog backend tests passed before the final duplicate-hold assertion;
+the final focused fallback suite passed 19 tests. The worker default suite passed
+82 tests with three optional fixtures skipped; seven focused worker tests passed.
+
+Both phones were checked first: JSA120 and Tickets414. The fourteen-hour JSA rule
+remains deployed server-side and requires no APK for this change. No phone app,
+open job, shift or JSA signature was changed during fallback work.
+
+## Deployed and activated
+
+Final trigger source: f0d6de53259a2e39a246ebb21a43a62d8db7ce74. Independently
+verified ACTIVE, Node22, Firebase hash 39e03917b3351433cc220f1e6e05eef80daeb23a.
+The inbox sync endpoint was updated from d9da3984; listWatchdogPhotoInbox from
+77e6eb4e. Only these three Functions were deployed; no rules, Hosting, unrelated
+Functions, APK or phone install was performed.
+
+Following confirmed-original and deployed-runtime tests, cloudPhotoFallback was
+armed with enabled true, allowDelivery true, maxDailyPhotos 25, and a prospective
+cutoff of 2026-11-20T16:19:23.000Z. Existing configuration fields were preserved
+with an update-time precondition. No historical messages were requeued. Next
+real-photo automatic delivery remains a separate acceptance check.
+
+ROG remains on a5ec8306 with nine healthy capture channels. The unresolved-only
+upload and cloud-receipt reconciliation worker patch is NOT installed yet: the
+laptop is on the phone hotspot and cannot reach the ROG's home LAN. Current ROG
+mirroring already allows the cloud fallback to run, but successful local photos
+will continue uploading until that runtime patch is installed. Its local review
+count may also retain already handled photos until receipt reconciliation lands.
+
+Prepared runtime bundle (outside Git):
+watchdog-fallback-d9da3984eb92d0b329b666aeb266e3ec75edde98.zip.
+The prepared runtime source is d9da3984eb92d0b329b666aeb266e3ec75edde98,
+and its ZIP SHA256
+is b13bfc3e66d2dd056360a9dc0b0cc71c887bd776db57efd84174cacb3fbd51eb.
+Preserve the ROG queue/session, deploy in its existing LocalAppData runtime
+layout, verify the manifest/full source, and repeat health/receipt checks before
+calling the bandwidth reduction installed. This is a pending home-network step.
