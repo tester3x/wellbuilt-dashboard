@@ -35,18 +35,7 @@ New-Item -ItemType Directory -Path $data | Out-Null
 @{enabled=$false;enabledAt=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()} | ConvertTo-Json | Set-Content (Join-Path $data 'transport.json') -Encoding ascii
 @{workerId=$WorkerId;sourceCommit=$SourceCommit} | ConvertTo-Json | Set-Content (Join-Path $data 'worker.json') -Encoding ascii
 $launcher=Join-Path $data 'start-runtime.ps1'
-$body=@'
-$ErrorActionPreference='Stop'
-$env:WBC_WATCHDOG_DATA=Split-Path $PSCommandPath
-$env:WBC_CHROME_PATH=Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
-$env:PUPPETEER_SKIP_DOWNLOAD='true'
-$runtime=Get-Content -LiteralPath (Join-Path $env:WBC_WATCHDOG_DATA 'runtime-path.txt') -Raw
-$runtime=$runtime.Trim()
-Set-Location (Join-Path $runtime 'tools\whatsapp-watchdog')
-& (Join-Path $env:ProgramFiles 'nodejs\node.exe') server.mjs 1>> (Join-Path $env:WBC_WATCHDOG_DATA 'server.stdout.log') 2>> (Join-Path $env:WBC_WATCHDOG_DATA 'server.stderr.log')
-exit $LASTEXITCODE
-'@
-$body | Set-Content -LiteralPath $launcher -Encoding utf8
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'start-fresh-runtime.ps1') -Destination $launcher
 $runtime | Set-Content -LiteralPath (Join-Path $data 'runtime-path.txt') -Encoding utf8
 $action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File "'+$launcher+'"') -WorkingDirectory $data
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().Name
