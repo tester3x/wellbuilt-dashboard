@@ -13,6 +13,7 @@ function fixture(extra:Partial<FallbackDeps>={}){
 test('only locally unreadable, verified Dwyer photos are eligible',()=>{
  expect(fallbackEligibility(item,policy)).toBeNull();
  expect(fallbackEligibility({...item,sourceEdited:true},policy)).toBe('edited_source');
+ expect(fallbackEligibility({...item,rows:[{...item.rows[0],issues:['Possible duplicate Dwyer report in this group']}]},policy)).toBe('other_review_required');
  expect(fallbackEligibility(item,{...policy,enabled:false})).toBe('not_armed');
  expect(fallbackEligibility(item,{...policy,enabledAfterMs:Date.parse(item.postedAt)+1})).toBe('not_armed');
  expect(fallbackEligibility({...item,rows:[{...item.rows[0],bottomLevelFeet:5.9}]},policy)).toBe('local_read_available');

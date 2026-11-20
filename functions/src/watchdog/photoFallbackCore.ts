@@ -25,6 +25,8 @@ export function fallbackEligibility(item:PhotoItem,policy:any){
  const row=item.rows[0],photo=row.photo;
  if(row.wellName!=='Dwyer'||!photo||photo.tagVerified!==true||photo.reviewOnly===true||photo.canSend!==true)return 'not_verified_dwyer';
  if(row.bottomLevelFeet!==null||photo.observedBottom!=null||photo.autoSend===true)return 'local_read_available';
+ const readableIssues=new Set(['Compare the photo with any separate text report for this haul','WTR 3 (LT-5103) bottom level needs verification']);
+ if(row.issues!==undefined&&(!Array.isArray(row.issues)||row.issues.some((issue:unknown)=>!readableIssues.has(String(issue)))))return 'other_review_required';
  try{const chat=sourcePhotoChat(item);if(/\b(?:21[-\s]?15H?|41[-\s]?15H?|good\s+shepherd)\b/i.test(chat))return 'other_pad';}catch{return 'missing_original_chat';}
  return null;
 }
