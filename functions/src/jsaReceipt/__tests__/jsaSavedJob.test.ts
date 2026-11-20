@@ -6,6 +6,12 @@ const read={...scope,requestId:id,jobRef:'first-job',state:'completed',action:'r
 const ack={...scope,jobRef:'job',method:'acknowledged',recordedAtMs:200,periodId:'old-shift'};
 function deps(extra:Partial<SavedJobDeps>={}):SavedJobDeps{return {invoice:async jobRef=>({...scope,wellName:jobRef==='first-job'?'Original well':'Current well'}),list:async c=>c==='jsa_governed_requests'?[read]:c==='jsa_job_acknowledgments'?[ack]:[],artifact:async()=>({...read,snapshot,receiptHandle:'private',actorUidHash:'private'}),...extra};}
 const body={protocolVersion:1,jobRef:'job'};
+
+test('summary metadata returns exact work period independently of per-job display number',async()=>{
+ const period='a'.repeat(48),r={...read,binding:{...read.binding,jsaPeriodId:period}};
+ const out=await readSavedJobJsa(deps({request:async()=>r,list:async c=>c==='jsa_job_acknowledgments'?[{...ack,fullReadId:id,jsaNumber:'JSA-OTHER-DISPLAY'}]:[],artifact:async()=>({...r,snapshot})}),auth,body);
+ expect(out.jsaPeriodId).toBe(period);expect(out.fullRead?.requestId).toBe(id);
+});
 test('legacy acknowledgement opens the same-shift earlier full read without current-shift checks',async()=>{
  const out=await readSavedJobJsa(deps(),auth,body);expect(out.acknowledgement?.method).toBe('acknowledged');expect(out.fullRead?.requestId).toBe(id);expect(out.fullRead?.snapshot.notes).toBe('Saved note');expect(JSON.stringify(out)).not.toContain('private');
 });

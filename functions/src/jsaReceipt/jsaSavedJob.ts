@@ -35,7 +35,7 @@ export async function readSavedJobJsa(deps:SavedJobDeps,auth:{uid?:string|null;c
     :linked?completed.find(r=>r.requestId===linked.fullReadId&&r.completedAtMs<=linked.recordedAtMs):direct;
   const acknowledgement=ack?{recordedAt:new Date(ack.recordedAtMs).toISOString(),method:'acknowledged'}:null;
   const base={coveredJobs:[] as Row[],jsaNumber:read?jsaNumber(ack?.jsaNumber?.startsWith('JSA-')?ack.jsaNumber:'JSA-'+String(read.requestId),ack?.jsaNumber&&ack.jsaNumber!=='JSA-'+String(read.requestId)?ack.recordedAtMs:read.completedAtMs,ack?.jsaNumber||read.jsaNumber):null,protocolVersion:1,jobRef:b.jobRef,companyId:p.companyId,driverId:p.driverId,wellName:String(invoice.wellName||''),acknowledgement};
-  if(!read)return {...base,fullRead:null};
+  if(!read)return {...base,jsaPeriodId:null,fullRead:null};
   const artifact=await deps.artifact(read.requestId);
   if(!artifact||!owned(artifact)||artifact.requestId!==read.requestId||artifact.jobRef!==read.jobRef||artifact.action!==read.action)return {...base,fullRead:null};
   // Re-parse and allowlist signed content; never return receipt handles, tokens or actor metadata.
@@ -57,5 +57,5 @@ export async function readSavedJobJsa(deps:SavedJobDeps,auth:{uid?:string|null;c
   for(const stop of stops)if(stop.fullReadId===read.requestId&&['acknowledged','scope_read'].includes(stop.method)
     && Number.isFinite(stop.recordedAtMs)&&stop.recordedAtMs>=read.completedAtMs&&stop.job)
     add(stop.job,stop.jobRef,stop.recordedAtMs);
-  return {...base,coveredJobs,fullRead:{requestId:read.requestId,jobRef:read.jobRef,completedAt:new Date(read.completedAtMs).toISOString(),snapshot:snapshot.value.snapshot}};
+  return {...base,jsaPeriodId:read.binding?.jsaPeriodId||null,coveredJobs,fullRead:{requestId:read.requestId,jobRef:read.jobRef,completedAt:new Date(read.completedAtMs).toISOString(),snapshot:snapshot.value.snapshot}};
 }
