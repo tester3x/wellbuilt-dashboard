@@ -48,7 +48,7 @@ exit $LASTEXITCODE
 '@
 $body | Set-Content -LiteralPath $launcher -Encoding utf8
 $runtime | Set-Content -LiteralPath (Join-Path $data 'runtime-path.txt') -Encoding utf8
-$action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -File "'+$launcher+'"') -WorkingDirectory $data
+$action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File "'+$launcher+'"') -WorkingDirectory $data
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 $trigger=New-ScheduledTaskTrigger -AtLogOn -User $user
