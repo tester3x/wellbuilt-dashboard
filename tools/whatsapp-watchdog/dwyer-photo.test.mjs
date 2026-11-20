@@ -119,6 +119,11 @@ test('Dwyer uses the WTR 3 decimal reading and all four equalizing tanks', () =>
 });
 
 test('uncertain identification, quantity, and limits do not supply measurements', () => {
+  const otherPad = photoEvidence({body:'Another pad',gauge});
+  assert.equal(otherPad.wellName,'Well needs review');
+  assert.ok(otherPad.issues.some(issue=>issue.startsWith('Confirm the well')));
+  assert.equal(otherPad.bottomLevelFeet,null);
+  assert.equal(photoEvidence({body:'',gauge}).wellName,'Dwyer');
   const ambiguous = photoEvidence({body:'Not Dwyer\nHauled 140 bbl'});
   assert.equal(ambiguous.wellName,'Well needs review');
   assert.equal(ambiguous.bblsTaken,null);
@@ -175,7 +180,7 @@ test('eligible photo sends through signed intake and polls the canonical receipt
   const queue=new Queue(directory);
   const intake=new DwyerPhotoIntake(queue,async()=>gauge);
   const message={id:'auto',channel:'test-tallgrass',timestamp:Math.ceil(Date.now()/1000),
-    body:'Bottom',author:'Fixture driver'};
+    body:'Dwyer',author:'Fixture driver'};
   await intake.receive(message,()=>media);
   assert.equal(queue.reviewInbox().length,0);
   const transport=new Transport(queue);
@@ -198,7 +203,7 @@ test('eligible photo sends through signed intake and polls the canonical receipt
 test('private Tallgrass crop reads 6.4 ft', {skip:!process.env.WBC_DWYER_OCR_FIXTURE}, async () => {
   const result = await readDwyerGauge(readFileSync(process.env.WBC_DWYER_OCR_FIXTURE));
   assert.deepEqual(result,gauge);
-  const row = photoEvidence({body:'Hauled 140 barrels',gauge:result});
+  const row = photoEvidence({body:'Dwyer\nHauled 140 barrels',gauge:result});
   assert.equal(row.tankLevelFeet.toFixed(2),'7.77');
 });
 
@@ -239,7 +244,7 @@ test('four private photo framings reach the test queue once per run', {skip:!pro
     const intake=new DwyerPhotoIntake(queue);
     const messages=fixtures.map((fixture,index)=>({
       id:'isolated-'+index,channel:testChannel,timestamp:Date.parse(fixture.postedAt)/1000,
-      body:'Bottom',author:'Fixture driver',
+      body:'Dwyer',author:'Fixture driver',
     }));
     for (const [index,message] of messages.entries()) {
       const image=readFileSync(fixtures[index].path);
@@ -301,7 +306,7 @@ test('recover the two faint WTR 3 readings and send only the first post for each
   const starts=[firstAt,Date.parse('2026-11-09T14:20:04Z')/1000];
   const channel='tallgrass-isolated-test';
   for (const [index,timestamp] of starts.entries()) {
-    const post={channel,timestamp,body:'Bottom',author:'Fixture driver',senderId:'fixture'};
+    const post={channel,timestamp,body:'Dwyer',author:'Fixture driver',senderId:'fixture'};
     await capture.receive({...post,id:'original-'+index},()=>mediaFor(index));
     await capture.receive({...post,id:'repeat-'+index,timestamp:timestamp+3},()=>mediaFor(index));
   }

@@ -317,7 +317,7 @@ export function photoEvidence({body,gauge,imageDigest,bank=dwyerBank}) {
     photo:{imageDigest,tagVerified:false,observedBottom:null,estimatedTop:null,confirmedBarrels:null,
       standardBarrels:null,activeTanks:2,equalizedTanks:true,reviewOnly:true,autoSend:false,canSend:false},
   };
-  const identified = /^\s*dwyer(?:\s*[-:]|\s*$|\s+(?:hauled|pulled|took)\b)/im.test(body) || gauge?.tagVerified === true;
+  const identified = /^\s*dwyer(?:\s*[-:]|\s*$|\s+(?:hauled|pulled|took)\b)/im.test(body) || (!body.trim() && gauge?.tagVerified === true);
   const issues = ['Compare the photo with any separate text report for this haul'];
   if (!identified) issues.push('Confirm the well. The caption and gauge tags did not identify Dwyer');
   const bottom = identified ? gauge?.bottomFeet ?? null : null;
