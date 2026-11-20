@@ -3,13 +3,20 @@ const owner={companyId:'c',driverId:'d'},shiftId='2026-10-19_080000',period='a'.
 const snapshot={prepared:{trained:true},locationAcks:{},locations:['Well'],stepsAcknowledged:true,stepAcks:{one:true},ppeSelected:{gloves:true},ppeOtherItems:[],notes:'signed note',pusher:'',otherInfo:'',printedName:'Driver',signature:{mimeType:'image/png',data:Buffer.from([137,80,78,71,13,10,26,10,1]).toString('base64')}};
 const request={...owner,requestId,jobRef:'job',binding:{jsaPeriodId:period},state:'completed',action:'read_and_acknowledged',completedAtMs:100};
 const rows:Record<string,any[]>={jsa_work_periods:[{...owner,id:period,shiftId,state:'open'}],jsa_governed_requests:[request]};
-const deps=(extra:Partial<HomeDeps>={}):HomeDeps=>({shift:async()=>({state:'open',periodId:shiftId}),list:async c=>rows[c]||[],artifact:async()=>({...request,snapshot,receiptHandle:'secret',actorUidHash:'secret'}),...extra});
+const deps=(extra:Partial<HomeDeps>={}):HomeDeps=>({nowMs:()=>1000,shift:async()=>({state:'open',periodId:shiftId}),list:async c=>rows[c]||[],artifact:async()=>({...request,snapshot,receiptHandle:'secret',actorUidHash:'secret'}),...extra});
 const body={protocolVersion:1,operation:'status'};
 test('off shift without a current work period is New without consulting stale open rows',async()=>{
  const out=await readJsaHomeState(deps({shift:async()=>({state:'none'}),list:async()=>{throw Error('must not read history')}}),owner,body);expect(out.action).toBe('new');expect(out.active).toBeNull();
 });
 
-const offShiftPeriod={...owner,id:period,shiftId:null,state:'open'};
+const offShiftPeriod={...owner,id:period,shiftId:null,state:'open',createdAtMs:100};
+
+test('expired off-shift home offers New without changing the old signed record or period',async()=>{
+ const before=JSON.stringify(offShiftPeriod);
+ const out=await readJsaHomeState(deps({nowMs:()=>100+14*60*60*1000,shift:async()=>({state:'none'}),activeOffShiftPeriod:async()=>offShiftPeriod,list:async()=>{throw Error('expired period must not resume');}}),owner,body);
+ expect(out).toMatchObject({action:'new',active:null,offShiftWindowExpired:true});
+ expect(JSON.stringify(offShiftPeriod)).toBe(before);
+});
 test('open off-shift signed read gives Resume without creating a shift or changing its signature',async()=>{
  const d=deps({shift:async()=>({state:'none'}),activeOffShiftPeriod:async()=>offShiftPeriod});
  const before=JSON.stringify(snapshot);

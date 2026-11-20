@@ -1,8 +1,10 @@
 import {jsaNumber} from './jsaNumber';
 import {decideInvoiceJobFields} from './jsaReceiptCore';
 import {parseArtifactInput} from './jsaArtifactCore';
+import {offShiftJsaExpired,OFF_SHIFT_JSA_WINDOW_MS} from './jsaWorkPeriod';
 type Row=Record<string,any>;
 export type HomeDeps={
+  nowMs?():number;
   shift():Promise<{state:'none'|'open'|'unverifiable';periodId?:string}>;
   activeOffShiftPeriod?():Promise<Row|null>;
   list(collection:string,shiftId:string,periodIds:string[]):Promise<Row[]>;
@@ -27,13 +29,16 @@ export async function readJsaHomeState(deps:HomeDeps,owner:{companyId:string;dri
   if(!owned(period))throw Error('scope_or_size');
   if(period.state!=='open'||period.shiftId!=null)return {...base,action:'new',active:null};
   if(typeof period.id!=='string'||!/^[a-f0-9]{48}$/.test(period.id))throw Error('scope_or_size');
+  if(!Number.isFinite(period.createdAtMs))throw Error('scope_or_size');
+  if(offShiftJsaExpired({shiftId:null,createdAtMs:period.createdAtMs},deps.nowMs?.()??Date.now()))
+   return {...base,action:'new',active:null,offShiftWindowExpired:true};
   periods=[period];
  }else{
   if(!shift.periodId||!/^\d{4}-\d{2}-\d{2}_\d{6}$/.test(shift.periodId))throw Error('shift_unavailable');
   periods=checked(await deps.list('jsa_work_periods',shift.periodId,[])).filter(r=>r.shiftId===shift.periodId&&r.state==='open');
  }
  const scopeShift=shift.state==='open'?shift.periodId!:'';
- const scopeBase={...base,...(shift.state==='none'?{jsaPeriodId:periods[0].id}:{})};
+ const scopeBase={...base,...(shift.state==='none'?{jsaPeriodId:periods[0].id,offShiftExpiresAtMs:periods[0].createdAtMs+OFF_SHIFT_JSA_WINDOW_MS}:{})};
  const ids=periods.map(r=>r.id);if(ids.length>20)throw Error('scope_or_size');
  const [requests,standalone]=await Promise.all(['jsa_governed_requests','standalone'].map(c=>deps.list(c,scopeShift,ids).then(checked)));
  const inScope=(r:Row)=>r.binding?.jsaPeriodId?ids.includes(r.binding.jsaPeriodId):shift.state==='open'&&(r.binding?.associatedPeriodId===scopeShift||r.binding?.periodId===scopeShift);

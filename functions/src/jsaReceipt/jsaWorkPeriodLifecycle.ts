@@ -2,7 +2,7 @@ import {onDocumentWritten} from 'firebase-functions/v2/firestore';
 import * as admin from 'firebase-admin';
 import {createHash} from 'crypto';
 import {decideResolve,shiftAuthorityPath,type ShiftAuthorityRecord} from '../security/operational/shiftAuthority';
-import type {JsaWorkPeriod} from './jsaWorkPeriod';
+import {jsaShiftClosureReason,type JsaWorkPeriod} from './jsaWorkPeriod';
 
 /** Re-read authority inside the transaction: delayed/replayed events cannot
  * finalize a newer shift. This changes JSA metadata only, never HOS. */
@@ -17,9 +17,9 @@ export const jsaFinalizeShiftContext=onDocumentWritten('driver_shift_authority/{
     const state=decideResolve((authority.data()||null) as ShiftAuthorityRecord|null,{driverId,companyId});
     const old=(await tx.get(active)).data() as JsaWorkPeriod|undefined;
     if(!old||old.companyId!==companyId||old.driverId!==driverId||old.state!=='open'||state.state==='unverifiable')return;
-    if(!old.shiftId&&state.state!=='open')return;
-    if(state.state==='open'&&state.periodId===old.shiftId)return;
-    const finalized={...old,state:'finalized',finalizedAtMs:Date.now(),finalizationReason:'shift_ended'};
+    const reason=jsaShiftClosureReason(old,state);
+    if(!reason)return;
+    const finalized={...old,state:'finalized',finalizedAtMs:Date.now(),finalizationReason:reason};
     tx.set(active,finalized);tx.set(db.doc('jsa_work_periods/'+old.id),finalized);
   });
 });

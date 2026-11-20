@@ -321,10 +321,10 @@ export const jsaAcknowledgeJob = httpsV2.onCall(OPTIONS, async (request) => {
 
 // New job-day clients use a distinct registration endpoint. Legacy shift requests
 // keep their existing records and validators; completion discovers stored scope.
-function jobDayDeps():JobDayDeps {
+function jobDayDeps(options:{rolloverExpiredOffShift?:boolean}={}):JobDayDeps {
  const db=admin.firestore();return {shift:(d,c)=>buildReceiptDeps().resolveShift(d,c),sso:buildSsoDeps(),nowMs:()=>Date.now(),
   company:async id=>(await db.collection('companies').doc(id).get()).data()||{},
-  workPeriod:(p,day)=>resolveJsaWorkPeriod(p.companyId,p.driverId,day),
+  workPeriod:(p,day)=>resolveJsaWorkPeriod(p.companyId,p.driverId,day,options),
   records:async(company,driver,day,period)=>{
    const snap=await db.collection('jsa_governed_requests').where('companyId','==',company).where('driverId','==',driver).where(period?'binding.jsaPeriodId':'binding.policyDay','==',period||day).get();
    return snap.docs.map(d=>fromStored(d.data())).filter((r):r is NonNullable<typeof r>=>!!r);
@@ -376,7 +376,7 @@ export const jsaResolveJobShiftEvidence=httpsV2.onCall(OPTIONS,async request=>{
  await limited(request.auth.uid,'jsa_job_day_evidence');
  try{
   const {jobRef}=jobDayRequest(request.data),p=jobDayPrincipal(authOf(request));const jobExists=await ownedJob(p,jobRef,true);
-  const deps=jobDayDeps(),cfg=await deps.company(p.companyId);
+  const deps=jobDayDeps({rolloverExpiredOffShift:(request.data as Record<string,unknown>).purpose!=='coverage'}),cfg=await deps.company(p.companyId);
   // An authoritative Off requirement needs no commercial JSA entitlement, but
   // it still requires a current authenticated member of the selected company.
   if((cfg.jsaMode??'off')==='off'){
