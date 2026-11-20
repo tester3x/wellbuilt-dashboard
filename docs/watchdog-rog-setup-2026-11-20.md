@@ -58,3 +58,49 @@ to prepare pairing; owner QR authentication is pending. No old queue was copied
 and no photo/load was resent. Cloud worker roles are not activated yet. Private
 source comparisons, installation logs and ACTIVE metadata are retained outside
 Git under release-artifacts/watchdog-rog.
+
+## Main handover verified
+
+Owner QR pairing succeeded. All nine HP channel IDs were verified present in the
+ROG session before copying channel options and sender-exclusion hashes. The HMAC
+secret was provisioned through encrypted SSH stdin and protected with the ROG
+user's DPAPI; no plaintext credential was written to a packet or Git. Signed
+lifecycle access returned 82 configured wells. A signed claim for one previously
+completed photo returned its original packet with recorded_once and did not call
+the intake delivery endpoint.
+
+Firebase worker coordination now enables rog-main as main; od-backup remains
+disabled. The server policy's other fields were preserved with an update-time
+precondition. ROG reports are visible under watchdog_workers/liquid-gold/hosts.
+Final readback showed Connected, paused false, nine channels, captureHealthy true
+and a six-second heartbeat age. Receiver status independently showed all nine
+poll groups, Ready transport, and no receiver/photo-inbox/review-sync errors.
+
+The HP receiver stopped responding during handover, before its pause could be
+confirmed. Its worker and remote-recovery scheduled tasks were exported,
+disabled and stopped; no localhost listener remained. Transport was disabled on
+disk. Its queue was preserved and independently read with zero pending deliveries.
+All nine selected channels had the same final successful checkpoint:
+2026-11-20T07:16:39.000Z. ROG text delivery, photo capture and photo delivery
+cutoffs use that checkpoint, covering the short handover gap while excluding
+historical traffic. No HP messages/deliveries queue or browser profile was copied.
+
+The fresh launcher was replaced with the committed supervised launcher from
+cb1f7ad9. It redirects native process streams through Start-Process rather than
+PowerShell 5 native-stderr handling, and retries after receiver exit. A deliberate
+termination of the ROG's exact Node listener was followed by automatic recovery
+with a different PID and a successful health check. Runtime JavaScript/source
+remains a5ec83064c82deeb2040269f01355778f9c9ebd4; launcher source is recorded
+separately. AC sleep was already disabled and battery settings were unchanged.
+
+A synthetic one-pixel photo verified private signed upload, checksum completion
+and repeated completion with one message identity and no WB Mobile receipt. The
+exact synthetic Storage object and inbox document were then removed; real photos
+and loads were unchanged. At final receiver inspection, ROG had no deliveries
+since the handover cutoff. No historical load was resent.
+
+ROG is the active main. HP is preserved but disabled, not an automatic backup.
+OD backup installation, two-host failover and the next real Dwyer photo's OCR /
+exactly-one-receipt acceptance remain pending. Do not call the full main/backup
+deployment or real-photo acceptance complete. Windows must remain signed in for
+the interactive scheduled task; its at-logon trigger is installed.
