@@ -1,0 +1,16 @@
+{
+  "project": "wellbuilt-sync",
+  "functionsSourceCommit": "1a935ac5a0196ba0b6635273239b5f9bb0fb8c24",
+  "hostingSourceCommit": "38da5030619e51cc621287871438c00b4a2edbe8",
+  "functions": [
+    "driverJobExceptions",
+    "reviewJobExceptions"
+  ],
+  "functionsHash": "d3b9ee154a86055015d7eed52fccd506713dd4a9",
+  "deployment": "Both endpoints ACTIVE, Node22, us-central1. Scoped two-function deploy only. Hosting deployed through certified wrapper;408 exported live artifacts byte-matched, approved checkpoint advanced normally.",
+  "policy": "Company Firestore liveDispatchSync absent=independent, true=hybrid, false=dispatch_only; malformed/missing company fails closed. Driver actions use canonical membership and owned open invoice. Dispatch/hybrid selfApprove rejects regardless of driver role. Staff review refuses driver-audience sessions, then requires company-bound trusted dispatch/manageCompany capability; same person must explicitly use staff review. Independent can explicitly selfApprove. Binding includes policy version, company, driver, mode, job, PW type, names and coordinates. Replays do not duplicate requests; changed binding cannot reuse approval. No signed JSA, invoice evidence, billing, phase or saved GPS mutations. No rule deploy.",
+  "tests": "11 actual authority and retained-arrival callable tests passed. Hosting mandatory regression suite passed after updating callable inventory from independently verified ACTIVE endpoints; no guard disabled. Unauthenticated live driver endpoint403 and staff endpoint401. Client413 reason-field verification ongoing;412 was S24-only partial.",
+  "scopeReconciliation": "Preserved full integration source at release/dashboard-pw-job-exceptions-20261119 (fcef6e17). Applied only scoped exception patch on registered home release/dashboard-pw-exception-scoped-20261119 from freshly fetched approved checkpoint7649f289. Pre-existing Watchdog, Fresh Water and JSA pending work remains preserved in original histories, not added to Hosting release.",
+  "evidenceDirectory": "C:/dev/release-artifacts/wbt-job-exceptions",
+  "recordedAtUtc": "2026-11-20T05:09:16.029428+00:00"
+}
