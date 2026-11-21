@@ -1,0 +1,18 @@
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFunctions } from './firebase';
+
+export type IndependentJobDetails = {
+  title: string; customer: string; reference: string; pickup: string; destination: string;
+  cargo: string; scheduledAt: string; notes: string;
+};
+export type IndependentJobStatus = 'unassigned' | 'assigned' | 'in_progress' | 'completed' | 'cancelled';
+export type IndependentJob = IndependentJobDetails & {
+  id: string; companyId: string; revision: number; status: IndependentJobStatus;
+  externalDriverId?: string; driverName?: string; updatedAt: string;
+};
+export async function independentDispatchJobs(payload: Record<string, unknown>) {
+  const result = await httpsCallable<Record<string, unknown>, {
+    ok: true; companyId?: string; jobs?: IndependentJob[]; job?: IndependentJob;
+  }>(getFirebaseFunctions(), 'staffIndependentDispatchJobs')(payload);
+  return result.data;
+}

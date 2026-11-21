@@ -2952,6 +2952,7 @@ function DispatchPageInner() {
         </div>}
 
         <nav aria-label="Dispatch workspace" className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-2">
+          <a href="/dispatch/independent" className="inline-flex items-center rounded px-4 py-2 text-sm font-medium text-cyan-300 hover:bg-gray-800">Independent Dispatch</a>
           <a href="/dispatch/fresh-water" className="inline-flex items-center rounded px-4 py-2 text-sm font-medium text-cyan-300 hover:bg-gray-800">Fresh Water Tanks</a>
           {([
             ['jobs', 'Jobs'],

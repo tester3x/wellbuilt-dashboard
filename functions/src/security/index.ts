@@ -43,6 +43,7 @@ export {
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { staffExternalAssignmentDelivery } from './externalAssignmentDeliveryCallable';
+export { staffIndependentDispatchJobs } from './independentDispatchJobsCallable';
 export { staffCreateExternalGuestLink, externalGuestAssignment } from './externalGuestAssignmentCallable';
 export { adminSetOutsideDriverAccess } from './externalDriverCompanyAccess';
 export { createDriverDispatchIfAbsent } from './createDriverDispatchCallable';

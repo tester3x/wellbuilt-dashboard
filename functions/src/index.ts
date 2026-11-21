@@ -3640,6 +3640,7 @@ export {
   dismissDispatch,
   staffWriteDispatch,
   staffExternalAssignmentDelivery,
+  staffIndependentDispatchJobs,
   staffCreateExternalGuestLink,
   externalGuestAssignment,
   adminSetOutsideDriverAccess,

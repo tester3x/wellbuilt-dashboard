@@ -33,9 +33,13 @@ function rosterId(name: string): string {
 export function ExternalAssignmentDeliveryPanel({
   jobs,
   canManage,
+  rosterOnly = false,
+  onRosterChange,
 }: {
   jobs: ExternalDispatchOption[];
   canManage: boolean;
+  rosterOnly?: boolean;
+  onRosterChange?: () => Promise<void>;
 }) {
   const [drivers, setDrivers] = useState<ExternalDriver[]>([]);
   const [expanded, setExpanded] = useState(false);
@@ -60,12 +64,12 @@ export function ExternalAssignmentDeliveryPanel({
     if (!canManage) return;
     const [nextDrivers, nextDeliveries] = await Promise.all([
       listExternalDrivers(),
-      listExternalDeliveries(),
+      rosterOnly ? Promise.resolve([]) : listExternalDeliveries(),
     ]);
     setDrivers(nextDrivers);
     setDeliveries(nextDeliveries);
     setExternalDriverId(current => current || nextDrivers.find(driver => driver.active)?.externalDriverId || '');
-  }, [canManage]);
+  }, [canManage, rosterOnly]);
 
   useEffect(() => {
     refresh().catch(error => setMessage(`External delivery unavailable: ${error instanceof Error ? error.message : String(error)}`));
@@ -81,6 +85,7 @@ export function ExternalAssignmentDeliveryPanel({
     try {
       await action();
       await refresh();
+      await onRosterChange?.();
       setMessage(success);
     } catch (error) {
       setMessage(`External delivery error: ${error instanceof Error ? error.message : String(error)}`);
@@ -103,7 +108,7 @@ export function ExternalAssignmentDeliveryPanel({
         <span aria-hidden="true" className="text-amber-300">{expanded ? '▾' : '▸'}</span>
       </button>
       {expanded && <div id="external-drivers-details" className="mt-3">
-      <p className="mb-2 text-xs text-amber-200">Messaging provider not configured — no SMS or WhatsApp messages are sent.</p>
+      <p className="mb-2 text-xs text-amber-200">{rosterOnly ? 'Save outside-driver contacts here, then assign them on the job below. No SMS or WhatsApp messages are sent.' : 'Messaging provider not configured — no SMS or WhatsApp messages are sent.'}</p>
 
       {message && <div className="mt-3 rounded bg-gray-900 px-3 py-2 text-sm text-gray-200">{message}</div>}
 
@@ -153,7 +158,7 @@ export function ExternalAssignmentDeliveryPanel({
           )}
         </form>
 
-        <form className="rounded border border-gray-700 p-3" onSubmit={event => {
+        {!rosterOnly && <form className="rounded border border-gray-700 p-3" onSubmit={event => {
           event.preventDefault();
           void run(async () => {
             await writeExternalDelivery({
@@ -186,7 +191,7 @@ export function ExternalAssignmentDeliveryPanel({
             className="mt-2 w-full rounded bg-blue-700 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">
             Record delivery attempt (not sent)
           </button>
-        </form>
+        </form>}
       </div>
 
       {deliveries.length > 0 && (

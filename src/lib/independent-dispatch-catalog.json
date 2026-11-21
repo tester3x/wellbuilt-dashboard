@@ -1,0 +1,11 @@
+{
+  "id": "independent-dispatch",
+  "name": "Independent Dispatch",
+  "icon": "truck-delivery",
+  "industry": "General",
+  "unit": "job",
+  "description": "Plan and track customer jobs for outside drivers without requiring water-hauling wells or tickets.",
+  "revision": 1,
+  "jobTypes": [{ "id": "dispatch-job", "label": "Dispatch Job" }],
+  "capabilities": { "dispatch": true }
+}
