@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
-import { getFirestoreDb } from '@/lib/firebase';
-import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
+import { httpsCallable } from 'firebase/functions';
+import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
+import { type CompanyConfig } from '@/lib/companySettings';
 import { independentDispatchCatalog } from '@/lib/independentDispatchCatalog';
 
 interface JobPackage {
@@ -92,8 +93,9 @@ export function PackagesCard({ company, onSave, canEdit }: Props) {
     setSaving(packageId);
     setError(null);
     try {
-      const updated = [...activePackages, packageId];
-      await updateCompanyFields(company.id, { activePackages: updated });
+      await httpsCallable(getFirebaseFunctions(), 'staffSetCompanyJobPackage')({
+        companyId: company.id, packageId, action: 'install',
+      });
       onSave();
     } catch (err) {
       console.error('Failed to install package:', err);
@@ -109,8 +111,9 @@ export function PackagesCard({ company, onSave, canEdit }: Props) {
     setSaving(packageId);
     setError(null);
     try {
-      const updated = activePackages.filter(id => id !== packageId);
-      await updateCompanyFields(company.id, { activePackages: updated });
+      await httpsCallable(getFirebaseFunctions(), 'staffSetCompanyJobPackage')({
+        companyId: company.id, packageId, action: 'remove',
+      });
       onSave();
     } catch (err) {
       console.error('Failed to remove package:', err);

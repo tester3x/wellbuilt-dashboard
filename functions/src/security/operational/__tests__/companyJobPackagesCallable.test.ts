@@ -1,0 +1,60 @@
+const records = new Map<string, any>();
+const audits: any[] = [];
+let trustedCompany = 'company-a';
+jest.mock('../../trustedStaffAuthority', () => ({
+  requireTrustedCompanyCapability: jest.fn(async (uid: string, capability: string) => {
+    if (uid !== 'staff' || capability !== 'manageCompany') throw Error('permission-denied');
+    return { uid, companyId: trustedCompany };
+  }),
+}));
+jest.mock('../../audit', () => ({ writeSecurityAudit: async (entry: any) => { audits.push(entry); } }));
+const ref = (path: string): any => ({ path, get: async () => ({ exists: records.has(path), data: () => records.get(path) }) });
+const db = {
+  collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
+  runTransaction: async (fn: any) => {
+    const writes: any[] = [];
+    const result = await fn({ get: (document: any) => document.get(),
+      update: (document: any, fields: any) => writes.push([document.path, fields]) });
+    for (const [path, fields] of writes) records.set(path, { ...records.get(path), ...fields });
+    return result;
+  },
+};
+jest.mock('firebase-admin', () => ({ firestore: () => db }));
+jest.mock('firebase-functions/v2/https', () => ({ onCall: (_: any, handler: any) => handler,
+  HttpsError: class extends Error { constructor(public code: string, message: string) { super(message); } } }));
+import { staffSetCompanyJobPackage } from '../../companyJobPackagesCallable';
+const request = (uid: string, data: any, token: any = {}) => (staffSetCompanyJobPackage as any)({ auth: { uid, token }, data });
+const install = { companyId: 'company-a', packageId: 'independent-dispatch', action: 'install' };
+beforeEach(() => {
+  records.clear(); audits.length = 0; trustedCompany = 'company-a';
+  records.set('companies/company-a', { activePackages: ['water-hauling'] });
+  records.set('companies/company-b', { activePackages: ['water-hauling'] });
+  records.set('job_packages/independent-dispatch', { id: 'independent-dispatch' });
+});
+describe('governed job package callable', () => {
+  it('installs from the server record, retries safely, and removes only that package', async () => {
+    await expect(request('staff', install)).resolves.toMatchObject({ changed: true, activePackages: ['water-hauling', 'independent-dispatch'] });
+    await expect(request('staff', install)).resolves.toMatchObject({ changed: false });
+    expect(records.get('companies/company-a').activePackages).toEqual(['water-hauling', 'independent-dispatch']);
+    await request('staff', { ...install, action: 'remove' });
+    expect(records.get('companies/company-a').activePackages).toEqual(['water-hauling']);
+    expect(audits).toHaveLength(2);
+  });
+  it('denies tenant cross-company edits and untrusted actors', async () => {
+    await expect(request('staff', { ...install, companyId: 'company-b' })).rejects.toThrow('cross_company');
+    await expect(request('viewer', install)).rejects.toThrow('permission-denied');
+    expect(records.get('companies/company-b').activePackages).toEqual(['water-hauling']);
+  });
+  it('requires claim and enabled record for a platform admin', async () => {
+    const token = { wellbuiltAdmin: true };
+    await expect(request('owner', install, token)).rejects.toThrow('no_admin_record');
+    records.set('platform_admins/owner', { enabled: true, policyVersion: 1 });
+    await expect(request('owner', install, token)).resolves.toMatchObject({ changed: true });
+  });
+  it('rejects absent catalog entries and removal of the final package', async () => {
+    records.delete('job_packages/independent-dispatch');
+    await expect(request('staff', install)).rejects.toThrow('package_not_found');
+    records.set('job_packages/water-hauling', { id: 'water-hauling' });
+    await expect(request('staff', { ...install, packageId: 'water-hauling', action: 'remove' })).rejects.toThrow('last_package');
+  });
+});
