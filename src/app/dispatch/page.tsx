@@ -55,6 +55,7 @@ import { canViewGovernedWellPool, docBelongsToTenant, viewedCompanyId as resolve
 import { AppHeader } from '@/components/AppHeader';
 import { LoadTransferPanel } from '@/components/LoadTransferPanel';
 import { ExternalAssignmentDeliveryPanel } from '@/components/ExternalAssignmentDeliveryPanel';
+import { getExternalDeliveryAccess } from '@/lib/externalAssignmentDelivery';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -315,6 +316,29 @@ function DispatchPageInner() {
   // WB owners have no company on their login. Their header selection still
   // scopes what Dispatch displays; an empty selection is the explicit all view.
   const viewedCompanyId = resolveViewedCompanyId(user?.companyId, operatingCompanyId, isPlatformAdmin(user));
+  const [independentDispatchAccess, setIndependentDispatchAccess] = useState<{ companyId: string; enabled: boolean } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!viewedCompanyId) {
+      setIndependentDispatchAccess(null);
+      return () => { cancelled = true; };
+    }
+    // The backend determines the trusted tenant and whether this is an
+    // Independent Dispatch customer or an approved outside-contractor company.
+    setIndependentDispatchAccess(null);
+    if (!user || !hasCapability(user, 'createDispatch') || !hasCapability(user, 'manageDrivers')) {
+      return () => { cancelled = true; };
+    }
+    void getExternalDeliveryAccess().then(access => {
+      if (!cancelled) setIndependentDispatchAccess({
+        companyId: viewedCompanyId,
+        enabled: access.companyId === viewedCompanyId && access.enabled,
+      });
+    }).catch(() => {
+      if (!cancelled) setIndependentDispatchAccess({ companyId: viewedCompanyId, enabled: false });
+    });
+    return () => { cancelled = true; };
+  }, [viewedCompanyId, user]);
   const router = useRouter();
   const dispatchPathname = usePathname();
 
@@ -2947,12 +2971,14 @@ function DispatchPageInner() {
         </nav>
 
         {workspaceTab === 'jobs' && <>
+          {independentDispatchAccess?.companyId === viewedCompanyId && independentDispatchAccess?.enabled === true && (
           <ExternalAssignmentDeliveryPanel
             canManage={canCreateDispatch && hasCapability(user, 'manageDrivers')}
             jobs={dispatches
               .filter(job => Boolean(job.id) && ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused'].includes(job.status))
               .map(job => ({ id: job.id as string, wellName: job.wellName, driverName: job.driverName, status: job.status }))}
           />
+          )}
           <LoadTransferPanel companyId={viewedCompanyId || null} />
         </>}
 

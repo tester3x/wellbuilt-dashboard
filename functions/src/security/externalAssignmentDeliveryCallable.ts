@@ -5,6 +5,7 @@ import {
   TRUSTED_CAPABILITY_MANAGE_DRIVERS,
 } from './trustedStaffAuthority';
 import { externalDeliveryProvider } from './externalDeliveryProvider';
+import { externalDriverAccessMode, OUTSIDE_DRIVER_ACCESS_COLLECTION } from './operational/outsideDriverAccess';
 import {
   applyExternalProviderResult,
   deliveryIdForKey,
@@ -139,6 +140,17 @@ export const staffExternalAssignmentDelivery = httpsV2.onCall(
     if (unexpected) throw new httpsV2.HttpsError('invalid-argument', `unexpected_field:${unexpected}`);
     const op = text(raw.op);
     const fs = admin.firestore();
+    // The company ID comes only from trusted staff authority. Package assignment
+    // is an operational entitlement independent of the commercial subscription tier.
+    const [companySnap, accessSnap] = await Promise.all([
+      fs.collection('companies').doc(authority.companyId).get(),
+      fs.collection(OUTSIDE_DRIVER_ACCESS_COLLECTION).doc(authority.companyId).get(),
+    ]);
+    const accessMode = externalDriverAccessMode(companySnap.data(), accessSnap.data());
+    if (op === 'getAccess') return { ok: true, enabled: accessMode !== null, mode: accessMode, companyId: authority.companyId };
+    if (!accessMode) {
+      throw new httpsV2.HttpsError('permission-denied', 'external_driver_access_inactive');
+    }
 
     if (op === 'listRoster') {
       const snap = await fs.collection('companies').doc(authority.companyId).collection(ROSTER_COLLECTION).get();

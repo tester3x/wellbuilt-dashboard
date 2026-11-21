@@ -38,6 +38,7 @@ export function ExternalAssignmentDeliveryPanel({
   canManage: boolean;
 }) {
   const [drivers, setDrivers] = useState<ExternalDriver[]>([]);
+  const [expanded, setExpanded] = useState(false);
   const [deliveries, setDeliveries] = useState<ExternalDelivery[]>([]);
   const [dispatchId, setDispatchId] = useState('');
   const [externalDriverId, setExternalDriverId] = useState('');
@@ -92,15 +93,17 @@ export function ExternalAssignmentDeliveryPanel({
 
   return (
     <section className="mb-4 rounded-lg border border-amber-600/40 bg-gray-800 p-4" aria-labelledby="external-delivery-heading">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h2 id="external-delivery-heading" className="font-semibold text-amber-300">External company drivers</h2>
-          <p className="mt-1 text-xs text-gray-400">
-            Independent assignment delivery only. This does not use WB Mobile or staff/dispatch chat.
-          </p>
-        </div>
-        <span className="rounded bg-amber-950 px-2 py-1 text-xs text-amber-200">Provider not configured · messages are not sent</span>
-      </div>
+      <button type="button" aria-expanded={expanded} aria-controls="external-drivers-details"
+        onClick={() => setExpanded(value => !value)}
+        className="w-full flex items-center justify-between gap-3 text-left">
+        <span>
+          <span id="external-delivery-heading" className="block font-semibold text-amber-300">Drivers Without WellBuilt Accounts ({drivers.length})</span>
+          <span className="text-xs text-gray-400">Outside / temporary drivers · expand to manage assignments</span>
+        </span>
+        <span aria-hidden="true" className="text-amber-300">{expanded ? '▾' : '▸'}</span>
+      </button>
+      {expanded && <div id="external-drivers-details" className="mt-3">
+      <p className="mb-2 text-xs text-amber-200">Messaging provider not configured — no SMS or WhatsApp messages are sent.</p>
 
       {message && <div className="mt-3 rounded bg-gray-900 px-3 py-2 text-sm text-gray-200">{message}</div>}
 
@@ -234,6 +237,7 @@ export function ExternalAssignmentDeliveryPanel({
           </table>
         </div>
       )}
+      </div>}
     </section>
   );
 }

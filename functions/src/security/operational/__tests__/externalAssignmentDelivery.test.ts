@@ -165,6 +165,8 @@ describe('provider boundary', () => {
     const callable = readFileSync(join(__dirname, '../../externalAssignmentDeliveryCallable.ts'), 'utf8');
     expect(callable).toMatch(/requireTrustedCompanyCapability/);
     expect(callable).toMatch(/TRUSTED_CAPABILITY_MANAGE_DRIVERS/);
+    expect(callable).toMatch(/externalDriverAccessMode\(companySnap\.data\(\), accessSnap\.data\(\)\)/);
+    expect(callable).toMatch(/external_driver_access_inactive/);
     expect(callable).toMatch(/dispatch\.companyId !== authority\.companyId/);
     expect(callable).toMatch(/externalDeliveryProvider\(\)/);
     expect(callable).not.toMatch(/staffChat|shiftDispatchChat|dispatchConversations/);

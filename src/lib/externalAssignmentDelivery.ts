@@ -33,6 +33,10 @@ async function invoke<T>(payload: Record<string, unknown>): Promise<T> {
   return result.data as T;
 }
 
+export async function getExternalDeliveryAccess(): Promise<{ enabled: boolean; mode: 'independent_dispatch' | 'temporary_contractors' | null; companyId: string }> {
+  return invoke({ op: 'getAccess' });
+}
+
 export async function listExternalDrivers(): Promise<ExternalDriver[]> {
   const result = await invoke<{ ok: true; drivers: ExternalDriver[] }>({ op: 'listRoster' });
   return result.drivers;
