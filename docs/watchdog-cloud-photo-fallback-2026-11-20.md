@@ -70,6 +70,10 @@ open job, shift or JSA signature was changed during fallback work.
 
 ## Deployed and activated
 
+The later ROG runtime installation and real-photo automatic delivery verification
+are recorded in [the November 21 health check](watchdog-rog-health-2026-11-21.md).
+The pending-runtime notes below describe the November 20 checkpoint.
+
 Final trigger source: f0d6de53259a2e39a246ebb21a43a62d8db7ce74. Independently
 verified ACTIVE, Node22, Firebase hash 39e03917b3351433cc220f1e6e05eef80daeb23a.
 The inbox sync endpoint was updated from d9da3984; listWatchdogPhotoInbox from
