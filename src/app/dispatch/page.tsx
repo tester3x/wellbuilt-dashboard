@@ -56,6 +56,7 @@ import { AppHeader } from '@/components/AppHeader';
 import { LoadTransferPanel } from '@/components/LoadTransferPanel';
 import { ExternalAssignmentDeliveryPanel } from '@/components/ExternalAssignmentDeliveryPanel';
 import { getExternalDeliveryAccess } from '@/lib/externalAssignmentDelivery';
+import { hasIndependentDispatchPackage } from '@/lib/independentDispatchPackage';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -316,6 +317,7 @@ function DispatchPageInner() {
   // WB owners have no company on their login. Their header selection still
   // scopes what Dispatch displays; an empty selection is the explicit all view.
   const viewedCompanyId = resolveViewedCompanyId(user?.companyId, operatingCompanyId, isPlatformAdmin(user));
+  const [independentJobPackage, setIndependentJobPackage] = useState<{ companyId: string; active: boolean } | null>(null);
   const [independentDispatchAccess, setIndependentDispatchAccess] = useState<{ companyId: string; enabled: boolean } | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -1022,6 +1024,7 @@ function DispatchPageInner() {
   // WB admins resolve the operating company from the server-authorized catalog
   // Hauler admin: loads only their company's active packages
   useEffect(() => {
+    setIndependentJobPackage(null);
     if (!user) return;
     let cancelled = false;
     setAllOperatorWells([]);
@@ -1042,6 +1045,8 @@ function DispatchPageInner() {
 
         if (companyId) {
           companyConfig = await loadCompanyById(companyId);
+          if (cancelled) return;
+          setIndependentJobPackage({ companyId, active: hasIndependentDispatchPackage(companyConfig?.activePackages) });
           setAssignedBuilderOperators(companyConfig?.assignedOperators || []);
           activeFilter = companyConfig?.activePackages || [];
 
@@ -2952,7 +2957,9 @@ function DispatchPageInner() {
         </div>}
 
         <nav aria-label="Dispatch workspace" className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-2">
-          <a href="/dispatch/independent" className="inline-flex items-center rounded px-4 py-2 text-sm font-medium text-cyan-300 hover:bg-gray-800">Independent Dispatch</a>
+          {independentJobPackage?.companyId === viewedCompanyId && independentJobPackage?.active === true && (
+            <a href="/dispatch/independent" className="inline-flex items-center rounded px-4 py-2 text-sm font-medium text-cyan-300 hover:bg-gray-800">Independent Dispatch</a>
+          )}
           <a href="/dispatch/fresh-water" className="inline-flex items-center rounded px-4 py-2 text-sm font-medium text-cyan-300 hover:bg-gray-800">Fresh Water Tanks</a>
           {([
             ['jobs', 'Jobs'],
