@@ -56,7 +56,7 @@ import { AppHeader } from '@/components/AppHeader';
 import { LoadTransferPanel } from '@/components/LoadTransferPanel';
 import { ExternalAssignmentDeliveryPanel } from '@/components/ExternalAssignmentDeliveryPanel';
 import { getExternalDeliveryAccess } from '@/lib/externalAssignmentDelivery';
-import { hasIndependentDispatchPackage } from '@/lib/independentDispatchPackage';
+import { hasIndependentDispatchPackage, hasOnlyIndependentDispatchPackage } from '@/lib/independentDispatchPackage';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -317,7 +317,7 @@ function DispatchPageInner() {
   // WB owners have no company on their login. Their header selection still
   // scopes what Dispatch displays; an empty selection is the explicit all view.
   const viewedCompanyId = resolveViewedCompanyId(user?.companyId, operatingCompanyId, isPlatformAdmin(user));
-  const [independentJobPackage, setIndependentJobPackage] = useState<{ companyId: string; active: boolean } | null>(null);
+  const [independentJobPackage, setIndependentJobPackage] = useState<{ companyId: string; active: boolean; onlyIndependent: boolean; failed?: boolean } | null>(null);
   const [independentDispatchAccess, setIndependentDispatchAccess] = useState<{ companyId: string; enabled: boolean } | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -343,6 +343,10 @@ function DispatchPageInner() {
   }, [viewedCompanyId, user]);
   const router = useRouter();
   const dispatchPathname = usePathname();
+  const independentOnly = Boolean(user?.companyId && independentJobPackage?.companyId === user.companyId && independentJobPackage.onlyIndependent);
+  useEffect(() => {
+    if (independentOnly) router.replace('/dispatch/independent');
+  }, [independentOnly, router]);
 
   // Capability gate for ALL dispatch mutations. The Dispatch tab is visible to
   // any role with `viewDispatch` (e.g. `viewer`), but only `createDispatch`
@@ -1046,7 +1050,11 @@ function DispatchPageInner() {
         if (companyId) {
           companyConfig = await loadCompanyById(companyId);
           if (cancelled) return;
-          setIndependentJobPackage({ companyId, active: hasIndependentDispatchPackage(companyConfig?.activePackages) });
+          setIndependentJobPackage({ companyId,
+            active: hasIndependentDispatchPackage(companyConfig?.activePackages),
+            onlyIndependent: hasOnlyIndependentDispatchPackage(companyConfig?.activePackages),
+            failed: !companyConfig,
+          });
           setAssignedBuilderOperators(companyConfig?.assignedOperators || []);
           activeFilter = companyConfig?.activePackages || [];
 
@@ -1137,6 +1145,9 @@ function DispatchPageInner() {
         }
       } catch (err) {
         if (cancelled) return;
+        const scopedCompanyId = user.companyId;
+        if (scopedCompanyId) setIndependentJobPackage(previous => previous?.companyId === scopedCompanyId
+          ? previous : { companyId: scopedCompanyId, active: false, onlyIndependent: false, failed: true });
         setReadErrors(prev => ({ ...prev, operatorCatalog: classifiedReadFailure('company operator catalog', err) }));
         console.error('Failed to load job package types:', err);
         // Keep fallback on error
@@ -2930,6 +2941,15 @@ function DispatchPageInner() {
   }
 
   if (!user) return null;
+
+  // A scoped company with only Independent Dispatch must never render the
+  // standard water-hauling workspace, including while its package check loads.
+  if (user.companyId && (!independentJobPackage || independentJobPackage.companyId !== user.companyId
+    || independentJobPackage.onlyIndependent || independentJobPackage.failed)) {
+    return <div className="min-h-screen bg-gray-900 text-white"><AppHeader />
+      <main className="p-4">{independentJobPackage?.failed ? 'Unable to verify company packages. Refresh to retry.' : 'Checking company packages…'}</main>
+    </div>;
+  }
 
   // ─── Render ────────────────────────────────────────────────────────────────
 

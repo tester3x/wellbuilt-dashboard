@@ -6,3 +6,10 @@ export function hasIndependentDispatchPackage(activePackages: unknown): boolean 
   return Array.isArray(activePackages)
     && activePackages.some(id => id === INDEPENDENT_DISPATCH_PACKAGE_ID);
 }
+
+/** This company has no other job package that uses the standard workspace. */
+export function hasOnlyIndependentDispatchPackage(activePackages: unknown): boolean {
+  return Array.isArray(activePackages)
+    && activePackages.length === 1
+    && activePackages[0] === INDEPENDENT_DISPATCH_PACKAGE_ID;
+}

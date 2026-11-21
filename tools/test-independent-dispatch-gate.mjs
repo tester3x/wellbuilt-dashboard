@@ -13,6 +13,9 @@ const mocks = {
     if (window.mode === 'inactive') throw Error('independent_dispatch_package_inactive');
     return { ok: true, companyId: 'company-a', jobs: [] };
   }`,
+  '@/lib/companySettings': `export async function loadCompanyById() {
+    return { activePackages: window.mode === 'dual' ? ['water-hauling', 'independent-dispatch'] : ['independent-dispatch'] };
+  }`,
   '@/components/AppHeader': `export function AppHeader() { return null; }`,
   '@/components/IndependentDispatchBoard': `export function IndependentDispatchBoard() { return <div data-testid="independent-board">Authorized board</div>; }`,
   'next/navigation': `const router = { replace(path) { window.redirects.push(path); } }; export function useRouter() { return router; }`,
@@ -28,7 +31,7 @@ const bundle = await build({
   bundle: true, write: false, jsx: 'automatic',
   define: { 'process.env.NODE_ENV': '"production"' },
   plugins: [{ name: 'route-mocks', setup(plugin) {
-    plugin.onResolve({ filter: /^(next\/(navigation|link)|@\/(contexts\/AuthContext|lib\/(auth|independentDispatchJobs)|components\/(AppHeader|IndependentDispatchBoard)))$/ },
+    plugin.onResolve({ filter: /^(next\/(navigation|link)|@\/(contexts\/AuthContext|lib\/(auth|independentDispatchJobs|companySettings)|components\/(AppHeader|IndependentDispatchBoard)))$/ },
       args => ({ path: args.path, namespace: 'route-mock' }));
     plugin.onLoad({ filter: /.*/, namespace: 'route-mock' }, args => ({ contents: mocks[args.path], loader: 'tsx', resolveDir: process.cwd() }));
   } }],
@@ -43,7 +46,7 @@ const browser = await chromium.launch();
 try {
   for (const [mode, redirect, board] of [
     ['inactive', '/dispatch', false], ['guest', '/login', false],
-    ['no-role', '/dispatch', false], ['installed', null, true],
+    ['no-role', '/dispatch', false], ['installed', null, true], ['dual', null, true],
   ]) {
     const page = await browser.newPage();
     const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -53,6 +56,7 @@ try {
     assert.deepEqual(await page.evaluate(() => window.redirects), redirect ? [redirect] : []);
     assert.equal(await page.getByTestId('independent-board').count(), Number(board));
     assert.equal(await page.getByRole('heading', { name: 'Independent Dispatch' }).count(), Number(board));
+    assert.equal(await page.getByRole('link', { name: 'Dispatch workspace' }).count(), Number(mode === 'dual'));
     assert.deepEqual(errors, []);
     await page.close();
   }
