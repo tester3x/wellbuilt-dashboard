@@ -5,6 +5,7 @@ import { INDEPENDENT_SECTORS, type IndependentSector } from '@/lib/independentDi
 
 const lines = (value: string) => [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
 const join = (value: string[] | undefined) => (value || []).join('\n');
+const normalizeName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId: string; canEdit: boolean }) {
   const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
@@ -39,6 +40,11 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
     setCustomerSectors(customer?.sectors || []); setJobNames(join(customer?.jobNames));
     setPickups(join(customer?.pickupLocations)); setDeliveries(join(customer?.deliveryLocations));
   }
+  const enteredAliases = lines(alternateNames);
+  const shortAliases = enteredAliases.filter(alias => alias.replace(/[^a-z0-9]/gi, '').length <= 4);
+  const sharedAliases = directory?.customers.filter(customer => customer.id !== editingId
+    && enteredAliases.some(alias => [customer.name, ...(customer.alternateNames || [])]
+      .some(name => normalizeName(name) === normalizeName(alias)))) || [];
   return <section className="rounded-lg border border-cyan-700/40 bg-gray-800 p-4 text-white">
     <h3 className="font-semibold text-cyan-300">Independent Dispatch setup</h3>
     <p className="mt-1 text-xs text-gray-400">Choose the work your company dispatches, then save each customer’s workflows and reusable job names and locations.</p>
@@ -88,7 +94,9 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
           <label className="text-xs text-gray-300">Alternate names or abbreviations · one per line
             <textarea rows={3} value={alternateNames} onChange={e => setAlternateNames(e.target.value)} placeholder={"Bob's\nBHS"}
               className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" />
-            <span className="mt-1 block text-gray-400">Used to recognize requests. Job forms and customer lists show the official name above.</span>
+            <span className="mt-1 block text-gray-400">Used to suggest matches from requests. A dispatcher must confirm alternate names; jobs and customer lists show the official name above.</span>
+            {!!shortAliases.length && <span className="mt-1 block text-amber-200">Short aliases such as {shortAliases.join(', ')} can refer to other companies. Requests using them always require confirmation.</span>}
+            {!!sharedAliases.length && <span className="mt-1 block text-amber-200">Also used by {sharedAliases.map(customer => customer.name).join(', ')}. Both companies will be offered for confirmation.</span>}
           </label>
           <label className="text-xs text-gray-300">Customer phone for Dialpad (optional, +country code)<input type="tel" pattern="\\+[1-9][0-9]{7,14}" value={phoneE164} onChange={e => setPhoneE164(e.target.value)} placeholder="+15551234567" className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
           <fieldset><legend className="text-xs text-gray-300">Workflows for this customer</legend><div className="mt-1 flex flex-wrap gap-3 text-sm">

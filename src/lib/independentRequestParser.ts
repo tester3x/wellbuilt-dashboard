@@ -5,7 +5,7 @@ import { INDEPENDENT_SECTORS, SECTOR_FIELDS, type IndependentSector } from './in
 export type ParsedJobRequest = {
   customerId: string;
   customerLabel: string;
-  customerSuggestions: { id: string; name: string }[];
+  customerSuggestions: { id: string; name: string; sectorMatch: boolean }[];
   sector: IndependentSector | '';
   fields: Partial<IndependentJobDetails>;
   sectorFields: Record<string, string>;
@@ -48,13 +48,17 @@ function labeled(lines: string[], names: string[]): string {
   return '';
 }
 
-function matchCustomer(raw: string, customers: IndependentCustomer[]): IndependentCustomer | undefined {
+function matchOfficialCustomer(raw: string, customers: IndependentCustomer[]): IndependentCustomer | undefined {
   const wanted = normalize(raw);
-  const matches = customers.filter(customer => [customer.name, ...(customer.alternateNames || [])].some(name => normalize(name) === wanted));
-  return matches.length === 1 ? matches[0] : undefined;
+  const matches = customers.filter(customer => normalize(customer.name) === wanted);
+  if (matches.length !== 1) return undefined;
+  // An exact official name is still ambiguous if another company's alias uses it.
+  if (customers.some(customer => customer.id !== matches[0].id
+    && (customer.alternateNames || []).some(alias => normalize(alias) === wanted))) return undefined;
+  return matches[0];
 }
 
-function closeCustomers(raw: string, customers: IndependentCustomer[]): { id: string; name: string }[] {
+function closeCustomers(raw: string, customers: IndependentCustomer[], sector: IndependentSector | ''): ParsedJobRequest['customerSuggestions'] {
   const wanted = normalize(raw);
   if (wanted.length < 3) return [];
   return customers.filter(customer => [customer.name, ...(customer.alternateNames || [])].some(name => {
@@ -63,14 +67,16 @@ function closeCustomers(raw: string, customers: IndependentCustomer[]): { id: st
     if (wanted.length >= 4 && (candidate.startsWith(`${wanted} `) || wanted.startsWith(`${candidate} `))) return true;
     const words = wanted.split(' ').filter(word => word.length >= 3);
     return words.length > 0 && words.every(word => candidate.split(' ').some(part => part.startsWith(word)));
-  })).slice(0, 5).map(customer => ({ id: customer.id, name: customer.name }));
+  })).sort((a, b) => Number(!!sector && b.sectors.includes(sector)) - Number(!!sector && a.sectors.includes(sector))
+    || a.name.localeCompare(b.name)).slice(0, 5)
+    .map(customer => ({ id: customer.id, name: customer.name, sectorMatch: !!sector && customer.sectors.includes(sector) }));
 }
 
 function inferCustomer(text: string, customers: IndependentCustomer[]): IndependentCustomer | undefined {
   const haystack = ` ${normalize(text)} `;
-  const matches = customers.filter(customer => [customer.name, ...(customer.alternateNames || [])].some(name => normalize(name).length >= 5
-    && haystack.includes(` ${normalize(name)} `)));
-  return matches.length === 1 ? matches[0] : undefined;
+  const matches = customers.filter(customer => normalize(customer.name).length >= 5
+    && haystack.includes(` ${normalize(customer.name)} `));
+  return matches.length === 1 ? matchOfficialCustomer(matches[0].name, customers) : undefined;
 }
 
 function sectorFrom(raw: string): IndependentSector | '' {
@@ -120,18 +126,17 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
   const lines = text.slice(0, 10000).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const warnings: string[] = [];
   const fields: Partial<IndependentJobDetails> = {};
-  const customerLabel = labeled(lines, ALIASES.customer);
-  const customer = customerLabel ? matchCustomer(customerLabel, directory.customers) : inferCustomer(text, directory.customers);
-  const customerSuggestions = customerLabel && !customer ? closeCustomers(customerLabel, directory.customers) : [];
-  if (customerLabel && !customer) warnings.push(`Customer “${customerLabel}” is not an exact match in your customer list. Confirm a suggestion or use NEW customer.`);
-  if (customerLabel && customer && normalize(customerLabel) !== normalize(customer.name))
-    warnings.push(`Matched “${customerLabel}” to ${customer.name}; confirm the official customer.`);
-  if (!customerLabel && customer) warnings.push(`Matched ${customer.name} from the message; confirm the customer.`);
   const requestedSector = labeled(lines, ALIASES.sector);
-  let sector = requestedSector ? sectorFrom(requestedSector) : '';
+  let sector = requestedSector ? sectorFrom(requestedSector) : inferSector(text);
   if (requestedSector && !sector) warnings.push(`Transportation sector “${requestedSector}” was not recognized.`);
+  const customerLabel = labeled(lines, ALIASES.customer);
+  const customer = customerLabel ? matchOfficialCustomer(customerLabel, directory.customers) : inferCustomer(text, directory.customers);
+  const customerSuggestions = customerLabel && !customer ? closeCustomers(customerLabel, directory.customers, sector) : [];
+  if (customerLabel && !customer) warnings.push(customerSuggestions.length
+    ? `Customer “${customerLabel}” may match a saved company. Confirm its official name; the job sector is only a clue.`
+    : `Customer “${customerLabel}” is not in your customer list. Confirm the official name or use NEW customer.`);
+  if (!customerLabel && customer) warnings.push(`Matched ${customer.name} from the message; confirm the customer.`);
   if (!sector && !requestedSector && customer?.sectors.length === 1) sector = customer.sectors[0];
-  if (!sector && !requestedSector) sector = inferSector(text);
   if (sector && (!directory.sectors.includes(sector) || (customer && !customer.sectors.includes(sector)))) {
     warnings.push(`${sector} is not enabled for this customer.`); sector = '';
   }

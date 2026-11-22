@@ -165,7 +165,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
               <input aria-label="New customer's official company name" required maxLength={180} value={form.customer}
                 onChange={event => setForm(current => ({ ...current, customer: event.target.value }))} className={inputClass} />
             </label>{!editing && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={saveCustomer} onChange={event => setSaveCustomer(event.target.checked)} />Save this customer for future jobs</label>}</div>}
-            {!!parseReport?.customerSuggestions.length && !customerId && <div className="mt-2 text-amber-200">Possible matches: {parseReport.customerSuggestions.map(suggestion => <button key={suggestion.id} type="button" className="mr-2 underline" onClick={() => chooseSavedCustomer(suggestion.id)}>{suggestion.name}</button>)}</div>}
+            {!!parseReport?.customerSuggestions.length && !customerId && <div className="mt-2 text-amber-200">Possible saved customers — confirm the company: {parseReport.customerSuggestions.map(suggestion => <button key={suggestion.id} type="button" className="mr-2 underline" onClick={() => chooseSavedCustomer(suggestion.id)}>{suggestion.name}{suggestion.sectorMatch ? ' · matches job sector' : ''}</button>)}</div>}
           </div>
           <label className="text-xs text-gray-300">Transportation sector *<select aria-label="Transportation sector" required value={sector} className={inputClass} onChange={event => { setSector(event.target.value as IndependentSector); setSectorFields({}); }}>
             <option value="">{availableSectors.length ? 'Choose sector…' : 'Choose a customer first…'}</option>
