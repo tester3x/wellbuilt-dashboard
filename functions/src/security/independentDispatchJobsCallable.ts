@@ -1,6 +1,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
+import { requireIndependentDispatchAuthority } from './independentDispatchAuthority';
 import { hasIndependentDispatchPackage } from './operational/independentDispatchPackage';
 import { assertIndependentJobMutable, independentJobTransition, parseIndependentJob, type IndependentJobStatus, type IndependentJobDetails } from './operational/independentDispatchJobs';
 import { INDEPENDENT_SECTORS, parseIndependentSectors } from './operational/independentDispatchSectors';
@@ -19,7 +20,7 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
     const op = raw.op;
     if (!['list', 'create', 'update', 'assign', 'status'].includes(op))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_operation');
-    const authority = await requireTrustedCompanyCapability(request.auth?.uid, op === 'list' ? 'viewDispatch' : 'createDispatch');
+    const authority = await requireIndependentDispatchAuthority(request.auth?.uid, op === 'list' ? 'viewDispatch' : 'createDispatch');
     if (op === 'assign') await requireTrustedCompanyCapability(request.auth?.uid, 'manageDrivers');
     const db = admin.firestore();
     const companyRef = db.collection('companies').doc(authority.companyId);

@@ -1,6 +1,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
+import { requireIndependentDispatchAuthority } from './independentDispatchAuthority';
 import { hasIndependentDispatchPackage } from './operational/independentDispatchPackage';
 import { INDEPENDENT_SECTORS, parseIndependentSectors } from './operational/independentDispatchSectors';
 
@@ -22,8 +23,9 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
       || Object.keys(data).some(key => !['op', 'sectors', 'customer'].includes(key))
       || !['list', 'setSectors', 'saveCustomer'].includes(data.op))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_directory_request');
-    const authority = await requireTrustedCompanyCapability(request.auth?.uid,
-      data.op === 'list' ? 'viewDispatch' : 'manageCompany');
+    const authority = data.op === 'list'
+      ? await requireIndependentDispatchAuthority(request.auth?.uid, 'viewDispatch')
+      : await requireTrustedCompanyCapability(request.auth?.uid, 'manageCompany');
     const db = admin.firestore();
     const companyRef = db.collection('companies').doc(authority.companyId);
     const configRef = companyRef.collection('independent_dispatch_config').doc('settings');
