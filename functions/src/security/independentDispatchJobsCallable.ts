@@ -10,6 +10,7 @@ import { driverAuthUid } from './tokenMint';
 const COLLECTION = 'independent_dispatch_jobs';
 const WB_DRIVER_LINKS = 'independent_dispatch_wb_drivers';
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
+const normalizeCustomerName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const KEYS = new Set(['op', 'jobId', 'job', 'expectedRevision', 'externalDriverId', 'wbDriverId', 'status', 'requestId', 'saveCustomer']);
 
 /** Separate from governed WB-M execution: staff records dispatch progress, never tickets or driver acceptance. */
@@ -65,11 +66,12 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
       const directoryConfigRef = companyRef.collection('independent_dispatch_config').doc('settings');
       const customerRef = details?.customerId ? companyRef.collection('independent_dispatch_customers').doc(details.customerId) : null;
       const newCustomerRef = raw.saveCustomer === true ? companyRef.collection('independent_dispatch_customers').doc(`job_${raw.jobId}`) : null;
-      const [jobSnap, eventSnap, freshCompany, directoryConfig, customer, newCustomer] = await Promise.all([
+      const [jobSnap, eventSnap, freshCompany, directoryConfig, customer, newCustomer, otherCustomers] = await Promise.all([
         tx.get(jobRef), tx.get(eventRef), tx.get(companyRef),
         details?.sector ? tx.get(directoryConfigRef) : Promise.resolve(null),
         customerRef ? tx.get(customerRef) : Promise.resolve(null),
         newCustomerRef ? tx.get(newCustomerRef) : Promise.resolve(null),
+        newCustomerRef ? tx.get(companyRef.collection('independent_dispatch_customers').limit(500)) : Promise.resolve(null),
       ]);
       if (!hasIndependentDispatchPackage(freshCompany.data()))
         throw new httpsV2.HttpsError('permission-denied', 'independent_dispatch_package_inactive');
@@ -98,6 +100,12 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
       }
       if (op === 'create' && previous) throw new httpsV2.HttpsError('already-exists', 'job_exists');
       if (newCustomer?.exists) throw new httpsV2.HttpsError('already-exists', 'customer_exists');
+      if (newCustomerRef && otherCustomers?.docs.some(doc => doc.id !== newCustomerRef.id
+        && doc.data().companyId === authority.companyId && doc.data().active !== false
+        && [doc.data().name, ...(Array.isArray(doc.data().alternateNames) ? doc.data().alternateNames : [])]
+          .some((name: unknown) => typeof name === 'string'
+            && normalizeCustomerName(name) === normalizeCustomerName(details!.customer))))
+        throw new httpsV2.HttpsError('failed-precondition', 'customer_name_conflict');
       if (op !== 'create' && !previous) throw new httpsV2.HttpsError('not-found', 'job_not_found');
       if (previous && previous.revision !== raw.expectedRevision)
         throw new httpsV2.HttpsError('failed-precondition', 'job_changed_refresh_before_retry');

@@ -48,14 +48,11 @@ function labeled(lines: string[], names: string[]): string {
   return '';
 }
 
-function matchOfficialCustomer(raw: string, customers: IndependentCustomer[]): IndependentCustomer | undefined {
+function matchSavedCustomer(raw: string, customers: IndependentCustomer[]): IndependentCustomer | undefined {
   const wanted = normalize(raw);
-  const matches = customers.filter(customer => normalize(customer.name) === wanted);
-  if (matches.length !== 1) return undefined;
-  // An exact official name is still ambiguous if another company's alias uses it.
-  if (customers.some(customer => customer.id !== matches[0].id
-    && (customer.alternateNames || []).some(alias => normalize(alias) === wanted))) return undefined;
-  return matches[0];
+  const matches = customers.filter(customer => [customer.name, ...(customer.alternateNames || [])]
+    .some(name => normalize(name) === wanted));
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function closeCustomers(raw: string, customers: IndependentCustomer[], sector: IndependentSector | ''): ParsedJobRequest['customerSuggestions'] {
@@ -123,8 +120,10 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
   let sector = requestedSector ? sectorFrom(requestedSector) : inferSector(text);
   if (requestedSector && !sector) warnings.push(`Transportation sector “${requestedSector}” was not recognized.`);
   const customerLabel = labeled(lines, ALIASES.customer);
-  const customer = customerLabel ? matchOfficialCustomer(customerLabel, directory.customers) : undefined;
+  const customer = customerLabel ? matchSavedCustomer(customerLabel, directory.customers) : undefined;
   const customerSuggestions = customerLabel && !customer ? closeCustomers(customerLabel, directory.customers, sector) : [];
+  if (customer && customerLabel && normalize(customerLabel) !== normalize(customer.name))
+    warnings.push(`Matched “${customerLabel}” to ${customer.name}. The job will use the official company name.`);
   if (customerLabel && !customer) warnings.push(customerSuggestions.length
     ? `Customer “${customerLabel}” may match a saved company. Confirm its official name; the job sector is only a clue.`
     : `Customer “${customerLabel}” is not in your customer list. Confirm the official name or use NEW customer.`);

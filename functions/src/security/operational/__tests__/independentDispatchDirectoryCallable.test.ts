@@ -37,8 +37,12 @@ describe('Independent Dispatch directory', () => {
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'Customer A', active: true,
       sectors: ['aggregate'], jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('customer_sector_disabled');
     await call({ op: 'saveCustomer', customer: { id: 'customer-a', name: '  Customer A  ', active: true,
-      sectors: ['ltl'], alternateNames: ['C A', 'Customer-A'], phoneE164: '+17015550111', jobNames: ['Pallet delivery'], pickupLocations: ['Yard A'], deliveryLocations: ['Site B'] } });
-    await expect(call({ op: 'list' })).resolves.toMatchObject({ sectors: ['ltl', 'otr'], customers: [{ id: 'customer-a', name: 'Customer A', alternateNames: ['C A', 'Customer-A'], phoneE164: '+17015550111', pickupLocations: ['Yard A'] }] });
+      sectors: ['ltl'], alternateNames: ['CA', 'Cust A'], phoneE164: '+17015550111', jobNames: ['Pallet delivery'], pickupLocations: ['Yard A'], deliveryLocations: ['Site B'] } });
+    await expect(call({ op: 'list' })).resolves.toMatchObject({ sectors: ['ltl', 'otr'], customers: [{ id: 'customer-a', name: 'Customer A', alternateNames: ['CA', 'Cust A'], phoneE164: '+17015550111', pickupLocations: ['Yard A'] }] });
+    await expect(call({ op: 'saveCustomer', customer: { id: 'customer-b', name: 'Customer B', active: true,
+      sectors: ['ltl'], alternateNames: ['CA'], jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('customer_name_conflict');
+    await expect(call({ op: 'saveCustomer', customer: { id: 'customer-b', name: 'CA', active: true,
+      sectors: ['ltl'], alternateNames: [], jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('customer_name_conflict');
     expect(requireTrustedCompanyCapability).toHaveBeenCalledWith('staff', 'manageCompany');
     expect(records.get('companies/company-a/independent_dispatch_customers/customer-a').companyId).toBe('company-a');
   });

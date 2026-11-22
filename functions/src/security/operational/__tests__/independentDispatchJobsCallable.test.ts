@@ -13,7 +13,9 @@ function collectionRef(path: string): any {
   return { doc: (id: string) => docRef(`${path}/${id}`), where: (_: string, __: string, companyId: string) => ({
     get: async () => ({ docs: [...records].filter(([key, value]) => key.startsWith(path + '/') && key.split('/').length === path.split('/').length + 1 && value.companyId === companyId)
       .map(([key, value]) => ({ id: key.split('/').pop(), data: () => value })) }),
-  }) };
+  }), limit: (_n: number) => ({ get: async () => ({ docs: [...records].filter(([key]) => key.startsWith(path + '/')
+    && key.split('/').length === path.split('/').length + 1)
+    .map(([key, value]) => ({ id: key.split('/').pop(), data: () => value })) }) }) };
 }
 const db = { collection: collectionRef, runTransaction: async (fn: any) => {
   const writes: (() => void)[] = [];
@@ -121,5 +123,7 @@ describe('Independent Dispatch callable boundaries', () => {
     });
     await expect(call(saved)).resolves.toMatchObject({ idempotent: true });
     expect([...records.keys()].filter(key => key.includes('independent_dispatch_customers'))).toHaveLength(1);
+    await expect(call({ ...create, jobId: 'job-c', requestId: 'request-c', job: { ...oneOff, customer: "Bob's Hot Shot LLC" }, saveCustomer: true }))
+      .rejects.toThrow('customer_name_conflict');
   });
 });

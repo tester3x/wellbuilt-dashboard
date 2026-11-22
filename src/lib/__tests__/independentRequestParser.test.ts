@@ -53,12 +53,12 @@ test('unknown customer and unclear fields stay unselected and require review', (
   assert.equal(parsed.customerLabel, 'Unknown Carrier');
 });
 
-test('saved aliases require a dispatcher to confirm the official company name', () => {
+test('a unique saved alias fills the official company name', () => {
   for (const name of ["Bob's", 'BHS']) {
     const parsed = parsePastedJobRequest(`Customer: ${name}\nSector: Hot shot\nJob: Pump\nPickup: Yard\nDelivery: Rig\nUrgency: Same day\nCargo details: Pump skid`, directory);
-    assert.equal(parsed.customerId, '');
-    assert.deepEqual(parsed.customerSuggestions, [{ id: 'bob', name: "Bob's Hot Shot LLC", sectorMatch: true }]);
-    assert.ok(parsed.missing.includes('Customer'));
+    assert.equal(parsed.customerId, 'bob');
+    assert.deepEqual(parsed.customerSuggestions, []);
+    assert.ok(parsed.warnings.some(warning => warning.includes("Bob's Hot Shot LLC")));
   }
 });
 
@@ -68,13 +68,13 @@ test('close names suggest the official company without silently selecting it', (
   assert.deepEqual(parsed.customerSuggestions, [{ id: 'bob', name: "Bob's Hot Shot LLC", sectorMatch: true }]);
 });
 
-test('ROS remains ambiguous even when one saved alias and sector look plausible', () => {
+test('ROS fills its unique saved owner but remains ambiguous when another company shares it', () => {
   const customers = [...directory.customers,
     { id: 'rapid', name: 'Rapid Oilfield Supply', alternateNames: ['ROS'], active: true as const,
       sectors: ['water-hauling' as const], jobNames: [], pickupLocations: [], deliveryLocations: [] }];
   const one = parsePastedJobRequest('Customer: ROS\nSector: Water hauling\nJob: Load\nPickup: A\nDelivery: B', { ...directory, customers });
-  assert.equal(one.customerId, '');
-  assert.deepEqual(one.customerSuggestions, [{ id: 'rapid', name: 'Rapid Oilfield Supply', sectorMatch: true }]);
+  assert.equal(one.customerId, 'rapid');
+  assert.deepEqual(one.customerSuggestions, []);
   const real = { id: 'real-ros', name: 'R Oilfield Services', alternateNames: ['ROS'], active: true as const,
     sectors: ['hot-shot' as const], jobNames: [], pickupLocations: [], deliveryLocations: [] };
   const two = parsePastedJobRequest('Customer: ROS\nSector: Hot shot\nJob: Load\nPickup: A\nDelivery: B', { ...directory, customers: [...customers, real] });

@@ -32,7 +32,9 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
   async function run(action: () => Promise<unknown>, success: string) {
     setBusy(true); setMessage('');
     try { await action(); await refresh(); setMessage(success); }
-    catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to save.'); }
+    catch (error) { const detail = error instanceof Error ? error.message : 'Unable to save.';
+      setMessage(detail.includes('customer_name_conflict') ? 'That company name or alternate name is already used by another saved customer.'
+        : detail.includes('duplicate_customer_name_or_alias') ? 'Remove a repeated company name or alternate name.' : detail); }
     finally { setBusy(false); }
   }
   function edit(customer?: IndependentCustomer) {
@@ -41,10 +43,11 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
     setPickups(join(customer?.pickupLocations)); setDeliveries(join(customer?.deliveryLocations));
   }
   const enteredAliases = lines(alternateNames);
-  const shortAliases = enteredAliases.filter(alias => alias.replace(/[^a-z0-9]/gi, '').length <= 4);
-  const sharedAliases = directory?.customers.filter(customer => customer.id !== editingId
-    && enteredAliases.some(alias => [customer.name, ...(customer.alternateNames || [])]
-      .some(name => normalizeName(name) === normalizeName(alias)))) || [];
+  const enteredIdentifiers = [name, ...enteredAliases].map(normalizeName).filter(Boolean);
+  const repeatedIdentifier = new Set(enteredIdentifiers).size !== enteredIdentifiers.length;
+  const conflictingCustomers = directory?.customers.filter(customer => customer.id !== editingId
+    && enteredIdentifiers.some(identifier => [customer.name, ...(customer.alternateNames || [])]
+      .some(savedName => normalizeName(savedName) === identifier))) || [];
   return <section className="rounded-lg border border-cyan-700/40 bg-gray-800 p-4 text-white">
     <h3 className="font-semibold text-cyan-300">Independent Dispatch setup</h3>
     <p className="mt-1 text-xs text-gray-400">Choose the work your company dispatches, then save each customer’s workflows and reusable job names and locations.</p>
@@ -94,9 +97,9 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
           <label className="text-xs text-gray-300">Alternate names or abbreviations · one per line
             <textarea rows={3} value={alternateNames} onChange={e => setAlternateNames(e.target.value)} placeholder={"Bob's\nBHS"}
               className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" />
-            <span className="mt-1 block text-gray-400">Used to suggest matches from requests. A dispatcher must confirm alternate names; jobs and customer lists show the official name above.</span>
-            {!!shortAliases.length && <span className="mt-1 block text-amber-200">Short aliases such as {shortAliases.join(', ')} can refer to other companies. Requests using them always require confirmation.</span>}
-            {!!sharedAliases.length && <span className="mt-1 block text-amber-200">Also used by {sharedAliases.map(customer => customer.name).join(', ')}. Both companies will be offered for confirmation.</span>}
+            <span className="mt-1 block text-gray-400">A unique alternate name fills this official company on pasted jobs. The customer picker and jobs show only the official name.</span>
+            {repeatedIdentifier && <span className="mt-1 block text-amber-200">This profile repeats a company name or alternate name.</span>}
+            {!!conflictingCustomers.length && <span className="mt-1 block text-amber-200">Name already used by {conflictingCustomers.map(customer => customer.name).join(', ')}. Keep it on only one customer.</span>}
           </label>
           <label className="text-xs text-gray-300">Customer phone for Dialpad (optional, +country code)<input type="tel" pattern="\\+[1-9][0-9]{7,14}" value={phoneE164} onChange={e => setPhoneE164(e.target.value)} placeholder="+15551234567" className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
           <fieldset><legend className="text-xs text-gray-300">Workflows for this customer</legend><div className="mt-1 flex flex-wrap gap-3 text-sm">
@@ -108,7 +111,7 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
           ].map(([label, value, setter]) => <label key={label as string} className="text-xs text-gray-300">{label as string} · one per line
             <textarea rows={4} value={value as string} onChange={e => (setter as (value: string) => void)(e.target.value)}
               className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>)}</div>
-          <button disabled={busy || !name.trim() || !customerSectors.length} className="w-fit rounded bg-blue-700 px-3 py-2 text-sm disabled:opacity-40">Save customer</button>
+          <button disabled={busy || !name.trim() || !customerSectors.length || repeatedIdentifier || conflictingCustomers.length > 0} className="w-fit rounded bg-blue-700 px-3 py-2 text-sm disabled:opacity-40">Save customer</button>
         </form>}
       </div>
     </>}

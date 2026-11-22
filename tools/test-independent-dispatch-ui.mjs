@@ -72,6 +72,10 @@ try {
   await page.getByRole('button',{name:/Bob's Hot Shot LLC · matches job sector/}).click();
   assert.equal(await page.getByRole('combobox',{name:'Customer',exact:true}).inputValue(),'bob');
   await page.getByRole('button',{name:'Clear / new job'}).click();
+  await page.getByRole('textbox',{name:'Job request text'}).fill('Customer: BHS\nSector: Hot shot\nJob: Pump\nPickup: Yard\nDelivery: Rig\nUrgency: Same day\nCargo details: Pump skid');
+  await page.getByRole('button',{name:'Fill job form from text'}).click();
+  assert.equal(await page.getByRole('combobox',{name:'Customer',exact:true}).inputValue(),'bob','unique alias chooses the saved official customer');
+  await page.getByRole('button',{name:'Clear / new job'}).click();
   await page.getByRole('textbox',{name:'Job request text'}).fill('Customer: Unknown Co\nSector: Water hauling\nJob: Review pickup\nPickup: Yard A\nDelivery: Site B\nWater type: Production water\nBarrels: 50');
   await page.getByRole('button',{name:'Fill job form from text'}).click();
   assert.equal(await page.getByRole('combobox',{name:'Customer',exact:true}).inputValue(),'__new__');

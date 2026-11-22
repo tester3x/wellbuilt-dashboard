@@ -7,6 +7,7 @@ import { INDEPENDENT_SECTORS, parseIndependentSectors } from './operational/inde
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const DEFAULT_SECTORS = [...INDEPENDENT_SECTORS];
+const normalizeCustomerName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 function names(value: unknown, field: string, max: number): string[] {
   if (!Array.isArray(value) || value.length > max || value.some(item => typeof item !== 'string'
     || !item.trim() || item.length > 180) || new Set(value.map((item: string) => item.trim().toLowerCase())).size !== value.length)
@@ -82,8 +83,18 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
     const enabled = config.exists ? parseIndependentSectors(config.data()?.sectors) : DEFAULT_SECTORS;
     if (sectors.some(sector => !enabled.includes(sector)))
       throw new httpsV2.HttpsError('failed-precondition', 'customer_sector_disabled');
+    const alternateNames = names(raw.alternateNames ?? [], 'alternate_names', 30);
+    const identifiers = [raw.name.trim(), ...alternateNames].map(normalizeCustomerName);
+    if (new Set(identifiers).size !== identifiers.length)
+      throw new httpsV2.HttpsError('invalid-argument', 'duplicate_customer_name_or_alias');
+    const existing = await customersRef.limit(500).get();
+    if (existing.docs.some(doc => doc.id !== raw.id && doc.data().companyId === authority.companyId
+      && doc.data().active !== false
+      && [doc.data().name, ...(Array.isArray(doc.data().alternateNames) ? doc.data().alternateNames : [])]
+        .some((name: unknown) => typeof name === 'string' && identifiers.includes(normalizeCustomerName(name)))))
+      throw new httpsV2.HttpsError('failed-precondition', 'customer_name_conflict');
     const customer = { companyId: authority.companyId, name: raw.name.trim(), phoneE164, sectors,
-      alternateNames: names(raw.alternateNames ?? [], 'alternate_names', 30),
+      alternateNames,
       jobNames: names(raw.jobNames, 'job_names', 30),
       pickupLocations: names(raw.pickupLocations, 'pickup_locations', 50),
       deliveryLocations: names(raw.deliveryLocations, 'delivery_locations', 50),
