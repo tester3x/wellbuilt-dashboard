@@ -25,7 +25,7 @@ const bundle = await build({ stdin: { contents: `import React from 'react';impor
 } }] });
 const cssDir = 'out/_next/static/css';
 const css = fs.existsSync(cssDir) ? fs.readdirSync(cssDir).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(`${cssDir}/${f}`, 'utf8')).join('\n') : '';
-const server = http.createServer((req,res) => { res.setHeader('Content-Type', req.url === '/bundle.js' ? 'text/javascript' : 'text/html'); res.end(req.url === '/bundle.js' ? bundle.outputFiles[0].contents : `<style>${css}</style><div id="root"></div><script src="/bundle.js"></script>`); });
+const server = http.createServer((req,res) => { res.setHeader('Content-Type', req.url === '/bundle.js' ? 'text/javascript' : 'text/html'); res.end(req.url === '/bundle.js' ? bundle.outputFiles[0].contents : `<style>${css}</style><header style="position:sticky;top:0;height:72px;z-index:40;background:#111"></header><div id="root"></div><script src="/bundle.js"></script>`); });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch();
 try {
@@ -141,6 +141,13 @@ try {
   const card=page.getByRole('article').filter({hasText:'Pipe run water-hauling'});
   await card.waitFor();
   assert.equal(await page.getByRole('region',{name:'Needs a driver jobs'}).getByRole('article').count(),7,'new requests remain in the unassigned lane');
+  await page.evaluate(() => window.scrollTo({ top: 700, behavior: 'instant' }));
+  await page.waitForFunction(() => {
+    const toolbar = document.querySelector('[data-testid="independent-board-toolbar"]');
+    const header = document.querySelector('header');
+    return !!toolbar && !!header && Math.abs(toolbar.getBoundingClientRect().top - header.getBoundingClientRect().bottom) <= 2;
+  });
+  assert.equal(await page.getByRole('textbox',{name:'Search dispatch jobs'}).isVisible(),true,'search remains in the pinned toolbar');
   await card.getByText('Job contact: John Wick · Company man · +17015550199').waitFor();
   await page.getByRole('article').filter({hasText:'Pipe run ltl'}).getByText('Job contact: Jane Doe · Lead · +17015550113').waitFor();
   await card.getByRole('combobox').selectOption('outside:driver-a');

@@ -61,8 +61,18 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [pastedRequest, setPastedRequest] = useState('');
   const [parseReport, setParseReport] = useState<ParsedJobRequest | null>(null);
   const [intakeOpen, setIntakeOpen] = useState(false);
+  const [appHeaderHeight, setAppHeaderHeight] = useState(0);
   // Keep create identity through an ambiguous network failure, avoiding duplicate jobs.
   const creation = useRef({ jobId: crypto.randomUUID(), requestId: crypto.randomUUID() });
+  useEffect(() => {
+    const header = document.querySelector<HTMLElement>('header');
+    if (!header) return;
+    const measure = () => setAppHeaderHeight(Math.ceil(header.getBoundingClientRect().height));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
   const refresh = useCallback(async () => {
     const result = await independentDispatchJobs({ op: 'list' });
     if (result.companyId !== companyId) throw Error('Your staff account belongs to a different company.');
@@ -140,6 +150,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     {error && <div role="alert" className="rounded border border-red-700 bg-red-950 p-3 text-red-200">{error}</div>}
     {notice && <p role="status" className="text-green-300">{notice}</p>}
     <section aria-labelledby="dispatch-board-title" className="space-y-4">
+    <div data-testid="independent-board-toolbar" className="sticky z-30 space-y-3 rounded-lg border border-gray-700 bg-gray-900/95 p-3 shadow-lg backdrop-blur" style={{ top: appHeaderHeight }}>
       <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="dispatch-board-title" className="text-lg font-semibold text-white">Dispatch board</h2><p className="text-sm text-gray-400">Save requests now. Assign a driver when one is available. Assigned WellBuilt drivers do not receive these jobs in their phone app yet.</p></div>
         {canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); requestAnimationFrame(() => document.getElementById('independent-intake')?.scrollIntoView({ behavior: 'smooth' })); }}>New job / paste request</button>}
         <div className="flex flex-wrap gap-2 text-xs"><span className="rounded bg-amber-900/40 px-2 py-1 text-amber-200">{jobs.filter(job => job.status === 'unassigned').length} need drivers</span><span className="rounded bg-blue-900/40 px-2 py-1 text-blue-200">{jobs.filter(job => job.status === 'assigned').length} assigned</span><span className="rounded bg-emerald-900/40 px-2 py-1 text-emerald-200">{jobs.filter(job => job.status === 'in_progress').length} in progress</span></div>
@@ -148,6 +159,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       <input aria-label="Search dispatch jobs" placeholder="Search jobs, customers, locations, drivers…" value={search} onChange={e => setSearch(e.target.value)} className={`${inputClass} flex-1 min-w-48`} />
       <select aria-label="Job status" className={inputClass + ' !w-auto'} value={filter} onChange={e => setFilter(e.target.value)}><option value="active">Active jobs</option><option value="all">All jobs</option>{Object.entries(STATUS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
       <button type="button" className={buttonClass} disabled={busy} onClick={() => { setError(''); void refresh().catch(e => setError(e.message)); }}>Refresh</button>
+    </div>
     </div>
     {!loaded ? <p className="text-gray-400">Loading jobs…</p> : <div className={`grid items-start gap-3 ${lanes.length > 1 ? 'lg:grid-cols-3' : ''}`}>
       {lanes.map(lane => <section key={lane.status} aria-label={`${lane.label} jobs`} className="min-w-0 rounded-lg border border-gray-700 bg-gray-950/60 p-3">
