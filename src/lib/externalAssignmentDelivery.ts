@@ -4,6 +4,7 @@ import { getFirebaseFunctions } from './firebase';
 export const STAFF_EXTERNAL_ASSIGNMENT_DELIVERY_CALLABLE = 'staffExternalAssignmentDelivery';
 
 export type ExternalDeliveryChannel = 'sms' | 'whatsapp';
+export type DriverShiftPreference = 'day' | 'night' | 'either' | 'unset';
 
 export type ExternalDriver = {
   externalDriverId: string;
@@ -11,6 +12,7 @@ export type ExternalDriver = {
   displayName: string;
   phoneE164: string;
   channels: ExternalDeliveryChannel[];
+  shiftPreference?: DriverShiftPreference;
   active: boolean;
 };
 

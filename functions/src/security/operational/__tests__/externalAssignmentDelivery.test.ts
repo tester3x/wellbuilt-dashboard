@@ -49,7 +49,11 @@ describe('external driver roster containment', () => {
       phoneE164: '+17015550123',
       channels: ['sms', 'whatsapp'],
       active: true,
-    }, 'acme')).toMatchObject({ ok: true, externalDriverId: 'outside-joe' });
+    }, 'acme')).toMatchObject({ ok: true, externalDriverId: 'outside-joe', shiftPreference: 'unset' });
+    expect(parseExternalDriverWrite({
+      externalDriverId: 'outside-joe', displayName: 'Joe Outside', phoneE164: '', channels: [], active: true,
+      shiftPreference: 'night',
+    }, 'acme')).toMatchObject({ ok: true, shiftPreference: 'night' });
   });
 
   it('allows name-only roster entries but never sends to them', () => {
@@ -74,6 +78,9 @@ describe('external driver roster containment', () => {
     expect(parseExternalDriverWrite({
       externalDriverId: 'joe', displayName: 'Joe', phoneE164: '+17015550123', channels: ['sms'], active: true, providerToken: 'no',
     }, 'acme')).toMatchObject({ ok: false, reason: 'unexpected_field', field: 'providerToken' });
+    expect(parseExternalDriverWrite({
+      externalDriverId: 'joe', displayName: 'Joe', phoneE164: '', channels: [], active: true, shiftPreference: 'graveyard',
+    }, 'acme')).toMatchObject({ ok: false, reason: 'invalid_shift_preference' });
     expect(planExternalAssignmentRevision({
       companyId: 'other', actorUid: 'u', nowIso: '2026-11-20T12:00:00.000Z', idempotencyKey: 'k',
       dispatchId: 'dispatch-1', externalDriver: driver, channel: 'sms', action: 'assigned', existing: null,

@@ -11,6 +11,7 @@ export const EXTERNAL_DELIVERY_STATUSES = Object.freeze([
 
 export type ExternalDeliveryStatus = typeof EXTERNAL_DELIVERY_STATUSES[number];
 export type ExternalDeliveryChannel = 'sms' | 'whatsapp';
+export type DriverShiftPreference = 'day' | 'night' | 'either' | 'unset';
 export type ExternalAssignmentAction = 'assigned' | 'reassigned' | 'retried' | 'cancelled';
 
 export type ExternalDriverRecord = {
@@ -19,6 +20,7 @@ export type ExternalDriverRecord = {
   displayName: string;
   phoneE164: string;
   channels: ExternalDeliveryChannel[];
+  shiftPreference?: DriverShiftPreference;
   active: boolean;
 };
 
@@ -94,7 +96,7 @@ export function parseExternalDriverWrite(
 ): ExternalDeliverySuccess<Omit<ExternalDriverRecord, 'companyId'>> | ExternalDeliveryFailure {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fail('invalid_driver', 'driver');
   const value = raw as Record<string, unknown>;
-  const allowed = new Set(['externalDriverId', 'displayName', 'phoneE164', 'channels', 'active']);
+  const allowed = new Set(['externalDriverId', 'displayName', 'phoneE164', 'channels', 'active', 'shiftPreference']);
   const unexpected = Object.keys(value).find(key => !allowed.has(key));
   if (unexpected) return fail('unexpected_field', unexpected);
   const externalDriverId = stringField(value.externalDriverId);
@@ -114,6 +116,8 @@ export function parseExternalDriverWrite(
   if (!phoneE164 && channels.length > 0)
     return fail('invalid_channels', 'channels');
   if (typeof value.active !== 'boolean') return fail('invalid_active', 'active');
+  if (value.shiftPreference !== undefined && !['day', 'night', 'either', 'unset'].includes(value.shiftPreference as string))
+    return fail('invalid_shift_preference', 'shiftPreference');
   return {
     ok: true,
     externalDriverId,
@@ -121,6 +125,7 @@ export function parseExternalDriverWrite(
     phoneE164,
     channels: channels as ExternalDeliveryChannel[],
     active: value.active,
+    shiftPreference: (value.shiftPreference || 'unset') as DriverShiftPreference,
   };
 }
 

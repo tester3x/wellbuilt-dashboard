@@ -9,7 +9,15 @@ import {
   type ExternalDelivery,
   type ExternalDeliveryChannel,
   type ExternalDriver,
+  type DriverShiftPreference,
 } from '@/lib/externalAssignmentDelivery';
+
+const SHIFT_GROUPS: { value: DriverShiftPreference; label: string }[] = [
+  { value: 'day', label: 'Day shift' },
+  { value: 'night', label: 'Night shift' },
+  { value: 'either', label: 'Either shift' },
+  { value: 'unset', label: 'Preference not set' },
+];
 
 export type ExternalDispatchOption = {
   id: string;
@@ -52,6 +60,7 @@ export function ExternalAssignmentDeliveryPanel({
   const [newChannels, setNewChannels] = useState<ExternalDeliveryChannel[]>([]);
   const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
   const [driverActive, setDriverActive] = useState(true);
+  const [shiftPreference, setShiftPreference] = useState<DriverShiftPreference>('unset');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [reassignTargets, setReassignTargets] = useState<Record<string, string>>({});
@@ -102,6 +111,7 @@ export function ExternalAssignmentDeliveryPanel({
     setPhone('');
     setNewChannels([]);
     setDriverActive(true);
+    setShiftPreference('unset');
   }
 
   function editDriver(driver: ExternalDriver) {
@@ -110,6 +120,7 @@ export function ExternalAssignmentDeliveryPanel({
     setPhone(driver.phoneE164);
     setNewChannels(driver.channels);
     setDriverActive(driver.active);
+    setShiftPreference(driver.shiftPreference || 'unset');
     setMessage('');
     document.getElementById('outside-driver-name')?.focus();
   }
@@ -141,6 +152,7 @@ export function ExternalAssignmentDeliveryPanel({
             phoneE164: phone.trim(),
             channels: phone.trim() ? newChannels : [],
             active: driverActive,
+            shiftPreference,
           };
           void run(async () => {
             const saved = await saveExternalDriver(driver);
@@ -155,6 +167,12 @@ export function ExternalAssignmentDeliveryPanel({
             <input value={phone} onChange={event => setPhone(event.target.value)}
               aria-label="Driver phone (optional)" placeholder="Phone (optional) · +17015550123" inputMode="tel" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />
           </div>
+          <label className="mt-2 block text-xs text-gray-300">Shift preference
+            <select value={shiftPreference} onChange={event => setShiftPreference(event.target.value as DriverShiftPreference)}
+              className="mt-1 block w-full rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white">
+              {SHIFT_GROUPS.map(group => <option key={group.value} value={group.value}>{group.label}</option>)}
+            </select>
+          </label>
           <div className="mt-2 flex items-center gap-4 text-sm text-gray-300">
             {(['sms', 'whatsapp'] as const).map(option => (
               <label key={option} className="flex items-center gap-1.5">
@@ -172,14 +190,21 @@ export function ExternalAssignmentDeliveryPanel({
             <label className="flex items-center gap-1.5"><input type="checkbox" checked={driverActive} onChange={event => setDriverActive(event.target.checked)} />Active for new assignments</label>
             <button type="button" className="text-cyan-300 underline" onClick={clearDriverEditor}>Cancel editing</button>
           </div>}
-          {drivers.length > 0 && (
-            <ul className="mt-3 space-y-1 text-xs text-gray-400">
-              {drivers.map(driver => <li key={driver.externalDriverId} className="flex items-center justify-between gap-2">
-                <span>{driver.displayName} · {driver.phoneE164 || 'No phone on file'}{driver.channels.length ? ` · ${driver.channels.join('/')}` : ''}{driver.active ? '' : ' · inactive'}</span>
-                <button type="button" disabled={busy} onClick={() => editDriver(driver)} className="shrink-0 text-cyan-300 underline disabled:opacity-50" aria-label={`Edit ${driver.displayName}`}>Edit</button>
-              </li>)}
-            </ul>
-          )}
+          {drivers.length > 0 && <div className="mt-3 space-y-3">
+            {SHIFT_GROUPS.map(group => {
+              const members = drivers.filter(driver => (driver.shiftPreference || 'unset') === group.value);
+              if (!members.length) return null;
+              return <div key={group.value}>
+                <h4 className="text-xs font-medium text-gray-300">{group.label} ({members.length})</h4>
+                <ul className="mt-1 space-y-1 text-xs text-gray-400">
+                  {members.map(driver => <li key={driver.externalDriverId} className="flex items-center justify-between gap-2">
+                    <span>{driver.displayName} · {driver.phoneE164 || 'No phone on file'}{driver.channels.length ? ` · ${driver.channels.join('/')}` : ''}{driver.active ? '' : ' · inactive'}</span>
+                    <button type="button" disabled={busy} onClick={() => editDriver(driver)} className="shrink-0 text-cyan-300 underline disabled:opacity-50" aria-label={`Edit ${driver.displayName}`}>Edit</button>
+                  </li>)}
+                </ul>
+              </div>;
+            })}
+          </div>}
         </form>
 
         {!rosterOnly && <form className="rounded border border-gray-700 p-3" onSubmit={event => {

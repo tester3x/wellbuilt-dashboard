@@ -69,7 +69,9 @@ function parseStoredDriver(raw: FirebaseFirestore.DocumentData | undefined): Ext
     || typeof raw.active !== 'boolean'
     || (raw.phoneE164 === '' && channels.length > 0)
   ) return null;
-  return { ...raw, channels } as ExternalDriverRecord;
+  return { ...raw, channels,
+    shiftPreference: ['day', 'night', 'either', 'unset'].includes(raw.shiftPreference) ? raw.shiftPreference : 'unset',
+  } as ExternalDriverRecord;
 }
 
 function parseStoredRoot(raw: FirebaseFirestore.DocumentData | undefined): ExternalDeliveryRoot | null {
