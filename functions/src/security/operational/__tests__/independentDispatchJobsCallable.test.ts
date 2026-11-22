@@ -106,4 +106,20 @@ describe('Independent Dispatch callable boundaries', () => {
     records.set('companies/company-a/independent_dispatch_customers/customer-a', { companyId: 'company-b', name: 'Foreign', active: true, sectors: ['ltl'] });
     await expect(call({ ...create, jobId: 'job-c', requestId: 'request-c', job: sectorJob })).rejects.toThrow('customer_sector_unavailable');
   });
+  it('keeps a one-off customer on the job, or saves a reusable official name only when requested', async () => {
+    records.set('companies/company-a/independent_dispatch_config/settings', { sectors: ['ltl'] });
+    const oneOff = { ...details, customer: 'One Time Freight LLC', sector: 'ltl', sectorFields: { freightDescription: 'Pallets', pieces: '4' } };
+    await call({ ...create, job: oneOff });
+    expect(records.get('independent_dispatch_jobs/job-a')).toMatchObject({ customer: 'One Time Freight LLC', sector: 'ltl' });
+    expect(records.get('independent_dispatch_jobs/job-a').customerId).toBeUndefined();
+    expect([...records.keys()].filter(key => key.includes('independent_dispatch_customers'))).toEqual([]);
+    const saved = { ...create, jobId: 'job-b', requestId: 'request-b', job: { ...oneOff, customer: "Bob's Hot Shot LLC" }, saveCustomer: true };
+    await call(saved);
+    expect(records.get('independent_dispatch_jobs/job-b').customerId).toBe('job_job-b');
+    expect(records.get('companies/company-a/independent_dispatch_customers/job_job-b')).toMatchObject({
+      companyId: 'company-a', name: "Bob's Hot Shot LLC", alternateNames: [], sectors: ['ltl'], active: true,
+    });
+    await expect(call(saved)).resolves.toMatchObject({ idempotent: true });
+    expect([...records.keys()].filter(key => key.includes('independent_dispatch_customers'))).toHaveLength(1);
+  });
 });

@@ -10,7 +10,7 @@ import { driverAuthUid } from './tokenMint';
 const COLLECTION = 'independent_dispatch_jobs';
 const WB_DRIVER_LINKS = 'independent_dispatch_wb_drivers';
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
-const KEYS = new Set(['op', 'jobId', 'job', 'expectedRevision', 'externalDriverId', 'wbDriverId', 'status', 'requestId']);
+const KEYS = new Set(['op', 'jobId', 'job', 'expectedRevision', 'externalDriverId', 'wbDriverId', 'status', 'requestId', 'saveCustomer']);
 
 /** Separate from governed WB-M execution: staff records dispatch progress, never tickets or driver acceptance. */
 export const staffIndependentDispatchJobs = httpsV2.onCall(
@@ -47,6 +47,8 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
     let details: IndependentJobDetails | undefined;
     try { if (op === 'create' || op === 'update') details = parseIndependentJob(raw.job); }
     catch (error) { throw new httpsV2.HttpsError('invalid-argument', (error as Error).message); }
+    if (raw.saveCustomer !== undefined && (raw.saveCustomer !== true || op !== 'create' || !details?.sector || details.customerId))
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_save_customer');
     let wbProfile: Record<string, unknown> | null = null;
     if (op === 'assign' && typeof raw.wbDriverId === 'string' && ID.test(raw.wbDriverId)) {
       const profile = await admin.database().ref(`drivers/profiles/${raw.wbDriverId}`).get();
@@ -62,10 +64,12 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
     return db.runTransaction(async tx => {
       const directoryConfigRef = companyRef.collection('independent_dispatch_config').doc('settings');
       const customerRef = details?.customerId ? companyRef.collection('independent_dispatch_customers').doc(details.customerId) : null;
-      const [jobSnap, eventSnap, freshCompany, directoryConfig, customer] = await Promise.all([
+      const newCustomerRef = raw.saveCustomer === true ? companyRef.collection('independent_dispatch_customers').doc(`job_${raw.jobId}`) : null;
+      const [jobSnap, eventSnap, freshCompany, directoryConfig, customer, newCustomer] = await Promise.all([
         tx.get(jobRef), tx.get(eventRef), tx.get(companyRef),
         details?.sector ? tx.get(directoryConfigRef) : Promise.resolve(null),
         customerRef ? tx.get(customerRef) : Promise.resolve(null),
+        newCustomerRef ? tx.get(newCustomerRef) : Promise.resolve(null),
       ]);
       if (!hasIndependentDispatchPackage(freshCompany.data()))
         throw new httpsV2.HttpsError('permission-denied', 'independent_dispatch_package_inactive');
@@ -73,11 +77,13 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
         const enabled = directoryConfig?.exists ? parseIndependentSectors(directoryConfig.data()?.sectors) : [...INDEPENDENT_SECTORS];
         if (!enabled.includes(details.sector as typeof INDEPENDENT_SECTORS[number]))
           throw new httpsV2.HttpsError('failed-precondition', 'sector_disabled');
-        if (!customer?.exists || customer.data()?.companyId !== authority.companyId
-          || customer.data()?.active !== true || !Array.isArray(customer.data()?.sectors)
-          || !customer.data()!.sectors.includes(details.sector))
-          throw new httpsV2.HttpsError('failed-precondition', 'customer_sector_unavailable');
-        details.customer = customer.data()!.name;
+        if (customerRef) {
+          if (!customer?.exists || customer.data()?.companyId !== authority.companyId
+            || customer.data()?.active !== true || !Array.isArray(customer.data()?.sectors)
+            || !customer.data()!.sectors.includes(details.sector))
+            throw new httpsV2.HttpsError('failed-precondition', 'customer_sector_unavailable');
+          details.customer = customer.data()!.name;
+        }
       }
       const previous = jobSnap.data();
       if (previous && previous.companyId !== authority.companyId)
@@ -91,11 +97,18 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
         return { ok: true, idempotent: true, job: { ...previous, id: jobSnap.id } };
       }
       if (op === 'create' && previous) throw new httpsV2.HttpsError('already-exists', 'job_exists');
+      if (newCustomer?.exists) throw new httpsV2.HttpsError('already-exists', 'customer_exists');
       if (op !== 'create' && !previous) throw new httpsV2.HttpsError('not-found', 'job_not_found');
       if (previous && previous.revision !== raw.expectedRevision)
         throw new httpsV2.HttpsError('failed-precondition', 'job_changed_refresh_before_retry');
       const now = new Date().toISOString();
       let patch: Record<string, unknown> = details ? { ...details } : {};
+      if (newCustomerRef && details?.sector) {
+        tx.create(newCustomerRef, { companyId: authority.companyId, name: details.customer, alternateNames: [],
+          phoneE164: '', sectors: [details.sector], jobNames: [], pickupLocations: [], deliveryLocations: [],
+          active: true, updatedAt: now, updatedBy: authority.uid });
+        patch.customerId = newCustomerRef.id;
+      }
       if (op === 'update' || op === 'assign') {
         try { assertIndependentJobMutable(previous!.status); }
         catch { throw new httpsV2.HttpsError('failed-precondition', 'job_not_editable'); }

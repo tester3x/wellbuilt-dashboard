@@ -29,9 +29,9 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
     || !Number.isFinite(Date.parse(job.scheduledAt)) || new Date(job.scheduledAt).toISOString() !== job.scheduledAt)) throw Error('invalid_scheduledAt');
   if (input.sector !== undefined || input.customerId !== undefined || input.sectorFields !== undefined) {
     if (!isIndependentSector(input.sector)) throw Error('invalid_sector');
-    if (typeof input.customerId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(input.customerId)) throw Error('invalid_customerId');
+    if (input.customerId !== undefined && (typeof input.customerId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(input.customerId))) throw Error('invalid_customerId');
     job.sector = input.sector;
-    job.customerId = input.customerId;
+    if (input.customerId !== undefined) job.customerId = input.customerId as string;
     job.sectorFields = parseSectorFields(input.sector, input.sectorFields);
   }
   return job;

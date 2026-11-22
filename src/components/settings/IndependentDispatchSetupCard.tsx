@@ -13,6 +13,7 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
   const [dispatchPhoneE164, setDispatchPhoneE164] = useState('');
   const [editingId, setEditingId] = useState('');
   const [name, setName] = useState('');
+  const [alternateNames, setAlternateNames] = useState('');
   const [phoneE164, setPhoneE164] = useState('');
   const [customerSectors, setCustomerSectors] = useState<IndependentSector[]>([]);
   const [jobNames, setJobNames] = useState('');
@@ -34,7 +35,7 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
     finally { setBusy(false); }
   }
   function edit(customer?: IndependentCustomer) {
-    setEditingId(customer?.id || ''); setName(customer?.name || ''); setPhoneE164(customer?.phoneE164 || '');
+    setEditingId(customer?.id || ''); setName(customer?.name || ''); setAlternateNames(join(customer?.alternateNames)); setPhoneE164(customer?.phoneE164 || '');
     setCustomerSectors(customer?.sectors || []); setJobNames(join(customer?.jobNames));
     setPickups(join(customer?.pickupLocations)); setDeliveries(join(customer?.deliveryLocations));
   }
@@ -78,12 +79,17 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
         {canEdit && <form className="mt-4 grid gap-3" onSubmit={event => { event.preventDefault();
           const id = editingId || crypto.randomUUID();
           void run(() => independentDispatchDirectory({ op: 'saveCustomer', customer: {
-            id, name, phoneE164: phoneE164.trim(), sectors: customerSectors, jobNames: lines(jobNames), pickupLocations: lines(pickups),
+            id, name, alternateNames: lines(alternateNames), phoneE164: phoneE164.trim(), sectors: customerSectors, jobNames: lines(jobNames), pickupLocations: lines(pickups),
             deliveryLocations: lines(deliveries), active: true,
           } }), 'Customer saved.').then(() => setEditingId(id));
         }}>
           <h5 className="text-sm font-medium">{editingId ? 'Edit customer' : 'Add customer'}</h5>
           <label className="text-xs text-gray-300">Customer name<input required maxLength={180} value={name} onChange={e => setName(e.target.value)} className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
+          <label className="text-xs text-gray-300">Alternate names or abbreviations · one per line
+            <textarea rows={3} value={alternateNames} onChange={e => setAlternateNames(e.target.value)} placeholder={"Bob's\nBHS"}
+              className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" />
+            <span className="mt-1 block text-gray-400">Used to recognize requests. Job forms and customer lists show the official name above.</span>
+          </label>
           <label className="text-xs text-gray-300">Customer phone for Dialpad (optional, +country code)<input type="tel" pattern="\\+[1-9][0-9]{7,14}" value={phoneE164} onChange={e => setPhoneE164(e.target.value)} placeholder="+15551234567" className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
           <fieldset><legend className="text-xs text-gray-300">Workflows for this customer</legend><div className="mt-1 flex flex-wrap gap-3 text-sm">
             {INDEPENDENT_SECTORS.filter(s => sectors.includes(s.id)).map(sector => <label key={sector.id}><input type="checkbox" checked={customerSectors.includes(sector.id)}

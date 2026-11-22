@@ -4,7 +4,7 @@ import type { IndependentSector } from './independentDispatchSectors';
 
 export type IndependentCustomer = {
   id: string; name: string; phoneE164?: string; sectors: IndependentSector[]; jobNames: string[];
-  pickupLocations: string[]; deliveryLocations: string[]; active: true;
+  alternateNames?: string[]; pickupLocations: string[]; deliveryLocations: string[]; active: true;
 };
 export type IndependentDirectory = {
   ok: true; companyId: string; sectors: IndependentSector[]; communicationChannels: ('sms' | 'whatsapp')[];

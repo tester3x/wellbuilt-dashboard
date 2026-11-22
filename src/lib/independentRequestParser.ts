@@ -4,6 +4,8 @@ import { INDEPENDENT_SECTORS, SECTOR_FIELDS, type IndependentSector } from './in
 
 export type ParsedJobRequest = {
   customerId: string;
+  customerLabel: string;
+  customerSuggestions: { id: string; name: string }[];
   sector: IndependentSector | '';
   fields: Partial<IndependentJobDetails>;
   sectorFields: Record<string, string>;
@@ -48,14 +50,26 @@ function labeled(lines: string[], names: string[]): string {
 
 function matchCustomer(raw: string, customers: IndependentCustomer[]): IndependentCustomer | undefined {
   const wanted = normalize(raw);
-  return customers.filter(customer => normalize(customer.name) === wanted).length === 1
-    ? customers.find(customer => normalize(customer.name) === wanted) : undefined;
+  const matches = customers.filter(customer => [customer.name, ...(customer.alternateNames || [])].some(name => normalize(name) === wanted));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function closeCustomers(raw: string, customers: IndependentCustomer[]): { id: string; name: string }[] {
+  const wanted = normalize(raw);
+  if (wanted.length < 3) return [];
+  return customers.filter(customer => [customer.name, ...(customer.alternateNames || [])].some(name => {
+    const candidate = normalize(name);
+    if (candidate === wanted) return true;
+    if (wanted.length >= 4 && (candidate.startsWith(`${wanted} `) || wanted.startsWith(`${candidate} `))) return true;
+    const words = wanted.split(' ').filter(word => word.length >= 3);
+    return words.length > 0 && words.every(word => candidate.split(' ').some(part => part.startsWith(word)));
+  })).slice(0, 5).map(customer => ({ id: customer.id, name: customer.name }));
 }
 
 function inferCustomer(text: string, customers: IndependentCustomer[]): IndependentCustomer | undefined {
   const haystack = ` ${normalize(text)} `;
-  const matches = customers.filter(customer => normalize(customer.name).length >= 5
-    && haystack.includes(` ${normalize(customer.name)} `));
+  const matches = customers.filter(customer => [customer.name, ...(customer.alternateNames || [])].some(name => normalize(name).length >= 5
+    && haystack.includes(` ${normalize(name)} `)));
   return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -108,7 +122,10 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
   const fields: Partial<IndependentJobDetails> = {};
   const customerLabel = labeled(lines, ALIASES.customer);
   const customer = customerLabel ? matchCustomer(customerLabel, directory.customers) : inferCustomer(text, directory.customers);
-  if (customerLabel && !customer) warnings.push(`Customer “${customerLabel}” is not an exact match in your customer list.`);
+  const customerSuggestions = customerLabel && !customer ? closeCustomers(customerLabel, directory.customers) : [];
+  if (customerLabel && !customer) warnings.push(`Customer “${customerLabel}” is not an exact match in your customer list. Confirm a suggestion or use NEW customer.`);
+  if (customerLabel && customer && normalize(customerLabel) !== normalize(customer.name))
+    warnings.push(`Matched “${customerLabel}” to ${customer.name}; confirm the official customer.`);
   if (!customerLabel && customer) warnings.push(`Matched ${customer.name} from the message; confirm the customer.`);
   const requestedSector = labeled(lines, ALIASES.sector);
   let sector = requestedSector ? sectorFrom(requestedSector) : '';
@@ -147,5 +164,5 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
     !fields.pickup && 'Pickup location', !fields.destination && 'Delivery location',
     ...(sector ? SECTOR_FIELDS[sector].filter(field => field.required && !sectorFields[field.key]).map(field => field.label) : [])]
     .filter((value): value is string => !!value);
-  return { customerId: customer?.id || '', sector, fields, sectorFields, scheduledLocal, missing, warnings };
+  return { customerId: customer?.id || '', customerLabel, customerSuggestions, sector, fields, sectorFields, scheduledLocal, missing, warnings };
 }

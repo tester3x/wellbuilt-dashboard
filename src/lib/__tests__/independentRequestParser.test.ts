@@ -5,10 +5,11 @@ import type { IndependentDirectory } from '../independentDispatchDirectory.ts';
 
 const directory: IndependentDirectory = {
   ok: true, companyId: 'prairie', sectors: ['water-hauling', 'ltl', 'otr', 'hot-shot', 'aggregate'],
-  customers: [
+  communicationChannels: [], dispatchPhoneE164: '', customers: [
     { id: 'liquid', name: 'Liquid Gold', active: true, phoneE164: '', sectors: ['water-hauling', 'hot-shot'], jobNames: [], pickupLocations: [], deliveryLocations: [] },
     { id: 'freight', name: 'Prairie Freight', active: true, phoneE164: '', sectors: ['ltl', 'otr'], jobNames: [], pickupLocations: [], deliveryLocations: [] },
     { id: 'gravel', name: 'Red Mesa Gravel', active: true, phoneE164: '', sectors: ['aggregate'], jobNames: [], pickupLocations: [], deliveryLocations: [] },
+    { id: 'bob', name: "Bob's Hot Shot LLC", alternateNames: ["Bob's", 'BHS'], active: true, phoneE164: '', sectors: ['hot-shot'], jobNames: [], pickupLocations: [], deliveryLocations: [] },
   ],
 };
 
@@ -49,6 +50,21 @@ test('unknown customer and unclear fields stay unselected and require review', (
   assert.ok(parsed.missing.includes('Delivery location'));
   assert.ok(parsed.missing.includes('Job name'));
   assert.ok(parsed.warnings.some(message => message.includes('not an exact match')));
+  assert.equal(parsed.customerLabel, 'Unknown Carrier');
+});
+
+test('saved aliases resolve only to the official company name', () => {
+  for (const name of ["Bob's", 'BHS']) {
+    const parsed = parsePastedJobRequest(`Customer: ${name}\nSector: Hot shot\nJob: Pump\nPickup: Yard\nDelivery: Rig\nUrgency: Same day\nCargo details: Pump skid`, directory);
+    assert.equal(parsed.customerId, 'bob');
+    assert.deepEqual(parsed.customerSuggestions, []);
+  }
+});
+
+test('close names suggest the official company without silently selecting it', () => {
+  const parsed = parsePastedJobRequest("Customer: Bob's Hot Shot\nSector: Hot shot\nJob: Pump\nPickup: Yard\nDelivery: Rig", directory);
+  assert.equal(parsed.customerId, '');
+  assert.deepEqual(parsed.customerSuggestions, [{ id: 'bob', name: "Bob's Hot Shot LLC" }]);
 });
 
 test('sector conflicting with the selected customer is not applied', () => {

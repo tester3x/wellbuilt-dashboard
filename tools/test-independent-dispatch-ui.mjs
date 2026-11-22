@@ -20,7 +20,7 @@ export async function independentDispatchJobs(data){
 const bundle = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {IndependentDispatchBoard} from './src/components/IndependentDispatchBoard';createRoot(document.getElementById('root')).render(<IndependentDispatchBoard companyId="fixture" canWrite={true} canManageDrivers={true}/>);`, loader: 'tsx', resolveDir: process.cwd() }, bundle: true, write: false, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, plugins: [{ name: 'fixture', setup(b) {
   b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
-    : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],communicationChannels:['sms'],dispatchPhoneE164:'+17015550100',customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']}]});`
+    : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],communicationChannels:['sms'],dispatchPhoneE164:'+17015550100',customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']},{id:'bob',name:"Bob's Hot Shot LLC",alternateNames:["Bob's",'BHS'],phoneE164:'',active:true,sectors:['hot-shot'],jobNames:[],pickupLocations:[],deliveryLocations:[]}]});`
     : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{const i=roster.findIndex(x=>x.externalDriverId===d.externalDriverId);if(i>=0)roster[i]=d;else roster.push(d);window.savedDriver=d;window.roster=structuredClone(roster);return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
@@ -66,9 +66,17 @@ try {
   assert.equal(await page.getByLabel('Estimated barrels').inputValue(),'120');
   assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.op==='create').length),0,'parsing never creates a job');
   await page.getByRole('button',{name:'Clear / new job'}).click();
+  await page.getByRole('textbox',{name:'Job request text'}).fill("Customer: Bob's Hot Shot\nSector: Hot shot\nJob: Pump\nPickup: Yard\nDelivery: Rig\nUrgency: Same day\nCargo details: Pump skid");
+  await page.getByRole('button',{name:'Fill job form from text'}).click();
+  assert.equal(await page.getByRole('combobox',{name:'Customer',exact:true}).inputValue(),'');
+  await page.getByRole('button',{name:"Bob's Hot Shot LLC"}).click();
+  assert.equal(await page.getByRole('combobox',{name:'Customer',exact:true}).inputValue(),'bob');
+  await page.getByRole('button',{name:'Clear / new job'}).click();
   await page.getByRole('textbox',{name:'Job request text'}).fill('Customer: Unknown Co\nSector: Water hauling\nJob: Review pickup\nPickup: Yard A\nDelivery: Site B\nWater type: Production water\nBarrels: 50');
   await page.getByRole('button',{name:'Fill job form from text'}).click();
-  await page.getByText(/Still needed: Customer/).waitFor();
+  assert.equal(await page.getByRole('combobox',{name:'Customer',exact:true}).inputValue(),'__new__');
+  assert.equal(await page.getByRole('textbox',{name:"New customer's official company name"}).inputValue(),'Unknown Co');
+  assert.equal(await page.getByRole('checkbox',{name:'Save this customer for future jobs'}).isChecked(),false);
   await page.getByRole('combobox',{name:'Customer',exact:true}).selectOption('customer-a');
   assert.equal(await page.getByLabel('Job name *').inputValue(),'Review pickup','manual customer choice retains parsed fields');
   assert.equal(await page.getByRole('combobox',{name:'Transportation sector',exact:true}).inputValue(),'water-hauling');
@@ -93,11 +101,34 @@ try {
     await page.getByRole('button',{name:'Create job',exact:true}).click();
     await page.getByRole('article').filter({hasText:`Pipe run ${sector}`}).waitFor();
   }
+  await page.getByRole('combobox',{name:'Customer',exact:true}).selectOption('__new__');
+  await page.getByRole('textbox',{name:"New customer's official company name"}).fill('One Time Freight LLC');
+  await page.getByRole('combobox',{name:'Transportation sector',exact:true}).selectOption('ltl');
+  await page.getByLabel('Freight description').fill('Parts');
+  await page.getByLabel('Pieces').fill('2');
+  await page.getByLabel('Job name *').fill('One-time job');
+  await page.getByLabel('Pickup address / location *').fill('Yard');
+  await page.getByLabel('Delivery address / location *').fill('Site');
+  await page.getByRole('button',{name:'Create job',exact:true}).click();
+  await page.getByRole('article').filter({hasText:'One-time job'}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>{const r=window.requests.find(r=>r.op==='create'&&r.job.title==='One-time job');return {customer:r.job.customer,customerId:r.job.customerId,saveCustomer:r.saveCustomer}}),
+    {customer:'One Time Freight LLC',customerId:undefined,saveCustomer:undefined});
+  await page.getByRole('combobox',{name:'Customer',exact:true}).selectOption('__new__');
+  await page.getByRole('textbox',{name:"New customer's official company name"}).fill('New Repeat Customer LLC');
+  await page.getByRole('checkbox',{name:'Save this customer for future jobs'}).check();
+  await page.getByRole('combobox',{name:'Transportation sector',exact:true}).selectOption('ltl');
+  await page.getByLabel('Freight description').fill('Parts');
+  await page.getByLabel('Pieces').fill('3');
+  await page.getByLabel('Job name *').fill('First repeat job');
+  await page.getByLabel('Pickup address / location *').fill('Yard');
+  await page.getByLabel('Delivery address / location *').fill('Site');
+  await page.getByRole('button',{name:'Create job',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='create'&&r.job.title==='First repeat job')?.saveCustomer),true);
   const card=page.getByRole('article').filter({hasText:'Pipe run water-hauling'});
   await card.waitFor();
   await card.getByRole('combobox').selectOption('outside:driver-a');
   await card.getByRole('button',{name:'Assign',exact:true}).click();
-  const firstJobId = await page.evaluate(() => window.requests.find(request => request.op === 'create').jobId);
+  const firstJobId = await page.evaluate(() => window.requests.find(request => request.op === 'create'&&request.job.title==='Pipe run water-hauling').jobId);
   assert.equal(await card.getByRole('link',{name:'Call customer in Dialpad'}).getAttribute('href'),
     `dialpad://+17015550111?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.ok((await card.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
@@ -114,7 +145,7 @@ try {
   await page.getByRole('combobox',{name:'Job status',exact:true}).selectOption('completed');
   await card.waitFor();
   assert.equal(await card.getByRole('button').count(),0);
-  assert.deepEqual(await page.evaluate(()=>window.requests.filter(r=>r.op==='create').map(r=>r.job.sector)),sectors.map(([sector])=>sector));
+  assert.deepEqual(await page.evaluate(()=>window.requests.filter(r=>r.op==='create'&&r.job.title.startsWith('Pipe run ')).map(r=>r.job.sector)),sectors.map(([sector])=>sector));
   assert.deepEqual(errors,[]);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');
   await page.close();

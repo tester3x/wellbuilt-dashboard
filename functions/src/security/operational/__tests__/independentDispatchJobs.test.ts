@@ -39,6 +39,9 @@ describe('Independent Dispatch job validation and lifecycle', () => {
       const parsed = parseIndependentJob({ ...job, customerId: 'customer-a', sector, sectorFields: examples[sector] });
       expect(parsed.sector).toBe(sector);
       expect(parsed.sectorFields).toMatchObject(examples[sector]);
+      const oneOff = parseIndependentJob({ ...job, sector, sectorFields: examples[sector] });
+      expect(oneOff.customerId).toBeUndefined();
+      expect(oneOff.sector).toBe(sector);
     }
     expect(parseIndependentJob(job).sector).toBeUndefined();
   });
