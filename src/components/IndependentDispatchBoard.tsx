@@ -6,6 +6,7 @@ import { ExternalAssignmentDeliveryPanel } from './ExternalAssignmentDeliveryPan
 import { independentDispatchDirectory, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
 import { SECTOR_FIELDS, sectorLabel, type IndependentSector } from '@/lib/independentDispatchSectors';
 import { dialpadCallHref } from '@/lib/dialpad';
+import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentRequestParser';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '' };
 const STATUS: Record<IndependentJobStatus, string> = { unassigned: 'Unassigned', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
@@ -50,6 +51,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [customerId, setCustomerId] = useState('');
   const [sector, setSector] = useState<IndependentSector | ''>('');
   const [sectorFields, setSectorFields] = useState<Record<string, string>>({});
+  const [pastedRequest, setPastedRequest] = useState('');
+  const [parseReport, setParseReport] = useState<ParsedJobRequest | null>(null);
   // Keep create identity through an ambiguous network failure, avoiding duplicate jobs.
   const creation = useRef({ jobId: crypto.randomUUID(), requestId: crypto.randomUUID() });
   const refresh = useCallback(async () => {
@@ -76,6 +79,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   }
   function resetForm() {
     setForm(EMPTY); setEditing(null); setScheduledLocal(''); setCustomerId(''); setSector(''); setSectorFields({});
+    setPastedRequest(''); setParseReport(null);
     creation.current = { jobId: crypto.randomUUID(), requestId: crypto.randomUUID() };
   }
   function edit(job: IndependentJob) {
@@ -90,11 +94,38 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     && [job.title, job.customer, job.reference, job.pickup, job.destination, job.driverName].join(' ').toLowerCase().includes(search.toLowerCase()));
   const selectedCustomer = directory?.customers.find(customer => customer.id === customerId);
   const availableSectors = (selectedCustomer?.sectors || []).filter(id => directory?.sectors.includes(id));
+  function fillFromRequest() {
+    if (!directory || !pastedRequest.trim() || editing) return;
+    const result = parsePastedJobRequest(pastedRequest, directory);
+    const customer = directory.customers.find(item => item.id === result.customerId);
+    setCustomerId(result.customerId);
+    setSector(customer ? result.sector : '');
+    setSectorFields(customer ? result.sectorFields : {});
+    setScheduledLocal(result.scheduledLocal);
+    setForm({ ...EMPTY, ...result.fields, customer: customer?.name || '' });
+    setParseReport(result);
+    document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' });
+  }
   return <div className="space-y-4">
     <p className="text-sm text-gray-300">Create customer jobs with sector-specific details, assign outside or linked WellBuilt drivers, and record progress. Assigning a WellBuilt driver here does not send a job to their phone app yet.</p>
     {error && <div role="alert" className="rounded border border-red-700 bg-red-950 p-3 text-red-200">{error}</div>}
     {notice && <p role="status" className="text-green-300">{notice}</p>}
     {canManageDrivers && <ExternalAssignmentDeliveryPanel jobs={[]} canManage={canWrite && canManageDrivers} rosterOnly onRosterChange={refresh} />}
+    {canWrite && <section className="rounded border border-cyan-800 bg-cyan-950/20 p-4" aria-labelledby="paste-request-title">
+      <h2 id="paste-request-title" className="font-semibold text-cyan-300">Paste a job request</h2>
+      <p className="mt-1 text-sm text-gray-300">Paste a text or WhatsApp request, then review the filled form. Nothing is saved or sent until you create the job. Phone requests can be entered directly below.</p>
+      <textarea aria-label="Job request text" value={pastedRequest} onChange={event => setPastedRequest(event.target.value)}
+        maxLength={10000} rows={5} placeholder={'Customer: Example Hauling\nSector: Water hauling\nJob: Production water run\nPickup: Well pad\nDelivery: Disposal site\nBarrels: 120'}
+        className={`${inputClass} mt-3`} />
+      <button type="button" className={`${buttonClass} mt-2 px-3 py-2`} disabled={!loaded || !pastedRequest.trim() || !!editing}
+        onClick={fillFromRequest}>Fill job form from text</button>
+      {editing && <p className="mt-2 text-sm text-amber-200">Finish editing or choose Clear / new job before parsing another request.</p>}
+      {parseReport && <div role="status" className="mt-3 space-y-1 text-sm text-gray-200">
+        <p>Initial extraction applied. Check every field before creating the job.</p>
+        {parseReport.missing.length > 0 && <p className="text-amber-200">Still needed: {parseReport.missing.join(', ')}.</p>}
+        {parseReport.warnings.map(warning => <p key={warning} className="text-amber-200">{warning}</p>)}
+      </div>}
+    </section>}
     {canWrite && <form id="independent-job-form" className="rounded border border-gray-700 bg-gray-800 p-4" onSubmit={event => {
       event.preventDefault();
       const job = { ...form, scheduledAt: scheduledLocal ? new Date(scheduledLocal).toISOString() : '',
@@ -108,9 +139,14 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         {(!editing || editing.sector) ? <>
           <label className="text-xs text-gray-300">Customer *<select aria-label="Customer" required value={customerId} className={inputClass} onChange={event => {
             const next = directory?.customers.find(customer => customer.id === event.target.value);
-            setCustomerId(next?.id || ''); setForm(current => ({ ...current, customer: next?.name || '', title: '', pickup: '', destination: '' }));
+            const retainParsed = !!parseReport && !customerId;
+            setCustomerId(next?.id || ''); setForm(current => ({ ...current, customer: next?.name || '',
+              ...(retainParsed ? {} : { title: '', pickup: '', destination: '' }) }));
             const choices = (next?.sectors || []).filter(id => directory?.sectors.includes(id));
-            setSector(choices.length === 1 ? choices[0] : ''); setSectorFields({});
+            const parsedSector = retainParsed ? parseReport?.sector : '';
+            const nextSector = parsedSector && choices.includes(parsedSector) ? parsedSector : choices.length === 1 ? choices[0] : '';
+            setSector(nextSector);
+            setSectorFields(retainParsed && nextSector === parsedSector ? parseReport?.sectorFields || {} : {});
           }}><option value="">Choose customer…</option>{directory?.customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
           <label className="text-xs text-gray-300">Transportation sector *<select aria-label="Transportation sector" required value={sector} className={inputClass} onChange={event => { setSector(event.target.value as IndependentSector); setSectorFields({}); }}>
             <option value="">{availableSectors.length ? 'Choose sector…' : 'Choose a customer first…'}</option>

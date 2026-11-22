@@ -39,6 +39,22 @@ try {
   await page.getByRole('button',{name:'Add driver'}).click();
   await page.getByText('Isaac Hickert · No phone on file').waitFor();
   assert.deepEqual(await page.evaluate(()=>({phone:window.savedDriver.phoneE164,channels:window.savedDriver.channels})),{phone:'',channels:[]});
+  await page.getByRole('textbox',{name:'Job request text'}).fill('Customer: Customer A\nSector: Water hauling\nJob: Production water run\nPickup: Yard A\nDelivery: Site B\nWater type: Production water\nBarrels: 120');
+  await page.getByRole('button',{name:'Fill job form from text'}).click();
+  assert.equal(await page.getByRole('combobox',{name:'Customer',exact:true}).inputValue(),'customer-a');
+  assert.equal(await page.getByRole('combobox',{name:'Transportation sector',exact:true}).inputValue(),'water-hauling');
+  assert.equal(await page.getByLabel('Job name *').inputValue(),'Production water run');
+  assert.equal(await page.getByLabel('Estimated barrels').inputValue(),'120');
+  assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.op==='create').length),0,'parsing never creates a job');
+  await page.getByRole('button',{name:'Clear / new job'}).click();
+  await page.getByRole('textbox',{name:'Job request text'}).fill('Customer: Unknown Co\nSector: Water hauling\nJob: Review pickup\nPickup: Yard A\nDelivery: Site B\nWater type: Production water\nBarrels: 50');
+  await page.getByRole('button',{name:'Fill job form from text'}).click();
+  await page.getByText(/Still needed: Customer/).waitFor();
+  await page.getByRole('combobox',{name:'Customer',exact:true}).selectOption('customer-a');
+  assert.equal(await page.getByLabel('Job name *').inputValue(),'Review pickup','manual customer choice retains parsed fields');
+  assert.equal(await page.getByRole('combobox',{name:'Transportation sector',exact:true}).inputValue(),'water-hauling');
+  assert.equal(await page.getByLabel('Estimated barrels').inputValue(),'50');
+  await page.getByRole('button',{name:'Clear / new job'}).click();
   const sectors = [
     ['water-hauling', [['Water type *', 'Production water'], ['Estimated barrels *', '120']]],
     ['ltl', [['Freight description *', 'Palletized parts'], ['Pieces *', '12']]],
