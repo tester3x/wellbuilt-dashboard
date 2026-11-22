@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -31,6 +31,13 @@ export default function LoginPage() {
   const [resetMessage, setResetMessage] = useState('');
   const [resetError, setResetError] = useState('');
   const [resetLastSentAt, setResetLastSentAt] = useState<number | null>(null);
+  const [resetNow, setResetNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (cooldownRemainingMs(resetLastSentAt, resetNow) === 0) return;
+    const timer = window.setTimeout(() => setResetNow(Date.now()), 1000);
+    return () => window.clearTimeout(timer);
+  }, [resetLastSentAt, resetNow]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,14 +87,18 @@ export default function LoginPage() {
       await sendDashboardPasswordReset(resetEmail);
       // Always the same generic acknowledgement — existence is never revealed.
       setResetMessage(GENERIC_RESET_ACK);
-      setResetLastSentAt(Date.now());
+      const sentAt = Date.now();
+      setResetLastSentAt(sentAt);
+      setResetNow(sentAt);
     } catch (err) {
       const msg = resetErrorMessage((err as { code?: string })?.code);
       // resetErrorMessage falls back to the generic ack for unknown codes, so an
       // unexpected error stays non-enumerating; distinct codes get distinct copy.
       if (msg === GENERIC_RESET_ACK) {
         setResetMessage(msg);
-        setResetLastSentAt(Date.now());
+        const sentAt = Date.now();
+        setResetLastSentAt(sentAt);
+        setResetNow(sentAt);
       } else {
         setResetError(msg);
       }
@@ -96,8 +107,9 @@ export default function LoginPage() {
     }
   };
 
+  const resetRemainingMs = cooldownRemainingMs(resetLastSentAt, resetNow, RESET_COOLDOWN_MS);
   const resetDisabled =
-    !canSubmitReset(resetEmail, resetPending, resetLastSentAt, Date.now(), RESET_COOLDOWN_MS);
+    !canSubmitReset(resetEmail, resetPending, resetLastSentAt, resetNow, RESET_COOLDOWN_MS);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-900">
@@ -210,7 +222,9 @@ export default function LoginPage() {
               disabled={resetDisabled}
               className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800"
             >
-              {resetPending ? 'Sending…' : 'Send reset link'}
+              {resetPending ? 'Sending…' : resetRemainingMs > 0
+                ? `Send again in ${Math.ceil(resetRemainingMs / 1000)}s`
+                : resetLastSentAt ? 'Send another link' : 'Send reset link'}
             </button>
 
             <div className="text-center text-sm text-gray-400">
