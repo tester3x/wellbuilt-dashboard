@@ -4,6 +4,7 @@ import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { DemoPhoneOverlayGate } from "@/components/DemoPhoneOverlayGate";
 import { DashboardReturnState } from "@/components/DashboardReturnState";
+import { IndependentDispatchRouteGate } from "@/components/IndependentDispatchRouteGate";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,7 +33,7 @@ export default function RootLayout({
       >
         <AuthProvider>
           <DashboardReturnState />
-          {children}
+          <IndependentDispatchRouteGate>{children}</IndependentDispatchRouteGate>
           <DemoPhoneOverlayGate />
         </AuthProvider>
       </body>

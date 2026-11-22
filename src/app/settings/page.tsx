@@ -32,8 +32,29 @@ import { WorkPeriodCard } from '@/components/settings/WorkPeriodCard';
 import { LevelReportsCard } from '@/components/settings/LevelReportsCard';
 import { JobTypeRnDCard } from '@/components/settings/JobTypeRnDCard';
 import { RolesCard } from '@/components/settings/RolesCard';
+import { hasOnlyIndependentDispatchPackage } from '@/lib/independentDispatchPackage';
 
 export default function SettingsPage() {
+  const { user, userCompany, authResolved } = useAuth();
+  if (authResolved && user?.companyId && hasOnlyIndependentDispatchPackage(userCompany?.activePackages))
+    return <IndependentSettingsPage />;
+  return <StandardSettingsPage />;
+}
+
+function IndependentSettingsPage() {
+  const { user, userCompany } = useAuth();
+  if (!user || !userCompany) return null;
+  const canEdit = hasCapability(user, 'manageCompany', userCompany);
+  return <div className="min-h-screen bg-gray-900 text-white"><AppHeader />
+    <main className="mx-auto max-w-4xl space-y-4 px-4 py-8">
+      <div><h2 className="text-2xl font-bold">Independent Dispatch settings</h2><p className="mt-1 text-sm text-gray-400">{userCompany.name}</p></div>
+      <PackagesCard company={userCompany} canEdit={canEdit} onSave={async () => { window.location.reload(); }} />
+      <IndependentDispatchSetupCard companyId={userCompany.id} canEdit={canEdit} />
+    </main>
+  </div>;
+}
+
+function StandardSettingsPage() {
   const { user, loading: authLoading, userCompany, authResolved, operatingCompanyId, selectOperatingCompany } = useAuth();
   const router = useRouter();
 
