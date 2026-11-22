@@ -103,14 +103,16 @@ export function parseExternalDriverWrite(
   if (!companyId) return fail('missing_company', 'companyId');
   if (!ID_RE.test(externalDriverId)) return fail('invalid_driver_id', 'externalDriverId');
   if (!displayName || displayName.length > MAX_NAME_LENGTH) return fail('invalid_display_name', 'displayName');
-  if (!E164_RE.test(phoneE164)) return fail('invalid_phone', 'phoneE164');
-  if (!Array.isArray(value.channels) || value.channels.length < 1 || value.channels.length > 2) {
+  if (phoneE164 && !E164_RE.test(phoneE164)) return fail('invalid_phone', 'phoneE164');
+  if (!Array.isArray(value.channels) || value.channels.length > 2) {
     return fail('invalid_channels', 'channels');
   }
   const channels = [...new Set(value.channels)];
   if (channels.some(channel => channel !== 'sms' && channel !== 'whatsapp')) {
     return fail('invalid_channels', 'channels');
   }
+  if ((phoneE164 && channels.length === 0) || (!phoneE164 && channels.length > 0))
+    return fail('invalid_channels', 'channels');
   if (typeof value.active !== 'boolean') return fail('invalid_active', 'active');
   return {
     ok: true,
@@ -142,6 +144,7 @@ export function planExternalAssignmentRevision(input: {
   if (!ID_RE.test(input.dispatchId)) return fail('invalid_dispatch_id', 'dispatchId');
   if (input.externalDriver.companyId !== input.companyId) return fail('cross_company', 'externalDriverId');
   if (!input.externalDriver.active) return fail('external_driver_inactive', 'externalDriverId');
+  if (!E164_RE.test(input.externalDriver.phoneE164)) return fail('invalid_phone', 'phoneE164');
   if (!input.externalDriver.channels.includes(input.channel)) return fail('channel_not_enabled', 'channel');
   if (input.existing && input.existing.companyId !== input.companyId) return fail('cross_company', 'deliveryId');
   if (input.existing && input.existing.dispatchId !== input.dispatchId) return fail('dispatch_immutable', 'dispatchId');

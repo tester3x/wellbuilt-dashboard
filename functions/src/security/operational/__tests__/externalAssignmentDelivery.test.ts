@@ -52,6 +52,16 @@ describe('external driver roster containment', () => {
     }, 'acme')).toMatchObject({ ok: true, externalDriverId: 'outside-joe' });
   });
 
+  it('allows name-only roster entries but never sends to them', () => {
+    const { companyId: _companyId, ...withoutCompany } = driver;
+    const nameOnly = { ...withoutCompany, phoneE164: '', channels: [] as ExternalDriverRecord['channels'] };
+    expect(parseExternalDriverWrite(nameOnly, 'acme')).toMatchObject({ ok: true, phoneE164: '', channels: [] });
+    expect(planExternalAssignmentRevision({ companyId: 'acme', actorUid: 'dispatcher-1', nowIso: '2026-11-20T12:00:00.000Z',
+      idempotencyKey: 'name-only', dispatchId: 'dispatch-1', externalDriver: { ...nameOnly, companyId: 'acme' }, channel: 'sms', action: 'assigned', existing: null }))
+      .toMatchObject({ ok: false, reason: 'invalid_phone' });
+    expect(parseExternalDriverWrite({ ...nameOnly, channels: ['sms'] }, 'acme')).toMatchObject({ ok: false, reason: 'invalid_channels' });
+  });
+
   it('rejects malformed phone numbers, unknown fields, and cross-company assignment', () => {
     expect(parseExternalDriverWrite({
       externalDriverId: 'joe', displayName: 'Joe', phoneE164: '701-555-0123', channels: ['sms'], active: true,

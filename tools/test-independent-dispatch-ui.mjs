@@ -9,11 +9,11 @@ const transport = `
 let jobs=[]; window.requests=[];
 export async function independentDispatchJobs(data){
  window.requests.push(data);
- if(data.op==='list')return {companyId:'fixture',jobs:structuredClone(jobs)};
+ if(data.op==='list')return {companyId:'fixture',jobs:structuredClone(jobs),wbDrivers:[{driverId:'wb-marcial',sourceCompanyId:'liquid-gold',displayName:'Nitto–Anthony (Marcial Lebaron)'}]};
  if(data.op==='create')jobs.push({...data.job,id:data.jobId,revision:1,status:'unassigned',companyId:'fixture',updatedAt:new Date().toISOString()});
  const job=jobs.find(j=>j.id===data.jobId);
  if(data.op==='update')Object.assign(job,data.job,{revision:job.revision+1});
- if(data.op==='assign')Object.assign(job,{status:'assigned',driverName:'Outside Driver',externalDriverId:data.externalDriverId,revision:job.revision+1});
+ if(data.op==='assign')Object.assign(job,{status:'assigned',driverName:data.wbDriverId?'Nitto–Anthony (Marcial Lebaron)':'Outside Driver',externalDriverId:data.externalDriverId||'',wbDriverId:data.wbDriverId||'',driverSource:data.wbDriverId?'wellbuilt':'outside',revision:job.revision+1});
  if(data.op==='status')Object.assign(job,{status:data.status,revision:job.revision+1});
  return {ok:true,job};
 }`;
@@ -21,7 +21,7 @@ const bundle = await build({ stdin: { contents: `import React from 'react';impor
   b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
     : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']}]});`
-    : `export const listExternalDrivers=async()=>[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>d;export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
+    : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{roster.push(d);window.savedDriver=d;return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
 const css = fs.existsSync(cssDir) ? fs.readdirSync(cssDir).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(`${cssDir}/${f}`, 'utf8')).join('\n') : '';
@@ -34,6 +34,11 @@ try {
   const errors=[]; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.getByText('New Independent Dispatch job').waitFor();
+  await page.getByRole('button',{name:/Drivers Without WellBuilt Accounts/}).click();
+  await page.getByPlaceholder('Driver name').fill('Isaac Hickert');
+  await page.getByRole('button',{name:'Add driver'}).click();
+  await page.getByText('Isaac Hickert · No phone on file').waitFor();
+  assert.deepEqual(await page.evaluate(()=>({phone:window.savedDriver.phoneE164,channels:window.savedDriver.channels})),{phone:'',channels:[]});
   const sectors = [
     ['water-hauling', [['Water type *', 'Production water'], ['Estimated barrels *', '120']]],
     ['ltl', [['Freight description *', 'Palletized parts'], ['Pieces *', '12']]],
@@ -55,12 +60,18 @@ try {
   }
   const card=page.getByRole('article').filter({hasText:'Pipe run water-hauling'});
   await card.waitFor();
-  await card.getByRole('combobox').selectOption('driver-a');
+  await card.getByRole('combobox').selectOption('outside:driver-a');
   await card.getByRole('button',{name:'Assign',exact:true}).click();
   const firstJobId = await page.evaluate(() => window.requests.find(request => request.op === 'create').jobId);
   assert.equal(await card.getByRole('link',{name:'Call customer in Dialpad'}).getAttribute('href'),
     `dialpad://+17015550111?confirmPhone=1&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.ok((await card.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&customData='));
+  const linkedCard=page.getByRole('article').filter({hasText:'Pipe run ltl'});
+  await linkedCard.getByRole('combobox').selectOption('wellbuilt:wb-marcial');
+  await linkedCard.getByRole('button',{name:'Assign',exact:true}).click();
+  assert.equal(await linkedCard.getByText('WellBuilt account',{exact:false}).count(),1);
+  assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='assign'&&r.wbDriverId)?.wbDriverId),'wb-marcial');
+  assert.equal(await linkedCard.getByRole('link',{name:'Call driver in Dialpad'}).count(),0);
   await card.getByRole('button',{name:'Mark started',exact:true}).click();
   assert.equal(await card.getByRole('button',{name:'Edit',exact:true}).count(),0);
   await card.getByRole('button',{name:'Mark completed',exact:true}).click();

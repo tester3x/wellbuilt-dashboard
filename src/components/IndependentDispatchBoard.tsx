@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { independentDispatchJobs, type IndependentJob, type IndependentJobDetails, type IndependentJobStatus } from '@/lib/independentDispatchJobs';
+import { independentDispatchJobs, type IndependentJob, type IndependentJobDetails, type IndependentJobStatus, type LinkedWellBuiltDriver } from '@/lib/independentDispatchJobs';
 import { listExternalDrivers, type ExternalDriver } from '@/lib/externalAssignmentDelivery';
 import { ExternalAssignmentDeliveryPanel } from './ExternalAssignmentDeliveryPanel';
 import { independentDispatchDirectory, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
@@ -35,6 +35,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
 }) {
   const [jobs, setJobs] = useState<IndependentJob[]>([]);
   const [drivers, setDrivers] = useState<ExternalDriver[]>([]);
+  const [wbDrivers, setWbDrivers] = useState<LinkedWellBuiltDriver[]>([]);
   const [form, setForm] = useState(EMPTY);
   const [editing, setEditing] = useState<IndependentJob | null>(null);
   const [scheduledLocal, setScheduledLocal] = useState('');
@@ -55,6 +56,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     const result = await independentDispatchJobs({ op: 'list' });
     if (result.companyId !== companyId) throw Error('Your staff account belongs to a different company.');
     setJobs(result.jobs || []);
+    setWbDrivers(result.wbDrivers || []);
     const setup = await independentDispatchDirectory({ op: 'list' });
     if (setup.companyId !== companyId) throw Error('Your directory belongs to a different company.');
     setDirectory(setup);
@@ -89,7 +91,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const selectedCustomer = directory?.customers.find(customer => customer.id === customerId);
   const availableSectors = (selectedCustomer?.sectors || []).filter(id => directory?.sectors.includes(id));
   return <div className="space-y-4">
-    <p className="text-sm text-gray-300">Create customer jobs with sector-specific details, assign outside drivers, and record progress. Driver messaging and the WB Dispatch phone app will be connected separately.</p>
+    <p className="text-sm text-gray-300">Create customer jobs with sector-specific details, assign outside or linked WellBuilt drivers, and record progress. Assigning a WellBuilt driver here does not send a job to their phone app yet.</p>
     {error && <div role="alert" className="rounded border border-red-700 bg-red-950 p-3 text-red-200">{error}</div>}
     {notice && <p role="status" className="text-green-300">{notice}</p>}
     {canManageDrivers && <ExternalAssignmentDeliveryPanel jobs={[]} canManage={canWrite && canManageDrivers} rosterOnly onRosterChange={refresh} />}
@@ -156,12 +158,21 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {job.sector && job.sectorFields && <dl className="mt-2 grid gap-1 text-xs text-gray-300 md:grid-cols-2">{SECTOR_FIELDS[job.sector as IndependentSector]?.map(field => job.sectorFields?.[field.key] ? <div key={field.key}><dt className="inline text-gray-400">{field.label}: </dt><dd className="inline">{job.sectorFields[field.key]}</dd></div> : null)}</dl>}
       {job.scheduledAt && <p className="text-sm text-gray-300">Scheduled: {new Date(job.scheduledAt).toLocaleString()}</p>}
       {job.notes && <p className="mt-2 whitespace-pre-wrap break-words text-sm text-gray-300">{job.notes}</p>}
-      <p className="mt-2 text-sm text-amber-200">Driver: {job.driverName || 'Not assigned'}</p>
+      <p className="mt-2 text-sm text-amber-200">Driver: {job.driverName || 'Not assigned'}{job.driverSource === 'wellbuilt' ? ' · WellBuilt account' : ''}</p>
       {canWrite && <div className="mt-3 flex flex-wrap gap-2">
         {['unassigned', 'assigned'].includes(job.status) && <>
           <button className={buttonClass} disabled={busy} onClick={() => edit(job)}>Edit</button>
-          {canManageDrivers && <><select aria-label={`Driver for ${job.title}`} className={inputClass + ' !w-auto'} value={assignments[job.id] || ''} onChange={e => setAssignments({ ...assignments, [job.id]: e.target.value })}><option value="">Choose outside driver…</option>{drivers.filter(d => d.active).map(d => <option key={d.externalDriverId} value={d.externalDriverId}>{d.displayName}</option>)}</select>
-          <button disabled={busy || !assignments[job.id]} className={buttonClass} onClick={() => void run({ op: 'assign', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), externalDriverId: assignments[job.id] })}>{job.externalDriverId ? 'Reassign' : 'Assign'}</button></>}
+          {canManageDrivers && <><select aria-label={`Driver for ${job.title}`} className={inputClass + ' !w-auto'} value={assignments[job.id] || ''} onChange={e => setAssignments({ ...assignments, [job.id]: e.target.value })}>
+            <option value="">Choose driver…</option>
+            <optgroup label="Drivers without WellBuilt accounts">{drivers.filter(d => d.active).map(d => <option key={d.externalDriverId} value={`outside:${d.externalDriverId}`}>{d.displayName}</option>)}</optgroup>
+            <optgroup label="Linked WellBuilt accounts">{wbDrivers.map(d => <option key={d.driverId} value={`wellbuilt:${d.driverId}`}>{d.displayName}</option>)}</optgroup>
+          </select>
+          <button disabled={busy || !assignments[job.id]} className={buttonClass} onClick={() => {
+            const [kind, id] = (assignments[job.id] || '').split(':');
+            if (!id) return;
+            void run({ op: 'assign', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(),
+              ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) });
+          }}>{job.externalDriverId || job.wbDriverId ? 'Reassign' : 'Assign'}</button></>}
         </>}
         {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
         {!['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}

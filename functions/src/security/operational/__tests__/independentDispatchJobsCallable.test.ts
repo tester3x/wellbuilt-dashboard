@@ -1,4 +1,5 @@
 const records = new Map<string, any>();
+const profiles = new Map<string, any>();
 const authority = { uid: 'dispatcher', companyId: 'company-a' };
 jest.mock('../../trustedStaffAuthority', () => ({
   requireTrustedCompanyCapability: jest.fn(async () => authority),
@@ -10,7 +11,7 @@ function docRef(path: string): any {
 }
 function collectionRef(path: string): any {
   return { doc: (id: string) => docRef(`${path}/${id}`), where: (_: string, __: string, companyId: string) => ({
-    get: async () => ({ docs: [...records].filter(([key, value]) => key.startsWith(path + '/') && key.split('/').length === 2 && value.companyId === companyId)
+    get: async () => ({ docs: [...records].filter(([key, value]) => key.startsWith(path + '/') && key.split('/').length === path.split('/').length + 1 && value.companyId === companyId)
       .map(([key, value]) => ({ id: key.split('/').pop(), data: () => value })) }),
   }) };
 }
@@ -20,7 +21,11 @@ const db = { collection: collectionRef, runTransaction: async (fn: any) => {
     create: (ref: any, value: any) => writes.push(() => records.set(ref.path, value)) });
   writes.forEach(write => write()); return result;
 } };
-jest.mock('firebase-admin', () => ({ firestore: () => db }));
+jest.mock('firebase-admin', () => ({ firestore: () => db,
+  database: () => ({ ref: (path: string) => ({ get: async () => ({ val: () => profiles.get(path) || null }) }) }),
+  auth: () => ({ getUser: async () => ({ disabled: false }) }),
+}));
+jest.mock('../../tokenMint', () => ({ driverAuthUid: (id: string) => `driver_${id}` }));
 jest.mock('firebase-functions/v2/https', () => ({ onCall: (_: any, handler: any) => handler,
   HttpsError: class extends Error { constructor(public code: string, message: string) { super(message); } } }));
 import { staffIndependentDispatchJobs } from '../../independentDispatchJobsCallable';
@@ -29,7 +34,7 @@ const call = (data: any) => (staffIndependentDispatchJobs as any)({ auth: { uid:
 const details = { title: 'Delivery', customer: 'Customer', pickup: 'Yard', destination: 'Site' };
 const create = { op: 'create', jobId: 'job-a', requestId: 'request-a', job: details };
 beforeEach(() => {
-  records.clear(); jest.clearAllMocks();
+  records.clear(); profiles.clear(); jest.clearAllMocks();
   records.set('companies/company-a', { activePackages: ['independent-dispatch'] });
 });
 describe('Independent Dispatch callable boundaries', () => {
@@ -57,6 +62,32 @@ describe('Independent Dispatch callable boundaries', () => {
     records.set('companies/company-a/external_drivers/driver-a', { companyId: 'company-a', active: true, displayName: 'Driver' });
     await expect(call(assign)).resolves.toMatchObject({ job: { status: 'assigned', revision: 2 } });
     expect(requireTrustedCompanyCapability).toHaveBeenCalledWith('dispatcher', 'manageDrivers');
+  });
+  it('lists only approved WellBuilt links and assigns a live linked profile without phone-app delivery', async () => {
+    const id = 'wb-marcial';
+    const link = { companyId: 'company-a', sourceCompanyId: 'liquid-gold', driverId: id,
+      authUid: `driver_${id}`, displayName: 'Nitto–Anthony (Marcial Lebaron)', active: true };
+    records.set(`companies/company-a/independent_dispatch_wb_drivers/${id}`, link);
+    records.set('companies/company-a/independent_dispatch_wb_drivers/foreign', { ...link, driverId: 'foreign', companyId: 'company-b' });
+    records.set('companies/company-a/independent_dispatch_wb_drivers/disabled', { ...link, driverId: 'disabled', active: false });
+    profiles.set(`drivers/profiles/${id}`, { companyId: 'liquid-gold', active: true });
+    await expect(call({ op: 'list' })).resolves.toMatchObject({ wbDrivers: [{ driverId: id, displayName: link.displayName }] });
+    await call(create);
+    const assigned = await call({ op: 'assign', jobId: 'job-a', requestId: 'wb-assign', expectedRevision: 1, wbDriverId: id });
+    expect(assigned.job).toMatchObject({ wbDriverId: id, wbDriverCompanyId: 'liquid-gold',
+      driverName: link.displayName, driverSource: 'wellbuilt', externalDriverId: '', status: 'assigned' });
+    expect([...records.keys()].some(key => key.startsWith('dispatches/') || key.startsWith('tickets/'))).toBe(false);
+  });
+  it('rejects an unlinked or cross-company WellBuilt profile', async () => {
+    await call(create);
+    profiles.set('drivers/profiles/wb-marcial', { companyId: 'liquid-gold', active: true });
+    const assign = { op: 'assign', jobId: 'job-a', requestId: 'wb-assign', expectedRevision: 1, wbDriverId: 'wb-marcial' };
+    await expect(call(assign)).rejects.toThrow('wellbuilt_driver_not_linked');
+    records.set('companies/company-a/independent_dispatch_wb_drivers/wb-marcial', { companyId: 'company-a',
+      sourceCompanyId: 'another-company', driverId: 'wb-marcial', authUid: 'driver_wb-marcial', displayName: 'Marcial', active: true });
+    await expect(call(assign)).rejects.toThrow('wellbuilt_driver_not_linked');
+    profiles.set('drivers/profiles/wb-marcial', { companyId: 'another-company', active: false });
+    await expect(call(assign)).rejects.toThrow('wellbuilt_driver_inactive');
   });
   it('records staff progress and audit without creating water dispatches or tickets', async () => {
     await call(create);

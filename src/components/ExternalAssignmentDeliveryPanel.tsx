@@ -119,7 +119,7 @@ export function ExternalAssignmentDeliveryPanel({
             externalDriverId: rosterId(name),
             displayName: name.trim(),
             phoneE164: phone.trim(),
-            channels: newChannels,
+            channels: phone.trim() ? newChannels : [],
             active: true,
           };
           void run(async () => {
@@ -133,13 +133,13 @@ export function ExternalAssignmentDeliveryPanel({
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             <input required value={name} onChange={event => setName(event.target.value)} maxLength={120}
               placeholder="Driver name" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />
-            <input required value={phone} onChange={event => setPhone(event.target.value)}
-              placeholder="+17015550123" inputMode="tel" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />
+            <input value={phone} onChange={event => setPhone(event.target.value)}
+              aria-label="Driver phone (optional)" placeholder="Phone (optional) · +17015550123" inputMode="tel" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />
           </div>
           <div className="mt-2 flex items-center gap-4 text-sm text-gray-300">
             {(['sms', 'whatsapp'] as const).map(option => (
               <label key={option} className="flex items-center gap-1.5">
-                <input type="checkbox" checked={newChannels.includes(option)} onChange={event => {
+                <input type="checkbox" disabled={!phone.trim()} checked={!!phone.trim() && newChannels.includes(option)} onChange={event => {
                   setNewChannels(current => event.target.checked
                     ? [...new Set([...current, option])]
                     : current.filter(value => value !== option));
@@ -147,13 +147,13 @@ export function ExternalAssignmentDeliveryPanel({
                 {option === 'sms' ? 'SMS' : 'WhatsApp'}
               </label>
             ))}
-            <button disabled={busy || !newChannels.length} className="ml-auto rounded bg-amber-700 px-3 py-1.5 font-medium text-white disabled:opacity-50">
+            <button disabled={busy || (!!phone.trim() && !newChannels.length)} className="ml-auto rounded bg-amber-700 px-3 py-1.5 font-medium text-white disabled:opacity-50">
               Add driver
             </button>
           </div>
           {drivers.length > 0 && (
             <ul className="mt-3 space-y-1 text-xs text-gray-400">
-              {drivers.map(driver => <li key={driver.externalDriverId}>{driver.displayName} · {driver.phoneE164} · {driver.channels.join('/')}{driver.active ? '' : ' · inactive'}</li>)}
+              {drivers.map(driver => <li key={driver.externalDriverId}>{driver.displayName} · {driver.phoneE164 || 'No phone on file'}{driver.channels.length ? ` · ${driver.channels.join('/')}` : ''}{driver.active ? '' : ' · inactive'}</li>)}
             </ul>
           )}
         </form>
@@ -219,7 +219,7 @@ export function ExternalAssignmentDeliveryPanel({
                         <select value={reassignTargets[delivery.deliveryId] || ''} onChange={event => setReassignTargets(current => ({ ...current, [delivery.deliveryId]: event.target.value }))}
                           className="rounded border border-gray-600 bg-gray-900 px-1 py-1 text-gray-200">
                           <option value="">Reassign…</option>
-                          {activeDrivers.filter(driver => driver.externalDriverId !== delivery.externalDriverId).map(driver => <option key={driver.externalDriverId} value={driver.externalDriverId}>{driver.displayName}</option>)}
+                          {activeDrivers.filter(driver => driver.channels.length > 0 && driver.externalDriverId !== delivery.externalDriverId).map(driver => <option key={driver.externalDriverId} value={driver.externalDriverId}>{driver.displayName}</option>)}
                         </select>
                         <button disabled={busy || !reassignTargets[delivery.deliveryId]} onClick={() => {
                           const target = activeDrivers.find(driver => driver.externalDriverId === reassignTargets[delivery.deliveryId]);

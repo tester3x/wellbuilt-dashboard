@@ -9,11 +9,13 @@ export type IndependentJobDetails = {
 export type IndependentJobStatus = 'unassigned' | 'assigned' | 'in_progress' | 'completed' | 'cancelled';
 export type IndependentJob = IndependentJobDetails & {
   id: string; companyId: string; revision: number; status: IndependentJobStatus;
-  externalDriverId?: string; driverName?: string; updatedAt: string;
+  externalDriverId?: string; wbDriverId?: string; wbDriverCompanyId?: string;
+  driverSource?: 'outside' | 'wellbuilt'; driverName?: string; updatedAt: string;
 };
+export type LinkedWellBuiltDriver = { driverId: string; sourceCompanyId: string; displayName: string };
 export async function independentDispatchJobs(payload: Record<string, unknown>) {
   const result = await httpsCallable<Record<string, unknown>, {
-    ok: true; companyId?: string; jobs?: IndependentJob[]; job?: IndependentJob;
+    ok: true; companyId?: string; jobs?: IndependentJob[]; wbDrivers?: LinkedWellBuiltDriver[]; job?: IndependentJob;
   }>(getFirebaseFunctions(), 'staffIndependentDispatchJobs')(payload);
   return result.data;
 }

@@ -67,7 +67,7 @@ function parseStoredDriver(raw: FirebaseFirestore.DocumentData | undefined): Ext
     || typeof raw.displayName !== 'string'
     || typeof raw.phoneE164 !== 'string'
     || typeof raw.active !== 'boolean'
-    || channels.length < 1
+    || (raw.phoneE164 === '' ? channels.length !== 0 : channels.length < 1)
   ) return null;
   return { ...raw, channels } as ExternalDriverRecord;
 }
