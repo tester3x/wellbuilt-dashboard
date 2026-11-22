@@ -1,19 +1,23 @@
+import { isIndependentSector, parseSectorFields } from './independentDispatchSectors';
+
 export const JOB_STATUSES = ['unassigned', 'assigned', 'in_progress', 'completed', 'cancelled'] as const;
 export type IndependentJobStatus = typeof JOB_STATUSES[number];
 export type IndependentJobDetails = {
   title: string; customer: string; reference: string; pickup: string; destination: string;
   cargo: string; scheduledAt: string; notes: string;
+  customerId?: string; sector?: string; sectorFields?: Record<string, string>;
 };
-const LIMITS: Record<keyof IndependentJobDetails, number> = {
+const LIMITS: Record<'title' | 'customer' | 'reference' | 'pickup' | 'destination' | 'cargo' | 'scheduledAt' | 'notes', number> = {
   title: 180, customer: 180, reference: 120, pickup: 500, destination: 500,
   cargo: 500, scheduledAt: 40, notes: 4000,
 };
 export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_job');
   const input = raw as Record<string, unknown>;
-  if (Object.keys(input).some(key => !Object.prototype.hasOwnProperty.call(LIMITS, key))) throw Error('unexpected_job_field');
+  if (Object.keys(input).some(key => !Object.prototype.hasOwnProperty.call(LIMITS, key)
+    && !['customerId', 'sector', 'sectorFields'].includes(key))) throw Error('unexpected_job_field');
   const job = {} as IndependentJobDetails;
-  for (const key of Object.keys(LIMITS) as (keyof IndependentJobDetails)[]) {
+  for (const key of Object.keys(LIMITS) as (keyof typeof LIMITS)[]) {
     const value = input[key] ?? '';
     if (typeof value !== 'string' || value.length > LIMITS[key]) throw Error(`invalid_${key}`);
     job[key] = value.trim();
@@ -23,6 +27,13 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   }
   if (job.scheduledAt && (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(job.scheduledAt)
     || !Number.isFinite(Date.parse(job.scheduledAt)) || new Date(job.scheduledAt).toISOString() !== job.scheduledAt)) throw Error('invalid_scheduledAt');
+  if (input.sector !== undefined || input.customerId !== undefined || input.sectorFields !== undefined) {
+    if (!isIndependentSector(input.sector)) throw Error('invalid_sector');
+    if (typeof input.customerId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(input.customerId)) throw Error('invalid_customerId');
+    job.sector = input.sector;
+    job.customerId = input.customerId;
+    job.sectorFields = parseSectorFields(input.sector, input.sectorFields);
+  }
   return job;
 }
 export function independentJobTransition(current: IndependentJobStatus, next: IndependentJobStatus): boolean {

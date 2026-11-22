@@ -22,6 +22,7 @@ import { BillingConfigCard } from '@/components/settings/BillingConfigCard';
 import { TicketTemplateCard } from '@/components/settings/TicketTemplateCard';
 import { PayrollTemplateCard } from '@/components/settings/PayrollTemplateCard';
 import { PackagesCard } from '@/components/settings/PackagesCard';
+import { IndependentDispatchSetupCard } from '@/components/settings/IndependentDispatchSetupCard';
 import { SWDDirectoryCard } from '@/components/settings/SWDDirectoryCard';
 import { CustomJobTypesCard } from '@/components/settings/CustomJobTypesCard';
 import { PhotosCard } from '@/components/settings/PhotosCard';
@@ -174,6 +175,8 @@ export default function SettingsPage() {
                 so the server resolves their OWN company). */}
             {user.role !== 'demo_viewer' && <CompanyJoinCodeCard companyId={company.id} />}
             <PackagesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            {company.activePackages?.includes('independent-dispatch') &&
+              <IndependentDispatchSetupCard companyId={company.id} canEdit={hasCapability(user, 'manageCompany', userCompany)} />}
             <CustomJobTypesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)}
               prefillLabel={newJobTypeRequest?.label} prefillKey={newJobTypeRequest?.key} />
             <InvoiceConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />

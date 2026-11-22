@@ -18,8 +18,10 @@ export async function independentDispatchJobs(data){
  return {ok:true,job};
 }`;
 const bundle = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {IndependentDispatchBoard} from './src/components/IndependentDispatchBoard';createRoot(document.getElementById('root')).render(<IndependentDispatchBoard companyId="fixture" canWrite={true} canManageDrivers={true}/>);`, loader: 'tsx', resolveDir: process.cwd() }, bundle: true, write: false, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, plugins: [{ name: 'fixture', setup(b) {
-  b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|externalAssignmentDelivery)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
-  b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport : `export const listExternalDrivers=async()=>[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>d;export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
+  b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
+  b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
+    : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],customers:[{id:'customer-a',name:'Customer A',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']}]});`
+    : `export const listExternalDrivers=async()=>[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>d;export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
 const css = fs.existsSync(cssDir) ? fs.readdirSync(cssDir).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(`${cssDir}/${f}`, 'utf8')).join('\n') : '';
@@ -31,9 +33,27 @@ try {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   const errors=[]; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
-  for (const [label,value] of [['Job name','Pipe run'],['Customer','Customer A'],['Pickup address / location','Yard A'],['Delivery address / location','Site B']]) await page.getByLabel(label + ' *',{exact:true}).fill(value);
-  await page.getByRole('button',{name:'Create job',exact:true}).click();
-  const card=page.getByRole('article').filter({hasText:'Pipe run'});
+  await page.getByText('New Independent Dispatch job').waitFor();
+  const sectors = [
+    ['water-hauling', [['Water type *', 'Production water'], ['Estimated barrels *', '120']]],
+    ['ltl', [['Freight description *', 'Palletized parts'], ['Pieces *', '12']]],
+    ['otr', [['Trailer type *', 'Dry van'], ['Commodity *', 'Equipment']]],
+    ['hot-shot', [['Urgency *', 'Same day'], ['Cargo and dimensions *', 'Pump skid']]],
+    ['aggregate', [['Material *', 'Gravel'], ['Estimated tons *', '24']]],
+  ];
+  for (const [sector, fields] of sectors) {
+    await page.getByRole('combobox',{name:'Customer',exact:true}).selectOption('customer-a');
+    await page.getByRole('combobox',{name:'Transportation sector',exact:true}).selectOption(sector);
+    for (const [label, value] of fields) {
+      const field = page.getByLabel(label.replace(/ \*$/, ''),{exact:true});
+      if (['Water type *','Trailer type *','Urgency *','Material *'].includes(label)) await field.selectOption({label:value});
+      else await field.fill(value);
+    }
+    for (const [label,value] of [['Job name',`Pipe run ${sector}`],['Pickup address / location','Yard A'],['Delivery address / location','Site B']]) await page.getByLabel(label + ' *',{exact:true}).fill(value);
+    await page.getByRole('button',{name:'Create job',exact:true}).click();
+    await page.getByRole('article').filter({hasText:`Pipe run ${sector}`}).waitFor();
+  }
+  const card=page.getByRole('article').filter({hasText:'Pipe run water-hauling'});
   await card.waitFor();
   await card.getByRole('combobox').selectOption('driver-a');
   await card.getByRole('button',{name:'Assign',exact:true}).click();
@@ -44,10 +64,10 @@ try {
   await page.getByRole('combobox',{name:'Job status',exact:true}).selectOption('completed');
   await card.waitFor();
   assert.equal(await card.getByRole('button').count(),0);
-  assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.op==='create').length),1);
+  assert.deepEqual(await page.evaluate(()=>window.requests.filter(r=>r.op==='create').map(r=>r.job.sector)),sectors.map(([sector])=>sector));
   assert.deepEqual(errors,[]);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');
   await page.close();
  }
- console.log('Independent Dispatch actual UI: create, assign, start, complete, filters, locked completed jobs; desktop/mobile; no messaging.');
+ console.log('Independent Dispatch actual UI: five sector forms, customer selection, assign/start/complete, filters, terminal lock; desktop/mobile; no messaging.');
 } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }

@@ -44,6 +44,7 @@ export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { staffExternalAssignmentDelivery } from './externalAssignmentDeliveryCallable';
 export { staffIndependentDispatchJobs } from './independentDispatchJobsCallable';
+export { staffIndependentDispatchDirectory } from './independentDispatchDirectoryCallable';
 export { staffSetCompanyJobPackage } from './companyJobPackagesCallable';
 export { staffCreateExternalGuestLink, externalGuestAssignment } from './externalGuestAssignmentCallable';
 export { adminSetOutsideDriverAccess } from './externalDriverCompanyAccess';

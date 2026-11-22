@@ -3,6 +3,7 @@ import * as admin from 'firebase-admin';
 import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
 import { hasIndependentDispatchPackage } from './operational/independentDispatchPackage';
 import { assertIndependentJobMutable, independentJobTransition, parseIndependentJob, type IndependentJobStatus, type IndependentJobDetails } from './operational/independentDispatchJobs';
+import { INDEPENDENT_SECTORS, parseIndependentSectors } from './operational/independentDispatchSectors';
 
 const COLLECTION = 'independent_dispatch_jobs';
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -40,9 +41,25 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
     const jobRef = db.collection(COLLECTION).doc(raw.jobId);
     const eventRef = jobRef.collection('events').doc(raw.requestId);
     return db.runTransaction(async tx => {
-      const [jobSnap, eventSnap, freshCompany] = await Promise.all([tx.get(jobRef), tx.get(eventRef), tx.get(companyRef)]);
+      const directoryConfigRef = companyRef.collection('independent_dispatch_config').doc('settings');
+      const customerRef = details?.customerId ? companyRef.collection('independent_dispatch_customers').doc(details.customerId) : null;
+      const [jobSnap, eventSnap, freshCompany, directoryConfig, customer] = await Promise.all([
+        tx.get(jobRef), tx.get(eventRef), tx.get(companyRef),
+        details?.sector ? tx.get(directoryConfigRef) : Promise.resolve(null),
+        customerRef ? tx.get(customerRef) : Promise.resolve(null),
+      ]);
       if (!hasIndependentDispatchPackage(freshCompany.data()))
         throw new httpsV2.HttpsError('permission-denied', 'independent_dispatch_package_inactive');
+      if (details?.sector) {
+        const enabled = directoryConfig?.exists ? parseIndependentSectors(directoryConfig.data()?.sectors) : [...INDEPENDENT_SECTORS];
+        if (!enabled.includes(details.sector as typeof INDEPENDENT_SECTORS[number]))
+          throw new httpsV2.HttpsError('failed-precondition', 'sector_disabled');
+        if (!customer?.exists || customer.data()?.companyId !== authority.companyId
+          || customer.data()?.active !== true || !Array.isArray(customer.data()?.sectors)
+          || !customer.data()!.sectors.includes(details.sector))
+          throw new httpsV2.HttpsError('failed-precondition', 'customer_sector_unavailable');
+        details.customer = customer.data()!.name;
+      }
       const previous = jobSnap.data();
       if (previous && previous.companyId !== authority.companyId)
         throw new httpsV2.HttpsError('permission-denied', 'cross_company');

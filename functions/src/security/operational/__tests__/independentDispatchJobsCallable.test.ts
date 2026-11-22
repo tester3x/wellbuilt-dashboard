@@ -65,4 +65,14 @@ describe('Independent Dispatch callable boundaries', () => {
     expect(records.get('independent_dispatch_jobs/job-a/events/cancel')).toMatchObject({ actorUid: 'dispatcher', fromStatus: 'unassigned', toStatus: 'cancelled' });
     expect([...records.keys()].some(key => key.startsWith('dispatches/') || key.startsWith('tickets/'))).toBe(false);
   });
+  it('binds a sector job to an enabled company sector and same-company customer', async () => {
+    records.set('companies/company-a/independent_dispatch_config/settings', { sectors: ['ltl'] });
+    records.set('companies/company-a/independent_dispatch_customers/customer-a', { companyId: 'company-a', name: 'Customer A', active: true, sectors: ['ltl'] });
+    const sectorJob = { ...details, customerId: 'customer-a', sector: 'ltl', sectorFields: { freightDescription: 'Pallets', pieces: '4' } };
+    await call({ ...create, job: sectorJob });
+    expect(records.get('independent_dispatch_jobs/job-a')).toMatchObject({ sector: 'ltl', customerId: 'customer-a', customer: 'Customer A' });
+    await expect(call({ ...create, jobId: 'job-b', requestId: 'request-b', job: { ...sectorJob, sector: 'otr', sectorFields: { trailerType: 'Dry van', commodity: 'Parts' } } })).rejects.toThrow('sector_disabled');
+    records.set('companies/company-a/independent_dispatch_customers/customer-a', { companyId: 'company-b', name: 'Foreign', active: true, sectors: ['ltl'] });
+    await expect(call({ ...create, jobId: 'job-c', requestId: 'request-c', job: sectorJob })).rejects.toThrow('customer_sector_unavailable');
+  });
 });

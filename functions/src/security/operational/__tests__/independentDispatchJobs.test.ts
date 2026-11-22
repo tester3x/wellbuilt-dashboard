@@ -1,4 +1,5 @@
 import { assertIndependentJobMutable, independentJobTransition, parseIndependentJob } from '../independentDispatchJobs';
+import { INDEPENDENT_SECTORS, parseSectorFields } from '../independentDispatchSectors';
 
 describe('Independent Dispatch job validation and lifecycle', () => {
   const job = { title: 'Pipe delivery', customer: 'Customer', pickup: 'Yard', destination: 'Site' };
@@ -25,5 +26,25 @@ describe('Independent Dispatch job validation and lifecycle', () => {
     expect(independentJobTransition('completed', 'assigned')).toBe(false);
     expect(independentJobTransition('cancelled', 'assigned')).toBe(false);
     expect(() => assertIndependentJobMutable('in_progress')).toThrow();
+  });
+  it('accepts five distinct sector forms while retaining old generic jobs', () => {
+    const examples: Record<string, Record<string, string>> = {
+      'water-hauling': { waterType: 'Fresh water', volumeBbl: '120' },
+      ltl: { freightDescription: 'Palletized parts', pieces: '12' },
+      otr: { trailerType: 'Dry van', commodity: 'Equipment' },
+      'hot-shot': { urgency: 'Same day', cargoDetails: 'Pump skid' },
+      aggregate: { material: 'Gravel', estimatedTons: '24.5' },
+    };
+    for (const sector of INDEPENDENT_SECTORS) {
+      const parsed = parseIndependentJob({ ...job, customerId: 'customer-a', sector, sectorFields: examples[sector] });
+      expect(parsed.sector).toBe(sector);
+      expect(parsed.sectorFields).toMatchObject(examples[sector]);
+    }
+    expect(parseIndependentJob(job).sector).toBeUndefined();
+  });
+  it('rejects mixed-sector fields, missing required details, and injected fields', () => {
+    expect(() => parseSectorFields('ltl', { freightDescription: 'Parts', pieces: '2', waterType: 'PW' })).toThrow('unexpected_sector_field');
+    expect(() => parseSectorFields('aggregate', { material: 'Sand' })).toThrow('required_estimatedTons');
+    expect(() => parseIndependentJob({ ...job, customerId: 'customer-a', sector: 'otr', sectorFields: { trailerType: 'Dry van', commodity: 'Steel', weightLbs: '-10' } })).toThrow('invalid_weightLbs');
   });
 });

@@ -3641,6 +3641,7 @@ export {
   staffWriteDispatch,
   staffExternalAssignmentDelivery,
   staffIndependentDispatchJobs,
+  staffIndependentDispatchDirectory,
   staffSetCompanyJobPackage,
   staffCreateExternalGuestLink,
   externalGuestAssignment,

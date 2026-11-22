@@ -3,11 +3,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { independentDispatchJobs, type IndependentJob, type IndependentJobDetails, type IndependentJobStatus } from '@/lib/independentDispatchJobs';
 import { listExternalDrivers, type ExternalDriver } from '@/lib/externalAssignmentDelivery';
 import { ExternalAssignmentDeliveryPanel } from './ExternalAssignmentDeliveryPanel';
+import { independentDispatchDirectory, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
+import { SECTOR_FIELDS, sectorLabel, type IndependentSector } from '@/lib/independentDispatchSectors';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '' };
 const STATUS: Record<IndependentJobStatus, string> = { unassigned: 'Unassigned', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
 const FIELDS = [
-  ['title', 'Job name', 180, true], ['customer', 'Customer', 180, true],
+  ['title', 'Job name', 180, true],
   ['reference', 'Customer reference / load number', 120, false],
   ['pickup', 'Pickup address / location', 500, true], ['destination', 'Delivery address / location', 500, true],
   ['cargo', 'Cargo / equipment / quantity', 500, false], ['notes', 'Instructions', 4000, false],
@@ -30,12 +32,19 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
+  const [customerId, setCustomerId] = useState('');
+  const [sector, setSector] = useState<IndependentSector | ''>('');
+  const [sectorFields, setSectorFields] = useState<Record<string, string>>({});
   // Keep create identity through an ambiguous network failure, avoiding duplicate jobs.
   const creation = useRef({ jobId: crypto.randomUUID(), requestId: crypto.randomUUID() });
   const refresh = useCallback(async () => {
     const result = await independentDispatchJobs({ op: 'list' });
     if (result.companyId !== companyId) throw Error('Your staff account belongs to a different company.');
     setJobs(result.jobs || []);
+    const setup = await independentDispatchDirectory({ op: 'list' });
+    if (setup.companyId !== companyId) throw Error('Your directory belongs to a different company.');
+    setDirectory(setup);
     if (canManageDrivers) setDrivers(await listExternalDrivers());
     setLoaded(true);
   }, [companyId, canManageDrivers]);
@@ -51,39 +60,72 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     finally { setBusy(false); }
   }
   function resetForm() {
-    setForm(EMPTY); setEditing(null); setScheduledLocal('');
+    setForm(EMPTY); setEditing(null); setScheduledLocal(''); setCustomerId(''); setSector(''); setSectorFields({});
     creation.current = { jobId: crypto.randomUUID(), requestId: crypto.randomUUID() };
   }
   function edit(job: IndependentJob) {
     setEditing(job);
     setForm(Object.fromEntries(Object.keys(EMPTY).map(k => [k, job[k as keyof IndependentJobDetails]])) as IndependentJobDetails);
+    setCustomerId(job.customerId || ''); setSector((job.sector as IndependentSector) || ''); setSectorFields(job.sectorFields || {});
     const date = job.scheduledAt ? new Date(job.scheduledAt) : null;
     setScheduledLocal(date ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
     document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' });
   }
   const visible = jobs.filter(job => (filter === 'all' || (filter === 'active' ? !['completed', 'cancelled'].includes(job.status) : filter === job.status))
     && [job.title, job.customer, job.reference, job.pickup, job.destination, job.driverName].join(' ').toLowerCase().includes(search.toLowerCase()));
+  const selectedCustomer = directory?.customers.find(customer => customer.id === customerId);
+  const availableSectors = (selectedCustomer?.sectors || []).filter(id => directory?.sectors.includes(id));
   return <div className="space-y-4">
-    <p className="text-sm text-gray-300">Create customer jobs, assign outside drivers, and record progress. Driver messaging and the WB Dispatch phone app will be connected separately.</p>
+    <p className="text-sm text-gray-300">Create customer jobs with sector-specific details, assign outside drivers, and record progress. Driver messaging and the WB Dispatch phone app will be connected separately.</p>
     {error && <div role="alert" className="rounded border border-red-700 bg-red-950 p-3 text-red-200">{error}</div>}
     {notice && <p role="status" className="text-green-300">{notice}</p>}
     {canManageDrivers && <ExternalAssignmentDeliveryPanel jobs={[]} canManage={canWrite && canManageDrivers} rosterOnly onRosterChange={refresh} />}
     {canWrite && <form id="independent-job-form" className="rounded border border-gray-700 bg-gray-800 p-4" onSubmit={event => {
       event.preventDefault();
-      const job = { ...form, scheduledAt: scheduledLocal ? new Date(scheduledLocal).toISOString() : '' };
+      const job = { ...form, scheduledAt: scheduledLocal ? new Date(scheduledLocal).toISOString() : '',
+        ...(sector && customerId ? { customerId, sector, sectorFields } : {}) };
       void run({ op: editing ? 'update' : 'create', jobId: editing?.id || creation.current.jobId,
         requestId: editing ? crypto.randomUUID() : creation.current.requestId,
         ...(editing ? { expectedRevision: editing.revision } : {}), job }, resetForm);
     }}>
       <h2 className="mb-3 font-semibold text-cyan-300">{editing ? 'Edit job' : 'New Independent Dispatch job'}</h2>
       <fieldset disabled={busy || !loaded} className="grid gap-3 md:grid-cols-2">
+        {(!editing || editing.sector) ? <>
+          <label className="text-xs text-gray-300">Customer *<select aria-label="Customer" required value={customerId} className={inputClass} onChange={event => {
+            const next = directory?.customers.find(customer => customer.id === event.target.value);
+            setCustomerId(next?.id || ''); setForm(current => ({ ...current, customer: next?.name || '', title: '', pickup: '', destination: '' }));
+            const choices = (next?.sectors || []).filter(id => directory?.sectors.includes(id));
+            setSector(choices.length === 1 ? choices[0] : ''); setSectorFields({});
+          }}><option value="">Choose customer…</option>{directory?.customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
+          <label className="text-xs text-gray-300">Transportation sector *<select aria-label="Transportation sector" required value={sector} className={inputClass} onChange={event => { setSector(event.target.value as IndependentSector); setSectorFields({}); }}>
+            <option value="">{availableSectors.length ? 'Choose sector…' : 'Choose a customer first…'}</option>
+            {availableSectors.map(id => <option key={id} value={id}>{sectorLabel(id)}</option>)}
+          </select></label>
+        </> : <label className="text-xs text-gray-300">Customer *<input required maxLength={180} value={form.customer} onChange={event => setForm({ ...form, customer: event.target.value })} className={inputClass} /></label>}
+        {!directory?.customers.length && <p className="text-sm text-amber-200 md:col-span-2">Add a customer in <a href="/settings" className="underline">Independent Dispatch settings</a> before creating a sector job.</p>}
         {FIELDS.map(([key, label, max, required]) => <label key={key} className={`text-xs text-gray-300 ${key === 'notes' ? 'md:col-span-2' : ''}`}>
           {label}{required ? ' *' : ''}
           {key === 'notes' ? <textarea className={inputClass} rows={3} maxLength={max} value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} />
-            : <input className={inputClass} required={required} maxLength={max} value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} />}
+            : <input list={key === 'title' ? 'independent-job-names' : key === 'pickup' ? 'independent-pickups' : key === 'destination' ? 'independent-deliveries' : undefined}
+              className={inputClass} required={required} maxLength={max} value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} />}
         </label>)}
+        <datalist id="independent-job-names">{selectedCustomer?.jobNames.map(value => <option key={value} value={value} />)}</datalist>
+        <datalist id="independent-pickups">{selectedCustomer?.pickupLocations.map(value => <option key={value} value={value} />)}</datalist>
+        <datalist id="independent-deliveries">{selectedCustomer?.deliveryLocations.map(value => <option key={value} value={value} />)}</datalist>
+        {sector && <div className="rounded border border-cyan-700/50 bg-cyan-950/20 p-3 md:col-span-2">
+          <h3 className="mb-2 text-sm font-semibold text-cyan-300">{sectorLabel(sector)} details</h3>
+          <div className="grid gap-3 md:grid-cols-2">{SECTOR_FIELDS[sector].map(field => <label key={field.key} className="text-xs text-gray-300">
+            {field.label}{field.required ? ' *' : ''}
+            {field.options ? <select aria-label={field.label} required={field.required} value={sectorFields[field.key] || ''} className={inputClass}
+              onChange={event => setSectorFields(current => ({ ...current, [field.key]: event.target.value }))}>
+              <option value="">Choose…</option>{field.options.map(value => <option key={value} value={value}>{value}</option>)}
+            </select> : <input aria-label={field.label} required={field.required} type={field.type || 'text'} min={field.type === 'number' ? 0.01 : undefined}
+              step={field.type === 'number' ? '0.01' : undefined} maxLength={160} value={sectorFields[field.key] || ''}
+              onChange={event => setSectorFields(current => ({ ...current, [field.key]: event.target.value }))} className={inputClass} />}
+          </label>)}</div>
+        </div>}
         <label className="text-xs text-gray-300">Scheduled pickup (your local time)<input type="datetime-local" className={inputClass} value={scheduledLocal} onChange={e => setScheduledLocal(e.target.value)} /></label>
-        <div className="flex items-end gap-2"><button className={buttonClass}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create job'}</button>
+        <div className="flex items-end gap-2"><button disabled={!editing && (!customerId || !sector)} className={buttonClass}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create job'}</button>
           <button type="button" className="text-sm text-gray-300" onClick={resetForm}>Clear / new job</button></div>
       </fieldset>
     </form>}
@@ -94,9 +136,10 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     </div>
     {!loaded ? <p className="text-gray-400">Loading jobs…</p> : !visible.length ? <p className="text-gray-400">No matching jobs.</p> : visible.map(job => <article key={job.id} className="rounded border border-gray-700 bg-gray-800 p-4">
       <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold text-white">{job.title}</h2><span className="text-cyan-300">{STATUS[job.status]}</span></div>
-      <p className="text-sm text-gray-300">{job.customer}{job.reference ? ` · ${job.reference}` : ''}</p>
+      <p className="text-sm text-gray-300">{job.customer}{job.sector ? ` · ${sectorLabel(job.sector)}` : ''}{job.reference ? ` · ${job.reference}` : ''}</p>
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
       {job.cargo && <p className="mt-2 whitespace-pre-wrap text-sm text-gray-300">Cargo: {job.cargo}</p>}
+      {job.sector && job.sectorFields && <dl className="mt-2 grid gap-1 text-xs text-gray-300 md:grid-cols-2">{SECTOR_FIELDS[job.sector as IndependentSector]?.map(field => job.sectorFields?.[field.key] ? <div key={field.key}><dt className="inline text-gray-400">{field.label}: </dt><dd className="inline">{job.sectorFields[field.key]}</dd></div> : null)}</dl>}
       {job.scheduledAt && <p className="text-sm text-gray-300">Scheduled: {new Date(job.scheduledAt).toLocaleString()}</p>}
       {job.notes && <p className="mt-2 whitespace-pre-wrap break-words text-sm text-gray-300">{job.notes}</p>}
       <p className="mt-2 text-sm text-amber-200">Driver: {job.driverName || 'Not assigned'}</p>
