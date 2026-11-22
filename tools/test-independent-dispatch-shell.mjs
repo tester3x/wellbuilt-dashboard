@@ -9,7 +9,7 @@ const bundle = await build({ stdin: { contents: `import React from 'react';impor
     plugin.onResolve({ filter: /^(@\/contexts\/AuthContext|next\/navigation)$/ }, args => ({ path: args.path, namespace: 'fixture' }));
     plugin.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ loader: 'js', contents: args.path === 'next/navigation'
       ? `const router={replace(path){window.redirects.push(path)}};export const useRouter=()=>router;export const usePathname=()=>location.pathname;`
-      : `export function useAuth(){return {user:{uid:'owner',companyId:'company-a'},userCompany:window.mode==='missing'?null:{activePackages:window.mode==='dual'?['independent-dispatch','water-hauling']:['independent-dispatch']},authResolved:window.mode!=='loading'}};` }));
+      : `export function useAuth(){return {user:{uid:'owner',companyId:'company-a'},userCompany:window.mode==='missing'?null:window.mode==='free'?{id:'company-a',ownerUid:'owner',wellbuiltContract:{planId:'free-company-a'},activePackages:[]}:{activePackages:window.mode==='dual'?['independent-dispatch','water-hauling']:['independent-dispatch']},authResolved:window.mode!=='loading'}};` }));
   } }],
 });
 const server = http.createServer((req, res) => { res.setHeader('Content-Type', req.url === '/bundle.js' ? 'text/javascript' : 'text/html');
@@ -17,21 +17,23 @@ const server = http.createServer((req, res) => { res.setHeader('Content-Type', r
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch();
 try {
-  for (const [route, mode, mounted, redirect] of [
-    ['/', 'only', false, true], ['/dispatch', 'only', false, true], ['/tickets', 'only', false, true],
-    ['/dispatch/independent', 'only', true, false], ['/settings', 'only', true, false],
-    ['/tickets', 'dual', true, false], ['/dispatch/independent', 'loading', false, false],
-    ['/dispatch/independent', 'missing', false, false],
+  for (const [route, mode, mounted, target] of [
+    ['/', 'only', false, '/dispatch/independent'], ['/dispatch', 'only', false, '/dispatch/independent'], ['/tickets', 'only', false, '/dispatch/independent'],
+    ['/dispatch/independent', 'only', true, null], ['/settings', 'only', true, null],
+    ['/', 'free', false, '/welcome'], ['/tickets', 'free', false, '/welcome'],
+    ['/welcome', 'free', true, null], ['/equipment', 'free', true, null], ['/safety', 'free', true, null], ['/settings', 'free', true, null],
+    ['/tickets', 'dual', true, null], ['/dispatch/independent', 'loading', false, null],
+    ['/dispatch/independent', 'missing', false, null],
   ]) {
     const page = await browser.newPage(); const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}${route}?mode=${mode}`);
-    if (redirect) await page.waitForFunction(() => window.redirects.length > 0);
+    if (target) await page.waitForFunction(() => window.redirects.length > 0);
     else await page.getByText(mounted ? 'Mounted workspace' : mode === 'missing'
       ? 'Company workspace unavailable. Refresh this page to try again.' : 'Loading company workspace…').waitFor();
     assert.equal(await page.getByTestId('workspace').count(), Number(mounted), `${mode} ${route} content gate`);
-    assert.deepEqual(await page.evaluate(() => window.redirects), redirect ? ['/dispatch/independent'] : [], `${mode} ${route} redirect`);
+    assert.deepEqual(await page.evaluate(() => window.redirects), target ? [target] : [], `${mode} ${route} redirect`);
     assert.deepEqual(errors, []);
     await page.close();
   }
-  console.log('Independent package-only shell: home and standard routes redirect before mounting; dispatch/settings allowed; mixed package preserved.');
+  console.log('Company workspace shell: Independent Dispatch and new free owners reach only their available routes; mixed packages preserved.');
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

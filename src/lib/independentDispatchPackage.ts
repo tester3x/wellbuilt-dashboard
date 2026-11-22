@@ -13,3 +13,13 @@ export function hasOnlyIndependentDispatchPackage(activePackages: unknown): bool
     && activePackages.length === 1
     && activePackages[0] === INDEPENDENT_DISPATCH_PACKAGE_ID;
 }
+
+/** A self-service owner before installing any operational job package. */
+export function hasFreeOwnerWorkspace(company: {
+  id: string; ownerUid?: string; activePackages?: string[];
+  wellbuiltContract?: { planId?: string };
+} | null, uid: string | undefined): boolean {
+  return !!company && !!uid && company.ownerUid === uid
+    && company.wellbuiltContract?.planId === `free-${company.id.replace(/_/g, '-')}`
+    && (!Array.isArray(company.activePackages) || company.activePackages.length === 0);
+}

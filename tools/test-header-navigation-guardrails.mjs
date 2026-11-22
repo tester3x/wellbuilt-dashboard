@@ -219,15 +219,19 @@ export async function runHeaderNavigationGuardrails() {
     '@/contexts/AuthContext': {
       useAuth: () => ({
         user: { uid: 'guardrail-test-uid', email: 'dispatch-admin@wellbuilt.test', role: 'admin',
-          ...(headerMode === 'independent' ? { companyId: 'co_test' } : {}) },
-        userCompany: headerMode === 'independent' ? { activePackages: ['independent-dispatch'] } : null,
+          ...(headerMode !== 'full' ? { companyId: 'co_test' } : {}) },
+        userCompany: headerMode === 'independent' ? { activePackages: ['independent-dispatch'] }
+          : headerMode === 'free' ? { id: 'co_test', ownerUid: 'guardrail-test-uid', wellbuiltContract: { planId: 'free-co-test' }, activePackages: [] } : null,
         operatingCompanyId: null,
         selectOperatingCompany: () => {},
         signOut: async () => {},
       }),
     },
     '@/lib/tabs': tabsModule,
-    '@/lib/independentDispatchPackage': { hasOnlyIndependentDispatchPackage: value => Array.isArray(value) && value.length === 1 && value[0] === 'independent-dispatch' },
+    '@/lib/independentDispatchPackage': {
+      hasOnlyIndependentDispatchPackage: value => Array.isArray(value) && value.length === 1 && value[0] === 'independent-dispatch',
+      hasFreeOwnerWorkspace: (company, uid) => !!company && company.ownerUid === uid && company.wellbuiltContract?.planId === `free-${company.id.replace(/_/g, '-')}` && company.activePackages?.length === 0,
+    },
     '@/lib/dashboardReturnState': {
       rememberedTabHref: (_uid, _company, _tab, fallback) => fallback,
       rememberTabHref: () => {},
@@ -342,6 +346,17 @@ export async function runHeaderNavigationGuardrails() {
     if (await page.getByRole('link', { name: 'Independent Dispatch' }).getAttribute('href') !== '/dispatch/independent')
       throw new Error('Independent-only tab did not open its own workspace.');
     console.log('✓ Independent-only tenant sees only its dispatch workspace and settings.');
+
+    headerMode = 'free';
+    await page.setContent(`<style>${css}</style>${renderToStaticMarkup(React.createElement(AppHeader))}`);
+    const freeTabs = await page.locator('nav[aria-label="Main navigation"] a').allTextContents();
+    if (JSON.stringify(freeTabs) !== JSON.stringify(['eQuipment', 'Safety', 'Settings']))
+      throw new Error(`Free owner navigation leaked unavailable modules: ${freeTabs.join(', ')}`);
+    if (await page.getByRole('link', { name: 'Admin', exact: true }).count()
+      || await page.getByRole('link', { name: 'Location Review' }).count()
+      || await page.getByLabel('Chat and notifications').count())
+      throw new Error('Free owner navigation exposed unavailable standard workspace controls.');
+    console.log('✓ New free-plan owner sees equipment, safety, and settings only.');
 
     console.log('=== All Header & Navigation Guardrail Tests Passed Mechanically ===');
   } finally {

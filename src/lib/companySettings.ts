@@ -378,6 +378,8 @@ export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
 export interface CompanyConfig {
   id: string;
   name: string;
+  ownerUid?: string;
+  wellbuiltContract?: { planId?: string };
   address?: string;
   city?: string;
   state?: string;

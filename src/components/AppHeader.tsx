@@ -14,7 +14,7 @@ import { ChatSidebar } from './chat/ChatSidebar';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions, getFirebaseDatabase } from '@/lib/firebase';
 import { rememberedTabHref, rememberTabHref } from '@/lib/dashboardReturnState';
-import { hasOnlyIndependentDispatchPackage } from '@/lib/independentDispatchPackage';
+import { hasFreeOwnerWorkspace, hasOnlyIndependentDispatchPackage } from '@/lib/independentDispatchPackage';
 
 export function AppHeader() {
   const { user, userCompany, signOut, operatingCompanyId, selectOperatingCompany } = useAuth();
@@ -22,7 +22,9 @@ export function AppHeader() {
   const router = useRouter();
   const activeTabId = getActiveTab(pathname);
   const independentOnly = !!user?.companyId && hasOnlyIndependentDispatchPackage(userCompany?.activePackages);
-  const canReviewLocations = !independentOnly && (hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany));
+  const freeOwner = hasFreeOwnerWorkspace(userCompany, user?.uid);
+  const limitedWorkspace = independentOnly || freeOwner;
+  const canReviewLocations = !limitedWorkspace && (hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany));
   const [pendingLocations, setPendingLocations] = useState(0);
   useEffect(() => {
     if (!user || !canReviewLocations) { setPendingLocations(0); return; }
@@ -55,7 +57,7 @@ export function AppHeader() {
   // This is independent of the notification bell. Bell = awareness, pulse = persistent reminder.
   // Pulse stops ONLY when the actual pending drivers are approved/rejected.
   useEffect(() => {
-    if (!user || independentOnly) return;
+    if (!user || limitedWorkspace) return;
     if (!hasCapability(user, 'manageDrivers', userCompany)) return;
 
     const db = getFirebaseDatabase();
@@ -79,7 +81,7 @@ export function AppHeader() {
       ).catch(() => setPendingDriverCount(0));
     });
     return () => unsub();
-  }, [user, userCompany, independentOnly]);
+  }, [user, userCompany, limitedWorkspace]);
 
   if (!user) return null;
 
@@ -101,7 +103,7 @@ export function AppHeader() {
             {companies.map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
           </select>
         </label>}
-          {!independentOnly && hasCapability(user, 'viewAdmin', userCompany) && (
+          {!limitedWorkspace && hasCapability(user, 'viewAdmin', userCompany) && (
             <Link
               href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
               className="relative px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-xs"
@@ -183,7 +185,7 @@ export function AppHeader() {
           >
             {user.uid === 'wellbuilt-demo-shared-viewer' ? 'Leave Demo' : 'Sign Out'}
           </button>
-          {!independentOnly && <div aria-label="Chat and notifications" className="ml-auto flex items-center gap-2">
+          {!limitedWorkspace && <div aria-label="Chat and notifications" className="ml-auto flex items-center gap-2">
             <ChatIcon onClick={() => setChatOpen(!chatOpen)} unreadCount={chatUnread} />
             <NotificationBell />
           </div>}
@@ -194,6 +196,7 @@ export function AppHeader() {
           <nav aria-label="Main navigation" className="order-3 flex w-full min-w-0 flex-wrap justify-center gap-x-1 gap-y-0">
             {TABS.filter(tab => {
               if (independentOnly) return tab.id === 'dispatch' || tab.id === 'settings';
+              if (freeOwner) return tab.id === 'equipment' || tab.id === 'safety' || tab.id === 'settings';
               if (tab.id === 'equipment') return hasEQuipmentAccess(user, userCompany);
               // Capability-based gate wins when set. Falls back to legacy minRole
               // only if capability is unset (e.g., Home tab with no gate at all).
@@ -202,14 +205,15 @@ export function AppHeader() {
               return true;
             }).map((tab) => {
               const isActive = tab.id === activeTabId;
-              const href = independentOnly && tab.id === 'dispatch' ? '/dispatch/independent' : returnLinks[tab.id] || tab.href;
+              const href = independentOnly && tab.id === 'dispatch' ? '/dispatch/independent'
+                : freeOwner ? tab.href : returnLinks[tab.id] || tab.href;
               return (
                 <Link
                   key={tab.id}
                   href={href}
                   onClick={event => {
                     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                    if (independentOnly) { event.preventDefault(); router.push(href); return; }
+                    if (limitedWorkspace) { event.preventDefault(); router.push(href); return; }
                     rememberTabHref(user.uid, operatingCompanyId);
                     const targetHref = rememberedTabHref(user.uid, operatingCompanyId, tab.id, tab.href);
                     event.preventDefault(); router.push(targetHref);
@@ -230,7 +234,7 @@ export function AppHeader() {
       </div>
 
       {/* Chat Sidebar */}
-      {!independentOnly && <ChatSidebar
+      {!limitedWorkspace && <ChatSidebar
         visible={chatOpen}
         onClose={() => setChatOpen(false)}
         userId={user?.uid || ''}

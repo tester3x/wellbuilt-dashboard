@@ -39,7 +39,7 @@ export default function WelcomePage() {
           <p><Link href="/settings" className="text-cyan-400 underline">Open company settings</Link></p>
         </section>
         <details className="border border-gray-700 rounded-xl p-5"><summary>Invite employees later</summary><p className="mt-4">Your company code: <strong className="font-mono">{setup.joinCode}</strong></p><p className="mt-2 text-gray-300">Employees use this code in New Employee Registration. Share it only with people joining your company.</p></details>
-        <Link href="/" className="inline-block px-6 py-3 bg-cyan-600 rounded-lg font-semibold">Open Dashboard</Link>
+        <Link href="/settings" className="inline-block px-6 py-3 bg-cyan-600 rounded-lg font-semibold">Open company settings</Link>
       </>}
   </div></main>;
 }
