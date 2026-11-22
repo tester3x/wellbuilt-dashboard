@@ -13,14 +13,14 @@ export async function independentDispatchJobs(data){
  if(data.op==='create')jobs.push({...data.job,id:data.jobId,revision:1,status:'unassigned',companyId:'fixture',updatedAt:new Date().toISOString()});
  const job=jobs.find(j=>j.id===data.jobId);
  if(data.op==='update')Object.assign(job,data.job,{revision:job.revision+1});
- if(data.op==='assign')Object.assign(job,{status:'assigned',driverName:'Outside Driver',revision:job.revision+1});
+ if(data.op==='assign')Object.assign(job,{status:'assigned',driverName:'Outside Driver',externalDriverId:data.externalDriverId,revision:job.revision+1});
  if(data.op==='status')Object.assign(job,{status:data.status,revision:job.revision+1});
  return {ok:true,job};
 }`;
 const bundle = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {IndependentDispatchBoard} from './src/components/IndependentDispatchBoard';createRoot(document.getElementById('root')).render(<IndependentDispatchBoard companyId="fixture" canWrite={true} canManageDrivers={true}/>);`, loader: 'tsx', resolveDir: process.cwd() }, bundle: true, write: false, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, plugins: [{ name: 'fixture', setup(b) {
   b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
-    : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],customers:[{id:'customer-a',name:'Customer A',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']}]});`
+    : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']}]});`
     : `export const listExternalDrivers=async()=>[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>d;export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
@@ -57,6 +57,10 @@ try {
   await card.waitFor();
   await card.getByRole('combobox').selectOption('driver-a');
   await card.getByRole('button',{name:'Assign',exact:true}).click();
+  const firstJobId = await page.evaluate(() => window.requests.find(request => request.op === 'create').jobId);
+  assert.equal(await card.getByRole('link',{name:'Call customer in Dialpad'}).getAttribute('href'),
+    `dialpad://+17015550111?confirmPhone=1&customData=wellbuilt-independent%3A${firstJobId}`);
+  assert.ok((await card.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&customData='));
   await card.getByRole('button',{name:'Mark started',exact:true}).click();
   assert.equal(await card.getByRole('button',{name:'Edit',exact:true}).count(),0);
   await card.getByRole('button',{name:'Mark completed',exact:true}).click();

@@ -3,7 +3,7 @@ import { getFirebaseFunctions } from './firebase';
 import type { IndependentSector } from './independentDispatchSectors';
 
 export type IndependentCustomer = {
-  id: string; name: string; sectors: IndependentSector[]; jobNames: string[];
+  id: string; name: string; phoneE164?: string; sectors: IndependentSector[]; jobNames: string[];
   pickupLocations: string[]; deliveryLocations: string[]; active: true;
 };
 export type IndependentDirectory = {

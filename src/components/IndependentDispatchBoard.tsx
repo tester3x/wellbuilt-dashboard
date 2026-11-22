@@ -5,6 +5,7 @@ import { listExternalDrivers, type ExternalDriver } from '@/lib/externalAssignme
 import { ExternalAssignmentDeliveryPanel } from './ExternalAssignmentDeliveryPanel';
 import { independentDispatchDirectory, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
 import { SECTOR_FIELDS, sectorLabel, type IndependentSector } from '@/lib/independentDispatchSectors';
+import { dialpadCallHref } from '@/lib/dialpad';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '' };
 const STATUS: Record<IndependentJobStatus, string> = { unassigned: 'Unassigned', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
@@ -16,6 +17,18 @@ const FIELDS = [
 ] as const;
 const inputClass = 'w-full rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white';
 const buttonClass = 'rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-40';
+
+function JobDialpadLinks({ job, directory, drivers }: { job: IndependentJob; directory: IndependentDirectory | null; drivers: ExternalDriver[] }) {
+  const customer = directory?.customers.find(item => item.id === job.customerId);
+  const driver = drivers.find(item => item.externalDriverId === job.externalDriverId);
+  const customerHref = dialpadCallHref(customer?.phoneE164, job.id);
+  const driverHref = dialpadCallHref(driver?.phoneE164, job.id);
+  if (!customerHref && !driverHref) return null;
+  return <div className="mt-2 flex flex-wrap gap-3 text-sm text-cyan-300 underline">
+    {customerHref && <a href={customerHref}>Call customer in Dialpad</a>}
+    {driverHref && <a href={driverHref}>Call driver in Dialpad</a>}
+  </div>;
+}
 
 export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers }: {
   companyId: string; canWrite: boolean; canManageDrivers: boolean;
@@ -137,6 +150,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     {!loaded ? <p className="text-gray-400">Loading jobs…</p> : !visible.length ? <p className="text-gray-400">No matching jobs.</p> : visible.map(job => <article key={job.id} className="rounded border border-gray-700 bg-gray-800 p-4">
       <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold text-white">{job.title}</h2><span className="text-cyan-300">{STATUS[job.status]}</span></div>
       <p className="text-sm text-gray-300">{job.customer}{job.sector ? ` · ${sectorLabel(job.sector)}` : ''}{job.reference ? ` · ${job.reference}` : ''}</p>
+      <JobDialpadLinks job={job} directory={directory} drivers={drivers} />
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
       {job.cargo && <p className="mt-2 whitespace-pre-wrap text-sm text-gray-300">Cargo: {job.cargo}</p>}
       {job.sector && job.sectorFields && <dl className="mt-2 grid gap-1 text-xs text-gray-300 md:grid-cols-2">{SECTOR_FIELDS[job.sector as IndependentSector]?.map(field => job.sectorFields?.[field.key] ? <div key={field.key}><dt className="inline text-gray-400">{field.label}: </dt><dd className="inline">{job.sectorFields[field.key]}</dd></div> : null)}</dl>}

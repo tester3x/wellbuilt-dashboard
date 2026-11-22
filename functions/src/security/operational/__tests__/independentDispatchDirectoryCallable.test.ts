@@ -35,8 +35,8 @@ describe('Independent Dispatch directory', () => {
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'Customer A', active: true,
       sectors: ['aggregate'], jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('customer_sector_disabled');
     await call({ op: 'saveCustomer', customer: { id: 'customer-a', name: '  Customer A  ', active: true,
-      sectors: ['ltl'], jobNames: ['Pallet delivery'], pickupLocations: ['Yard A'], deliveryLocations: ['Site B'] } });
-    await expect(call({ op: 'list' })).resolves.toMatchObject({ sectors: ['ltl', 'otr'], customers: [{ id: 'customer-a', name: 'Customer A', pickupLocations: ['Yard A'] }] });
+      sectors: ['ltl'], phoneE164: '+17015550111', jobNames: ['Pallet delivery'], pickupLocations: ['Yard A'], deliveryLocations: ['Site B'] } });
+    await expect(call({ op: 'list' })).resolves.toMatchObject({ sectors: ['ltl', 'otr'], customers: [{ id: 'customer-a', name: 'Customer A', phoneE164: '+17015550111', pickupLocations: ['Yard A'] }] });
     expect(requireTrustedCompanyCapability).toHaveBeenCalledWith('staff', 'manageCompany');
     expect(records.get('companies/company-a/independent_dispatch_customers/customer-a').companyId).toBe('company-a');
   });
@@ -47,6 +47,8 @@ describe('Independent Dispatch directory', () => {
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'A', active: true,
       sectors: ['ltl'], jobNames: [], pickupLocations: ['Yard', 'yard'], deliveryLocations: [] } })).rejects.toThrow('invalid_pickup_locations');
     await expect(call({ op: 'setSectors', sectors: ['ltl', 'ltl'] })).rejects.toThrow('invalid_sectors');
+    await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'A', active: true,
+      sectors: ['ltl'], phoneE164: '555-1111', jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('invalid_customer_phone');
     await expect(call({ op: 'list', companyId: 'company-b' })).rejects.toThrow('invalid_directory_request');
   });
 });

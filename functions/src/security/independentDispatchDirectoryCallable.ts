@@ -52,10 +52,13 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
     if (Object.keys(data).length !== 2 || !data.customer || typeof data.customer !== 'object' || Array.isArray(data.customer))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_customer');
     const raw = data.customer as Record<string, unknown>;
-    if (Object.keys(raw).some(key => !['id', 'name', 'sectors', 'jobNames', 'pickupLocations', 'deliveryLocations', 'active'].includes(key))
+    if (Object.keys(raw).some(key => !['id', 'name', 'phoneE164', 'sectors', 'jobNames', 'pickupLocations', 'deliveryLocations', 'active'].includes(key))
       || typeof raw.id !== 'string' || !ID.test(raw.id) || typeof raw.name !== 'string'
       || !raw.name.trim() || raw.name.length > 180 || raw.active !== true)
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_customer');
+    const phoneE164 = raw.phoneE164 === undefined ? '' : raw.phoneE164;
+    if (typeof phoneE164 !== 'string' || (phoneE164 !== '' && !/^\+[1-9]\d{7,14}$/.test(phoneE164)))
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_customer_phone');
     let sectors;
     try { sectors = parseIndependentSectors(raw.sectors); }
     catch { throw new httpsV2.HttpsError('invalid-argument', 'invalid_customer_sectors'); }
@@ -63,7 +66,7 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
     const enabled = config.exists ? parseIndependentSectors(config.data()?.sectors) : DEFAULT_SECTORS;
     if (sectors.some(sector => !enabled.includes(sector)))
       throw new httpsV2.HttpsError('failed-precondition', 'customer_sector_disabled');
-    const customer = { companyId: authority.companyId, name: raw.name.trim(), sectors,
+    const customer = { companyId: authority.companyId, name: raw.name.trim(), phoneE164, sectors,
       jobNames: names(raw.jobNames, 'job_names', 30),
       pickupLocations: names(raw.pickupLocations, 'pickup_locations', 50),
       deliveryLocations: names(raw.deliveryLocations, 'delivery_locations', 50),
