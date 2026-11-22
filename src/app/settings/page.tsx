@@ -44,14 +44,16 @@ export default function SettingsPage() {
 function IndependentSettingsPage() {
   const { user, userCompany } = useAuth();
   if (!user || !userCompany) return null;
-  const canEdit = hasCapability(user, 'manageCompany', userCompany);
-  return <div className="min-h-screen bg-gray-900 text-white"><AppHeader />
-    <main className="mx-auto max-w-4xl space-y-4 px-4 py-8">
-      <div><h2 className="text-2xl font-bold">Independent Dispatch settings</h2><p className="mt-1 text-sm text-gray-400">{userCompany.name}</p></div>
-      <PackagesCard company={userCompany} canEdit={canEdit} onSave={async () => { window.location.reload(); }} />
-      <IndependentDispatchSetupCard companyId={userCompany.id} canEdit={canEdit} />
-    </main>
-  </div>;
+  return (
+    <div className="min-h-screen bg-gray-900 text-white">
+      <AppHeader />
+      <main className="mx-auto max-w-4xl space-y-4 px-4 py-8">
+        <div><h2 className="text-2xl font-bold">Independent Dispatch settings</h2><p className="mt-1 text-sm text-gray-400">{userCompany.name}</p></div>
+        <PackagesCard company={userCompany} canEdit={hasCapability(user, 'manageCompany', userCompany)} onSave={async () => { window.location.reload(); }} />
+        <IndependentDispatchSetupCard companyId={userCompany.id} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+      </main>
+    </div>
+  );
 }
 
 function StandardSettingsPage() {
