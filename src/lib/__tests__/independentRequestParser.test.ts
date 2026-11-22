@@ -127,3 +127,28 @@ test('sector conflicting with an exact customer name leaves the customer unselec
   assert.equal(parsed.sector, 'aggregate');
   assert.ok(parsed.warnings.some(message => message.includes('not enabled')));
 });
+
+test('real one-line fresh-water request fills only stated facts and flags missing pickup and date', () => {
+  const parsed = parsePastedJobRequest('Service : 100 bbls Fresh water from --- take to Thor 2, 3 at 6 am. For Dallas Entertech,Fresh water ticket.', directory);
+  assert.equal(parsed.customerLabel, 'Dallas Entertech');
+  assert.equal(parsed.customerId, '');
+  assert.equal(parsed.sector, 'water-hauling');
+  assert.equal(parsed.fields.title, 'Fresh water to Thor 2, 3');
+  assert.equal(parsed.fields.pickup, undefined);
+  assert.equal(parsed.fields.destination, 'Thor 2, 3');
+  assert.equal(parsed.sectorFields.waterType, 'Fresh water');
+  assert.equal(parsed.sectorFields.volumeBbl, '100');
+  assert.equal(parsed.scheduledLocal, '');
+  assert.ok(parsed.missing.includes('Pickup location'));
+  assert.ok(parsed.warnings.some(warning => warning.includes('no date')));
+  assert.ok(parsed.fields.notes?.includes('Fresh water ticket'));
+});
+
+test('two company men and one phone remain unpaired for dispatcher review', () => {
+  const parsed = parsePastedJobRequest('Customer: ROS\nCompany man: John Wick/Adam Samuels\nCompany man phone: 701-555-0199\nSector: Hot shot\nJob: Rig move\nPickup: Yard\nDelivery: Rig', directory);
+  assert.equal(parsed.fields.jobContactName, undefined);
+  assert.equal(parsed.fields.jobContactPhoneE164, undefined);
+  assert.ok(parsed.fields.notes?.includes('John Wick/Adam Samuels'));
+  assert.ok(parsed.warnings.some(warning => warning.includes('Multiple company men')));
+  assert.ok(parsed.warnings.some(warning => warning.includes('could not be paired')));
+});

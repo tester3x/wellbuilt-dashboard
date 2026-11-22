@@ -129,19 +129,24 @@ function contactPhone(raw: string): string {
 /** Local, review-first extraction. Never creates a job or sends the source text anywhere. */
 export function parsePastedJobRequest(text: string, directory: IndependentDirectory): ParsedJobRequest {
   const lines = text.slice(0, 10000).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const service = labeled(lines, ['service']);
+  const serviceCustomer = service.match(/\bfor\s+([^,.;]+)(?=[,.;]|$)/i)?.[1]?.trim() || '';
+  const serviceRoute = service.match(/\bfrom\s+(.+?)\s+(?:take\s+)?to\s+(.+?)(?=\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|[.;]|$)/i);
+  const serviceTime = service.match(/\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i)?.[1] || '';
   const warnings: string[] = [];
   const fields: Partial<IndependentJobDetails> = {};
   const requestedSector = labeled(lines, ALIASES.sector);
   let sector = requestedSector ? sectorFrom(requestedSector) : inferSector(text);
   if (requestedSector && !sector) warnings.push(`Transportation sector “${requestedSector}” was not recognized.`);
-  const customerLabel = labeled(lines, ALIASES.customer);
+  const customerLabel = labeled(lines, ALIASES.customer) || serviceCustomer;
   const contactName = labeled(lines, ALIASES.jobContactName);
+  const contactNames = contactName.split(/\s*\/\s*/).map(name => name.trim()).filter(Boolean);
   const contactRole = labeled(lines, ALIASES.jobContactRole);
   const contactPhoneRaw = labeled(lines, ALIASES.jobContactPhoneE164);
   const directCustomer = customerLabel ? matchSavedCustomer(customerLabel, directory.customers) : undefined;
   const candidates = customerLabel ? closeCustomerCandidates(customerLabel, directory.customers) : [];
-  const namedContactMatches = contactName ? candidates.filter(candidate =>
-    (candidate.contacts || []).some(contact => normalize(contact.name) === normalize(contactName))) : [];
+  const namedContactMatches = contactNames.length ? candidates.filter(candidate =>
+    contactNames.every(name => (candidate.contacts || []).some(contact => normalize(contact.name) === normalize(name)))) : [];
   const contactMatches = namedContactMatches.filter(candidate => !sector || candidate.sectors.includes(sector));
   const contactCustomer = contactMatches.length === 1 ? contactMatches[0] : undefined;
   const directIsOfficial = directCustomer && normalize(directCustomer.name) === normalize(customerLabel);
@@ -169,18 +174,36 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
     const value = labeled(lines, ALIASES[key]);
     if (value) fields[key] = value.slice(0, key === 'notes' ? 4000 : key === 'pickup' || key === 'destination' || key === 'cargo' ? 500 : 180);
   }
-  if (contactName) {
+  if (service) {
+    const pickup = serviceRoute?.[1]?.replace(/\s+take$/i, '').trim() || '';
+    const destination = serviceRoute?.[2]?.trim() || '';
+    if (pickup && !/^[-–—?]+$/.test(pickup)) fields.pickup ||= pickup.slice(0, 500);
+    if (destination) fields.destination ||= destination.slice(0, 500);
+    const water = /\b(fresh water|production water|flowback|frac water)\b/i.exec(service)?.[1];
+    if (water && destination) fields.title ||= `${water} to ${destination}`.slice(0, 180);
+    fields.notes ||= `Original request: ${service}`.slice(0, 4000);
+    if (serviceTime) warnings.push(`Request says ${serviceTime} but gives no date; confirm the date before scheduling.`);
+    if (pickup && /^[-–—?]+$/.test(pickup)) warnings.push('Pickup was left blank in the request; confirm the source location.');
+  }
+  if (contactNames.length > 1) {
+    fields.notes = [fields.notes, `Company men (shift and phone pairing unspecified): ${contactName}`].filter(Boolean).join('\n').slice(0, 4000);
+    warnings.push('Multiple company men were named without clear shifts; confirm each person and phone before dispatching.');
+  } else if (contactName) {
     fields.jobContactName = contactName.slice(0, 120);
     fields.jobContactRole = (contactRole || (lines.some(line => /^company man\s*:/i.test(line)) ? 'Company man' : '')).slice(0, 80);
   }
-  if (contactPhoneRaw && contactName) {
+  if (contactPhoneRaw && contactNames.length === 1) {
     fields.jobContactPhoneE164 = contactPhone(contactPhoneRaw);
     if (!fields.jobContactPhoneE164) warnings.push('Job contact phone needs review; use a full number with country code.');
     else if (!contactPhoneRaw.trim().startsWith('+')) warnings.push('Assumed +1 for the job contact phone; confirm it.');
-  } else if (contactPhoneRaw && !contactName) warnings.push('Job contact phone was found without a contact name; enter the right person before using it.');
+  } else if (contactPhoneRaw && contactNames.length !== 1) warnings.push('Job contact phone could not be paired with one person; confirm the right person before using it.');
   if (!fields.pickup || !fields.destination) {
     const fromTo = text.match(/\bfrom\s+([^\n]+?)\s+to\s+([^\n.,;]+)/i);
-    if (fromTo) { fields.pickup ||= fromTo[1].trim(); fields.destination ||= fromTo[2].trim(); }
+    if (fromTo) {
+      const pickup = fromTo[1].replace(/\s+take$/i, '').trim();
+      if (!/^[-–—?]+$/.test(pickup)) fields.pickup ||= pickup;
+      fields.destination ||= fromTo[2].trim();
+    }
   }
   const timeRaw = labeled(lines, ALIASES.scheduledLocal);
   const scheduledLocal = timeRaw ? localDateTime(timeRaw) : '';
@@ -188,7 +211,8 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
   const sectorFields: Record<string, string> = {};
   if (sector) for (const field of SECTOR_FIELDS[sector]) {
     let raw = labeled(lines, [field.label, ...(ALIASES[field.key] || [])]);
-    if (!raw && field.key === 'volumeBbl') raw = text.match(/\b([\d,]+(?:\.\d+)?)\s*(?:bbl|barrels)\b/i)?.[1] || '';
+    if (!raw && field.key === 'volumeBbl') raw = text.match(/\b([\d,]+(?:\.\d+)?)\s*(?:bbls?|barrels)\b/i)?.[1] || '';
+    if (!raw && field.key === 'waterType') raw = text.match(/\b(production water|fresh water|flowback|frac water)\b/i)?.[1] || '';
     if (!raw && field.key === 'estimatedTons') raw = text.match(/\b([\d,]+(?:\.\d+)?)\s*tons?\b/i)?.[1] || '';
     if (!raw && field.key === 'pieces') raw = text.match(/\b([\d,]+)\s*pieces?\b/i)?.[1] || '';
     if (!raw && field.key === 'pallets') raw = text.match(/\b([\d,]+)\s*pallets?\b/i)?.[1] || '';
