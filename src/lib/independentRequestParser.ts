@@ -68,15 +68,8 @@ function closeCustomers(raw: string, customers: IndependentCustomer[], sector: I
     const words = wanted.split(' ').filter(word => word.length >= 3);
     return words.length > 0 && words.every(word => candidate.split(' ').some(part => part.startsWith(word)));
   })).sort((a, b) => Number(!!sector && b.sectors.includes(sector)) - Number(!!sector && a.sectors.includes(sector))
-    || a.name.localeCompare(b.name)).slice(0, 5)
+    || a.name.localeCompare(b.name)).slice(0, 3)
     .map(customer => ({ id: customer.id, name: customer.name, sectorMatch: !!sector && customer.sectors.includes(sector) }));
-}
-
-function inferCustomer(text: string, customers: IndependentCustomer[]): IndependentCustomer | undefined {
-  const haystack = ` ${normalize(text)} `;
-  const matches = customers.filter(customer => normalize(customer.name).length >= 5
-    && haystack.includes(` ${normalize(customer.name)} `));
-  return matches.length === 1 ? matchOfficialCustomer(matches[0].name, customers) : undefined;
 }
 
 function sectorFrom(raw: string): IndependentSector | '' {
@@ -130,12 +123,11 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
   let sector = requestedSector ? sectorFrom(requestedSector) : inferSector(text);
   if (requestedSector && !sector) warnings.push(`Transportation sector “${requestedSector}” was not recognized.`);
   const customerLabel = labeled(lines, ALIASES.customer);
-  const customer = customerLabel ? matchOfficialCustomer(customerLabel, directory.customers) : inferCustomer(text, directory.customers);
+  const customer = customerLabel ? matchOfficialCustomer(customerLabel, directory.customers) : undefined;
   const customerSuggestions = customerLabel && !customer ? closeCustomers(customerLabel, directory.customers, sector) : [];
   if (customerLabel && !customer) warnings.push(customerSuggestions.length
     ? `Customer “${customerLabel}” may match a saved company. Confirm its official name; the job sector is only a clue.`
     : `Customer “${customerLabel}” is not in your customer list. Confirm the official name or use NEW customer.`);
-  if (!customerLabel && customer) warnings.push(`Matched ${customer.name} from the message; confirm the customer.`);
   if (!sector && !requestedSector && customer?.sectors.length === 1) sector = customer.sectors[0];
   if (sector && (!directory.sectors.includes(sector) || (customer && !customer.sectors.includes(sector)))) {
     warnings.push(`${sector} is not enabled for this customer.`); sector = '';

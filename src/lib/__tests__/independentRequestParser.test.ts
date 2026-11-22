@@ -94,6 +94,13 @@ test('official names match directly unless another customer uses that name as an
   assert.deepEqual(ambiguous.customerSuggestions.map(item => item.id), ['liquid', 'other']);
 });
 
+test('a company mentioned in unlabelled notes never selects the customer', () => {
+  const parsed = parsePastedJobRequest('Job: Deliver for Liquid Gold\nSector: Water hauling\nPickup: Yard\nDelivery: Pad\nWater type: Production water\nBarrels: 120', directory);
+  assert.equal(parsed.customerId, '');
+  assert.ok(parsed.missing.includes('Customer'));
+  assert.equal(parsed.fields.title, 'Deliver for Liquid Gold');
+});
+
 test('sector conflicting with the selected customer is not applied', () => {
   const parsed = parsePastedJobRequest('Customer: Liquid Gold\nSector: Aggregate\nJob: Test\nPickup: A\nDelivery: B', directory);
   assert.equal(parsed.sector, '');
