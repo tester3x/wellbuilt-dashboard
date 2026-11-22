@@ -20,7 +20,7 @@ export async function independentDispatchJobs(data){
 const bundle = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {IndependentDispatchBoard} from './src/components/IndependentDispatchBoard';createRoot(document.getElementById('root')).render(<IndependentDispatchBoard companyId="fixture" canWrite={true} canManageDrivers={true}/>);`, loader: 'tsx', resolveDir: process.cwd() }, bundle: true, write: false, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, plugins: [{ name: 'fixture', setup(b) {
   b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
-    : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']}]});`
+    : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],communicationChannels:['sms'],dispatchPhoneE164:'+17015550100',customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']}]});`
     : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{const i=roster.findIndex(x=>x.externalDriverId===d.externalDriverId);if(i>=0)roster[i]=d;else roster.push(d);window.savedDriver=d;window.roster=structuredClone(roster);return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
@@ -53,10 +53,9 @@ try {
   await page.getByRole('button',{name:'Edit Isaac Hickert'}).click();
   await page.getByRole('textbox',{name:'Driver name'}).fill('Isaac H.');
   await page.getByLabel('Shift preference').selectOption('day');
-  await page.getByRole('checkbox',{name:'SMS'}).check();
   await page.getByRole('checkbox',{name:'Active for new assignments'}).uncheck();
   await page.getByRole('button',{name:'Save driver'}).click();
-  await page.getByText('Isaac H. · +17015550124 · sms · inactive').waitFor();
+  await page.getByText('Isaac H. · +17015550124 · inactive').waitFor();
   await page.getByRole('heading',{name:'Day shift (1)'}).waitFor();
   assert.equal(await page.evaluate(id=>window.roster.find(d=>d.externalDriverId===id)?.active,originalId),false);
   await page.getByRole('textbox',{name:'Job request text'}).fill('Customer: Customer A\nSector: Water hauling\nJob: Production water run\nPickup: Yard A\nDelivery: Site B\nWater type: Production water\nBarrels: 120');
@@ -100,8 +99,8 @@ try {
   await card.getByRole('button',{name:'Assign',exact:true}).click();
   const firstJobId = await page.evaluate(() => window.requests.find(request => request.op === 'create').jobId);
   assert.equal(await card.getByRole('link',{name:'Call customer in Dialpad'}).getAttribute('href'),
-    `dialpad://+17015550111?confirmPhone=1&customData=wellbuilt-independent%3A${firstJobId}`);
-  assert.ok((await card.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&customData='));
+    `dialpad://+17015550111?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
+  assert.ok((await card.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
   const linkedCard=page.getByRole('article').filter({hasText:'Pipe run ltl'});
   await linkedCard.getByRole('combobox').selectOption('wellbuilt:wb-marcial');
   await linkedCard.getByRole('button',{name:'Assign',exact:true}).click();

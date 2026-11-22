@@ -57,7 +57,6 @@ export function ExternalAssignmentDeliveryPanel({
   const [channel, setChannel] = useState<ExternalDeliveryChannel>('sms');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [newChannels, setNewChannels] = useState<ExternalDeliveryChannel[]>([]);
   const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
   const [driverActive, setDriverActive] = useState(true);
   const [shiftPreference, setShiftPreference] = useState<DriverShiftPreference>('unset');
@@ -109,7 +108,6 @@ export function ExternalAssignmentDeliveryPanel({
     setEditingDriverId(null);
     setName('');
     setPhone('');
-    setNewChannels([]);
     setDriverActive(true);
     setShiftPreference('unset');
   }
@@ -118,7 +116,6 @@ export function ExternalAssignmentDeliveryPanel({
     setEditingDriverId(driver.externalDriverId);
     setName(driver.displayName);
     setPhone(driver.phoneE164);
-    setNewChannels(driver.channels);
     setDriverActive(driver.active);
     setShiftPreference(driver.shiftPreference || 'unset');
     setMessage('');
@@ -139,7 +136,7 @@ export function ExternalAssignmentDeliveryPanel({
         <span aria-hidden="true" className="text-amber-300">{expanded ? '▾' : '▸'}</span>
       </button>
       {expanded && <div id="external-drivers-details" className="mt-3">
-      <p className="mb-2 text-xs text-amber-200">{rosterOnly ? 'Add or edit outside drivers here, then assign them on the job below. A phone number can be saved without enabling SMS or WhatsApp. No messages are sent.' : 'Messaging provider not configured — no SMS or WhatsApp messages are sent.'}</p>
+      <p className="mb-2 text-xs text-amber-200">{rosterOnly ? <>Add or edit outside-driver contacts here, then assign them on the job below. Company communication options are in <a href="/settings" className="underline">Independent Dispatch settings</a>. No messages are sent.</> : 'Messaging provider not configured — no SMS or WhatsApp messages are sent.'}</p>
 
       {message && <div className="mt-3 rounded bg-gray-900 px-3 py-2 text-sm text-gray-200">{message}</div>}
 
@@ -150,7 +147,7 @@ export function ExternalAssignmentDeliveryPanel({
             externalDriverId: editingDriverId || rosterId(name),
             displayName: name.trim(),
             phoneE164: phone.trim(),
-            channels: phone.trim() ? newChannels : [],
+            channels: phone.trim() ? drivers.find(driver => driver.externalDriverId === editingDriverId)?.channels || [] : [],
             active: driverActive,
             shiftPreference,
           };
@@ -173,17 +170,7 @@ export function ExternalAssignmentDeliveryPanel({
               {SHIFT_GROUPS.map(group => <option key={group.value} value={group.value}>{group.label}</option>)}
             </select>
           </label>
-          <div className="mt-2 flex items-center gap-4 text-sm text-gray-300">
-            {(['sms', 'whatsapp'] as const).map(option => (
-              <label key={option} className="flex items-center gap-1.5">
-                <input type="checkbox" disabled={!phone.trim()} checked={!!phone.trim() && newChannels.includes(option)} onChange={event => {
-                  setNewChannels(current => event.target.checked
-                    ? [...new Set([...current, option])]
-                    : current.filter(value => value !== option));
-                }} />
-                {option === 'sms' ? 'SMS' : 'WhatsApp'}
-              </label>
-            ))}
+          <div className="mt-2 flex justify-end">
             <button disabled={busy} className="ml-auto rounded bg-amber-700 px-3 py-1.5 font-medium text-white disabled:opacity-50">{editingDriverId ? 'Save driver' : 'Add driver'}</button>
           </div>
           {editingDriverId && <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-300">
@@ -198,7 +185,7 @@ export function ExternalAssignmentDeliveryPanel({
                 <h4 className="text-xs font-medium text-gray-300">{group.label} ({members.length})</h4>
                 <ul className="mt-1 space-y-1 text-xs text-gray-400">
                   {members.map(driver => <li key={driver.externalDriverId} className="flex items-center justify-between gap-2">
-                    <span>{driver.displayName} · {driver.phoneE164 || 'No phone on file'}{driver.channels.length ? ` · ${driver.channels.join('/')}` : ''}{driver.active ? '' : ' · inactive'}</span>
+                    <span>{driver.displayName} · {driver.phoneE164 || 'No phone on file'}{driver.active ? '' : ' · inactive'}</span>
                     <button type="button" disabled={busy} onClick={() => editDriver(driver)} className="shrink-0 text-cyan-300 underline disabled:opacity-50" aria-label={`Edit ${driver.displayName}`}>Edit</button>
                   </li>)}
                 </ul>

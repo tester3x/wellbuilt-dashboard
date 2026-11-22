@@ -22,8 +22,8 @@ const buttonClass = 'rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:o
 function JobDialpadLinks({ job, directory, drivers }: { job: IndependentJob; directory: IndependentDirectory | null; drivers: ExternalDriver[] }) {
   const customer = directory?.customers.find(item => item.id === job.customerId);
   const driver = drivers.find(item => item.externalDriverId === job.externalDriverId);
-  const customerHref = dialpadCallHref(customer?.phoneE164, job.id);
-  const driverHref = dialpadCallHref(driver?.phoneE164, job.id);
+  const customerHref = dialpadCallHref(customer?.phoneE164, job.id, directory?.dispatchPhoneE164);
+  const driverHref = dialpadCallHref(driver?.phoneE164, job.id, directory?.dispatchPhoneE164);
   if (!customerHref && !driverHref) return null;
   return <div className="mt-2 flex flex-wrap gap-3 text-sm text-cyan-300 underline">
     {customerHref && <a href={customerHref}>Call customer in Dialpad</a>}

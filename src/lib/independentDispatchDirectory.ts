@@ -7,7 +7,9 @@ export type IndependentCustomer = {
   pickupLocations: string[]; deliveryLocations: string[]; active: true;
 };
 export type IndependentDirectory = {
-  ok: true; companyId: string; sectors: IndependentSector[]; customers: IndependentCustomer[];
+  ok: true; companyId: string; sectors: IndependentSector[]; communicationChannels: ('sms' | 'whatsapp')[];
+  dispatchPhoneE164: string;
+  customers: IndependentCustomer[];
 };
 export async function independentDispatchDirectory(payload: Record<string, unknown>): Promise<IndependentDirectory> {
   const response = await httpsCallable<Record<string, unknown>, IndependentDirectory>(

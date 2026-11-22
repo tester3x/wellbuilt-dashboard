@@ -9,7 +9,7 @@ jest.mock('../../trustedStaffAuthority', () => ({
 const snapshot = (path: string) => ({ exists: records.has(path), id: path.split('/').pop(), data: () => records.get(path) });
 const ref = (path: string): any => ({
   path, get: async () => snapshot(path),
-  set: async (data: any) => records.set(path, { ...records.get(path), ...data }),
+  set: async (data: any, options?: { merge?: boolean }) => records.set(path, options?.merge ? { ...records.get(path), ...data } : data),
   collection: (name: string) => collection(`${path}/${name}`),
 });
 const collection = (path: string): any => ({
@@ -30,8 +30,10 @@ beforeEach(() => {
 });
 describe('Independent Dispatch directory', () => {
   it('defaults to five sectors and stores a company-scoped customer directory', async () => {
-    await expect(call({ op: 'list' })).resolves.toMatchObject({ companyId: 'company-a', sectors: ['water-hauling', 'ltl', 'otr', 'hot-shot', 'aggregate'], customers: [] });
+    await expect(call({ op: 'list' })).resolves.toMatchObject({ companyId: 'company-a', sectors: ['water-hauling', 'ltl', 'otr', 'hot-shot', 'aggregate'], communicationChannels: [], dispatchPhoneE164: '', customers: [] });
+    await call({ op: 'setCommunications', communicationChannels: ['sms', 'whatsapp'], dispatchPhoneE164: '+17015550100' });
     await call({ op: 'setSectors', sectors: ['ltl', 'otr'] });
+    await expect(call({ op: 'list' })).resolves.toMatchObject({ communicationChannels: ['sms', 'whatsapp'], dispatchPhoneE164: '+17015550100' });
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'Customer A', active: true,
       sectors: ['aggregate'], jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('customer_sector_disabled');
     await call({ op: 'saveCustomer', customer: { id: 'customer-a', name: '  Customer A  ', active: true,
@@ -47,6 +49,9 @@ describe('Independent Dispatch directory', () => {
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'A', active: true,
       sectors: ['ltl'], jobNames: [], pickupLocations: ['Yard', 'yard'], deliveryLocations: [] } })).rejects.toThrow('invalid_pickup_locations');
     await expect(call({ op: 'setSectors', sectors: ['ltl', 'ltl'] })).rejects.toThrow('invalid_sectors');
+    await expect(call({ op: 'setCommunications', communicationChannels: ['sms', 'sms'], dispatchPhoneE164: '' })).rejects.toThrow('invalid_communications');
+    await expect(call({ op: 'setCommunications', communicationChannels: ['email'], dispatchPhoneE164: '' })).rejects.toThrow('invalid_communications');
+    await expect(call({ op: 'setCommunications', communicationChannels: [], dispatchPhoneE164: '555-0100' })).rejects.toThrow('invalid_communications');
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'A', active: true,
       sectors: ['ltl'], phoneE164: '555-1111', jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('invalid_customer_phone');
     await expect(call({ op: 'list', companyId: 'company-b' })).rejects.toThrow('invalid_directory_request');

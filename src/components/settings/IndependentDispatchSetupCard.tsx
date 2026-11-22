@@ -9,6 +9,8 @@ const join = (value: string[] | undefined) => (value || []).join('\n');
 export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId: string; canEdit: boolean }) {
   const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
   const [sectors, setSectors] = useState<IndependentSector[]>([]);
+  const [communicationChannels, setCommunicationChannels] = useState<('sms' | 'whatsapp')[]>([]);
+  const [dispatchPhoneE164, setDispatchPhoneE164] = useState('');
   const [editingId, setEditingId] = useState('');
   const [name, setName] = useState('');
   const [phoneE164, setPhoneE164] = useState('');
@@ -21,7 +23,8 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
   async function refresh() {
     const result = await independentDispatchDirectory({ op: 'list' });
     if (result.companyId !== companyId) throw Error('Company scope changed.');
-    setDirectory(result); setSectors(result.sectors);
+    setDirectory(result); setSectors(result.sectors); setCommunicationChannels(result.communicationChannels || []);
+    setDispatchPhoneE164(result.dispatchPhoneE164 || '');
   }
   useEffect(() => { void refresh().catch(error => setMessage(error instanceof Error ? error.message : 'Unable to load setup.')); }, [companyId]);
   async function run(action: () => Promise<unknown>, success: string) {
@@ -49,6 +52,21 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
         </label>)}</div>
         <button type="button" disabled={!sectors.length || busy} className="mt-2 rounded bg-cyan-700 px-3 py-1.5 text-sm disabled:opacity-40"
           onClick={() => void run(() => independentDispatchDirectory({ op: 'setSectors', sectors }), 'Sectors saved.')}>Save sectors</button>
+      </fieldset>
+      <fieldset disabled={!canEdit || busy} className="mt-6 border-t border-gray-700 pt-4">
+        <legend className="text-sm font-medium">Dispatch communications</legend>
+        <p className="mt-1 text-xs text-gray-400">Set the shared dispatch number and channels your company plans to use. The caller ID works only for Dialpad users permitted to place calls from that number. Saving channels does not send messages.</p>
+        <label className="mt-2 block text-xs text-gray-300">Shared Dialpad dispatch number (optional, +country code)
+          <input type="tel" pattern="\+[1-9][0-9]{7,14}" value={dispatchPhoneE164} onChange={event => setDispatchPhoneE164(event.target.value)}
+            placeholder="+15551234567" className="mt-1 block w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" />
+        </label>
+        <p className="mt-2 text-xs text-gray-400">Planned message channels; Dialpad SMS and WhatsApp delivery are not connected yet.</p>
+        <div className="mt-2 flex flex-wrap gap-4 text-sm">{(['sms', 'whatsapp'] as const).map(channel => <label key={channel}>
+          <input type="checkbox" className="mr-2" checked={communicationChannels.includes(channel)} onChange={event => setCommunicationChannels(current => event.target.checked
+            ? [...current, channel] : current.filter(value => value !== channel))} />{channel === 'sms' ? 'SMS' : 'WhatsApp'}
+        </label>)}</div>
+        <button type="button" disabled={busy || (!!dispatchPhoneE164 && !/^\+[1-9]\d{7,14}$/.test(dispatchPhoneE164))} className="mt-2 rounded bg-cyan-700 px-3 py-1.5 text-sm disabled:opacity-40"
+          onClick={() => void run(() => independentDispatchDirectory({ op: 'setCommunications', communicationChannels, dispatchPhoneE164 }), 'Dispatch communications saved.')}>Save dispatch communications</button>
       </fieldset>
       <div className="mt-6 border-t border-gray-700 pt-4">
         <div className="flex items-center justify-between"><h4 className="font-medium">Customers ({directory.customers.length})</h4>

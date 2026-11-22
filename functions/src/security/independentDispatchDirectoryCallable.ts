@@ -20,8 +20,8 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
   async request => {
     const data = request.data;
     if (!data || typeof data !== 'object' || Array.isArray(data)
-      || Object.keys(data).some(key => !['op', 'sectors', 'customer'].includes(key))
-      || !['list', 'setSectors', 'saveCustomer'].includes(data.op))
+      || Object.keys(data).some(key => !['op', 'sectors', 'customer', 'communicationChannels', 'dispatchPhoneE164'].includes(key))
+      || !['list', 'setSectors', 'setCommunications', 'saveCustomer'].includes(data.op))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_directory_request');
     const authority = data.op === 'list'
       ? await requireIndependentDispatchAuthority(request.auth?.uid, 'viewDispatch')
@@ -37,7 +37,10 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
       if (Object.keys(data).length !== 1) throw new httpsV2.HttpsError('invalid-argument', 'unexpected_directory_fields');
       const [config, customers] = await Promise.all([configRef.get(), customersRef.limit(500).get()]);
       const sectors = config.exists ? parseIndependentSectors(config.data()?.sectors) : DEFAULT_SECTORS;
-      return { ok: true, companyId: authority.companyId, sectors,
+      const communicationChannels = (Array.isArray(config.data()?.communicationChannels)
+        ? config.data()!.communicationChannels : []).filter((value: unknown) => value === 'sms' || value === 'whatsapp');
+      const dispatchPhoneE164 = typeof config.data()?.dispatchPhoneE164 === 'string' ? config.data()!.dispatchPhoneE164 : '';
+      return { ok: true, companyId: authority.companyId, sectors, communicationChannels, dispatchPhoneE164,
         customers: customers.docs.map(doc => ({ ...doc.data(), id: doc.id })).filter((row: any) => row.active !== false)
           .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name))) };
     }
@@ -46,8 +49,21 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
       let sectors;
       try { sectors = parseIndependentSectors(data.sectors); }
       catch { throw new httpsV2.HttpsError('invalid-argument', 'invalid_sectors'); }
-      await configRef.set({ sectors, updatedAt: admin.firestore.FieldValue.serverTimestamp(), updatedBy: authority.uid });
+      await configRef.set({ sectors, updatedAt: admin.firestore.FieldValue.serverTimestamp(), updatedBy: authority.uid }, { merge: true });
       return { ok: true, sectors };
+    }
+    if (data.op === 'setCommunications') {
+      if (Object.keys(data).length !== 3 || !Array.isArray(data.communicationChannels)
+        || data.communicationChannels.length > 2
+        || new Set(data.communicationChannels).size !== data.communicationChannels.length
+        || data.communicationChannels.some((value: unknown) => value !== 'sms' && value !== 'whatsapp')
+        || typeof data.dispatchPhoneE164 !== 'string'
+        || (data.dispatchPhoneE164 !== '' && !/^\+[1-9]\d{7,14}$/.test(data.dispatchPhoneE164)))
+        throw new httpsV2.HttpsError('invalid-argument', 'invalid_communications');
+      const communicationChannels = data.communicationChannels as ('sms' | 'whatsapp')[];
+      const dispatchPhoneE164 = data.dispatchPhoneE164 as string;
+      await configRef.set({ communicationChannels, dispatchPhoneE164, updatedAt: admin.firestore.FieldValue.serverTimestamp(), updatedBy: authority.uid }, { merge: true });
+      return { ok: true, communicationChannels, dispatchPhoneE164 };
     }
     if (Object.keys(data).length !== 2 || !data.customer || typeof data.customer !== 'object' || Array.isArray(data.customer))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_customer');
