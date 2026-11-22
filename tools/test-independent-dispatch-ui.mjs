@@ -29,7 +29,7 @@ const server = http.createServer((req,res) => { res.setHeader('Content-Type', re
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch();
 try {
- for (const width of [1280, 390]) {
+ for (const width of [2560, 1280, 390]) {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   const errors=[]; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);

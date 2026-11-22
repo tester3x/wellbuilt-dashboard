@@ -188,7 +188,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       </section>)}
     </div>}
     </section>
-    <div id="independent-intake" hidden={!intakeOpen} className="space-y-4">
+    <div id="independent-intake" hidden={!intakeOpen} className="max-w-5xl space-y-4">
     {canWrite && <section className="rounded border border-cyan-800 bg-cyan-950/20 p-4" aria-labelledby="paste-request-title">
       <h2 id="paste-request-title" className="font-semibold text-cyan-300">Paste a job request</h2>
       <p className="mt-1 text-sm text-gray-300">Paste a text or WhatsApp request, then review the filled form. Nothing is saved or sent until you create the job. Phone requests can be entered directly below.</p>

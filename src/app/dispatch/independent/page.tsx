@@ -45,7 +45,7 @@ export default function IndependentDispatchPage() {
     return () => { cancelled = true; };
   }, [user, loading, router]);
   return <div className="min-h-screen bg-gray-900 text-white"><AppHeader />
-    <main className="mx-auto max-w-6xl p-4">
+    <main className="w-full px-4 py-4 2xl:px-8">
       {!access || !user ? <p>Checking access…</p> : <>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h1 className="text-xl font-semibold">Independent Dispatch</h1><div className="flex gap-4 text-sm text-cyan-300">{access.standardWorkspace && <Link href="/dispatch">Dispatch workspace</Link>}<Link href="/settings">Job package settings</Link></div></div>
         <IndependentDispatchBoard key={`${access.companyId}:${user.uid}`} companyId={access.companyId} canWrite={hasCapability(user, 'createDispatch')} canManageDrivers={hasCapability(user, 'manageDrivers')} />
