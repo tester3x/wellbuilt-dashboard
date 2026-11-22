@@ -5,7 +5,8 @@ import { requireTrustedCompanyCapability } from './trustedStaffAuthority';
 import { writeSecurityAudit } from './audit';
 import { nextCompanyJobPackages, type PackageAction } from './operational/companyJobPackages';
 
-const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const COMPANY_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const PACKAGE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** Package changes use trusted identity and a transaction over the current company record. */
 export const staffSetCompanyJobPackage = httpsV2.onCall(
@@ -14,8 +15,8 @@ export const staffSetCompanyJobPackage = httpsV2.onCall(
     const input = request.data;
     if (!input || typeof input !== 'object' || Array.isArray(input)
       || Object.keys(input).some(key => !['companyId', 'packageId', 'action'].includes(key))
-      || typeof input.companyId !== 'string' || !ID.test(input.companyId)
-      || typeof input.packageId !== 'string' || !ID.test(input.packageId)
+      || typeof input.companyId !== 'string' || !COMPANY_ID.test(input.companyId)
+      || typeof input.packageId !== 'string' || !PACKAGE_ID.test(input.packageId)
       || !['install', 'remove'].includes(input.action)) {
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_package_change');
     }
