@@ -49,7 +49,9 @@ export function ExternalAssignmentDeliveryPanel({
   const [channel, setChannel] = useState<ExternalDeliveryChannel>('sms');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [newChannels, setNewChannels] = useState<ExternalDeliveryChannel[]>(['sms']);
+  const [newChannels, setNewChannels] = useState<ExternalDeliveryChannel[]>([]);
+  const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
+  const [driverActive, setDriverActive] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [reassignTargets, setReassignTargets] = useState<Record<string, string>>({});
@@ -94,6 +96,24 @@ export function ExternalAssignmentDeliveryPanel({
     }
   }
 
+  function clearDriverEditor() {
+    setEditingDriverId(null);
+    setName('');
+    setPhone('');
+    setNewChannels([]);
+    setDriverActive(true);
+  }
+
+  function editDriver(driver: ExternalDriver) {
+    setEditingDriverId(driver.externalDriverId);
+    setName(driver.displayName);
+    setPhone(driver.phoneE164);
+    setNewChannels(driver.channels);
+    setDriverActive(driver.active);
+    setMessage('');
+    document.getElementById('outside-driver-name')?.focus();
+  }
+
   if (!canManage) return null;
 
   return (
@@ -108,7 +128,7 @@ export function ExternalAssignmentDeliveryPanel({
         <span aria-hidden="true" className="text-amber-300">{expanded ? '▾' : '▸'}</span>
       </button>
       {expanded && <div id="external-drivers-details" className="mt-3">
-      <p className="mb-2 text-xs text-amber-200">{rosterOnly ? 'Save outside-driver contacts here, then assign them on the job below. No SMS or WhatsApp messages are sent.' : 'Messaging provider not configured — no SMS or WhatsApp messages are sent.'}</p>
+      <p className="mb-2 text-xs text-amber-200">{rosterOnly ? 'Add or edit outside drivers here, then assign them on the job below. A phone number can be saved without enabling SMS or WhatsApp. No messages are sent.' : 'Messaging provider not configured — no SMS or WhatsApp messages are sent.'}</p>
 
       {message && <div className="mt-3 rounded bg-gray-900 px-3 py-2 text-sm text-gray-200">{message}</div>}
 
@@ -116,23 +136,22 @@ export function ExternalAssignmentDeliveryPanel({
         <form className="rounded border border-gray-700 p-3" onSubmit={event => {
           event.preventDefault();
           const driver = {
-            externalDriverId: rosterId(name),
+            externalDriverId: editingDriverId || rosterId(name),
             displayName: name.trim(),
             phoneE164: phone.trim(),
             channels: phone.trim() ? newChannels : [],
-            active: true,
+            active: driverActive,
           };
           void run(async () => {
             const saved = await saveExternalDriver(driver);
-            setName('');
-            setPhone('');
             setExternalDriverId(saved.externalDriverId);
-          }, 'External driver saved to this company roster.');
+            clearDriverEditor();
+          }, editingDriverId ? 'Driver changes saved to this company roster.' : 'External driver saved to this company roster.');
         }}>
-          <h3 className="text-sm font-medium text-white">Company roster</h3>
+          <h3 className="text-sm font-medium text-white">{editingDriverId ? 'Edit outside driver' : 'Company roster'}</h3>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <input required value={name} onChange={event => setName(event.target.value)} maxLength={120}
-              placeholder="Driver name" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />
+            <input id="outside-driver-name" required value={name} onChange={event => setName(event.target.value)} maxLength={120}
+              aria-label="Driver name" placeholder="Driver name" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />
             <input value={phone} onChange={event => setPhone(event.target.value)}
               aria-label="Driver phone (optional)" placeholder="Phone (optional) · +17015550123" inputMode="tel" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />
           </div>
@@ -147,13 +166,18 @@ export function ExternalAssignmentDeliveryPanel({
                 {option === 'sms' ? 'SMS' : 'WhatsApp'}
               </label>
             ))}
-            <button disabled={busy || (!!phone.trim() && !newChannels.length)} className="ml-auto rounded bg-amber-700 px-3 py-1.5 font-medium text-white disabled:opacity-50">
-              Add driver
-            </button>
+            <button disabled={busy} className="ml-auto rounded bg-amber-700 px-3 py-1.5 font-medium text-white disabled:opacity-50">{editingDriverId ? 'Save driver' : 'Add driver'}</button>
           </div>
+          {editingDriverId && <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-300">
+            <label className="flex items-center gap-1.5"><input type="checkbox" checked={driverActive} onChange={event => setDriverActive(event.target.checked)} />Active for new assignments</label>
+            <button type="button" className="text-cyan-300 underline" onClick={clearDriverEditor}>Cancel editing</button>
+          </div>}
           {drivers.length > 0 && (
             <ul className="mt-3 space-y-1 text-xs text-gray-400">
-              {drivers.map(driver => <li key={driver.externalDriverId}>{driver.displayName} · {driver.phoneE164 || 'No phone on file'}{driver.channels.length ? ` · ${driver.channels.join('/')}` : ''}{driver.active ? '' : ' · inactive'}</li>)}
+              {drivers.map(driver => <li key={driver.externalDriverId} className="flex items-center justify-between gap-2">
+                <span>{driver.displayName} · {driver.phoneE164 || 'No phone on file'}{driver.channels.length ? ` · ${driver.channels.join('/')}` : ''}{driver.active ? '' : ' · inactive'}</span>
+                <button type="button" disabled={busy} onClick={() => editDriver(driver)} className="shrink-0 text-cyan-300 underline disabled:opacity-50" aria-label={`Edit ${driver.displayName}`}>Edit</button>
+              </li>)}
             </ul>
           )}
         </form>

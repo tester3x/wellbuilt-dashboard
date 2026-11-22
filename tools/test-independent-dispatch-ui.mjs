@@ -21,7 +21,7 @@ const bundle = await build({ stdin: { contents: `import React from 'react';impor
   b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
     : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']}]});`
-    : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{roster.push(d);window.savedDriver=d;return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
+    : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{const i=roster.findIndex(x=>x.externalDriverId===d.externalDriverId);if(i>=0)roster[i]=d;else roster.push(d);window.savedDriver=d;window.roster=structuredClone(roster);return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
 const css = fs.existsSync(cssDir) ? fs.readdirSync(cssDir).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(`${cssDir}/${f}`, 'utf8')).join('\n') : '';
@@ -39,6 +39,20 @@ try {
   await page.getByRole('button',{name:'Add driver'}).click();
   await page.getByText('Isaac Hickert · No phone on file').waitFor();
   assert.deepEqual(await page.evaluate(()=>({phone:window.savedDriver.phoneE164,channels:window.savedDriver.channels})),{phone:'',channels:[]});
+  const originalId=await page.evaluate(()=>window.savedDriver.externalDriverId);
+  await page.getByRole('button',{name:'Edit Isaac Hickert'}).click();
+  await page.getByRole('textbox',{name:'Driver phone (optional)'}).fill('+17015550124');
+  await page.getByRole('button',{name:'Save driver'}).click();
+  await page.getByText('Isaac Hickert · +17015550124').waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.savedDriver.channels),[], 'phone can be saved without opting into messaging');
+  assert.equal(await page.evaluate(id=>window.roster.filter(d=>d.externalDriverId===id).length,originalId),1,'edit preserves the roster ID');
+  await page.getByRole('button',{name:'Edit Isaac Hickert'}).click();
+  await page.getByRole('textbox',{name:'Driver name'}).fill('Isaac H.');
+  await page.getByRole('checkbox',{name:'SMS'}).check();
+  await page.getByRole('checkbox',{name:'Active for new assignments'}).uncheck();
+  await page.getByRole('button',{name:'Save driver'}).click();
+  await page.getByText('Isaac H. · +17015550124 · sms · inactive').waitFor();
+  assert.equal(await page.evaluate(id=>window.roster.find(d=>d.externalDriverId===id)?.active,originalId),false);
   await page.getByRole('textbox',{name:'Job request text'}).fill('Customer: Customer A\nSector: Water hauling\nJob: Production water run\nPickup: Yard A\nDelivery: Site B\nWater type: Production water\nBarrels: 120');
   await page.getByRole('button',{name:'Fill job form from text'}).click();
   assert.equal(await page.getByRole('combobox',{name:'Customer',exact:true}).inputValue(),'customer-a');

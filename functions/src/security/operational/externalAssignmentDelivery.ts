@@ -111,7 +111,7 @@ export function parseExternalDriverWrite(
   if (channels.some(channel => channel !== 'sms' && channel !== 'whatsapp')) {
     return fail('invalid_channels', 'channels');
   }
-  if ((phoneE164 && channels.length === 0) || (!phoneE164 && channels.length > 0))
+  if (!phoneE164 && channels.length > 0)
     return fail('invalid_channels', 'channels');
   if (typeof value.active !== 'boolean') return fail('invalid_active', 'active');
   return {

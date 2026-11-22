@@ -60,6 +60,11 @@ describe('external driver roster containment', () => {
       idempotencyKey: 'name-only', dispatchId: 'dispatch-1', externalDriver: { ...nameOnly, companyId: 'acme' }, channel: 'sms', action: 'assigned', existing: null }))
       .toMatchObject({ ok: false, reason: 'invalid_phone' });
     expect(parseExternalDriverWrite({ ...nameOnly, channels: ['sms'] }, 'acme')).toMatchObject({ ok: false, reason: 'invalid_channels' });
+    const contactOnly = { ...nameOnly, phoneE164: '+17015550124' };
+    expect(parseExternalDriverWrite(contactOnly, 'acme')).toMatchObject({ ok: true, phoneE164: '+17015550124', channels: [] });
+    expect(planExternalAssignmentRevision({ companyId: 'acme', actorUid: 'dispatcher-1', nowIso: '2026-11-20T12:00:00.000Z',
+      idempotencyKey: 'contact-only', dispatchId: 'dispatch-1', externalDriver: { ...contactOnly, companyId: 'acme' }, channel: 'sms', action: 'assigned', existing: null }))
+      .toMatchObject({ ok: false, reason: 'channel_not_enabled' });
   });
 
   it('rejects malformed phone numbers, unknown fields, and cross-company assignment', () => {
