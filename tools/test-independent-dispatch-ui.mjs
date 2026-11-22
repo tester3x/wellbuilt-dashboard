@@ -29,12 +29,14 @@ const server = http.createServer((req,res) => { res.setHeader('Content-Type', re
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch();
 try {
- for (const width of [2560, 1280, 390]) {
+ for (const width of [2560, 1280, 1024, 390]) {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   const errors=[]; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.getByRole('heading',{name:'Dispatch board'}).waitFor();
   await page.getByRole('region',{name:'Needs a driver jobs'}).waitFor();
+  const laneColumns = await page.locator('section[aria-labelledby="dispatch-board-title"] > div.grid').evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length);
+  assert.equal(laneColumns, width >= 1024 ? 3 : 1, `dispatch lanes should use ${width >= 1024 ? 'three' : 'one'} columns at ${width}px`);
   assert.equal(await page.getByRole('heading',{name:'New Independent Dispatch job'}).count(),0,'intake starts collapsed so the board is visible first');
   await page.getByRole('button',{name:'New job / paste request'}).click();
   await page.getByText('New Independent Dispatch job').waitFor();
