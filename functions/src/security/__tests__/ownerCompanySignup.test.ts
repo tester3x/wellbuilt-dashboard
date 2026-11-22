@@ -79,6 +79,8 @@ test('creates an isolated owner and company with hashed app credentials and only
   for (const uid of ['owner-one', driverAuthUid(result.driverId)]) {
     expect(mockDocuments.get(`trusted_staff_authority/${uid}`)).toMatchObject({ companyId: result.companyId, active: true });
   }
+  expect(mockDocuments.get('staff/owner-one')).toMatchObject({ companyId: result.companyId,
+    role: 'admin', enabled: true, ownerSignupUid: 'owner-one' });
   expect(ownerFreePlan(result.companyId).apps?.['wellbuilt-tickets']?.included).toBe(false);
   expect(ownerFreePlan(result.companyId).apps?.['wellbuilt-mobile']?.included).toBe(false);
   expect(OWNER_CAPABILITIES.every(cap => (TRUSTED_CAPABILITY_ALLOWLIST as readonly string[]).includes(cap))).toBe(true);
@@ -122,7 +124,7 @@ test.each([{ companyId: 'liquid-gold', role: 'admin' }, { role: 'it' }])('preser
   await expect(signup()).rejects.toThrow('already belongs');
   expect(mockRealtime.get('users/owner-one')).toEqual(prior); expect(mockDocuments.size).toBe(0);
 });
-test.each(['trusted_staff_authority/owner-one', 'platform_admins/owner-one', 'driver_name_index/owner one'])('does not adopt existing authority or identity at %s', async path => {
+test.each(['trusted_staff_authority/owner-one', 'platform_admins/owner-one', 'driver_name_index/owner one', 'staff/owner-one'])('does not adopt existing authority or identity at %s', async path => {
   mockDocuments.set(path, { existing: true });
   await expect(signup()).rejects.toThrow('already belongs'); expect(mockDocuments.size).toBe(1);
 });
@@ -134,13 +136,15 @@ test.each(['companyName', 'displayName', 'passcode'])('retry cannot change reser
   mockFailurePath = 'drivers/profiles/'; await expect(signup()).rejects.toThrow();
   await expect(signup({ ...input, [field]: 'Something Different' })).rejects.toThrow('already belongs');
 });
-test.each(['company', 'credential', 'profile', 'authority'])('retry cannot reactivate revoked %s', async kind => {
+test.each(['company', 'credential', 'profile', 'authority', 'staff'])('retry cannot reactivate revoked %s', async kind => {
   const result = await signup();
   if (kind === 'company') mockDocuments.get(`companies/${result.companyId}`).status = 'archived';
   if (kind === 'credential') mockDocuments.get(`driver_credentials/${result.driverId}`).active = false;
   if (kind === 'profile') mockRealtime.get(`drivers/profiles/${result.driverId}`).active = false;
   if (kind === 'authority') mockDocuments.get('trusted_staff_authority/owner-one').active = false;
+  if (kind === 'staff') mockDocuments.get('staff/owner-one').enabled = false;
   await expect(signup()).rejects.toThrow();
+  if (kind === 'staff') expect(mockDocuments.get('staff/owner-one').enabled).toBe(false);
 });
 test('does not activate an archived company after an interrupted reservation', async () => {
   mockFailurePath = 'drivers/profiles/'; await expect(signup()).rejects.toThrow();

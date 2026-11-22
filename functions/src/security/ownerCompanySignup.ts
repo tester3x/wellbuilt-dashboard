@@ -65,9 +65,11 @@ async function summary(uid: string) {
   const [authority, company] = await Promise.all([
     fs().collection('trusted_staff_authority').doc(uid).get(), fs().collection('companies').doc(j.companyId).get(),
   ]);
+  const staff = await fs().collection('staff').doc(uid).get();
   const parsed = parseTrustedStaffAuthorityRecord(authority.data(), uid);
   if (j.state !== 'complete' || !parsed.ok || parsed.companyId !== j.companyId
-    || !parsed.capabilities.includes('manageCompany') || company.data()?.status !== 'active') {
+    || !parsed.capabilities.includes('manageCompany') || company.data()?.status !== 'active'
+    || staff.data()?.companyId !== j.companyId || staff.data()?.role !== 'admin' || staff.data()?.enabled !== true) {
     throw new HttpsError('failed-precondition', 'Company setup is not complete or access has changed.');
   }
   const [credential, profile, appAuthority] = await Promise.all([
@@ -108,7 +110,8 @@ export const createOwnerCompany = onCall({ region: 'us-central1', timeoutSeconds
       return saved;
     }
     const refs = [fs().collection('companies').doc(companyId), fs().collection('driver_name_index').doc(nameNorm),
-      fs().collection('trusted_staff_authority').doc(uid), fs().collection('platform_admins').doc(uid)];
+      fs().collection('trusted_staff_authority').doc(uid), fs().collection('platform_admins').doc(uid),
+      fs().collection('staff').doc(uid)];
     const rows = await Promise.all(refs.map(ref => tx.get(ref)));
     if (rows.some(row => row.exists)) return refuse();
     const codeRef = fs().collection('company_join_codes').doc(createHash('sha256').update(proposed.joinCode).digest('hex'));
@@ -162,6 +165,9 @@ export const createOwnerCompany = onCall({ region: 'us-central1', timeoutSeconds
       || company.data()?.ownerUid !== uid || company.data()?.status !== 'provisioning') return refuse();
     authorityRefs.forEach((ref, index) => tx.create(ref, { schemaVersion: 1, uid: index === 0 ? uid : appUid,
       companyId, active: true, capabilities: [...OWNER_CAPABILITIES] }));
+    // Live Firestore rules use this separate read projection to authorize the
+    // owner's first Dashboard company/settings read.
+    tx.create(fs().collection('staff').doc(uid), { companyId, role: 'admin', enabled: true, ownerSignupUid: uid });
     tx.update(credentialRef, { active: true, updatedAt: stamp() });
     tx.update(fs().collection('companies').doc(companyId), { status: 'active' });
     tx.update(fs().collection('company_join_codes').doc(createHash('sha256').update(j.joinCode).digest('hex')), { active: true });
@@ -174,6 +180,8 @@ export const createOwnerCompany = onCall({ region: 'us-central1', timeoutSeconds
   if (!appAuthority.ok || appAuthority.companyId !== companyId
     || (await credentialRef.get()).data()?.active !== true
     || (await fs().collection('companies').doc(companyId).get()).data()?.status !== 'active') return refuse();
+  const staff = (await fs().collection('staff').doc(uid).get()).data();
+  if (staff?.companyId !== companyId || staff?.role !== 'admin' || staff?.enabled !== true) return refuse();
   const activated = await profileRef.transaction(prior => {
     // RTDB can initially call this with null even when the server has the
     // profile. Undefined aborts locally and never fetches that server value.
