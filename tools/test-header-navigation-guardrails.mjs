@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
@@ -212,9 +213,10 @@ export async function runHeaderNavigationGuardrails() {
 
   // Step E: Playwright Headless Layout Proof across viewports
   let headerMode = 'full';
+  let currentPath = '/dispatch';
   const { AppHeader } = transpileAndLoad('src/components/AppHeader.tsx', {
     'next/link': { default: ({ children, ...props }) => React.createElement('a', props, children) },
-    'next/navigation': { usePathname: () => '/dispatch', useRouter: () => ({}) },
+    'next/navigation': { usePathname: () => currentPath, useRouter: () => ({}) },
     'firebase/database': {},
     '@/contexts/AuthContext': {
       useAuth: () => ({
@@ -332,6 +334,7 @@ export async function runHeaderNavigationGuardrails() {
     }
 
     headerMode = 'independent';
+    currentPath = '/settings';
     await page.setContent(`<style>${css}</style>${renderToStaticMarkup(React.createElement(AppHeader))}`);
     const packageTabs = await page.locator('nav[aria-label="Main navigation"] a').allTextContents();
     if (JSON.stringify(packageTabs) !== JSON.stringify(['Independent Dispatch', 'Settings']))
@@ -345,9 +348,28 @@ export async function runHeaderNavigationGuardrails() {
       throw new Error(`Independent-only navigation exposed standard workspace controls: ${JSON.stringify(extras)}`);
     if (await page.getByRole('link', { name: 'Independent Dispatch' }).getAttribute('href') !== '/dispatch/independent')
       throw new Error('Independent-only tab did not open its own workspace.');
+    const settingsHeader = renderToStaticMarkup(React.createElement(AppHeader));
+    const server = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(req.url?.startsWith('/dispatch/independent')
+        ? '<main>Independent Dispatch board opened</main>'
+        : `<style>${css}</style>${settingsHeader}`);
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const clickPage = await browser.newPage();
+      try {
+        await clickPage.goto(`http://127.0.0.1:${server.address().port}/settings`);
+        await clickPage.getByRole('link', { name: 'Independent Dispatch' }).click();
+        await clickPage.getByText('Independent Dispatch board opened').waitFor();
+        if (new URL(clickPage.url()).pathname !== '/dispatch/independent')
+          throw new Error('Settings link did not navigate to the Independent Dispatch route.');
+      } finally { await clickPage.close(); }
+    } finally { await new Promise(resolve => server.close(resolve)); }
     console.log('✓ Independent-only tenant sees only its dispatch workspace and settings.');
 
     headerMode = 'free';
+    currentPath = '/welcome';
     await page.setContent(`<style>${css}</style>${renderToStaticMarkup(React.createElement(AppHeader))}`);
     const freeTabs = await page.locator('nav[aria-label="Main navigation"] a').allTextContents();
     if (JSON.stringify(freeTabs) !== JSON.stringify(['eQuipment', 'Safety', 'Settings']))

@@ -207,24 +207,29 @@ export function AppHeader() {
               const isActive = tab.id === activeTabId;
               const href = independentOnly && tab.id === 'dispatch' ? '/dispatch/independent'
                 : freeOwner ? tab.href : returnLinks[tab.id] || tab.href;
+              const className = `relative whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors border-b-2 ${
+                isActive
+                  ? 'border-blue-500 text-white'
+                  : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600'
+              }`;
+              const label = independentOnly && tab.id === 'dispatch' ? 'Independent Dispatch' : tab.label;
+              // These small package workspaces use normal document navigation.
+              // It also discards a stale App Router state when moving between
+              // Settings and Independent Dispatch after company hydration.
+              if (limitedWorkspace) return <a key={tab.id} href={href} className={className}>{label}</a>;
               return (
                 <Link
                   key={tab.id}
                   href={href}
                   onClick={event => {
                     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                    if (limitedWorkspace) { event.preventDefault(); router.push(href); return; }
                     rememberTabHref(user.uid, operatingCompanyId);
                     const targetHref = rememberedTabHref(user.uid, operatingCompanyId, tab.id, tab.href);
                     event.preventDefault(); router.push(targetHref);
                   }}
-                  className={`relative whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors border-b-2 ${
-                    isActive
-                      ? 'border-blue-500 text-white'
-                      : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600'
-                  }`}
+                  className={className}
                 >
-                  {independentOnly && tab.id === 'dispatch' ? 'Independent Dispatch' : tab.label}
+                  {label}
                 </Link>
               );
             })}
