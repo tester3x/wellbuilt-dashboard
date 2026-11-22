@@ -130,18 +130,20 @@ function contactPhone(raw: string): string {
 export function parsePastedJobRequest(text: string, directory: IndependentDirectory): ParsedJobRequest {
   const lines = text.slice(0, 10000).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const service = labeled(lines, ['service']);
+  const serviceBody = service.split(/\.\s+(?=For\b|Ordered by\b)/i)[0];
   const serviceCustomer = service.match(/\bfor\s+([^,.;]+)(?=[,.;]|$)/i)?.[1]?.trim() || '';
-  const serviceRoute = service.match(/\bfrom\s+(.+?)\s+(?:take\s+)?to\s+(.+?)(?=\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|[.;]|$)/i);
-  const serviceTime = service.match(/\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i)?.[1] || '';
+  const serviceRoute = serviceBody.match(/\bfrom\s+(.+?)\s+(?:take\s+)?to\s+(.+?)(?=\s+to\s+(?:fill|deliver|load|unload)\b|\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|$)/i);
+  const serviceTime = serviceBody.match(/\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i)?.[1] || '';
+  const orderedBy = service.match(/\bOrdered by\s+([^.,;]+)(?=[.,;]|$)/i)?.[1]?.trim() || '';
   const warnings: string[] = [];
   const fields: Partial<IndependentJobDetails> = {};
   const requestedSector = labeled(lines, ALIASES.sector);
   let sector = requestedSector ? sectorFrom(requestedSector) : inferSector(text);
   if (requestedSector && !sector) warnings.push(`Transportation sector “${requestedSector}” was not recognized.`);
   const customerLabel = labeled(lines, ALIASES.customer) || serviceCustomer;
-  const contactName = labeled(lines, ALIASES.jobContactName);
+  const contactName = labeled(lines, ALIASES.jobContactName) || orderedBy;
   const contactNames = contactName.split(/\s*\/\s*/).map(name => name.trim()).filter(Boolean);
-  const contactRole = labeled(lines, ALIASES.jobContactRole);
+  const contactRole = labeled(lines, ALIASES.jobContactRole) || (orderedBy && contactName === orderedBy ? 'Requester' : '');
   const contactPhoneRaw = labeled(lines, ALIASES.jobContactPhoneE164);
   const directCustomer = customerLabel ? matchSavedCustomer(customerLabel, directory.customers) : undefined;
   const candidates = customerLabel ? closeCustomerCandidates(customerLabel, directory.customers) : [];
@@ -180,8 +182,8 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
     if (pickup && !/^[-–—?]+$/.test(pickup)) fields.pickup ||= pickup.slice(0, 500);
     if (destination) fields.destination ||= destination.slice(0, 500);
     const water = /\b(fresh water|production water|flowback|frac water)\b/i.exec(service)?.[1];
-    if (water && destination) fields.title ||= `${water} to ${destination}`.slice(0, 180);
-    fields.notes ||= `Original request: ${service}`.slice(0, 4000);
+    if (destination && (water || /^\s*\d+\s+loads?\b/i.test(serviceBody))) fields.title ||= `${water || 'Load'} to ${destination}`.slice(0, 180);
+    fields.notes ||= `Original request: ${text.trim()}`.slice(0, 4000);
     if (serviceTime) warnings.push(`Request says ${serviceTime} but gives no date; confirm the date before scheduling.`);
     if (pickup && /^[-–—?]+$/.test(pickup)) warnings.push('Pickup was left blank in the request; confirm the source location.');
   }

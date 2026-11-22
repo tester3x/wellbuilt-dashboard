@@ -152,3 +152,20 @@ test('two company men and one phone remain unpaired for dispatcher review', () =
   assert.ok(parsed.warnings.some(warning => warning.includes('Multiple company men')));
   assert.ok(parsed.warnings.some(warning => warning.includes('could not be paired')));
 });
+
+test('mongoose split-ticket request keeps well names intact and does not invent a customer or sector', () => {
+  const request = 'Can you help cover this job as soon as possible?\n\nService: 1 load from Daredevil Fed. 2-2-14H to Pad 390(Phazor Fed. 3-1-13H) to fill the treators. Ordered by Brad Holyoak. Pak Energy Split ticket load';
+  const parsed = parsePastedJobRequest(request, directory);
+  assert.equal(parsed.customerId, '');
+  assert.equal(parsed.customerLabel, '');
+  assert.equal(parsed.sector, '');
+  assert.equal(parsed.fields.title, 'Load to Pad 390(Phazor Fed. 3-1-13H)');
+  assert.equal(parsed.fields.pickup, 'Daredevil Fed. 2-2-14H');
+  assert.equal(parsed.fields.destination, 'Pad 390(Phazor Fed. 3-1-13H)');
+  assert.equal(parsed.fields.jobContactName, 'Brad Holyoak');
+  assert.equal(parsed.fields.jobContactRole, 'Requester');
+  assert.ok(parsed.fields.notes?.includes('Pak Energy Split ticket load'));
+  assert.ok(parsed.fields.notes?.includes('as soon as possible'));
+  assert.ok(parsed.missing.includes('Customer'));
+  assert.ok(parsed.missing.includes('Transportation sector'));
+});
