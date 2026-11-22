@@ -113,7 +113,10 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
       let patch: Record<string, unknown> = details ? { ...details } : {};
       if (newCustomerRef && details?.sector) {
         tx.create(newCustomerRef, { companyId: authority.companyId, name: details.customer, alternateNames: [],
-          phoneE164: '', sectors: [details.sector], jobNames: [], pickupLocations: [], deliveryLocations: [],
+          phoneE164: '', sectors: [details.sector],
+          contacts: details.jobContactName ? [{ id: `contact_${raw.jobId}`.slice(0, 100), name: details.jobContactName,
+            role: details.jobContactRole || '', phoneE164: details.jobContactPhoneE164 || '' }] : [],
+          jobNames: [], pickupLocations: [], deliveryLocations: [],
           active: true, updatedAt: now, updatedBy: authority.uid });
         patch.customerId = newCustomerRef.id;
       }

@@ -16,6 +16,9 @@ export type ParsedJobRequest = {
 
 const ALIASES: Record<string, string[]> = {
   customer: ['customer', 'client', 'requested by', 'requesting company'],
+  jobContactName: ['company man', 'company man name', 'job contact', 'site contact', 'field contact', 'lead', 'boss'],
+  jobContactRole: ['contact role', 'contact title', 'company man title'],
+  jobContactPhoneE164: ['company man phone', 'company man number', 'job contact phone', 'site contact phone', 'contact phone', 'lead phone', 'boss phone'],
   sector: ['sector', 'service type', 'transportation sector'],
   title: ['job', 'job name', 'load name', 'work requested'],
   reference: ['reference', 'ref', 'po', 'po #', 'order #', 'load #', 'bol', 'ticket #'],
@@ -55,16 +58,20 @@ function matchSavedCustomer(raw: string, customers: IndependentCustomer[]): Inde
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-function closeCustomers(raw: string, customers: IndependentCustomer[], sector: IndependentSector | ''): ParsedJobRequest['customerSuggestions'] {
+function closeCustomerCandidates(raw: string, customers: IndependentCustomer[]): IndependentCustomer[] {
   const wanted = normalize(raw);
   if (wanted.length < 3) return [];
   return customers.filter(customer => [customer.name, ...(customer.alternateNames || [])].some(name => {
     const candidate = normalize(name);
     if (candidate === wanted) return true;
-    if (wanted.length >= 4 && (candidate.startsWith(`${wanted} `) || wanted.startsWith(`${candidate} `))) return true;
+    if (candidate.startsWith(`${wanted} `) || wanted.startsWith(`${candidate} `)) return true;
     const words = wanted.split(' ').filter(word => word.length >= 3);
     return words.length > 0 && words.every(word => candidate.split(' ').some(part => part.startsWith(word)));
-  })).sort((a, b) => Number(!!sector && b.sectors.includes(sector)) - Number(!!sector && a.sectors.includes(sector))
+  }));
+}
+
+function closeCustomers(candidates: IndependentCustomer[], sector: IndependentSector | ''): ParsedJobRequest['customerSuggestions'] {
+  return candidates.sort((a, b) => Number(!!sector && b.sectors.includes(sector)) - Number(!!sector && a.sectors.includes(sector))
     || a.name.localeCompare(b.name)).slice(0, 3)
     .map(customer => ({ id: customer.id, name: customer.name, sectorMatch: !!sector && customer.sectors.includes(sector) }));
 }
@@ -111,6 +118,14 @@ function optionValue(raw: string, options: readonly string[]): string {
   return options.find(option => normalize(option) === value) || '';
 }
 
+function contactPhone(raw: string): string {
+  const compact = raw.replace(/[\s().-]/g, '');
+  if (/^\+[1-9]\d{7,14}$/.test(compact)) return compact;
+  if (/^1\d{10}$/.test(compact)) return `+${compact}`;
+  if (/^\d{10}$/.test(compact)) return `+1${compact}`;
+  return '';
+}
+
 /** Local, review-first extraction. Never creates a job or sends the source text anywhere. */
 export function parsePastedJobRequest(text: string, directory: IndependentDirectory): ParsedJobRequest {
   const lines = text.slice(0, 10000).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -120,8 +135,27 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
   let sector = requestedSector ? sectorFrom(requestedSector) : inferSector(text);
   if (requestedSector && !sector) warnings.push(`Transportation sector “${requestedSector}” was not recognized.`);
   const customerLabel = labeled(lines, ALIASES.customer);
-  const customer = customerLabel ? matchSavedCustomer(customerLabel, directory.customers) : undefined;
-  const customerSuggestions = customerLabel && !customer ? closeCustomers(customerLabel, directory.customers, sector) : [];
+  const contactName = labeled(lines, ALIASES.jobContactName);
+  const contactRole = labeled(lines, ALIASES.jobContactRole);
+  const contactPhoneRaw = labeled(lines, ALIASES.jobContactPhoneE164);
+  const directCustomer = customerLabel ? matchSavedCustomer(customerLabel, directory.customers) : undefined;
+  const candidates = customerLabel ? closeCustomerCandidates(customerLabel, directory.customers) : [];
+  const namedContactMatches = contactName ? candidates.filter(candidate =>
+    (candidate.contacts || []).some(contact => normalize(contact.name) === normalize(contactName))) : [];
+  const contactMatches = namedContactMatches.filter(candidate => !sector || candidate.sectors.includes(sector));
+  const contactCustomer = contactMatches.length === 1 ? contactMatches[0] : undefined;
+  const directIsOfficial = directCustomer && normalize(directCustomer.name) === normalize(customerLabel);
+  const customer = namedContactMatches.length && !contactCustomer ? undefined
+    : contactCustomer && (!directIsOfficial || directCustomer?.id === contactCustomer.id)
+    ? contactCustomer : contactCustomer && directIsOfficial && directCustomer?.id !== contactCustomer.id
+      ? undefined : directCustomer && (!sector || directCustomer.sectors.includes(sector)) ? directCustomer : undefined;
+  const customerSuggestions = customerLabel && !customer ? closeCustomers(candidates, sector) : [];
+  if (directCustomer && sector && !directCustomer.sectors.includes(sector))
+    warnings.push(`${sector} is not enabled for ${directCustomer.name}; confirm the customer and job type.`);
+  if (customer && contactCustomer?.id === customer.id && directCustomer?.id !== customer.id)
+    warnings.push(`Matched “${customerLabel}” to ${customer.name} using job contact ${contactName}; confirm the company.`);
+  if (namedContactMatches.length && !contactMatches.length && sector)
+    warnings.push(`Job contact ${contactName} is saved under a different sector; confirm the customer and job type.`);
   if (customer && customerLabel && normalize(customerLabel) !== normalize(customer.name))
     warnings.push(`Matched “${customerLabel}” to ${customer.name}. The job will use the official company name.`);
   if (customerLabel && !customer) warnings.push(customerSuggestions.length
@@ -135,6 +169,15 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
     const value = labeled(lines, ALIASES[key]);
     if (value) fields[key] = value.slice(0, key === 'notes' ? 4000 : key === 'pickup' || key === 'destination' || key === 'cargo' ? 500 : 180);
   }
+  if (contactName) {
+    fields.jobContactName = contactName.slice(0, 120);
+    fields.jobContactRole = (contactRole || (lines.some(line => /^company man\s*:/i.test(line)) ? 'Company man' : '')).slice(0, 80);
+  }
+  if (contactPhoneRaw && contactName) {
+    fields.jobContactPhoneE164 = contactPhone(contactPhoneRaw);
+    if (!fields.jobContactPhoneE164) warnings.push('Job contact phone needs review; use a full number with country code.');
+    else if (!contactPhoneRaw.trim().startsWith('+')) warnings.push('Assumed +1 for the job contact phone; confirm it.');
+  } else if (contactPhoneRaw && !contactName) warnings.push('Job contact phone was found without a contact name; enter the right person before using it.');
   if (!fields.pickup || !fields.destination) {
     const fromTo = text.match(/\bfrom\s+([^\n]+?)\s+to\s+([^\n.,;]+)/i);
     if (fromTo) { fields.pickup ||= fromTo[1].trim(); fields.destination ||= fromTo[2].trim(); }

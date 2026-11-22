@@ -8,7 +8,8 @@ import { SECTOR_FIELDS, sectorLabel, type IndependentSector } from '@/lib/indepe
 import { dialpadCallHref } from '@/lib/dialpad';
 import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentRequestParser';
 
-const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '' };
+const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
+  jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' };
 const STATUS: Record<IndependentJobStatus, string> = { unassigned: 'Unassigned', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
 const FIELDS = [
   ['title', 'Job name', 180, true],
@@ -23,10 +24,12 @@ function JobDialpadLinks({ job, directory, drivers }: { job: IndependentJob; dir
   const customer = directory?.customers.find(item => item.id === job.customerId);
   const driver = drivers.find(item => item.externalDriverId === job.externalDriverId);
   const customerHref = dialpadCallHref(customer?.phoneE164, job.id, directory?.dispatchPhoneE164);
+  const contactHref = dialpadCallHref(job.jobContactPhoneE164, job.id, directory?.dispatchPhoneE164);
   const driverHref = dialpadCallHref(driver?.phoneE164, job.id, directory?.dispatchPhoneE164);
-  if (!customerHref && !driverHref) return null;
+  if (!customerHref && !contactHref && !driverHref) return null;
   return <div className="mt-2 flex flex-wrap gap-3 text-sm text-cyan-300 underline">
     {customerHref && <a href={customerHref}>Call customer in Dialpad</a>}
+    {contactHref && <a href={contactHref}>Call job contact in Dialpad</a>}
     {driverHref && <a href={driverHref}>Call driver in Dialpad</a>}
   </div>;
 }
@@ -49,6 +52,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [assignments, setAssignments] = useState<Record<string, string>>({});
   const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
   const [customerId, setCustomerId] = useState('');
+  const [contactId, setContactId] = useState('');
   const [newCustomer, setNewCustomer] = useState(false);
   const [saveCustomer, setSaveCustomer] = useState(false);
   const [sector, setSector] = useState<IndependentSector | ''>('');
@@ -80,14 +84,17 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     finally { setBusy(false); }
   }
   function resetForm() {
-    setForm(EMPTY); setEditing(null); setScheduledLocal(''); setCustomerId(''); setNewCustomer(false); setSaveCustomer(false); setSector(''); setSectorFields({});
+    setForm(EMPTY); setEditing(null); setScheduledLocal(''); setCustomerId(''); setContactId(''); setNewCustomer(false); setSaveCustomer(false); setSector(''); setSectorFields({});
     setPastedRequest(''); setParseReport(null);
     creation.current = { jobId: crypto.randomUUID(), requestId: crypto.randomUUID() };
   }
   function edit(job: IndependentJob) {
     setEditing(job);
-    setForm(Object.fromEntries(Object.keys(EMPTY).map(k => [k, job[k as keyof IndependentJobDetails]])) as IndependentJobDetails);
+    setForm(Object.fromEntries(Object.keys(EMPTY).map(k => [k, job[k as keyof IndependentJobDetails] || ''])) as IndependentJobDetails);
     setCustomerId(job.customerId || ''); setNewCustomer(!!job.sector && !job.customerId); setSaveCustomer(false);
+    const savedContact = directory?.customers.find(customer => customer.id === job.customerId)?.contacts?.find(contact =>
+      contact.name === job.jobContactName && contact.phoneE164 === job.jobContactPhoneE164 && contact.role === job.jobContactRole);
+    setContactId(savedContact?.id || '');
     setSector((job.sector as IndependentSector) || ''); setSectorFields(job.sectorFields || {});
     const date = job.scheduledAt ? new Date(job.scheduledAt) : null;
     setScheduledLocal(date ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
@@ -100,9 +107,9 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   function chooseSavedCustomer(id: string) {
     const next = directory?.customers.find(customer => customer.id === id);
     const retainParsed = !!parseReport && !customerId;
-    setNewCustomer(false); setSaveCustomer(false); setCustomerId(next?.id || '');
+    setNewCustomer(false); setSaveCustomer(false); setCustomerId(next?.id || ''); setContactId('');
     setForm(current => ({ ...current, customer: next?.name || '',
-      ...(retainParsed ? {} : { title: '', pickup: '', destination: '' }) }));
+      ...(retainParsed ? {} : { title: '', pickup: '', destination: '', jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' }) }));
     const choices = (next?.sectors || []).filter(value => directory?.sectors.includes(value));
     const parsedSector = retainParsed ? parseReport?.sector : '';
     const nextSector = parsedSector && choices.includes(parsedSector) ? parsedSector : choices.length === 1 ? choices[0] : '';
@@ -114,6 +121,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     const result = parsePastedJobRequest(pastedRequest, directory);
     const customer = directory.customers.find(item => item.id === result.customerId);
     setCustomerId(result.customerId);
+    setContactId('');
     setNewCustomer(!!result.customerLabel && !customer && result.customerSuggestions.length === 0); setSaveCustomer(false);
     setSector(result.sector);
     setSectorFields(result.sectorFields);
@@ -156,8 +164,9 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       <fieldset disabled={busy || !loaded} className="grid gap-3 md:grid-cols-2">
         {(!editing || editing.sector) ? <>
           <div className="text-xs text-gray-300">Customer *<select aria-label="Customer" required value={newCustomer ? '__new__' : customerId} className={inputClass} onChange={event => {
-            if (event.target.value === '__new__') { setNewCustomer(true); setSaveCustomer(false); setCustomerId('');
-              setForm(current => ({ ...current, customer: parseReport?.customerLabel || '' }));
+            if (event.target.value === '__new__') { setNewCustomer(true); setSaveCustomer(false); setCustomerId(''); setContactId('');
+              setForm(current => ({ ...current, customer: parseReport?.customerLabel || '',
+                ...(parseReport ? {} : { jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' }) }));
               setSector(parseReport?.sector || ''); setSectorFields(parseReport?.sectorFields || {}); return; }
             chooseSavedCustomer(event.target.value);
           }}><option value="">Choose customer…</option>{directory?.customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}</option>)}<option value="__new__">NEW customer…</option></select>
@@ -172,6 +181,22 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
             {availableSectors.map(id => <option key={id} value={id}>{sectorLabel(id)}</option>)}
           </select></label>
         </> : <label className="text-xs text-gray-300">Customer *<input required maxLength={180} value={form.customer} onChange={event => setForm({ ...form, customer: event.target.value })} className={inputClass} /></label>}
+        <div className="rounded border border-cyan-700/40 bg-cyan-950/20 p-3 md:col-span-2">
+          <h3 className="text-sm font-medium text-cyan-300">Company man / job contact</h3>
+          <p className="mt-1 text-xs text-gray-400">Choose this job’s contact or enter the person and phone supplied with the request. Changes here apply to this job only.</p>
+          {!!selectedCustomer?.contacts?.length && <label className="mt-2 block text-xs text-gray-300">Saved customer contacts
+            <select aria-label="Saved job contact" value={contactId} className={inputClass} onChange={event => {
+              const contact = selectedCustomer.contacts?.find(item => item.id === event.target.value);
+              setContactId(contact?.id || '');
+              setForm(current => ({ ...current, jobContactName: contact?.name || '', jobContactRole: contact?.role || '', jobContactPhoneE164: contact?.phoneE164 || '' }));
+            }}><option value="">Enter a contact for this job…</option>{selectedCustomer.contacts.map(contact => <option key={contact.id} value={contact.id}>{contact.name}{contact.role ? ` · ${contact.role}` : ''}</option>)}</select>
+          </label>}
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            <label className="text-xs text-gray-300">Contact name<input maxLength={120} value={form.jobContactName || ''} onChange={event => { setContactId(''); setForm(current => ({ ...current, jobContactName: event.target.value })); }} className={inputClass} /></label>
+            <label className="text-xs text-gray-300">Role / title<input maxLength={80} value={form.jobContactRole || ''} onChange={event => { setContactId(''); setForm(current => ({ ...current, jobContactRole: event.target.value })); }} placeholder="Company man" className={inputClass} /></label>
+            <label className="text-xs text-gray-300">Contact phone (+country code)<input type="tel" pattern="\+[1-9][0-9]{7,14}" value={form.jobContactPhoneE164 || ''} onChange={event => { setContactId(''); setForm(current => ({ ...current, jobContactPhoneE164: event.target.value })); }} placeholder="+17015550123" className={inputClass} /></label>
+          </div>
+        </div>
         {FIELDS.map(([key, label, max, required]) => <label key={key} className={`text-xs text-gray-300 ${key === 'notes' ? 'md:col-span-2' : ''}`}>
           {label}{required ? ' *' : ''}
           {key === 'notes' ? <textarea className={inputClass} rows={3} maxLength={max} value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} />
@@ -206,6 +231,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     {!loaded ? <p className="text-gray-400">Loading jobs…</p> : !visible.length ? <p className="text-gray-400">No matching jobs.</p> : visible.map(job => <article key={job.id} className="rounded border border-gray-700 bg-gray-800 p-4">
       <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold text-white">{job.title}</h2><span className="text-cyan-300">{STATUS[job.status]}</span></div>
       <p className="text-sm text-gray-300">{job.customer}{job.sector ? ` · ${sectorLabel(job.sector)}` : ''}{job.reference ? ` · ${job.reference}` : ''}</p>
+      {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} />
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
       {job.cargo && <p className="mt-2 whitespace-pre-wrap text-sm text-gray-300">Cargo: {job.cargo}</p>}

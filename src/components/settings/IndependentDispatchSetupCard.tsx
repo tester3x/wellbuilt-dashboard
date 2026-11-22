@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { independentDispatchDirectory, type IndependentCustomer, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
+import { independentDispatchDirectory, type IndependentCustomer, type IndependentCustomerContact, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
 import { INDEPENDENT_SECTORS, type IndependentSector } from '@/lib/independentDispatchSectors';
 
 const lines = (value: string) => [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
@@ -16,6 +16,7 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
   const [name, setName] = useState('');
   const [alternateNames, setAlternateNames] = useState('');
   const [phoneE164, setPhoneE164] = useState('');
+  const [contacts, setContacts] = useState<IndependentCustomerContact[]>([]);
   const [customerSectors, setCustomerSectors] = useState<IndependentSector[]>([]);
   const [jobNames, setJobNames] = useState('');
   const [pickups, setPickups] = useState('');
@@ -29,16 +30,17 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
     setDispatchPhoneE164(result.dispatchPhoneE164 || '');
   }
   useEffect(() => { void refresh().catch(error => setMessage(error instanceof Error ? error.message : 'Unable to load setup.')); }, [companyId]);
-  async function run(action: () => Promise<unknown>, success: string) {
+  async function run(action: () => Promise<unknown>, success: string): Promise<boolean> {
     setBusy(true); setMessage('');
-    try { await action(); await refresh(); setMessage(success); }
+    try { await action(); await refresh(); setMessage(success); return true; }
     catch (error) { const detail = error instanceof Error ? error.message : 'Unable to save.';
       setMessage(detail.includes('customer_name_conflict') ? 'That company name or alternate name is already used by another saved customer.'
-        : detail.includes('duplicate_customer_name_or_alias') ? 'Remove a repeated company name or alternate name.' : detail); }
+        : detail.includes('duplicate_customer_name_or_alias') ? 'Remove a repeated company name or alternate name.' : detail); return false; }
     finally { setBusy(false); }
   }
   function edit(customer?: IndependentCustomer) {
     setEditingId(customer?.id || ''); setName(customer?.name || ''); setAlternateNames(join(customer?.alternateNames)); setPhoneE164(customer?.phoneE164 || '');
+    setContacts(customer?.contacts || []);
     setCustomerSectors(customer?.sectors || []); setJobNames(join(customer?.jobNames));
     setPickups(join(customer?.pickupLocations)); setDeliveries(join(customer?.deliveryLocations));
   }
@@ -48,6 +50,9 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
   const conflictingCustomers = directory?.customers.filter(customer => customer.id !== editingId
     && enteredIdentifiers.some(identifier => [customer.name, ...(customer.alternateNames || [])]
       .some(savedName => normalizeName(savedName) === identifier))) || [];
+  function changeContact(id: string, patch: Partial<IndependentCustomerContact>) {
+    setContacts(current => current.map(contact => contact.id === id ? { ...contact, ...patch } : contact));
+  }
   return <section className="rounded-lg border border-cyan-700/40 bg-gray-800 p-4 text-white">
     <h3 className="font-semibold text-cyan-300">Independent Dispatch setup</h3>
     <p className="mt-1 text-xs text-gray-400">Choose the work your company dispatches, then save each customer’s workflows and reusable job names and locations.</p>
@@ -88,9 +93,9 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
         {canEdit && <form className="mt-4 grid gap-3" onSubmit={event => { event.preventDefault();
           const id = editingId || crypto.randomUUID();
           void run(() => independentDispatchDirectory({ op: 'saveCustomer', customer: {
-            id, name, alternateNames: lines(alternateNames), phoneE164: phoneE164.trim(), sectors: customerSectors, jobNames: lines(jobNames), pickupLocations: lines(pickups),
+            id, name, alternateNames: lines(alternateNames), phoneE164: phoneE164.trim(), contacts, sectors: customerSectors, jobNames: lines(jobNames), pickupLocations: lines(pickups),
             deliveryLocations: lines(deliveries), active: true,
-          } }), 'Customer saved.').then(() => setEditingId(id));
+          } }), 'Customer saved.').then(saved => { if (saved) setEditingId(id); });
         }}>
           <h5 className="text-sm font-medium">{editingId ? 'Edit customer' : 'Add customer'}</h5>
           <label className="text-xs text-gray-300">Customer name<input required maxLength={180} value={name} onChange={e => setName(e.target.value)} className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
@@ -102,6 +107,16 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
             {!!conflictingCustomers.length && <span className="mt-1 block text-amber-200">Name already used by {conflictingCustomers.map(customer => customer.name).join(', ')}. Keep it on only one customer.</span>}
           </label>
           <label className="text-xs text-gray-300">Customer phone for Dialpad (optional, +country code)<input type="tel" pattern="\\+[1-9][0-9]{7,14}" value={phoneE164} onChange={e => setPhoneE164(e.target.value)} placeholder="+15551234567" className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
+          <fieldset className="rounded border border-gray-700 p-3"><legend className="px-1 text-sm font-medium">Company men / job contacts</legend>
+            <p className="mb-2 text-xs text-gray-400">Save everyone this customer may assign to a job. Choose the right person separately on each dispatch.</p>
+            <div className="space-y-3">{contacts.map((contact, index) => <div key={contact.id} className="grid gap-2 rounded border border-gray-700 p-2 sm:grid-cols-3">
+              <label className="text-xs text-gray-300">Contact name<input required maxLength={120} value={contact.name} onChange={event => changeContact(contact.id, { name: event.target.value })} className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
+              <label className="text-xs text-gray-300">Role / title<input maxLength={80} value={contact.role} onChange={event => changeContact(contact.id, { role: event.target.value })} placeholder="Company man, lead, boss…" className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
+              <label className="text-xs text-gray-300">Phone (+country code)<input type="tel" pattern="\+[1-9][0-9]{7,14}" value={contact.phoneE164} onChange={event => changeContact(contact.id, { phoneE164: event.target.value })} placeholder="+17015550123" className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
+              <button type="button" className="w-fit text-xs text-red-300 underline sm:col-span-3" onClick={() => setContacts(current => current.filter(item => item.id !== contact.id))}>Remove contact {index + 1}</button>
+            </div>)}</div>
+            <button type="button" disabled={contacts.length >= 30} className="mt-3 text-sm text-cyan-300 underline disabled:opacity-40" onClick={() => setContacts(current => [...current, { id: crypto.randomUUID(), name: '', role: 'Company man', phoneE164: '' }])}>Add job contact</button>
+          </fieldset>
           <fieldset><legend className="text-xs text-gray-300">Workflows for this customer</legend><div className="mt-1 flex flex-wrap gap-3 text-sm">
             {INDEPENDENT_SECTORS.filter(s => sectors.includes(s.id)).map(sector => <label key={sector.id}><input type="checkbox" checked={customerSectors.includes(sector.id)}
               onChange={event => setCustomerSectors(current => event.target.checked ? [...current, sector.id] : current.filter(id => id !== sector.id))} className="mr-1" />{sector.label}</label>)}

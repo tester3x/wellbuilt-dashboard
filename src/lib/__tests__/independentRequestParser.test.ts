@@ -83,6 +83,26 @@ test('ROS fills its unique saved owner but remains ambiguous when another compan
   assert.deepEqual(two.customerSuggestions.map(item => item.sectorMatch), [true, false]);
 });
 
+test('a saved company man and sector can identify the right ROS while preserving the phone received for this job', () => {
+  const customers = [...directory.customers,
+    { id: 'rapid', name: 'Rapid Oilfield Supply', alternateNames: ['ROS'], active: true as const,
+      sectors: ['ltl' as const], contacts: [{ id: 'jane', name: 'Jane Doe', role: 'Company man', phoneE164: '+17015550110' }],
+      jobNames: [], pickupLocations: [], deliveryLocations: [] },
+    { id: 'workover', name: 'ROS Workover Rigs', active: true as const,
+      sectors: ['hot-shot' as const], contacts: [{ id: 'john', name: 'John Wick', role: 'Company man', phoneE164: '+17015550111' }],
+      jobNames: [], pickupLocations: [], deliveryLocations: [] },
+  ];
+  const parsed = parsePastedJobRequest('Customer: ROS\nSector: Hot shot\nCompany man: John Wick\nCompany man phone: 701-555-0199\nJob: Rig move\nPickup: Yard\nDelivery: Rig', { ...directory, customers });
+  assert.equal(parsed.customerId, 'workover');
+  assert.equal(parsed.fields.jobContactName, 'John Wick');
+  assert.equal(parsed.fields.jobContactRole, 'Company man');
+  assert.equal(parsed.fields.jobContactPhoneE164, '+17015550199');
+  assert.ok(parsed.warnings.some(warning => warning.includes('Assumed +1')));
+  const conflict = parsePastedJobRequest('Customer: ROS\nSector: LTL\nCompany man: John Wick\nJob: Freight\nPickup: Yard\nDelivery: Site', { ...directory, customers });
+  assert.equal(conflict.customerId, '');
+  assert.ok(conflict.warnings.some(warning => warning.includes('different sector')));
+});
+
 test('official names match directly unless another customer uses that name as an alias', () => {
   const exact = parsePastedJobRequest('Customer: Liquid Gold\nSector: Water hauling\nJob: Load\nPickup: A\nDelivery: B', directory);
   assert.equal(exact.customerId, 'liquid');
@@ -101,8 +121,9 @@ test('a company mentioned in unlabelled notes never selects the customer', () =>
   assert.equal(parsed.fields.title, 'Deliver for Liquid Gold');
 });
 
-test('sector conflicting with the selected customer is not applied', () => {
+test('sector conflicting with an exact customer name leaves the customer unselected for review', () => {
   const parsed = parsePastedJobRequest('Customer: Liquid Gold\nSector: Aggregate\nJob: Test\nPickup: A\nDelivery: B', directory);
-  assert.equal(parsed.sector, '');
+  assert.equal(parsed.customerId, '');
+  assert.equal(parsed.sector, 'aggregate');
   assert.ok(parsed.warnings.some(message => message.includes('not enabled')));
 });

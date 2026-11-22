@@ -5,11 +5,13 @@ export type IndependentJobStatus = typeof JOB_STATUSES[number];
 export type IndependentJobDetails = {
   title: string; customer: string; reference: string; pickup: string; destination: string;
   cargo: string; scheduledAt: string; notes: string;
+  jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
 };
-const LIMITS: Record<'title' | 'customer' | 'reference' | 'pickup' | 'destination' | 'cargo' | 'scheduledAt' | 'notes', number> = {
+const LIMITS: Record<'title' | 'customer' | 'reference' | 'pickup' | 'destination' | 'cargo' | 'scheduledAt' | 'notes'
+  | 'jobContactName' | 'jobContactRole' | 'jobContactPhoneE164', number> = {
   title: 180, customer: 180, reference: 120, pickup: 500, destination: 500,
-  cargo: 500, scheduledAt: 40, notes: 4000,
+  cargo: 500, scheduledAt: 40, notes: 4000, jobContactName: 120, jobContactRole: 80, jobContactPhoneE164: 16,
 };
 export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_job');
@@ -25,6 +27,8 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   for (const key of ['title', 'customer', 'pickup', 'destination'] as const) {
     if (!job[key]) throw Error(`required_${key}`);
   }
+  if (job.jobContactPhoneE164 && !/^\+[1-9]\d{7,14}$/.test(job.jobContactPhoneE164)) throw Error('invalid_job_contact_phone');
+  if ((job.jobContactPhoneE164 || job.jobContactRole) && !job.jobContactName) throw Error('required_job_contact_name');
   if (job.scheduledAt && (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(job.scheduledAt)
     || !Number.isFinite(Date.parse(job.scheduledAt)) || new Date(job.scheduledAt).toISOString() !== job.scheduledAt)) throw Error('invalid_scheduledAt');
   if (input.sector !== undefined || input.customerId !== undefined || input.sectorFields !== undefined) {

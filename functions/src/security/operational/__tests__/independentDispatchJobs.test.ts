@@ -4,7 +4,8 @@ import { INDEPENDENT_SECTORS, parseSectorFields } from '../independentDispatchSe
 describe('Independent Dispatch job validation and lifecycle', () => {
   const job = { title: 'Pipe delivery', customer: 'Customer', pickup: 'Yard', destination: 'Site' };
   it('supports jobs without wells, water, accounts, or ticket fields', () => {
-    expect(parseIndependentJob(job)).toEqual({ ...job, reference: '', cargo: '', scheduledAt: '', notes: '' });
+    expect(parseIndependentJob(job)).toEqual({ ...job, reference: '', cargo: '', scheduledAt: '', notes: '',
+      jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' });
   });
   it('rejects injected tenant, status, and identity fields', () => {
     for (const field of ['companyId', 'driverId', 'status', 'revision', 'wellName', '__proto__']) {
@@ -18,6 +19,10 @@ describe('Independent Dispatch job validation and lifecycle', () => {
     expect(() => parseIndependentJob({ ...job, notes: 'a'.repeat(4001) })).toThrow();
     expect(() => parseIndependentJob({ ...job, scheduledAt: '2026-02-30T12:00:00.000Z' })).toThrow();
     expect(parseIndependentJob({ ...job, scheduledAt: '2026-11-20T12:00:00.000Z' }).scheduledAt).toContain('2026-11-20');
+    expect(parseIndependentJob({ ...job, jobContactName: 'John Wick', jobContactRole: 'Company man', jobContactPhoneE164: '+17015550123' }))
+      .toMatchObject({ jobContactName: 'John Wick', jobContactPhoneE164: '+17015550123' });
+    expect(() => parseIndependentJob({ ...job, jobContactPhoneE164: '+17015550123' })).toThrow('required_job_contact_name');
+    expect(() => parseIndependentJob({ ...job, jobContactName: 'John Wick', jobContactPhoneE164: '701-555-0123' })).toThrow('invalid_job_contact_phone');
   });
   it('cannot complete unassigned work or reopen terminal jobs', () => {
     expect(independentJobTransition('unassigned', 'completed')).toBe(false);

@@ -115,11 +115,13 @@ describe('Independent Dispatch callable boundaries', () => {
     expect(records.get('independent_dispatch_jobs/job-a')).toMatchObject({ customer: 'One Time Freight LLC', sector: 'ltl' });
     expect(records.get('independent_dispatch_jobs/job-a').customerId).toBeUndefined();
     expect([...records.keys()].filter(key => key.includes('independent_dispatch_customers'))).toEqual([]);
-    const saved = { ...create, jobId: 'job-b', requestId: 'request-b', job: { ...oneOff, customer: "Bob's Hot Shot LLC" }, saveCustomer: true };
+    const saved = { ...create, jobId: 'job-b', requestId: 'request-b', job: { ...oneOff, customer: "Bob's Hot Shot LLC",
+      jobContactName: 'John Wick', jobContactRole: 'Company man', jobContactPhoneE164: '+17015550199' }, saveCustomer: true };
     await call(saved);
     expect(records.get('independent_dispatch_jobs/job-b').customerId).toBe('job_job-b');
     expect(records.get('companies/company-a/independent_dispatch_customers/job_job-b')).toMatchObject({
       companyId: 'company-a', name: "Bob's Hot Shot LLC", alternateNames: [], sectors: ['ltl'], active: true,
+      contacts: [{ id: 'contact_job-b', name: 'John Wick', role: 'Company man', phoneE164: '+17015550199' }],
     });
     await expect(call(saved)).resolves.toMatchObject({ idempotent: true });
     expect([...records.keys()].filter(key => key.includes('independent_dispatch_customers'))).toHaveLength(1);

@@ -4,6 +4,7 @@ import { getFirebaseFunctions } from './firebase';
 export type IndependentJobDetails = {
   title: string; customer: string; reference: string; pickup: string; destination: string;
   cargo: string; scheduledAt: string; notes: string;
+  jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
 };
 export type IndependentJobStatus = 'unassigned' | 'assigned' | 'in_progress' | 'completed' | 'cancelled';
