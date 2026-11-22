@@ -11,7 +11,7 @@ export type IndependentJobStatus = 'unassigned' | 'assigned' | 'in_progress' | '
 export type IndependentJob = IndependentJobDetails & {
   id: string; companyId: string; revision: number; status: IndependentJobStatus;
   externalDriverId?: string; wbDriverId?: string; wbDriverCompanyId?: string;
-  driverSource?: 'outside' | 'wellbuilt'; driverName?: string; updatedAt: string;
+  driverSource?: 'outside' | 'wellbuilt'; driverName?: string; createdAt?: string; updatedAt: string;
 };
 export type LinkedWellBuiltDriver = { driverId: string; sourceCompanyId: string; displayName: string };
 export async function independentDispatchJobs(payload: Record<string, unknown>) {

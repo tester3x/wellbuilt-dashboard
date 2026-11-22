@@ -33,6 +33,10 @@ try {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   const errors=[]; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.getByRole('heading',{name:'Dispatch board'}).waitFor();
+  await page.getByRole('region',{name:'Needs a driver jobs'}).waitFor();
+  assert.equal(await page.getByRole('heading',{name:'New Independent Dispatch job'}).count(),0,'intake starts collapsed so the board is visible first');
+  await page.getByRole('button',{name:'New job / paste request'}).click();
   await page.getByText('New Independent Dispatch job').waitFor();
   await page.getByRole('button',{name:/Drivers Without WellBuilt Accounts/}).click();
   await page.getByPlaceholder('Driver name').fill('Isaac Hickert');
@@ -134,10 +138,12 @@ try {
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='create'&&r.job.title==='First repeat job')?.saveCustomer),true);
   const card=page.getByRole('article').filter({hasText:'Pipe run water-hauling'});
   await card.waitFor();
+  assert.equal(await page.getByRole('region',{name:'Needs a driver jobs'}).getByRole('article').count(),7,'new requests remain in the unassigned lane');
   await card.getByText('Job contact: John Wick · Company man · +17015550199').waitFor();
   await page.getByRole('article').filter({hasText:'Pipe run ltl'}).getByText('Job contact: Jane Doe · Lead · +17015550113').waitFor();
   await card.getByRole('combobox').selectOption('outside:driver-a');
   await card.getByRole('button',{name:'Assign',exact:true}).click();
+  await page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'}).waitFor();
   const firstJobId = await page.evaluate(() => window.requests.find(request => request.op === 'create'&&request.job.title==='Pipe run water-hauling').jobId);
   assert.equal(await card.getByRole('link',{name:'Call customer in Dialpad'}).getAttribute('href'),
     `dialpad://+17015550111?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
@@ -151,6 +157,7 @@ try {
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='assign'&&r.wbDriverId)?.wbDriverId),'wb-marcial');
   assert.equal(await linkedCard.getByRole('link',{name:'Call driver in Dialpad'}).count(),0);
   await card.getByRole('button',{name:'Mark started',exact:true}).click();
+  await page.getByRole('region',{name:'In progress jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'}).waitFor();
   assert.equal(await card.getByRole('button',{name:'Edit',exact:true}).count(),0);
   await card.getByRole('button',{name:'Mark completed',exact:true}).click();
   await card.waitFor({state:'detached'});

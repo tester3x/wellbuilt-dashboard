@@ -7,6 +7,7 @@ import { independentDispatchDirectory, type IndependentDirectory } from '@/lib/i
 import { SECTOR_FIELDS, sectorLabel, type IndependentSector } from '@/lib/independentDispatchSectors';
 import { dialpadCallHref } from '@/lib/dialpad';
 import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentRequestParser';
+import { ACTIVE_LANES, pickupTiming, sortDispatchJobs } from '@/lib/independentDispatchBoard';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' };
@@ -59,6 +60,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [sectorFields, setSectorFields] = useState<Record<string, string>>({});
   const [pastedRequest, setPastedRequest] = useState('');
   const [parseReport, setParseReport] = useState<ParsedJobRequest | null>(null);
+  const [intakeOpen, setIntakeOpen] = useState(false);
   // Keep create identity through an ambiguous network failure, avoiding duplicate jobs.
   const creation = useRef({ jobId: crypto.randomUUID(), requestId: crypto.randomUUID() });
   const refresh = useCallback(async () => {
@@ -89,6 +91,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     creation.current = { jobId: crypto.randomUUID(), requestId: crypto.randomUUID() };
   }
   function edit(job: IndependentJob) {
+    setIntakeOpen(true);
     setEditing(job);
     setForm(Object.fromEntries(Object.keys(EMPTY).map(k => [k, job[k as keyof IndependentJobDetails] || ''])) as IndependentJobDetails);
     setCustomerId(job.customerId || ''); setNewCustomer(!!job.sector && !job.customerId); setSaveCustomer(false);
@@ -98,10 +101,13 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     setSector((job.sector as IndependentSector) || ''); setSectorFields(job.sectorFields || {});
     const date = job.scheduledAt ? new Date(job.scheduledAt) : null;
     setScheduledLocal(date ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
-    document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' });
+    requestAnimationFrame(() => document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' }));
   }
   const visible = jobs.filter(job => (filter === 'all' || (filter === 'active' ? !['completed', 'cancelled'].includes(job.status) : filter === job.status))
-    && [job.title, job.customer, job.reference, job.pickup, job.destination, job.driverName].join(' ').toLowerCase().includes(search.toLowerCase()));
+    && [job.title, job.customer, job.reference, job.pickup, job.destination, job.driverName, job.jobContactName].join(' ').toLowerCase().includes(search.toLowerCase()));
+  const lanes = filter === 'active' ? ACTIVE_LANES : filter === 'all'
+    ? [...ACTIVE_LANES, { status: 'completed' as const, label: 'Completed', hint: 'Finished work' }, { status: 'cancelled' as const, label: 'Cancelled', hint: 'Retained history' }]
+    : [{ status: filter as IndependentJobStatus, label: STATUS[filter as IndependentJobStatus], hint: '' }];
   const selectedCustomer = directory?.customers.find(customer => customer.id === customerId);
   const availableSectors = newCustomer ? directory?.sectors || [] : (selectedCustomer?.sectors || []).filter(id => directory?.sectors.includes(id));
   function chooseSavedCustomer(id: string) {
@@ -130,11 +136,59 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     setParseReport(result);
     document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' });
   }
-  return <div className="space-y-4">
-    <p className="text-sm text-gray-300">Create customer jobs with sector-specific details, assign outside or linked WellBuilt drivers, and record progress. Assigning a WellBuilt driver here does not send a job to their phone app yet.</p>
+  return <div className="flex flex-col gap-4">
     {error && <div role="alert" className="rounded border border-red-700 bg-red-950 p-3 text-red-200">{error}</div>}
     {notice && <p role="status" className="text-green-300">{notice}</p>}
-    {canManageDrivers && <ExternalAssignmentDeliveryPanel jobs={[]} canManage={canWrite && canManageDrivers} rosterOnly onRosterChange={refresh} />}
+    <section aria-labelledby="dispatch-board-title" className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="dispatch-board-title" className="text-lg font-semibold text-white">Dispatch board</h2><p className="text-sm text-gray-400">Save requests now. Assign a driver when one is available. Assigned WellBuilt drivers do not receive these jobs in their phone app yet.</p></div>
+        {canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); requestAnimationFrame(() => document.getElementById('independent-intake')?.scrollIntoView({ behavior: 'smooth' })); }}>New job / paste request</button>}
+        <div className="flex flex-wrap gap-2 text-xs"><span className="rounded bg-amber-900/40 px-2 py-1 text-amber-200">{jobs.filter(job => job.status === 'unassigned').length} need drivers</span><span className="rounded bg-blue-900/40 px-2 py-1 text-blue-200">{jobs.filter(job => job.status === 'assigned').length} assigned</span><span className="rounded bg-emerald-900/40 px-2 py-1 text-emerald-200">{jobs.filter(job => job.status === 'in_progress').length} in progress</span></div>
+      </div>
+    <div className="flex flex-wrap gap-2">
+      <input aria-label="Search dispatch jobs" placeholder="Search jobs, customers, locations, drivers…" value={search} onChange={e => setSearch(e.target.value)} className={`${inputClass} flex-1 min-w-48`} />
+      <select aria-label="Job status" className={inputClass + ' !w-auto'} value={filter} onChange={e => setFilter(e.target.value)}><option value="active">Active jobs</option><option value="all">All jobs</option>{Object.entries(STATUS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
+      <button type="button" className={buttonClass} disabled={busy} onClick={() => { setError(''); void refresh().catch(e => setError(e.message)); }}>Refresh</button>
+    </div>
+    {!loaded ? <p className="text-gray-400">Loading jobs…</p> : <div className={`grid items-start gap-3 ${lanes.length > 1 ? 'xl:grid-cols-3' : ''}`}>
+      {lanes.map(lane => <section key={lane.status} aria-label={`${lane.label} jobs`} className="min-w-0 rounded-lg border border-gray-700 bg-gray-950/60 p-3">
+        <div className="mb-3 flex items-start justify-between gap-2"><div><h3 className="font-semibold text-white">{lane.label}</h3>{lane.hint && <p className="text-xs text-gray-400">{lane.hint}</p>}</div><span className="rounded bg-gray-800 px-2 py-0.5 text-sm text-gray-200">{visible.filter(job => job.status === lane.status).length}</span></div>
+        <div className="space-y-3">{!visible.some(job => job.status === lane.status) ? <p className="rounded border border-dashed border-gray-700 p-4 text-sm text-gray-500">No jobs here.</p> : sortDispatchJobs(visible.filter(job => job.status === lane.status), ['completed', 'cancelled'].includes(lane.status)).map(job => <article key={job.id} className={`min-w-0 rounded border bg-gray-800 p-4 ${job.status === 'unassigned' ? 'border-amber-700/70' : 'border-gray-700'}`}>
+      <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold text-white">{job.title}</h2><span className="text-cyan-300">{STATUS[job.status]}</span></div>
+      <p className="text-sm text-gray-300">{job.customer}{job.sector ? ` · ${sectorLabel(job.sector)}` : ''}{job.reference ? ` · ${job.reference}` : ''}</p>
+      <p className={`mt-2 text-sm font-medium ${pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? 'text-red-300' : pickupTiming(job) === 'soon' ? 'text-amber-200' : 'text-gray-300'}`}>Pickup: {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : 'Time not set'}{pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? ' · Past requested time' : ''}</p>
+      {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
+      <JobDialpadLinks job={job} directory={directory} drivers={drivers} />
+      <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
+      {(job.cargo || job.notes || (job.sector && Object.values(job.sectorFields || {}).some(Boolean))) && <details className="mt-3 rounded border border-gray-700 bg-gray-900/60 p-2 text-sm"><summary className="cursor-pointer text-cyan-200">Details and instructions</summary>
+        {job.cargo && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">Cargo: {job.cargo}</p>}
+        {job.sector && job.sectorFields && <dl className="mt-2 grid gap-1 text-xs text-gray-300">{SECTOR_FIELDS[job.sector as IndependentSector]?.map(field => job.sectorFields?.[field.key] ? <div key={field.key}><dt className="inline text-gray-400">{field.label}: </dt><dd className="inline">{job.sectorFields[field.key]}</dd></div> : null)}</dl>}
+        {job.notes && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">{job.notes}</p>}
+      </details>}
+      <p className="mt-2 text-sm text-amber-200">Driver: {job.driverName || 'Not assigned'}{job.driverSource === 'wellbuilt' ? ' · WellBuilt account' : ''}</p>
+      {canWrite && <div className="mt-3 flex flex-wrap gap-2">
+        {['unassigned', 'assigned'].includes(job.status) && <>
+          <button className={buttonClass} disabled={busy} onClick={() => edit(job)}>Edit</button>
+          {canManageDrivers && <><select aria-label={`Driver for ${job.title}`} className={inputClass + ' !w-auto'} value={assignments[job.id] || ''} onChange={e => setAssignments({ ...assignments, [job.id]: e.target.value })}>
+            <option value="">Choose driver…</option>
+            <optgroup label="Drivers without WellBuilt accounts">{drivers.filter(d => d.active).map(d => <option key={d.externalDriverId} value={`outside:${d.externalDriverId}`}>{d.displayName}</option>)}</optgroup>
+            <optgroup label="Linked WellBuilt accounts">{wbDrivers.map(d => <option key={d.driverId} value={`wellbuilt:${d.driverId}`}>{d.displayName}</option>)}</optgroup>
+          </select>
+          <button disabled={busy || !assignments[job.id]} className={buttonClass} onClick={() => {
+            const [kind, id] = (assignments[job.id] || '').split(':');
+            if (!id) return;
+            void run({ op: 'assign', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(),
+              ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) });
+          }}>{job.externalDriverId || job.wbDriverId ? 'Reassign' : 'Assign'}</button></>}
+        </>}
+        {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
+        {!['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
+      </div>}
+      <p className="mt-2 text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
+    </article>)}</div>
+      </section>)}
+    </div>}
+    </section>
+    <div id="independent-intake" hidden={!intakeOpen} className="space-y-4">
     {canWrite && <section className="rounded border border-cyan-800 bg-cyan-950/20 p-4" aria-labelledby="paste-request-title">
       <h2 id="paste-request-title" className="font-semibold text-cyan-300">Paste a job request</h2>
       <p className="mt-1 text-sm text-gray-300">Paste a text or WhatsApp request, then review the filled form. Nothing is saved or sent until you create the job. Phone requests can be entered directly below.</p>
@@ -158,9 +212,12 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       void run({ op: editing ? 'update' : 'create', jobId: editing?.id || creation.current.jobId,
         requestId: editing ? crypto.randomUUID() : creation.current.requestId,
         ...(editing ? { expectedRevision: editing.revision } : {}),
-        ...(!editing && newCustomer && saveCustomer ? { saveCustomer: true } : {}), job }, resetForm);
+        ...(!editing && newCustomer && saveCustomer ? { saveCustomer: true } : {}), job }, () => {
+          resetForm();
+          requestAnimationFrame(() => document.getElementById('dispatch-board-title')?.scrollIntoView({ behavior: 'smooth' }));
+        });
     }}>
-      <h2 className="mb-3 font-semibold text-cyan-300">{editing ? 'Edit job' : 'New Independent Dispatch job'}</h2>
+      <div className="mb-3 flex items-center justify-between gap-2"><h2 className="font-semibold text-cyan-300">{editing ? 'Edit job' : 'New Independent Dispatch job'}</h2><button type="button" className="text-sm text-gray-300 underline" onClick={() => setIntakeOpen(false)}>Hide intake</button></div>
       <fieldset disabled={busy || !loaded} className="grid gap-3 md:grid-cols-2">
         {(!editing || editing.sector) ? <>
           <div className="text-xs text-gray-300">Customer *<select aria-label="Customer" required value={newCustomer ? '__new__' : customerId} className={inputClass} onChange={event => {
@@ -223,41 +280,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           <button type="button" className="text-sm text-gray-300" onClick={resetForm}>Clear / new job</button></div>
       </fieldset>
     </form>}
-    <div className="flex flex-wrap gap-2">
-      <input aria-label="Search dispatch jobs" placeholder="Search jobs, customers, locations, drivers…" value={search} onChange={e => setSearch(e.target.value)} className={`${inputClass} flex-1 min-w-48`} />
-      <select aria-label="Job status" className={inputClass + ' !w-auto'} value={filter} onChange={e => setFilter(e.target.value)}><option value="active">Active jobs</option><option value="all">All jobs</option>{Object.entries(STATUS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
-      <button type="button" className={buttonClass} disabled={busy} onClick={() => { setError(''); void refresh().catch(e => setError(e.message)); }}>Refresh</button>
     </div>
-    {!loaded ? <p className="text-gray-400">Loading jobs…</p> : !visible.length ? <p className="text-gray-400">No matching jobs.</p> : visible.map(job => <article key={job.id} className="rounded border border-gray-700 bg-gray-800 p-4">
-      <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold text-white">{job.title}</h2><span className="text-cyan-300">{STATUS[job.status]}</span></div>
-      <p className="text-sm text-gray-300">{job.customer}{job.sector ? ` · ${sectorLabel(job.sector)}` : ''}{job.reference ? ` · ${job.reference}` : ''}</p>
-      {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
-      <JobDialpadLinks job={job} directory={directory} drivers={drivers} />
-      <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
-      {job.cargo && <p className="mt-2 whitespace-pre-wrap text-sm text-gray-300">Cargo: {job.cargo}</p>}
-      {job.sector && job.sectorFields && <dl className="mt-2 grid gap-1 text-xs text-gray-300 md:grid-cols-2">{SECTOR_FIELDS[job.sector as IndependentSector]?.map(field => job.sectorFields?.[field.key] ? <div key={field.key}><dt className="inline text-gray-400">{field.label}: </dt><dd className="inline">{job.sectorFields[field.key]}</dd></div> : null)}</dl>}
-      {job.scheduledAt && <p className="text-sm text-gray-300">Scheduled: {new Date(job.scheduledAt).toLocaleString()}</p>}
-      {job.notes && <p className="mt-2 whitespace-pre-wrap break-words text-sm text-gray-300">{job.notes}</p>}
-      <p className="mt-2 text-sm text-amber-200">Driver: {job.driverName || 'Not assigned'}{job.driverSource === 'wellbuilt' ? ' · WellBuilt account' : ''}</p>
-      {canWrite && <div className="mt-3 flex flex-wrap gap-2">
-        {['unassigned', 'assigned'].includes(job.status) && <>
-          <button className={buttonClass} disabled={busy} onClick={() => edit(job)}>Edit</button>
-          {canManageDrivers && <><select aria-label={`Driver for ${job.title}`} className={inputClass + ' !w-auto'} value={assignments[job.id] || ''} onChange={e => setAssignments({ ...assignments, [job.id]: e.target.value })}>
-            <option value="">Choose driver…</option>
-            <optgroup label="Drivers without WellBuilt accounts">{drivers.filter(d => d.active).map(d => <option key={d.externalDriverId} value={`outside:${d.externalDriverId}`}>{d.displayName}</option>)}</optgroup>
-            <optgroup label="Linked WellBuilt accounts">{wbDrivers.map(d => <option key={d.driverId} value={`wellbuilt:${d.driverId}`}>{d.displayName}</option>)}</optgroup>
-          </select>
-          <button disabled={busy || !assignments[job.id]} className={buttonClass} onClick={() => {
-            const [kind, id] = (assignments[job.id] || '').split(':');
-            if (!id) return;
-            void run({ op: 'assign', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(),
-              ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) });
-          }}>{job.externalDriverId || job.wbDriverId ? 'Reassign' : 'Assign'}</button></>}
-        </>}
-        {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
-        {!['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
-      </div>}
-      <p className="mt-2 text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
-    </article>)}
+    {canManageDrivers && <div><ExternalAssignmentDeliveryPanel jobs={[]} canManage={canWrite && canManageDrivers} rosterOnly onRosterChange={refresh} /></div>}
   </div>;
 }
