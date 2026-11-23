@@ -13,6 +13,7 @@ import { driverAvailability } from '@/lib/independentDriverAvailability';
 import { listIndependentDriverProfiles, type IndependentDriverProfile } from '@/lib/independentDriverProfiles';
 import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
+import { normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
@@ -185,8 +186,13 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     });
   }
   function crewRow(job: IndependentJob, driver: ReturnType<typeof jobCrew>[number]) {
+    const missingPhone = driver.source === 'outside' && !normalizeWhatsAppNumber(
+      drivers.find(profile => `outside:${profile.externalDriverId}` === driver.key)?.phoneE164);
     return <div key={driver.key} className="min-h-12 border-t border-gray-700/70 py-1 first:border-t-0">
-      <p className="truncate text-xs text-white" title={driver.name}>{driver.name}{driver.source === 'wellbuilt' ? ' · WB' : ''}</p>
+      <p className={`flex flex-wrap items-center gap-1 text-xs ${missingPhone ? 'text-red-300' : 'text-white'}`}>
+        <span className="min-w-0 truncate" title={driver.name}>{driver.name}{driver.source === 'wellbuilt' ? ' · WB' : ''}</span>
+        {missingPhone && <span className="rounded border border-red-600 bg-red-950/80 px-1 py-0.5 text-[10px] font-semibold text-red-200">No Contact Info</span>}
+      </p>
       {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
       {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
         <select aria-label={`Assignment shift for ${driver.name} on ${job.title}`} value={crewShift(driver)} disabled={busy}
@@ -277,7 +283,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {job.requestedDriverCount && <p className="text-sm text-amber-200">Drivers requested: {job.requestedDriverCount} · Assigned: {jobCrew(job).length}{jobCrew(job).length < job.requestedDriverCount ? ` · ${job.requestedDriverCount - jobCrew(job).length} still needed` : ''}</p>}
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} />
-      {canWrite && <IndependentWhatsAppLinks job={job} drivers={drivers} />}
+      {canWrite && <IndependentWhatsAppLinks job={job} />}
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
       {(job.cargo || job.notes || (job.sector && Object.values(job.sectorFields || {}).some(Boolean))) && <details className="mt-3 rounded border border-gray-700 bg-gray-900/60 p-2 text-sm"><summary className="cursor-pointer text-cyan-200">Details and instructions</summary>
         {job.cargo && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">Cargo: {job.cargo}</p>}
