@@ -9,13 +9,19 @@ function Stop-WatchdogBrowser {
   $added=$false
   foreach($item in $all){if($ids.Contains([int]$item.ParentProcessId) -and $ids.Add([int]$item.ProcessId)){$added=$true}}
  } while($added)
+ $stopping=@()
  foreach($item in @($all | Where-Object {$ids.Contains([int]$_.ProcessId)})){
   $process=Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue
   if($process -and -not $process.HasExited){
    Write-StartupPhase ('stopping Watchdog profile process '+$item.ProcessId)
+   $stopping+=,$process
    Stop-Process -Id $item.ProcessId -Force -ErrorAction Stop
-   if(-not $process.WaitForExit(5000)){throw ('Watchdog profile process did not stop: '+$item.ProcessId)}
   }
+ }
+ # Signal the entire verified tree before waiting. A parent can remain pending
+ # while its children still hold browser resources on a memory-starved host.
+ foreach($process in $stopping){
+  if(-not $process.WaitForExit(30000)){throw ('Watchdog profile process did not stop: '+$process.Id)}
  }
  Write-StartupPhase ('Watchdog profile cleanup verified; matched roots '+$roots.Count)
 }
