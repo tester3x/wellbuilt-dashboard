@@ -18,7 +18,6 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
   const [profiles, setProfiles] = useState<IndependentDriverProfile[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedKey, setSelectedKey] = useState('');
-  const [hasWellBuiltAccount, setHasWellBuiltAccount] = useState(false);
   const [outsideDraft, setOutsideDraft] = useState({ name: '', active: true, shiftPreference: 'unset' as ExternalDriver['shiftPreference'] });
   const [form, setForm] = useState<IndependentDriverProfileInput | null>(null);
   const [addCustomerId, setAddCustomerId] = useState('');
@@ -61,18 +60,13 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
     {open && <div className="mt-3 space-y-3">
       <p className="text-xs text-gray-300">These notes help dispatch plan work. Pending review does not block a driver, change operator eligibility, or notify management. Confirm route timing before assigning a side job.</p>
       {message && <p role="status" className="rounded bg-gray-900 p-2 text-sm text-gray-200">{message}</p>}
-      <label className="flex items-center gap-2 text-sm text-gray-200"><input type="checkbox" checked={hasWellBuiltAccount} onChange={event => {
-        setHasWellBuiltAccount(event.target.checked); chooseDriver('');
-      }} />Has a WellBuilt account</label>
-      {hasWellBuiltAccount && wbDrivers.length === 0 && <p className="text-xs text-amber-200">No linked WellBuilt drivers are available for this dispatch company yet.</p>}
       <div className="flex flex-wrap items-end gap-2"><label className="min-w-52 flex-1 text-xs text-gray-300">Driver
         <select aria-label="Driver profile" className={inputClass} disabled={!loaded} value={selectedKey} onChange={event => chooseDriver(event.target.value)}>
           <option value="">Choose driver…</option>
-          {roster.filter(driver => driver.key.startsWith(hasWellBuiltAccount ? 'wellbuilt:' : 'outside:')).map(driver =>
-            <option key={driver.key} value={driver.key}>{driver.name}{driver.active ? '' : ' · inactive'}</option>)}
-          {isNewOutside && <option value={selectedKey}>{outsideDraft.name || 'New outside driver'}</option>}
+          {roster.map(driver => <option key={driver.key} value={driver.key}>{driver.name} · {driver.key.startsWith('wellbuilt:') ? 'WellBuilt' : 'Independent'}{driver.active ? '' : ' · inactive'}</option>)}
+          {isNewOutside && <option value={selectedKey}>{outsideDraft.name || 'New driver'} · Independent</option>}
         </select>
-      </label>{!hasWellBuiltAccount && <button type="button" disabled={!loaded} className="rounded bg-amber-700 px-3 py-2 text-sm text-white disabled:opacity-40" onClick={addOutsideDriver}>Add outside driver</button>}</div>
+      </label><button type="button" disabled={!loaded} className="rounded bg-amber-700 px-3 py-2 text-sm text-white disabled:opacity-40" onClick={addOutsideDriver}>Add driver</button></div>
       {form && (selected || isNewOutside) && <form className="space-y-3 rounded border border-gray-700 p-3" onSubmit={event => {
         event.preventDefault(); setBusy(true); setMessage('');
         void (async () => {
@@ -92,8 +86,10 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
         })().catch(error => setMessage(error instanceof Error ? error.message : 'Unable to save driver profile.'))
           .finally(() => setBusy(false));
       }}>
-        <h3 className="font-medium text-white">{selected?.name || 'New outside driver'}</h3>
-        {!hasWellBuiltAccount && <div className="grid gap-3 md:grid-cols-3">
+        <div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-white">{selected?.name || 'New driver'}</h3>
+          <span className="rounded border border-gray-600 px-2 py-0.5 text-xs text-gray-300">{selectedKey.startsWith('wellbuilt:') ? 'Linked WellBuilt account' : 'Independent driver'}</span>
+        </div>
+        {selectedKey.startsWith('outside:') && <div className="grid gap-3 md:grid-cols-3">
           <label className="text-xs text-gray-300">Driver name<input aria-label="Driver name" required maxLength={120} className={inputClass} value={outsideDraft.name}
             onChange={event => setOutsideDraft({ ...outsideDraft, name: event.target.value })} /></label>
           <label className="text-xs text-gray-300">Usual shift<select aria-label="Usual shift" className={inputClass} value={outsideDraft.shiftPreference}
@@ -129,7 +125,7 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
               <option value="ask">Check with dispatch</option><option value="yes">Can take side jobs when they fit</option><option value="no">Standing work only</option>
             </select>
           </label>
-          {hasWellBuiltAccount && <label className="text-xs text-gray-300">Usual shift
+          {selectedKey.startsWith('wellbuilt:') && <label className="text-xs text-gray-300">Usual shift
             <select aria-label="Usual shift" className={inputClass} value={form.shiftPreference || 'unset'}
               onChange={event => setForm({ ...form, shiftPreference: event.target.value as IndependentDriverProfileInput['shiftPreference'] })}>
               <option value="unset">Not set</option><option value="day">Day</option><option value="night">Night</option><option value="either">Either</option>

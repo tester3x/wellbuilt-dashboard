@@ -37,10 +37,12 @@ try {
   const page = await browser.newPage();
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
-  await page.getByRole('checkbox', { name: 'Has a WellBuilt account' }).waitFor();
+  await page.getByRole('combobox', { name: 'Driver profile' }).waitFor();
+  assert.equal(await page.getByRole('checkbox', { name: 'Has a WellBuilt account' }).count(), 0, 'account source does not filter the roster');
   assert.equal(await page.getByRole('textbox', { name: 'Driver phone (international format)' }).count(), 0, 'no driver selected yet');
-  assert.equal(await page.getByRole('combobox', { name: 'Driver profile' }).locator('option').count(), 2, 'outside drivers only');
-  await page.getByRole('button', { name: 'Add outside driver' }).click();
+  assert.equal(await page.getByRole('combobox', { name: 'Driver profile' }).locator('option').count(), 3, 'outside and WellBuilt drivers share one list');
+  await page.getByRole('button', { name: 'Add driver' }).click();
+  await page.getByText('Independent driver', { exact: true }).waitFor();
   await page.getByRole('textbox', { name: 'Driver name' }).fill('Michael Test');
   await page.getByRole('combobox', { name: 'Usual shift' }).selectOption('night');
   await page.getByRole('textbox', { name: 'Driver phone (international format)' }).fill('+17015550124');
@@ -58,13 +60,12 @@ try {
   await page.getByRole('combobox', { name: 'Usual shift' }).selectOption('day');
   await page.getByRole('checkbox', { name: 'Active for new assignments' }).uncheck();
   await page.getByRole('button', { name: 'Save driver profile' }).click();
-  await page.waitForFunction(id => document.querySelector(`select[aria-label="Driver profile"] option[value="outside:${id}"]`)?.textContent === 'Michael T. · inactive', newDriverId);
+  await page.waitForFunction(id => document.querySelector(`select[aria-label="Driver profile"] option[value="outside:${id}"]`)?.textContent === 'Michael T. · Independent · inactive', newDriverId);
   assert.equal(await page.evaluate(id => window.roster.filter(driver => driver.externalDriverId === id).length, newDriverId), 1, 'editing keeps the roster ID');
   assert.equal(await page.evaluate(id => window.roster.find(driver => driver.externalDriverId === id)?.shiftPreference, newDriverId), 'day');
-  await page.getByRole('checkbox', { name: 'Has a WellBuilt account' }).check();
-  assert.equal(await page.getByRole('button', { name: 'Add outside driver' }).count(), 0);
-  assert.equal(await page.getByRole('combobox', { name: 'Driver profile' }).locator('option').count(), 2, 'linked drivers only');
   await page.getByRole('combobox', { name: 'Driver profile' }).selectOption('wellbuilt:wb-a');
+  await page.getByText('Linked WellBuilt account', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Add driver' }).count(), 1, 'add action stays available beside the shared list');
   await page.getByRole('textbox', { name: 'Driver phone (international format)' }).fill('+17015550123');
   await page.getByRole('textbox', { name: 'WhatsApp name (optional)' }).fill('Marcial WA');
   await page.getByRole('combobox', { name: 'Usual shift' }).selectOption('day');
@@ -75,7 +76,6 @@ try {
   assert.deepEqual(await page.evaluate(() => { const profile = window.savedProfiles.find(item => item.driverKey === 'wellbuilt:wb-a'); return { key: profile.driverKey, shift: profile.shiftPreference,
     phone: profile.phoneE164, whatsappName: profile.whatsappName }; }),
     { key: 'wellbuilt:wb-a', shift: 'day', phone: '+17015550123', whatsappName: 'Marcial WA' });
-  await page.getByRole('checkbox', { name: 'Has a WellBuilt account' }).uncheck();
   await page.getByRole('combobox', { name: 'Driver profile' }).selectOption('outside:outside-a');
   assert.equal(await page.getByRole('combobox', { name: 'Usual shift' }).count(), 1, 'outside shift uses the same form');
   assert.deepEqual(errors, []);
@@ -89,5 +89,5 @@ try {
     assert.deepEqual(routeErrors, []);
     await routePage.close();
   }
-  console.log('Independent Dispatch driver profiles: one form for new and existing outside or linked WellBuilt drivers.');
+  console.log('Independent Dispatch driver profiles: one roster and form, source shown in each profile, separate trusted driver records retained.');
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
