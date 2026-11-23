@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ReceiverRecovery} from './recovery.mjs';
+import {ReceiverRecovery,restartClosedReceiver} from './recovery.mjs';
 import {collectReceiver} from './receiver-history.mjs';
+
+test('replacement browser waits for confirmed close; failed and stalled closes restart the worker instead',async()=>{
+ let release;const calls=[];
+ const pending=restartClosedReceiver({destroy:()=>new Promise(resolve=>release=resolve)},
+  {connect:()=>calls.push('open'),restartWorker:()=>calls.push('worker'),timeoutMs:1000});
+ await Promise.resolve();assert.deepEqual(calls,[]);release();assert.equal(await pending,true);assert.deepEqual(calls,['open']);
+ for(const destroy of [()=>{throw Error('disconnected browser')},()=>new Promise(()=>{})]){
+  calls.length=0;
+  assert.equal(await restartClosedReceiver({destroy},{connect:()=>calls.push('open'),restartWorker:()=>calls.push('worker'),timeoutMs:10}),false);
+  assert.deepEqual(calls,['worker']);
+ }
+});
 
 test('restart, Wi-Fi outage and stale receiver recover with bounded retries; manual stop and QR are respected', async () => {
   let now=1000000, connected=true, calls=0, state={connect:true,state:'Stopped'};

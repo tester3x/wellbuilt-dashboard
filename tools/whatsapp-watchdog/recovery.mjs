@@ -1,3 +1,21 @@
+// A timed-out browser close is not permission to open the same profile again.
+// The supervisor can clean up the exact profile tree after the worker exits.
+export async function restartClosedReceiver(old, {connect, restartWorker, timeoutMs=15000}) {
+  if (old) {
+    let timer;
+    try {
+      await Promise.race([Promise.resolve().then(()=>old.destroy()),new Promise((_,reject)=>{
+        timer=setTimeout(()=>reject(Error('Browser close timed out')),timeoutMs);
+      })]);
+    } catch {
+      await restartWorker();
+      return false;
+    } finally { clearTimeout(timer); }
+  }
+  await connect();
+  return true;
+}
+
 export class ReceiverRecovery {
   constructor({snapshot, online, restart, now = Date.now}) {
     Object.assign(this, {snapshot, online, restart, now});

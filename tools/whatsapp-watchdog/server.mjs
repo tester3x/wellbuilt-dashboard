@@ -17,7 +17,7 @@ import {PhotoInbox} from './photo-inbox.mjs';
 import {WorkerCoordinator,loadWorkerConfig} from './worker-coordinator.mjs';
 import {dismissReview} from './dismiss-review.mjs';
 import {createProfileAuth,closeRestoredReceiverTabs} from './profile-auth.mjs';
-import {ReceiverRecovery} from './recovery.mjs';
+import {ReceiverRecovery,restartClosedReceiver} from './recovery.mjs';
 import {collectReceiver} from './receiver-history.mjs';
 import {finishSyncedLogin} from './receiver-ready.mjs';
 import {DwyerPhotoIntake,downloadDwyerMedia,isTallgrassChannel} from './dwyer-photo.mjs';
@@ -38,7 +38,7 @@ let channels=existsSync(configFile)?JSON.parse(readFileSync(configFile,'utf8')):
 queue.save();
 queue.data.receiverControl ??= {connect:channels.length>0, watching:channels.length>0};
 const control=queue.data.receiverControl;queue.save();
-let client=null,qr='',state='Stopped',paused=!control.watching,error='',chats=[],loadingGroups=false;
+let client=null,qr='',state='Stopped',paused=!control.watching,error='',chats=[],loadingGroups=false,restartingReceiver=false;
 function saveControl(connect,watching){Object.assign(control,{connect,watching});queue.save();}
 async function loadGroups(){if(loadingGroups||!client||!['Connected','Syncing WhatsApp'].includes(state))throw Error('WhatsApp is not connected yet. Current state: '+state);loadingGroups=true;try{let available;try{available=await Promise.race([client.getChats(),new Promise((_,reject)=>setTimeout(()=>reject(Error('Chat list timed out')),8000))]);}catch{available=await client.pupPage.evaluate(()=>window.require('WAWebCollections').Chat.getModelsArray().filter(c=>c.id?.server==='g.us').map(c=>({id:{_serialized:c.id._serialized},name:c.name||c.formattedTitle||c.id._serialized,isGroup:true})));}chats=available.filter(c=>c.isGroup||c.id?._serialized?.endsWith('@g.us')).map(c=>({id:c.id._serialized,name:c.name||c.id._serialized}));error=chats.length?'':'WhatsApp is syncing groups; retrying shortly.';}catch(e){error='Group list is not ready; retrying shortly. '+String(e?.message||e);}finally{loadingGroups=false;}}
 const groupRetry=setInterval(()=>{if(['Connected','Syncing WhatsApp'].includes(state)&&!chats.length)void loadGroups().catch(e=>{error=e.message;});},10000);groupRetry.unref();
@@ -102,7 +102,7 @@ async function capture(m,deleted=false){const channelId=m.fromMe?m.to:m.from;if(
   return;
  }
  queue.ingest({id:m.id._serialized||m.id.id,channel:configured.id,chat:header(m.timestamp*1000,m.author||m.from,m.body||''),options:configured.options,deleted,senderId});}
-async function connect(){if(client)return;const {Client,LocalAuth}=require('whatsapp-web.js');
+async function connect(){if(client||restartingReceiver)return;const {Client,LocalAuth}=require('whatsapp-web.js');
  client=new Client({userAgent:false,authStrategy:createProfileAuth(LocalAuth,{dataPath:path.join(directory,'session')},()=>console.log('[receiver-auth] WhatsApp logged out; preserving live browser profile for QR relinking.')),puppeteer:{headless:true,timeout:120000,executablePath:process.env.WBC_CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}});
  const current=client;let authenticated=false;state='Connecting';error='';
  // Startup stages contain no messages or credentials; distinguish a browser
@@ -121,12 +121,15 @@ async function connect(){if(client)return;const {Client,LocalAuth}=require('what
  client.initialize().catch(e=>{if(client===current){error=String(e?.message||e);state='Connection failed';}});
 }
 async function restartReceiver(){
+ if(restartingReceiver)return;
+ restartingReceiver=true;
  const old=client;client=null;polling=false;loadingGroups=false;
- if(old){
-  try{await Promise.race([old.destroy(),new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Browser close timed out')),15000);timer.unref();})]);}
-  catch(e){const process=old.pupBrowser?.process();if(process)process.kill();console.log('[receiver-recovery] browser close fallback');}
- }
- if(control.connect)await connect();
+ try{
+  await restartClosedReceiver(old,{
+   connect:async()=>{restartingReceiver=false;if(control.connect)await connect();},
+   restartWorker:()=>{console.log('[receiver-recovery] browser close unconfirmed; exiting for supervisor profile cleanup');process.exit(1);}
+  });
+ }finally{restartingReceiver=false;}
 }
 const recovery=new ReceiverRecovery({snapshot:()=>({state,lastReceiverCheck,connect:control.connect}),
  online:async()=>{try{const response=await fetch('https://web.whatsapp.com/',{method:'HEAD',signal:AbortSignal.timeout(8000)});return response.ok;}catch{return false;}},
