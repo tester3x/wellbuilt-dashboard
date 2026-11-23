@@ -29,6 +29,8 @@ export async function independentDispatchJobs(data){
  return {ok:true,job};
 }`;
 const bundle = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {IndependentDispatchBoard} from './src/components/IndependentDispatchBoard';createRoot(document.getElementById('root')).render(<IndependentDispatchBoard companyId="fixture" canWrite={true} canManageDrivers={true}/>);`, loader: 'tsx', resolveDir: process.cwd() }, bundle: true, write: false, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, plugins: [{ name: 'fixture', setup(b) {
+  b.onResolve({ filter: /^next\/link$/ }, () => ({ path: 'next/link', namespace: 'fixture-link' }));
+  b.onLoad({ filter: /.*/, namespace: 'fixture-link' }, () => ({ contents: `import React from 'react';export default function Link({href,children,...props}){return React.createElement('a',{href,...props},children)}`, loader: 'js', resolveDir: process.cwd() }));
   b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery|independentDriverProfiles)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
     : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],communicationChannels:['sms'],dispatchPhoneE164:'+17015550100',customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],contacts:[{id:'john',name:'John Wick',role:'Company man',phoneE164:'+17015550112'},{id:'jane',name:'Jane Doe',role:'Lead',phoneE164:'+17015550113'}],workCategories:[{id:'rig-work',name:'Rig Work',sector:'water-hauling',sourceChannels:['Rig Work chat'],assets:['Rig 429']}],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']},{id:'bob',name:"Bob's Hot Shot LLC",alternateNames:["Bob's",'BHS'],phoneE164:'',active:true,sectors:['hot-shot'],jobNames:[],pickupLocations:[],deliveryLocations:[]}]});`
@@ -46,6 +48,7 @@ try {
   const errors=[]; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.getByRole('heading',{name:'Dispatch board'}).waitFor();
+  assert.equal(await page.getByRole('link',{name:'Driver profiles'}).getAttribute('href'),'/dispatch/independent/drivers/');
   await page.getByText('No active jobs. New requests will appear here.').waitFor();
   assert.equal(await page.getByRole('region',{name:'Needs a driver jobs'}).count(),0,'empty waiting queue does not reserve board space');
   assert.equal(await page.getByRole('heading',{name:'New Independent Dispatch job'}).count(),0,'intake starts collapsed so the board is visible first');
@@ -180,9 +183,17 @@ try {
   assert.equal(await dialog.isVisible(),false,'editing a waiting job closes the modal so the form is usable');
   await page.getByRole('button',{name:'Clear / new job'}).click();
   await queue.getByRole('button',{name:/Needs a driver/}).click();
-  await card.getByText('Choose drivers').click();
+  const waitingPicker = card.locator('details').filter({hasText:'Choose drivers'});
+  if (!await waitingPicker.evaluate(details => details.open)) await waitingPicker.locator('summary').click();
+  assert.equal(await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).inputValue(),'night');
+  await card.getByRole('group',{name:'Night Shift candidates'}).getByText('Driver B').waitFor();
+  await card.getByRole('checkbox',{name:'Choose Nitto–Anthony (Marcial Lebaron) for Pipe run water-hauling'}).locator('..').getByText('WB',{exact:true}).waitFor();
   await card.getByRole('checkbox',{name:'Choose Outside Driver for Pipe run water-hauling'}).check();
   await card.getByRole('checkbox',{name:'Choose Driver B for Pipe run water-hauling'}).check();
+  await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).selectOption('day');
+  await card.getByRole('group',{name:'Day Shift candidates'}).getByText('Driver B').waitFor();
+  await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).selectOption('night');
+  await card.getByRole('group',{name:'Night Shift candidates'}).getByText('Driver B').waitFor();
   assert.equal(await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).inputValue(),'night','saved night preference overrides the job day shift');
   await card.getByRole('button',{name:'Assign selected drivers'}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
@@ -204,11 +215,16 @@ try {
     `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
   await assignedCard.getByTitle('Driver B').waitFor();
+  assert.equal(await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).inputValue(),'night');
   await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('day');
   await assignedCard.getByLabel('2 day shift drivers').waitFor();
   await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('night');
   await assignedCard.getByLabel('1 night shift drivers').waitFor();
   await assignedCard.getByText('Choose drivers').click();
+  assert.ok(await assignedCard.locator('details').filter({hasText:'Choose drivers'}).evaluate(details => details.getBoundingClientRect().width <= 160),
+    'the closed picker stays compact even when the candidate list is open');
+  assert.ok(await assignedCard.getByText('HOS unverified').evaluate(label => label.tagName === 'P' && label.nextElementSibling?.querySelector('details')),
+    'HOS notice is independent of the driver picker');
   assert.ok(await assignedCard.getByRole('button',{name:'Add selected drivers'}).evaluate(button => button.getBoundingClientRect().height < 60),
     'opening the picker must not stretch the assignment button to the picker height');
   assert.ok(await assignedCard.getByRole('button',{name:'Mark started'}).evaluate(button => button.getBoundingClientRect().height < 60),

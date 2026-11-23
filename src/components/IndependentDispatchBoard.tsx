@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { independentDispatchJobs, type IndependentJob, type IndependentJobDetails, type IndependentJobStatus, type LinkedWellBuiltDriver } from '@/lib/independentDispatchJobs';
 import { listExternalDrivers, type ExternalDriver } from '@/lib/externalAssignmentDelivery';
 import { ExternalAssignmentDeliveryPanel } from './ExternalAssignmentDeliveryPanel';
@@ -165,9 +166,9 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   function crewRow(job: IndependentJob, driver: ReturnType<typeof jobCrew>[number]) {
     return <div key={driver.key} className="min-h-12 border-t border-gray-700/70 py-1 first:border-t-0">
       <p className="truncate text-xs text-white" title={driver.name}>{driver.name}{driver.source === 'wellbuilt' ? ' · WB' : ''}</p>
-      {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Shown by profile preference; assignment shift needs confirmation</p>}
+      {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
       {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
-        <select aria-label={`Assignment shift for ${driver.name} on ${job.title}`} value={driver.shift || ''} disabled={busy}
+        <select aria-label={`Assignment shift for ${driver.name} on ${job.title}`} value={crewShift(driver)} disabled={busy}
           className="rounded border border-gray-600 bg-gray-950 px-1 py-0.5 text-xs text-white"
           onChange={event => void run({ op: 'setDriverShift', jobId: job.id, expectedRevision: job.revision,
             requestId: crypto.randomUUID(), driverKey: driver.key, shift: event.target.value })}>
@@ -229,7 +230,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     <section aria-labelledby="dispatch-board-title" className="space-y-4">
     <div data-testid="independent-board-toolbar" className="sticky z-30 space-y-3 rounded-lg border border-gray-700 bg-gray-900/95 p-3 shadow-lg backdrop-blur" style={{ top: appHeaderHeight }}>
       <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="dispatch-board-title" className="text-lg font-semibold text-white">Dispatch board</h2><p className="text-sm text-gray-400">Save requests now. Assign a driver when one is available. Assigned WellBuilt drivers do not receive these jobs in their phone app yet.</p></div>
-        <div className="flex flex-wrap items-center gap-3">{canManageDrivers && <a href="/dispatch/independent/drivers/" className="text-sm text-cyan-300 underline">Driver profiles</a>}{canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); requestAnimationFrame(() => document.getElementById('independent-intake')?.scrollIntoView({ behavior: 'smooth' })); }}>New job / paste request</button>}</div>
+        <div className="flex flex-wrap items-center gap-3">{canManageDrivers && <Link href="/dispatch/independent/drivers/" className="text-sm text-cyan-300 underline">Driver profiles</Link>}{canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); requestAnimationFrame(() => document.getElementById('independent-intake')?.scrollIntoView({ behavior: 'smooth' })); }}>New job / paste request</button>}</div>
         <div className="flex flex-wrap gap-2 text-xs"><span className="rounded bg-amber-900/40 px-2 py-1 text-amber-200">{jobs.filter(job => job.status === 'unassigned').length} need drivers</span><span className="rounded bg-blue-900/40 px-2 py-1 text-blue-200">{jobs.filter(job => job.status === 'assigned').length} assigned</span><span className="rounded bg-emerald-900/40 px-2 py-1 text-emerald-200">{jobs.filter(job => job.status === 'in_progress').length} in progress</span></div>
       </div>
     <div className="flex flex-wrap gap-2">
@@ -270,13 +271,13 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           {jobCrew(job).filter(driver => !crewShift(driver)).map(driver => crewRow(job, driver))}
         </div>}
       </> : 'Needs a driver'}</div>
-      {canWrite && <div className="mt-3 flex flex-wrap items-start gap-2">
+      {canWrite && canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <p className="mt-3 text-xs text-gray-400" title="ID has no verified HOS feed; dispatch decides whether to assign.">HOS unverified</p>}
+      {canWrite && <div className="relative mt-2 flex flex-wrap items-center gap-2">
         {['unassigned', 'assigned', 'in_progress'].includes(job.status) && <>
           {['unassigned', 'assigned'].includes(job.status) && <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>}
           {canManageDrivers && <><IndependentDriverPicker job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
             now={availabilityNow} selected={assignments[job.id] || {}} disabled={busy}
             onChange={next => setAssignments(current => ({ ...current, [job.id]: next }))} />
-          <span className="self-center text-xs text-gray-400" title="ID has no verified HOS feed; dispatch decides whether to assign.">HOS unverified</span>
           <button disabled={busy || !canAddSelection(job)} className={buttonClass} onClick={() => {
             const selected = Object.entries(assignments[job.id] || {}).map(([key, shift]) => ({ key, shift }));
             if (!selected.length) return;

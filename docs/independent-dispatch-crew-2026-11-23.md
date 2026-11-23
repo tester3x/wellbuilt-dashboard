@@ -8,17 +8,25 @@ fills it only from an explicit staffing request; tank count, volume, and a
 completion deadline do not imply a crew size. Dispatch reviews and may edit the
 count before saving. Job cards show assigned drivers against the requested count
 without blocking a partial crew or forcing one for a fill-by order.
-The board picker has checkboxes and an individual shift selector for each checked
-driver. Add/Assign saves the selected crew in one transaction and one job revision;
+The board picker groups candidates by effective Day, Night, or unset shift. Each
+row shows the shift choice before selection and an Outside or WB badge. Changing
+that choice on an unselected row selects the driver; changing a selected row
+moves it between shift groups. Add/Assign saves the selected crew in one
+transaction and one job revision;
 if any selection is unavailable, none of the checked drivers is added.
 Assigned crews appear in equal-width Day Shift and Night Shift list boxes on the
 job card, with each box's count at the right of its header. Each list shows about
 three drivers before scrolling. An older assignment without a saved shift appears
 under its driver's Day or Night profile preference with a review note. If no
 preference exists, it remains in a compact shift-review row outside the two lists.
-Opening the picker does not stretch the job action buttons.
-Dispatch can confirm or change each assignment's Day or Night shift directly on
-the card; that choice is saved with the job and recorded in its audit event.
+The picker is a compact control in the action row; its bounded panel opens over
+the card below the entire action row, and availability details wrap in their own
+column beside each driver. The HOS notice sits above the actions. Opening the
+picker does not stretch or cover the job action buttons.
+The assignment shift selector on the card shows the saved shift or, for an older
+unset assignment, the driver's profile Day/Night default. Dispatch can change
+it directly on the card; a change is saved with the job and recorded in its
+audit event. The Driver profiles link uses in-app route navigation.
 The job event records the before and after roster. Existing single-driver jobs
 are read as one-member crews and are upgraded when their roster changes.
 
