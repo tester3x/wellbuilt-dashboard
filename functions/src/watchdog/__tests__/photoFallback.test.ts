@@ -58,3 +58,31 @@ test('audit writes do not recursively retrigger themselves for the same result',
  expect(fallbackAuditChanged({...result,model:'model',checkedAt:1},result)).toBe(false);
  expect(fallbackAuditChanged({state:'running'},result)).toBe(true);
 });
+
+const unidentified={...item,rows:[{...item.rows[0],wellName:'Well needs review',issues:[
+ 'Compare the photo with any separate text report for this haul',
+ 'Confirm the well. The caption and gauge tags did not identify Dwyer',
+ 'WTR 3 (LT-5103) bottom level needs verification',
+ 'Resolve conflicting haul evidence or confirm the Dwyer report',
+],photo:{...item.rows[0].photo,tagVerified:false}}]};
+const defaultPolicy={...policy,unidentifiedDwyerChannels:['group']};
+test('explicit channel default admits unidentified local photo only to cloud verification',async()=>{
+ expect(fallbackEligibility(unidentified,policy)).toBe('not_verified_dwyer');
+ expect(fallbackEligibility({...unidentified,channel:'other'},defaultPolicy)).toBe('not_verified_dwyer');
+ expect(fallbackEligibility(unidentified,defaultPolicy)).toBeNull();
+ const f=fixture();expect((await runPhotoFallback(unidentified,defaultPolicy,f.deps)).state).toBe('delivery_submitted');expect(f.counts()).toEqual({reads:2,sends:1});
+ const wrong=fixture({read:async()=>({...read,printedPadIdentifier:'Good Shepherd 21-15H'})});
+ expect((await runPhotoFallback(unidentified,defaultPolicy,wrong.deps)).state).toBe('review');expect(wrong.counts().sends).toBe(0);
+});
+test('channel default never overrides other pads, conflicting barrels, duplicate holds or local values',()=>{
+ expect(fallbackEligibility({...unidentified,rows:[{...unidentified.rows[0],wellName:'Good Shepherd 21-15H'}]},defaultPolicy)).toBe('not_verified_dwyer');
+ expect(fallbackEligibility({...unidentified,rows:[{...unidentified.rows[0],photo:{...unidentified.rows[0].photo,reviewOnly:true}}]},defaultPolicy)).toBe('not_verified_dwyer');
+ for(const text of ['21-15H','Good Shepherd','41-15'])expect(fallbackEligibility({...unidentified,caption:item.caption+text},defaultPolicy)).toBe('other_pad');
+ for(const text of ['hauled 165 bbl','185','pulled 140 bbl\nhauled 140 bbl'])expect(fallbackEligibility({...unidentified,caption:item.caption+text},defaultPolicy)).toBe('other_review_required');
+ expect(fallbackEligibility({...unidentified,rows:[{...unidentified.rows[0],issues:['Possible duplicate Dwyer report in this group']}]},defaultPolicy)).toBe('other_review_required');
+ expect(fallbackEligibility({...unidentified,rows:[{...unidentified.rows[0],bottomLevelFeet:8.6}]},defaultPolicy)).toBe('local_read_available');
+});
+test('unidentified photo with an existing receipt performs no model call or send',async()=>{
+ const f=fixture({receipts:async()=>({recordedCount:1,receipts:[{packetId:'original'}],status:'recorded_once'})});
+ expect((await runPhotoFallback(unidentified,defaultPolicy,f.deps)).state).toBe('already_recorded');expect(f.counts()).toEqual({reads:0,sends:0});
+});

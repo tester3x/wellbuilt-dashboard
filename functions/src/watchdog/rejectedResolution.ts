@@ -28,7 +28,9 @@ export async function resolveRejectedReview(input:{companyId:string;id:string;re
   const row=item.row;
   // Receipts display the calibrated bottom when a reviewer discarded the reported
   // bottom. Its observation identity still binds the original null value.
-  const identities=[...new Set([row.bottomLevelFeet,null].map(bottom=>digest([row.wellName,row.dateTimeUTC,row.tankLevelFeet,bottom,row.bblsTaken])))];
+  const photoDigest=row.wellName==='Dwyer'&&item.rowId?.endsWith(':photo')&&/^[a-f0-9]{64}$/.test(row.photo?.imageDigest)?row.photo.imageDigest:null;
+  const photoIdentity=photoDigest?digest(['dwyer_gauge_photo',item.channel,photoDigest]):null;
+  const identities=[...new Set([...([row.bottomLevelFeet,null].map(bottom=>digest([row.wellName,row.dateTimeUTC,row.tankLevelFeet,bottom,row.bblsTaken]))),...(photoIdentity?[photoIdentity]:[])])];
   const candidates=await Promise.all(identities.map(async identity=>{
     const entryRef=fs.doc('watchdog_v2_deliveries/'+identity),entry=(await entryRef.get()).data();
     return {identity,entryRef,entry};
@@ -41,6 +43,7 @@ export async function resolveRejectedReview(input:{companyId:string;id:string;re
     entry.wellName!==row.wellName||entry.dateTimeUTC!==row.dateTimeUTC||entry.top!==row.tankLevelFeet||entry.bbl!==row.bblsTaken||entry.pendingReview)throw Error('Observation ownership changed');
   const rejected=(await db.ref('packets/rejected/'+entry.packetId).once('value')).val();
   const original=rejected?.packet;
+  if(identity===photoIdentity&&original?.watchdogProvenance?.dwyerPhoto?.imageDigest!==photoDigest)throw Error('Owned photo fingerprint required');
   if(rejected?.packetId!==entry.packetId||original?.watchdogProvenance?.observationDigest!==identity||original?.watchdogProvenance?.principalId!==principal||
     original.wellName!==entry.wellName||original.dateTimeUTC!==entry.dateTimeUTC||original.tankLevelFeet!==entry.top||original.bblsTaken!==entry.bbl)throw Error('Owned processor rejection required');
   if(input.decision==='record_history'&&rejected.reason!=='STALE_PULL_TIME')throw Error('Only stale-time rejections can be recorded as history');

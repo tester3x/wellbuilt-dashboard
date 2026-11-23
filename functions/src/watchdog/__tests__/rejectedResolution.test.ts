@@ -64,3 +64,26 @@ test('discarded reported bottom remains bound to its null observation identity',
  expect((await resolveRejectedReview(input,'manager')).identity).toBe(nullId);
  expect(database.get('packets/processed/original').watchdogProvenance.reportedBottomFeet).toBeNull();
 });
+
+function photoFixture(){
+ const imageDigest='d'.repeat(64),photoId=digest(['dwyer_gauge_photo','group',imageDigest]);
+ const entry=documents.get(entryKey);documents.delete(entryKey);
+ documents.set('watchdog_v2_deliveries/'+photoId,{...entry,identity:photoId,wellName:'Dwyer'});
+ documents.set(itemKey,{...documents.get(itemKey),rowId:'row:photo',row:{...row,wellName:'Dwyer',photo:{imageDigest}}});
+ documents.set('watchdog_v2_config/laptop',{enabled:true,channels:{group:{wells:['Dwyer']}}});
+ database.set('well_config/Dwyer',{tanks:4,tankHeight:40,bblPerFoot:102});
+ for(const key of ['previous','newer'])database.set('packets/processed/'+key,{...database.get('packets/processed/'+key),wellName:'Dwyer'});
+ const packet={...original,wellName:'Dwyer',watchdogProvenance:{...original.watchdogProvenance,observationDigest:photoId,dwyerPhoto:{imageDigest}}};
+ database.set('packets/rejected/original',{packetId:'original',reason:'STALE_PULL_TIME',packet});return photoId;
+}
+test('older photo uses its channel and image identity, records once and preserves current state',async()=>{
+ const photoId=photoFixture(),before=JSON.stringify(database.get('packets/outgoing/Well'));
+ const result=await resolveRejectedReview(input,'manager');expect(result).toMatchObject({identity:photoId,status:'complete',historicalOnly:true});
+ expect(await resolveRejectedReview(input,'manager')).toEqual(result);
+ expect(database.get('packets/processed/original').watchdogProvenance.dwyerPhoto.imageDigest).toBe('d'.repeat(64));
+ expect(JSON.stringify(database.get('packets/outgoing/Well'))).toBe(before);
+});
+test('photo recovery rejects a mismatched original fingerprint',async()=>{
+ photoFixture();const r=database.get('packets/rejected/original');r.packet.watchdogProvenance.dwyerPhoto.imageDigest='e'.repeat(64);
+ await expect(resolveRejectedReview(input,'manager')).rejects.toThrow('fingerprint');expect(database.has('packets/processed/original')).toBe(false);
+});

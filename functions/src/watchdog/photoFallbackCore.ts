@@ -23,11 +23,25 @@ export function fallbackEligibility(item:PhotoItem,policy:any){
  if(item.photoReady!==true||!/^([a-f0-9]{64})$/.test(item.imageDigest)||!['image/jpeg','image/png','image/webp'].includes(item.mimeType)||!Number.isInteger(item.bytes)||item.bytes<1||item.bytes>12*1024*1024)return 'invalid_photo';
  if(!Array.isArray(item.rows)||item.rows.length!==1)return 'ambiguous_rows';
  const row=item.rows[0],photo=row.photo;
- if(row.wellName!=='Dwyer'||!photo||photo.tagVerified!==true||photo.reviewOnly===true||photo.canSend!==true)return 'not_verified_dwyer';
+ // The owner may designate this exact channel's unlabelled photos as Dwyer.
+ // This only admits a cloud verification attempt; both reads must still locate
+ // WTR 3 / LT-5103 and reject a printed identifier for another pad.
+ const unidentified=policy.unidentifiedDwyerChannels?.includes(item.channel)===true
+  &&row.wellName==='Well needs review'&&photo?.tagVerified===false;
+ if((!(row.wellName==='Dwyer'&&photo?.tagVerified===true)&&!unidentified)||!photo||photo.reviewOnly===true||photo.canSend!==true)return 'not_verified_dwyer';
  if(row.bottomLevelFeet!==null||photo.observedBottom!=null||photo.autoSend===true)return 'local_read_available';
  const readableIssues=new Set(['Compare the photo with any separate text report for this haul','WTR 3 (LT-5103) bottom level needs verification']);
+ if(unidentified){
+  readableIssues.add('Confirm the well. The caption and gauge tags did not identify Dwyer');
+  readableIssues.add('Resolve conflicting haul evidence or confirm the Dwyer report');
+ }
  if(row.issues!==undefined&&(!Array.isArray(row.issues)||row.issues.some((issue:unknown)=>!readableIssues.has(String(issue)))))return 'other_review_required';
- try{const chat=sourcePhotoChat(item);if(/\b(?:21[-\s]?15H?|41[-\s]?15H?|good\s+shepherd)\b/i.test(chat))return 'other_pad';}catch{return 'missing_original_chat';}
+ try{const chat=sourcePhotoChat(item);if(/\b(?:21[-\s]?15H?|41[-\s]?15H?|good\s+shepherd)\b/i.test(chat))return 'other_pad';
+  if(unidentified){const body=splitChat(chat)[0].body;
+   const quantities=[...body.matchAll(/\b(\d+(?:\.\d+)?)\s*(?:bbls?|barrels?)\b/gi),...body.matchAll(/^\s*(\d{3}(?:\.\d+)?)\s*$/gm)];
+   if(quantities.some(match=>Number(match[1])!==140)||[...body.matchAll(/^\s*(?:dwyer\s*[-:]?\s*)?(?:i\s+)?(?:hauled|pulled|took)\s+\d+/gim)].length>1)return 'other_review_required';
+  }
+ }catch{return 'missing_original_chat';}
  return null;
 }
 export function acceptedGaugeRead(raw:any):number|null {
