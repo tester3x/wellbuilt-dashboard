@@ -32,7 +32,7 @@ const bundle = await build({ stdin: { contents: `import React from 'react';impor
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
     : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],communicationChannels:['sms'],dispatchPhoneE164:'+17015550100',customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],contacts:[{id:'john',name:'John Wick',role:'Company man',phoneE164:'+17015550112'},{id:'jane',name:'Jane Doe',role:'Lead',phoneE164:'+17015550113'}],workCategories:[{id:'rig-work',name:'Rig Work',sector:'water-hauling',sourceChannels:['Rig Work chat'],assets:['Rig 429']}],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']},{id:'bob',name:"Bob's Hot Shot LLC",alternateNames:["Bob's",'BHS'],phoneE164:'',active:true,sectors:['hot-shot'],jobNames:[],pickupLocations:[],deliveryLocations:[]}]});`
     : a.path.endsWith('independentDriverProfiles') ? `let profiles=[];window.savedProfiles=profiles;export const listIndependentDriverProfiles=async()=>structuredClone(profiles);export const saveIndependentDriverProfile=async(p,expectedRevision)=>{const previous=profiles.find(x=>x.driverKey===p.driverKey);if((previous?.revision||0)!==expectedRevision)throw Error('revision_conflict');const saved={...p,companyId:'fixture',revision:expectedRevision+1,updatedAt:new Date().toISOString(),updatedBy:'fixture'};profiles=profiles.filter(x=>x.driverKey!==p.driverKey).concat(saved);window.savedProfiles=profiles;return saved};`
-    : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true},...['b','c','d','e','f'].map(x=>({externalDriverId:'driver-'+x,displayName:'Driver '+x.toUpperCase(),phoneE164:'',channels:[],active:true}))];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{const i=roster.findIndex(x=>x.externalDriverId===d.externalDriverId);if(i>=0)roster[i]=d;else roster.push(d);window.savedDriver=d;window.roster=structuredClone(roster);return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
+    : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true},...['b','c','d','e','f'].map(x=>({externalDriverId:'driver-'+x,displayName:'Driver '+x.toUpperCase(),phoneE164:'',channels:[],active:true,shiftPreference:x==='b'?'night':undefined}))];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{const i=roster.findIndex(x=>x.externalDriverId===d.externalDriverId);if(i>=0)roster[i]=d;else roster.push(d);window.savedDriver=d;window.roster=structuredClone(roster);return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
 const css = fs.existsSync(cssDir) ? fs.readdirSync(cssDir).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(`${cssDir}/${f}`, 'utf8')).join('\n') : '';
@@ -54,7 +54,7 @@ try {
   await page.getByPlaceholder('Driver name').fill('Isaac Hickert');
   await page.getByRole('button',{name:'Add driver'}).click();
   await page.getByText('Isaac Hickert · No phone on file').waitFor();
-  await page.getByRole('heading',{name:'Preference not set (7)'}).waitFor();
+  await page.getByRole('heading',{name:'Preference not set (6)'}).waitFor();
   assert.deepEqual(await page.evaluate(()=>({phone:window.savedDriver.phoneE164,channels:window.savedDriver.channels})),{phone:'',channels:[]});
   const originalId=await page.evaluate(()=>window.savedDriver.externalDriverId);
   await page.getByRole('button',{name:'Edit Isaac Hickert'}).click();
@@ -62,7 +62,7 @@ try {
   await page.getByLabel('Shift preference').selectOption('night');
   await page.getByRole('button',{name:'Save driver'}).click();
   await page.getByText('Isaac Hickert · +17015550124').waitFor();
-  await page.getByRole('heading',{name:'Night shift (1)'}).waitFor();
+  await page.getByRole('heading',{name:'Night shift (2)'}).waitFor();
   assert.equal(await page.evaluate(()=>window.savedDriver.shiftPreference),'night');
   assert.deepEqual(await page.evaluate(()=>window.savedDriver.channels),[], 'phone can be saved without opting into messaging');
   assert.equal(await page.evaluate(id=>window.roster.filter(d=>d.externalDriverId===id).length,originalId),1,'edit preserves the roster ID');
@@ -180,7 +180,7 @@ try {
   await card.getByText('Choose drivers').click();
   await card.getByRole('checkbox',{name:'Choose Outside Driver for Pipe run water-hauling'}).check();
   await card.getByRole('checkbox',{name:'Choose Driver B for Pipe run water-hauling'}).check();
-  await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).selectOption('night');
+  assert.equal(await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).inputValue(),'night','saved night preference overrides the job day shift');
   await card.getByRole('button',{name:'Assign selected drivers'}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
   const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run water-hauling',exact:true})});

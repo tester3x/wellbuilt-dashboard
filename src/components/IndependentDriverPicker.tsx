@@ -37,7 +37,7 @@ export function IndependentDriverPicker({ job, jobs, outside, linked, profiles, 
               <input type="checkbox" aria-label={`Choose ${driver.name} for ${job.title}`} checked={checked} disabled={disabled || (unavailable && !checked)}
                 onChange={event => {
                   const next = { ...selected };
-                  if (event.target.checked) next[driver.key] = defaultShift;
+                  if (event.target.checked) next[driver.key] = driver.preference === 'day' || driver.preference === 'night' ? driver.preference : defaultShift;
                   else delete next[driver.key];
                   onChange(next);
                 }} />

@@ -13,10 +13,12 @@ The job event records the before and after roster. Existing single-driver jobs
 are read as one-member crews and are upgraded when their roster changes.
 
 The job's shift may be day, night, both, or unspecified. The separate shift on
-each crew member is the working assignment. A driver's usual shift is only a
-planning cue: outside drivers already have it in the roster, and linked
-WellBuilt drivers may set it in their Independent Dispatch profile. A different
-shift preference never blocks an assignment.
+each crew member is the working assignment. Selecting a driver defaults to
+their saved Day or Night preference when available. Otherwise it uses the
+job's Day or Night shift, or remains unset. Dispatch can override each selected
+driver's shift before assignment. Outside drivers have their preference in the
+roster, and linked WellBuilt drivers may set it in their Independent Dispatch
+profile. A different shift preference never blocks an assignment.
 
 Driver profiles are under `/dispatch/independent/drivers/`, reached from the
 board toolbar. The same package and staff capabilities still guard the data.
