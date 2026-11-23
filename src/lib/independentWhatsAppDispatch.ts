@@ -5,25 +5,42 @@ type WhatsAppJob = Pick<IndependentJob,
   'scheduledAt' | 'requestedDriverCount' | 'jobContactName' | 'jobContactPhoneE164' | 'drivers' | 'driverName'
 >;
 
-export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: string): string {
-  const assigned = job.drivers?.map(driver => driver.name).filter(Boolean).join(', ') || job.driverName || '';
-  const rows = [
-    recipientName ? `DRIVER ASSIGNMENT: ${recipientName}` : `DISPATCH: ${job.title}`,
-    `Job: ${job.title}`,
-    `Customer: ${job.customer}`,
-    job.reference ? `Reference: ${job.reference}` : '',
-    `Pickup: ${job.pickup || 'Not specified'}`,
-    `Delivery: ${job.destination || 'Not specified'}`,
-    job.cargo ? `Cargo / loads: ${job.cargo}` : '',
-    job.scheduledAt ? `Scheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
-    job.requestedDriverCount ? `Drivers requested: ${job.requestedDriverCount}` : '',
-    assigned ? `Assigned drivers: ${assigned}` : '',
-    job.jobContactName ? `Job contact: ${job.jobContactName}` : '',
-    job.jobContactPhoneE164 ? `Contact phone: ${job.jobContactPhoneE164}` : '',
-    job.notes ? `Instructions: ${job.notes}` : '',
-    'Drivers: reply ACK privately to dispatch in WhatsApp to confirm this assignment. Do not reply in the group.',
+export type IndependentDispatchUrgency = 'urgent' | 'soon' | 'routine';
+
+/** Presentation only; a time-based flag never changes the saved job or dispatch authority. */
+export function independentDispatchUrgency(job: WhatsAppJob, nowMs = Date.now()): IndependentDispatchUrgency {
+  if (/\b(asap|emergency|urgent|immediately)\b/i.test(job.notes || '')) return 'urgent';
+  const dueMs = job.scheduledAt ? Date.parse(job.scheduledAt) : NaN;
+  if (!Number.isFinite(dueMs)) return 'routine';
+  const minutesRemaining = (dueMs - nowMs) / 60_000;
+  if (minutesRemaining <= 60) return 'urgent';
+  if (minutesRemaining <= 240) return 'soon';
+  return 'routine';
+}
+
+export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: string, nowMs = Date.now()): string {
+  const urgency = independentDispatchUrgency(job, nowMs);
+  const heading = urgency === 'urgent' ? '🚨🚨🚨🚨🚨\n*URGENT DISPATCH*'
+    : urgency === 'soon' ? '🟠🟠🟠🟠🟠\n*UPCOMING DISPATCH*'
+      : '🟡🟡🟡🟡🟡\n*JOB DISPATCH*';
+  const assigned = job.drivers?.map(driver => driver.name).filter(Boolean).join('\n') || job.driverName || '';
+  const sections = [
+    heading,
+    ['*JOB*', job.title, `Customer: ${job.customer}`,
+      job.reference ? `Reference: ${job.reference}` : '',
+      recipientName ? `For: ${recipientName}` : ''].filter(Boolean).join('\n'),
+    job.notes ? `*DESCRIPTION / INSTRUCTIONS*\n${job.notes}` : '',
+    `*PICKUP / SOURCE*\n${job.pickup || 'Not specified'}`,
+    `*DELIVERY / DESTINATION*\n${job.destination || 'Not specified'}`,
+    job.cargo ? `*CARGO / LOADS*\n${job.cargo}` : '',
+    job.scheduledAt ? `*SCHEDULE*\nScheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
+    [job.requestedDriverCount ? `Drivers requested: ${job.requestedDriverCount}` : '',
+      assigned ? `Assigned drivers:\n${assigned}` : ''].filter(Boolean).join('\n'),
+    [job.jobContactName ? `Job contact: ${job.jobContactName}` : '',
+      job.jobContactPhoneE164 ? `Contact phone: ${job.jobContactPhoneE164}` : ''].filter(Boolean).join('\n'),
+    '*ACKNOWLEDGMENT*\nDrivers: reply ACK privately to dispatch in WhatsApp to confirm this assignment. Do not reply in the group.',
   ];
-  return rows.filter(Boolean).join('\n');
+  return sections.filter(Boolean).join('\n\n');
 }
 
 export function normalizeWhatsAppNumber(phone: string | undefined): string | null {

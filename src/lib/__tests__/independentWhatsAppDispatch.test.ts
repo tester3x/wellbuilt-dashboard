@@ -4,6 +4,7 @@ import {
   buildIndependentWhatsAppText,
   independentWhatsAppDriverUrl,
   independentWhatsAppGroupShareUrl,
+  independentDispatchUrgency,
   normalizeWhatsAppNumber,
 } from '../independentWhatsAppDispatch';
 
@@ -30,7 +31,11 @@ test('prepares main WhatsApp share without guessing pickup or sending', () => {
   assert.match(message, /White Owl Epping or White Owl Tioga/);
   assert.match(message, /2 loads of 10 PPG brine/);
   assert.match(message, /Scheduled pickup \(UTC\)/);
-  assert.match(message, /Assigned drivers: Demo driver/);
+  assert.match(message, /Assigned drivers:\nDemo driver/);
+  assert.match(message, /🚨🚨🚨🚨🚨/);
+  assert.match(message, /\*DESCRIPTION \/ INSTRUCTIONS\*\nASAP\. Pickup location is driver choice\./);
+  assert.match(message, /\n\n\*PICKUP \/ SOURCE\*\n/);
+  assert.match(message, /\n\n\*DELIVERY \/ DESTINATION\*\n/);
   assert.match(message, /reply ACK privately to dispatch/);
   assert.match(message, /Do not reply in the group/);
 });
@@ -47,4 +52,24 @@ test('rejects missing and malformed numbers rather than selecting a wrong recipi
 });
 test('message content is the same when generated independently', () => {
   assert.equal(decodeURIComponent(independentWhatsAppGroupShareUrl(job).split('?text=')[1]),buildIndependentWhatsAppText(job));
+});
+
+test('scheduled urgency uses red, orange, and yellow without guessing missing dates', () => {
+  const now = Date.parse('2026-11-23T12:00:00.000Z');
+  const clean = { ...job, notes: '' };
+  assert.equal(independentDispatchUrgency({ ...clean, scheduledAt: '2026-11-23T12:30:00.000Z' }, now), 'urgent');
+  assert.equal(independentDispatchUrgency({ ...clean, scheduledAt: '2026-11-23T14:00:00.000Z' }, now), 'soon');
+  assert.equal(independentDispatchUrgency({ ...clean, scheduledAt: '2026-11-24T12:00:00.000Z' }, now), 'routine');
+  assert.equal(independentDispatchUrgency({ ...clean, scheduledAt: '' }, now), 'routine');
+  assert.match(buildIndependentWhatsAppText({ ...clean, scheduledAt: '2026-11-23T14:00:00.000Z' }, undefined, now), /🟠🟠🟠/);
+  assert.match(buildIndependentWhatsAppText({ ...clean, scheduledAt: '' }, undefined, now), /🟡🟡🟡/);
+});
+
+test('retains exact operator work description and separate dispatch-selected pickup', () => {
+  const exact = 'Need 500 barrels of production water.\nLeave sample measurements unchanged.';
+  const message = buildIndependentWhatsAppText({ ...job, notes: exact, pickup: 'Dispatch-selected water supplier' }, undefined,
+    Date.parse('2026-11-23T12:00:00.000Z'));
+  assert.ok(message.includes(`*DESCRIPTION / INSTRUCTIONS*\n${exact}\n\n*PICKUP / SOURCE*\nDispatch-selected water supplier`));
+  assert.ok(message.includes('Delivery / Destination') === false);
+  assert.match(message, /\*DELIVERY \/ DESTINATION\*/);
 });
