@@ -7,6 +7,7 @@ export type IndependentJobDetails = {
   cargo: string; scheduledAt: string; notes: string;
   jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
+  categoryId?: string; asset?: string;
 };
 const LIMITS: Record<'title' | 'customer' | 'reference' | 'pickup' | 'destination' | 'cargo' | 'scheduledAt' | 'notes'
   | 'jobContactName' | 'jobContactRole' | 'jobContactPhoneE164', number> = {
@@ -17,7 +18,7 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_job');
   const input = raw as Record<string, unknown>;
   if (Object.keys(input).some(key => !Object.prototype.hasOwnProperty.call(LIMITS, key)
-    && !['customerId', 'sector', 'sectorFields'].includes(key))) throw Error('unexpected_job_field');
+    && !['customerId', 'sector', 'sectorFields', 'categoryId', 'asset'].includes(key))) throw Error('unexpected_job_field');
   const job = {} as IndependentJobDetails;
   for (const key of Object.keys(LIMITS) as (keyof typeof LIMITS)[]) {
     const value = input[key] ?? '';
@@ -37,6 +38,14 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
     job.sector = input.sector;
     if (input.customerId !== undefined) job.customerId = input.customerId as string;
     job.sectorFields = parseSectorFields(input.sector, input.sectorFields);
+  }
+  if (input.categoryId !== undefined || input.asset !== undefined) {
+    if (!job.customerId || !job.sector || typeof input.categoryId !== 'string' || (input.categoryId !== '' && !/^[A-Za-z0-9_-]{1,100}$/.test(input.categoryId)))
+      throw Error('invalid_categoryId');
+    if (input.asset !== undefined && (typeof input.asset !== 'string' || input.asset.length > 180)) throw Error('invalid_asset');
+    if (!input.categoryId && input.asset) throw Error('asset_requires_category');
+    job.categoryId = input.categoryId;
+    job.asset = typeof input.asset === 'string' ? input.asset.trim() : '';
   }
   return job;
 }

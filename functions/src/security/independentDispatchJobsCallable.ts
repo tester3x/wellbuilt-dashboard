@@ -75,6 +75,9 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
       ]);
       if (!hasIndependentDispatchPackage(freshCompany.data()))
         throw new httpsV2.HttpsError('permission-denied', 'independent_dispatch_package_inactive');
+      const previous = jobSnap.data();
+      if (previous && previous.companyId !== authority.companyId)
+        throw new httpsV2.HttpsError('permission-denied', 'cross_company');
       if (details?.sector) {
         const enabled = directoryConfig?.exists ? parseIndependentSectors(directoryConfig.data()?.sectors) : [...INDEPENDENT_SECTORS];
         if (!enabled.includes(details.sector as typeof INDEPENDENT_SECTORS[number]))
@@ -85,11 +88,17 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
             || !customer.data()!.sectors.includes(details.sector))
             throw new httpsV2.HttpsError('failed-precondition', 'customer_sector_unavailable');
           details.customer = customer.data()!.name;
+          if (details.categoryId) {
+            const category = Array.isArray(customer.data()!.workCategories)
+              ? customer.data()!.workCategories.find((entry: any) => entry?.id === details!.categoryId && entry?.sector === details!.sector)
+              : null;
+            const unchangedArchivedCategory = op === 'update' && previous?.customerId === details.customerId
+              && previous?.sector === details.sector && previous?.categoryId === details.categoryId;
+            if ((!category || typeof category.name !== 'string') && !unchangedArchivedCategory)
+              throw new httpsV2.HttpsError('failed-precondition', 'customer_category_unavailable');
+          }
         }
       }
-      const previous = jobSnap.data();
-      if (previous && previous.companyId !== authority.companyId)
-        throw new httpsV2.HttpsError('permission-denied', 'cross_company');
       // Idempotency includes the exact payload: retries cannot reuse a key for different work.
       const payload = JSON.stringify({ op, job: details ?? null, expectedRevision: raw.expectedRevision ?? null,
         externalDriverId: raw.externalDriverId ?? null, wbDriverId: raw.wbDriverId ?? null, status: raw.status ?? null });
@@ -117,6 +126,7 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
           contacts: details.jobContactName ? [{ id: `contact_${raw.jobId}`.slice(0, 100), name: details.jobContactName,
             role: details.jobContactRole || '', phoneE164: details.jobContactPhoneE164 || '' }] : [],
           jobNames: [], pickupLocations: [], deliveryLocations: [],
+          workCategories: [],
           active: true, updatedAt: now, updatedBy: authority.uid });
         patch.customerId = newCustomerRef.id;
       }

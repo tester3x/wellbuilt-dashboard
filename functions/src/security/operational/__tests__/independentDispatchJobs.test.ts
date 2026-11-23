@@ -55,4 +55,15 @@ describe('Independent Dispatch job validation and lifecycle', () => {
     expect(() => parseSectorFields('aggregate', { material: 'Sand' })).toThrow('required_estimatedTons');
     expect(() => parseIndependentJob({ ...job, customerId: 'customer-a', sector: 'otr', sectorFields: { trailerType: 'Dry van', commodity: 'Steel', weightLbs: '-10' } })).toThrow('invalid_weightLbs');
   });
+  it('requires a saved customer and sector before using a profile category', () => {
+    const water = { ...job, customerId: 'exxon', sector: 'water-hauling',
+      sectorFields: { waterType: 'Fresh water', volumeBbl: '120' } };
+    expect(parseIndependentJob({ ...water, categoryId: 'rig-work', asset: 'H&P Rig 429' }))
+      .toMatchObject({ categoryId: 'rig-work', asset: 'H&P Rig 429' });
+    expect(parseIndependentJob({ ...water, categoryId: '', asset: '' })).toMatchObject({ categoryId: '', asset: '' });
+    expect(() => parseIndependentJob({ ...water, categoryId: '', asset: 'H&P Rig 429' })).toThrow('asset_requires_category');
+    expect(() => parseIndependentJob({ ...job, categoryId: 'rig-work' })).toThrow('invalid_categoryId');
+    expect(() => parseIndependentJob({ ...water, categoryId: 'bad/id' })).toThrow('invalid_categoryId');
+    expect(() => parseIndependentJob({ ...water, asset: 'H&P Rig 429' })).toThrow('invalid_categoryId');
+  });
 });

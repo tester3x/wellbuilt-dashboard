@@ -128,4 +128,33 @@ describe('Independent Dispatch callable boundaries', () => {
     await expect(call({ ...create, jobId: 'job-c', requestId: 'request-c', job: { ...oneOff, customer: "Bob's Hot Shot LLC" }, saveCustomer: true }))
       .rejects.toThrow('customer_name_conflict');
   });
+  it('binds a job category to its customer and sector', async () => {
+    const category = { id: 'rig-work', name: 'Rig Work', sector: 'water-hauling',
+      sourceChannels: ['ExxonMobil - RIG WORK'], assets: ['H&P Rig 429', 'H&P Rig 640'] };
+    records.set('companies/company-a/independent_dispatch_customers/exxon', {
+      companyId: 'company-a', name: 'ExxonMobil', active: true, sectors: ['water-hauling'], workCategories: [category],
+    });
+    const water = { ...details, customerId: 'exxon', sector: 'water-hauling',
+      sectorFields: { waterType: 'Fresh water', volumeBbl: '120' } };
+    await call({ ...create, job: { ...water, categoryId: 'rig-work', asset: 'H&P Rig 429' } });
+    expect(records.get('independent_dispatch_jobs/job-a')).toMatchObject({ customer: 'ExxonMobil',
+      categoryId: 'rig-work', asset: 'H&P Rig 429' });
+    await expect(call({ ...create, jobId: 'job-b', requestId: 'request-b', job: { ...water, categoryId: 'mongoose' } }))
+      .rejects.toThrow('customer_category_unavailable');
+    records.set('companies/company-a/independent_dispatch_customers/other', {
+      companyId: 'company-a', name: 'Other', active: true, sectors: ['water-hauling'],
+      workCategories: [{ ...category, id: 'mongoose' }],
+    });
+    await expect(call({ ...create, jobId: 'job-c', requestId: 'request-c', job: { ...water, categoryId: 'mongoose' } }))
+      .rejects.toThrow('customer_category_unavailable');
+    records.set('companies/company-a/independent_dispatch_customers/exxon', {
+      companyId: 'company-a', name: 'ExxonMobil', active: true, sectors: ['water-hauling'], workCategories: [],
+    });
+    await expect(call({ op: 'update', jobId: 'job-a', requestId: 'archived-edit', expectedRevision: 1,
+      job: { ...water, categoryId: 'rig-work', asset: 'H&P Rig 429', notes: 'Updated after category removal' } }))
+      .resolves.toMatchObject({ job: { revision: 2, categoryId: 'rig-work' } });
+    await expect(call({ op: 'update', jobId: 'job-a', requestId: 'archived-clear', expectedRevision: 2,
+      job: { ...water, categoryId: '', asset: '' } }))
+      .resolves.toMatchObject({ job: { revision: 3, categoryId: '', asset: '' } });
+  });
 });

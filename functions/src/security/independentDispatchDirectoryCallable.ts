@@ -32,6 +32,26 @@ function customerContacts(value: unknown): { id: string; name: string; role: str
     return { id: row.id, name: row.name.trim(), role: row.role.trim(), phoneE164: row.phoneE164 };
   });
 }
+function workCategories(value: unknown, customerSectors: string[]) {
+  if (!Array.isArray(value) || value.length > 20) throw new httpsV2.HttpsError('invalid-argument', 'invalid_work_categories');
+  const ids = new Set<string>();
+  const labels = new Set<string>();
+  return value.map((item: unknown) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item))
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_work_category');
+    const row = item as Record<string, unknown>;
+    if (Object.keys(row).some(key => !['id', 'name', 'sector', 'sourceChannels', 'assets'].includes(key))
+      || typeof row.id !== 'string' || !ID.test(row.id) || ids.has(row.id)
+      || typeof row.name !== 'string' || !row.name.trim() || row.name.length > 100
+      || typeof row.sector !== 'string' || !customerSectors.includes(row.sector))
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_work_category');
+    const label = normalizeCustomerName(row.name);
+    if (labels.has(label)) throw new httpsV2.HttpsError('invalid-argument', 'duplicate_work_category');
+    ids.add(row.id); labels.add(label);
+    return { id: row.id, name: row.name.trim(), sector: row.sector,
+      sourceChannels: names(row.sourceChannels, 'source_channels', 15), assets: names(row.assets, 'category_assets', 50) };
+  });
+}
 
 /** Company-owned sector choices, customer lists, and reusable locations. */
 export const staffIndependentDispatchDirectory = httpsV2.onCall(
@@ -87,7 +107,7 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
     if (Object.keys(data).length !== 2 || !data.customer || typeof data.customer !== 'object' || Array.isArray(data.customer))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_customer');
     const raw = data.customer as Record<string, unknown>;
-    if (Object.keys(raw).some(key => !['id', 'name', 'alternateNames', 'contacts', 'phoneE164', 'sectors', 'jobNames', 'pickupLocations', 'deliveryLocations', 'active'].includes(key))
+    if (Object.keys(raw).some(key => !['id', 'name', 'alternateNames', 'contacts', 'phoneE164', 'sectors', 'jobNames', 'pickupLocations', 'deliveryLocations', 'workCategories', 'active'].includes(key))
       || typeof raw.id !== 'string' || !ID.test(raw.id) || typeof raw.name !== 'string'
       || !raw.name.trim() || raw.name.length > 180 || raw.active !== true)
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_customer');
@@ -114,6 +134,7 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
     const customer = { companyId: authority.companyId, name: raw.name.trim(), phoneE164, sectors,
       alternateNames,
       contacts: customerContacts(raw.contacts ?? []),
+      workCategories: workCategories(raw.workCategories ?? [], sectors),
       jobNames: names(raw.jobNames, 'job_names', 30),
       pickupLocations: names(raw.pickupLocations, 'pickup_locations', 50),
       deliveryLocations: names(raw.deliveryLocations, 'delivery_locations', 50),

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { independentDispatchDirectory, type IndependentCustomer, type IndependentCustomerContact, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
+import { independentDispatchDirectory, type IndependentCustomer, type IndependentCustomerCategory, type IndependentCustomerContact, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
 import { INDEPENDENT_SECTORS, type IndependentSector } from '@/lib/independentDispatchSectors';
 
 const lines = (value: string) => [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
@@ -17,6 +17,7 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
   const [alternateNames, setAlternateNames] = useState('');
   const [phoneE164, setPhoneE164] = useState('');
   const [contacts, setContacts] = useState<IndependentCustomerContact[]>([]);
+  const [workCategories, setWorkCategories] = useState<IndependentCustomerCategory[]>([]);
   const [customerSectors, setCustomerSectors] = useState<IndependentSector[]>([]);
   const [jobNames, setJobNames] = useState('');
   const [pickups, setPickups] = useState('');
@@ -41,6 +42,7 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
   function edit(customer?: IndependentCustomer) {
     setEditingId(customer?.id || ''); setName(customer?.name || ''); setAlternateNames(join(customer?.alternateNames)); setPhoneE164(customer?.phoneE164 || '');
     setContacts(customer?.contacts || []);
+    setWorkCategories(customer?.workCategories || []);
     setCustomerSectors(customer?.sectors || []); setJobNames(join(customer?.jobNames));
     setPickups(join(customer?.pickupLocations)); setDeliveries(join(customer?.deliveryLocations));
   }
@@ -52,6 +54,9 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
       .some(savedName => normalizeName(savedName) === identifier))) || [];
   function changeContact(id: string, patch: Partial<IndependentCustomerContact>) {
     setContacts(current => current.map(contact => contact.id === id ? { ...contact, ...patch } : contact));
+  }
+  function changeCategory(id: string, patch: Partial<IndependentCustomerCategory>) {
+    setWorkCategories(current => current.map(category => category.id === id ? { ...category, ...patch } : category));
   }
   return <section className="rounded-lg border border-cyan-700/40 bg-gray-800 p-4 text-white">
     <h3 className="font-semibold text-cyan-300">Independent Dispatch setup</h3>
@@ -93,7 +98,9 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
         {canEdit && <form className="mt-4 grid gap-3" onSubmit={event => { event.preventDefault();
           const id = editingId || crypto.randomUUID();
           void run(() => independentDispatchDirectory({ op: 'saveCustomer', customer: {
-            id, name, alternateNames: lines(alternateNames), phoneE164: phoneE164.trim(), contacts, sectors: customerSectors, jobNames: lines(jobNames), pickupLocations: lines(pickups),
+            id, name, alternateNames: lines(alternateNames), phoneE164: phoneE164.trim(), contacts, sectors: customerSectors,
+            workCategories: workCategories.map(category => ({ ...category, sourceChannels: lines(join(category.sourceChannels)), assets: lines(join(category.assets)) })),
+            jobNames: lines(jobNames), pickupLocations: lines(pickups),
             deliveryLocations: lines(deliveries), active: true,
           } }), 'Customer saved.').then(saved => { if (saved) setEditingId(id); });
         }}>
@@ -121,6 +128,19 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
             {INDEPENDENT_SECTORS.filter(s => sectors.includes(s.id)).map(sector => <label key={sector.id}><input type="checkbox" checked={customerSectors.includes(sector.id)}
               onChange={event => setCustomerSectors(current => event.target.checked ? [...current, sector.id] : current.filter(id => id !== sector.id))} className="mr-1" />{sector.label}</label>)}
           </div></fieldset>
+          <fieldset className="rounded border border-gray-700 p-3"><legend className="px-1 text-sm font-medium">Customer work categories</legend>
+            <p className="mb-2 text-xs text-gray-400">A customer may have several categories. Record the source chat name for reference; this does not connect or monitor the chat. Rigs and sites are reusable labels, while each job keeps its own locations.</p>
+            <div className="space-y-3">{workCategories.map(category => <div key={category.id} className="grid gap-2 rounded border border-gray-600 p-3 sm:grid-cols-2">
+              <label className="text-xs text-gray-300">Category name<input required maxLength={100} value={category.name} onChange={event => changeCategory(category.id, { name: event.target.value })} placeholder="Rig Work" className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
+              <label className="text-xs text-gray-300">Transportation sector<select required value={category.sector} onChange={event => changeCategory(category.id, { sector: event.target.value as IndependentSector })} className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white">
+                <option value="">Choose sector…</option>{customerSectors.map(id => <option key={id} value={id}>{INDEPENDENT_SECTORS.find(sector => sector.id === id)?.label || id}</option>)}
+              </select></label>
+              <label className="text-xs text-gray-300">Source channels · one per line<textarea rows={3} value={join(category.sourceChannels)} onChange={event => changeCategory(category.id, { sourceChannels: event.target.value.split('\n') })} placeholder="ExxonMobil - RIG WORK" className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
+              <label className="text-xs text-gray-300">Rigs, sites, or assets · one per line<textarea rows={3} value={join(category.assets)} onChange={event => changeCategory(category.id, { assets: event.target.value.split('\n') })} placeholder={'H&P Rig 429\nH&P Rig 640'} className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
+              <button type="button" className="w-fit text-xs text-red-300 underline sm:col-span-2" onClick={() => setWorkCategories(current => current.filter(item => item.id !== category.id))}>Remove category</button>
+            </div>)}</div>
+            <button type="button" disabled={workCategories.length >= 20 || !customerSectors.length} className="mt-3 text-sm text-cyan-300 underline disabled:opacity-40" onClick={() => setWorkCategories(current => [...current, { id: crypto.randomUUID(), name: '', sector: customerSectors[0], sourceChannels: [], assets: [] }])}>Add category</button>
+          </fieldset>
           <div className="grid gap-3 md:grid-cols-3">{[
             ['Saved job names', jobNames, setJobNames], ['Pickup locations', pickups, setPickups], ['Delivery locations', deliveries, setDeliveries],
           ].map(([label, value, setter]) => <label key={label as string} className="text-xs text-gray-300">{label as string} · one per line

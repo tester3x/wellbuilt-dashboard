@@ -6,6 +6,7 @@ export type IndependentJobDetails = {
   cargo: string; scheduledAt: string; notes: string;
   jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
+  categoryId?: string; asset?: string;
 };
 export type IndependentJobStatus = 'unassigned' | 'assigned' | 'in_progress' | 'completed' | 'cancelled';
 export type IndependentJob = IndependentJobDetails & {

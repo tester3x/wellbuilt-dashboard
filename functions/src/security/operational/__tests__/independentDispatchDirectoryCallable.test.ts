@@ -70,4 +70,19 @@ describe('Independent Dispatch directory', () => {
       jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('invalid_customer_contact');
     await expect(call({ op: 'list', companyId: 'company-b' })).rejects.toThrow('invalid_directory_request');
   });
+  it('keeps categories and channel labels inside the selected customer profile', async () => {
+    const base = { id: 'exxon', name: 'ExxonMobil', active: true, sectors: ['water-hauling'],
+      jobNames: [], pickupLocations: [], deliveryLocations: [] };
+    await call({ op: 'saveCustomer', customer: { ...base, workCategories: [{ id: 'rig-work', name: 'Rig Work',
+      sector: 'water-hauling', sourceChannels: ['ExxonMobil - RIG WORK'], assets: ['H&P Rig 429', 'H&P Rig 640'] }] } });
+    await expect(call({ op: 'list' })).resolves.toMatchObject({ customers: [{ name: 'ExxonMobil', workCategories: [{
+      name: 'Rig Work', sourceChannels: ['ExxonMobil - RIG WORK'], assets: ['H&P Rig 429', 'H&P Rig 640'],
+    }] }] });
+    await expect(call({ op: 'saveCustomer', customer: { ...base, workCategories: [
+      { id: 'one', name: 'Rig Work', sector: 'water-hauling', sourceChannels: [], assets: [] },
+      { id: 'two', name: 'rig-work', sector: 'water-hauling', sourceChannels: [], assets: [] },
+    ] } })).rejects.toThrow('duplicate_work_category');
+    await expect(call({ op: 'saveCustomer', customer: { ...base, workCategories: [{ id: 'rig-work', name: 'Rig Work',
+      sector: 'ltl', sourceChannels: [], assets: [] }] } })).rejects.toThrow('invalid_work_category');
+  });
 });
