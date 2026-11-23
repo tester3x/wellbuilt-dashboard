@@ -1,0 +1,31 @@
+{
+  "sourceCommit": "85b7708d65a74d774f5858320010fe307006d575",
+  "checkout": "C:/dev/dashboard-current-20261004",
+  "branch": "release/dashboard-pw-exception-scoped-20261119",
+  "remote": "https://github.com/tester3x/wellbuilt-dashboard.git",
+  "scope": "Allow configured unidentified-photo channels to reach cloud gauge verification; add image-bound historical photo recovery for authenticated operator tooling.",
+  "checks": {
+    "watchdogSuites": 23,
+    "watchdogTests": 177,
+    "typescript": "passed",
+    "originalPhoto": "Two actual read-only cloud passes agreed; no second load submitted",
+    "liveDuplicateGuard": "Existing handled photo returns already_recorded before model claim or delivery"
+  },
+  "reconciliation": "Fresh origin fetch. No unseen Watchdog commits on current desktop approved branch. Preserved laptop source and other branches without reset or wholesale replacement. Downloaded exact live function source; transitive release delta was photoFallbackCore and image-bound historical resolver only. Unpushed remote-machine work is not discoverable.",
+  "deployment": {
+    "project": "wellbuilt-sync",
+    "function": "processWatchdogPhotoFallback",
+    "state": "ACTIVE",
+    "updatedAt": "2026-11-23T03:05:28.991680645Z",
+    "runtime": "nodejs22",
+    "matchedDependencyModules": 30,
+    "mismatches": 0,
+    "hostingDeployed": false,
+    "rulesDeployed": false,
+    "rogWorkerChanged": false,
+    "otherFunctionsDeployed": false
+  },
+  "policy": "Owner-authorized unidentified-photo default enabled for the existing Tallgrass channel only. Existing activation date, daily budget, message reservations, well whitelist and barrel limits retained. Other-pad captions, printed pad identifiers, conflicting haul quantities, duplicate holds and edited photos remain blocked.",
+  "historicalRecovery": "Used authenticated operator helper from this source to recover one expressly authorized older photo observation as history. Original identity and image fingerprint bound; existing current outgoing state unchanged; one matching message ledger and processed receipt; ROG review queue clear. The remote office resolver callable was not redeployed in this scoped release.",
+  "privateEvidence": "Original photo, message IDs, private receipt verification, current-state comparison, policy before/readback, cloud reads and logs retained outside Git under C:/dev/release-artifacts/watchdog-20261122/."
+}
