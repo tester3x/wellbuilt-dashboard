@@ -1,6 +1,5 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import { independentDispatchJobs, type IndependentJob, type IndependentJobDetails, type IndependentJobStatus, type LinkedWellBuiltDriver } from '@/lib/independentDispatchJobs';
 import { listExternalDrivers, type ExternalDriver } from '@/lib/externalAssignmentDelivery';
 import { ExternalAssignmentDeliveryPanel } from './ExternalAssignmentDeliveryPanel';
@@ -261,7 +260,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     <section aria-labelledby="dispatch-board-title" className="space-y-4">
     <div data-testid="independent-board-toolbar" className="sticky z-30 space-y-3 rounded-lg border border-gray-700 bg-gray-900/95 p-3 shadow-lg backdrop-blur" style={{ top: appHeaderHeight }}>
       <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="dispatch-board-title" className="text-lg font-semibold text-white">Dispatch board</h2><p className="text-sm text-gray-400">Save requests now. Assign a driver when one is available. Assigned WellBuilt drivers do not receive these jobs in their phone app yet.</p></div>
-        <div className="flex flex-wrap items-center gap-3">{canManageDrivers && <Link href="/dispatch/independent/drivers/" className="text-sm text-cyan-300 underline">Driver profiles</Link>}{canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); scrollBelowBoardToolbar('independent-intake'); }}>New job / paste request</button>}</div>
+        <div className="flex flex-wrap items-center gap-3">{canManageDrivers && <a href="/dispatch/independent/drivers/" className="text-sm text-cyan-300 underline">Driver profiles</a>}{canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); scrollBelowBoardToolbar('independent-intake'); }}>New job / paste request</button>}</div>
         <div className="flex flex-wrap gap-2 text-xs"><span className="rounded bg-amber-900/40 px-2 py-1 text-amber-200">{jobs.filter(job => job.status === 'unassigned').length} need drivers</span><span className="rounded bg-blue-900/40 px-2 py-1 text-blue-200">{jobs.filter(job => job.status === 'assigned').length} assigned</span><span className="rounded bg-emerald-900/40 px-2 py-1 text-emerald-200">{jobs.filter(job => job.status === 'in_progress').length} in progress</span></div>
       </div>
     <div className="flex flex-wrap gap-2">
@@ -306,7 +305,6 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           {jobCrew(job).filter(driver => !crewShift(driver)).map(driver => crewRow(job, driver))}
         </div>}
       </> : 'Needs a driver'}</div>
-      {canWrite && canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <p className="mt-3 text-xs text-gray-400" title="ID has no verified HOS feed; dispatch decides whether to assign.">HOS unverified</p>}
       {canWrite && <div className="mt-2">
         {canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <IndependentDriverPicker job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
           now={availabilityNow} selected={assignments[job.id] || {}} disabled={busy}
@@ -327,7 +325,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {jobActionError?.jobId === job.id && <p role="alert" className="mt-2 text-sm text-red-300">Assignment was not saved: {jobActionError.message}</p>}
       <div className="mt-2 flex flex-wrap items-end justify-between gap-2">
         <p className="text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
-        {canWrite && !['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
+        {canWrite && !['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="ml-auto rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
       </div>
     </article>)}</div>;
         return <section key={lane.status} aria-label={`${lane.label} jobs`} className={`min-w-0 rounded-lg border ${isWaitingQueue ? 'border-amber-700/70 bg-amber-950/20' : 'border-gray-700 bg-gray-950/60'} p-3 ${filter === 'active' && (isWaitingQueue || workingLaneCount === 1) ? 'lg:col-span-2' : ''}`}>

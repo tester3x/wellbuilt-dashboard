@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AppHeader } from '@/components/AppHeader';
 import { IndependentDriverProfilesPanel } from '@/components/IndependentDriverProfilesPanel';
@@ -21,7 +20,7 @@ export default function IndependentDispatchDriversPage() {
     let cancelled = false;
     if (loading) return () => { cancelled = true; };
     if (!user) { router.replace('/login'); return () => { cancelled = true; }; }
-    if (!hasCapability(user, 'viewDispatch') || !hasCapability(user, 'manageDrivers') || !hasCapability(user, 'createDispatch')) {
+    if (!hasCapability(user, 'viewDispatch') || !hasCapability(user, 'manageDrivers')) {
       router.replace('/dispatch/independent');
       return () => { cancelled = true; };
     }
@@ -38,7 +37,7 @@ export default function IndependentDispatchDriversPage() {
 
   return <div className="min-h-screen bg-gray-900 text-white"><AppHeader />
     <main className="mx-auto w-full max-w-5xl px-4 py-4 2xl:px-8">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h1 className="text-xl font-semibold">Driver profiles</h1><Link className="text-sm text-cyan-300 underline" href="/dispatch/independent">Back to Independent Dispatch</Link></div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h1 className="text-xl font-semibold">Driver profiles</h1><a className="text-sm text-cyan-300 underline" href="/dispatch/independent/">Back to Independent Dispatch</a></div>
       {error ? <p role="alert" className="rounded border border-red-700 bg-red-950 p-3 text-red-200">{error}</p> : !data ? <p>Loading driver profiles…</p>
         : <IndependentDriverProfilesPanel {...data} initiallyOpen />}
     </main>

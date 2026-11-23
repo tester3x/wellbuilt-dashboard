@@ -49,6 +49,10 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.getByRole('heading',{name:'Dispatch board'}).waitFor();
   assert.equal(await page.getByRole('link',{name:'Driver profiles'}).getAttribute('href'),'/dispatch/independent/drivers/');
+  await Promise.all([page.waitForNavigation(), page.getByRole('link',{name:'Driver profiles'}).click()]);
+  assert.equal(new URL(page.url()).pathname, '/dispatch/independent/drivers/', 'Driver profiles link opens the route');
+  await page.goBack();
+  await page.getByRole('heading',{name:'Dispatch board'}).waitFor();
   await page.getByText('No active jobs. New requests will appear here.').waitFor();
   assert.equal(await page.getByRole('region',{name:'Needs a driver jobs'}).count(),0,'empty waiting queue does not reserve board space');
   assert.equal(await page.getByRole('heading',{name:'New Independent Dispatch job'}).count(),0,'intake starts collapsed so the board is visible first');
@@ -280,8 +284,8 @@ try {
   await assignedCard.getByText('Choose drivers').click();
   assert.ok(await assignedCard.locator('details').filter({hasText:'Choose drivers'}).evaluate(details => details.getBoundingClientRect().width >= details.parentElement.getBoundingClientRect().width - 1),
     'the driver picker spans the job card action area');
-  assert.ok(await assignedCard.getByText('HOS unverified').evaluate(label => label.tagName === 'P' && label.nextElementSibling?.querySelector('details')),
-    'HOS notice is independent of the driver picker');
+  assert.equal(await assignedCard.getByText('HOS unverified').count(), 0,
+    'the board does not show an HOS label without a verified data source');
   assert.ok(await assignedCard.getByRole('button',{name:'Add selected drivers'}).evaluate(button =>
     button.getBoundingClientRect().top >= button.parentElement.previousElementSibling.getBoundingClientRect().bottom),
     'action buttons sit below the open picker');
