@@ -21,8 +21,8 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const roster = useMemo(() => [
-    ...drivers.map(driver => ({ key: `outside:${driver.externalDriverId}`, name: driver.displayName, active: driver.active })),
-    ...wbDrivers.map(driver => ({ key: `wellbuilt:${driver.driverId}`, name: driver.displayName, active: driver.active })),
+    ...drivers.map(driver => ({ key: `outside:${driver.externalDriverId}`, name: driver.displayName, phoneE164: driver.phoneE164, active: driver.active })),
+    ...wbDrivers.map(driver => ({ key: `wellbuilt:${driver.driverId}`, name: driver.displayName, phoneE164: '', active: driver.active })),
   ].sort((a, b) => a.name.localeCompare(b.name)), [drivers, wbDrivers]);
   useEffect(() => {
     if (!open) return;
@@ -45,10 +45,12 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
         <select aria-label="Driver profile" className={inputClass} disabled={!loaded} value={selectedKey} onChange={event => {
           const key = event.target.value;
           const saved = profiles.find(profile => profile.driverKey === key);
+          const rosterDriver = roster.find(driver => driver.key === key);
           setSelectedKey(key); setMessage('');
-          setForm(!key ? null : saved ? { driverKey: saved.driverKey, primaryCustomerId: saved.primaryCustomerId,
+          setForm(!key ? null : saved ? { driverKey: saved.driverKey, phoneE164: saved.phoneE164 ?? rosterDriver?.phoneE164 ?? '',
+            whatsappName: saved.whatsappName ?? '', primaryCustomerId: saved.primaryCustomerId,
             standingWork: saved.standingWork, sideJobs: saved.sideJobs, shiftPreference: saved.shiftPreference || 'unset', operatorNotes: saved.operatorNotes }
-            : { driverKey: key, primaryCustomerId: '', standingWork: '', sideJobs: 'ask', shiftPreference: 'unset', operatorNotes: [] });
+            : { driverKey: key, phoneE164: rosterDriver?.phoneE164 || '', whatsappName: '', primaryCustomerId: '', standingWork: '', sideJobs: 'ask', shiftPreference: 'unset', operatorNotes: [] });
         }}>
           <option value="">Choose driver…</option>
           {roster.map(driver => <option key={driver.key} value={driver.key}>{driver.name} · {driver.key.startsWith('wellbuilt:') ? 'WellBuilt' : 'outside'}{driver.active ? '' : ' · inactive'}</option>)}
@@ -63,6 +65,19 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
           .finally(() => setBusy(false));
       }}>
         <h3 className="font-medium text-white">{selected.name}</h3>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="text-xs text-gray-300">Driver phone (international format)
+            <input aria-label="Driver phone (international format)" type="tel" autoComplete="tel" pattern="\+[1-9][0-9]{7,14}" title="Use + followed by country code and phone number, with no spaces" className={inputClass}
+              placeholder="+17015550123" value={form.phoneE164 || ''}
+              onChange={event => setForm({ ...form, phoneE164: event.target.value.trim() })} />
+          </label>
+          <label className="text-xs text-gray-300">WhatsApp name (optional)
+            <input aria-label="WhatsApp name (optional)" className={inputClass} maxLength={80}
+              placeholder="Name shown in WhatsApp" value={form.whatsappName || ''}
+              onChange={event => setForm({ ...form, whatsappName: event.target.value })} />
+          </label>
+        </div>
+        <p className="text-xs text-gray-400">The job card uses these contact details. Leave WhatsApp name blank to show the driver&apos;s roster name.</p>
         <div className="grid gap-3 md:grid-cols-3">
           <label className="text-xs text-gray-300">Primary customer / operator
             <select aria-label="Primary customer" className={inputClass} value={form.primaryCustomerId}

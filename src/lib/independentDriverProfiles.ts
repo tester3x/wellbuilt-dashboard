@@ -10,6 +10,8 @@ export type OperatorReviewNote = {
 
 export type IndependentDriverProfileInput = {
   driverKey: string;
+  phoneE164?: string;
+  whatsappName?: string;
   primaryCustomerId: string;
   standingWork: string;
   sideJobs: 'ask' | 'yes' | 'no';
@@ -23,7 +25,6 @@ export type IndependentDriverProfile = IndependentDriverProfileInput & {
   updatedAt: string;
   updatedBy: string;
 };
-
 function invoke(payload: Record<string, unknown>) {
   return httpsCallable<Record<string, unknown>, { ok: true; companyId?: string; profiles?: IndependentDriverProfile[]; profile?: IndependentDriverProfile }>(
     getFirebaseFunctions(), 'staffIndependentDriverProfiles')(payload);

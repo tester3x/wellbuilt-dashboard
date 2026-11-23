@@ -36,6 +36,8 @@ export const staffIndependentDriverProfiles = httpsV2.onCall(
     let profile;
     try { profile = parseIndependentDriverProfile(raw.profile); }
     catch (error) { throw new httpsV2.HttpsError('invalid-argument', (error as Error).message); }
+    const updatesOutsidePhone = !!raw.profile && typeof raw.profile === 'object'
+      && !Array.isArray(raw.profile) && Object.prototype.hasOwnProperty.call(raw.profile, 'phoneE164');
     const documentId = profileDocumentId(profile.driverKey);
     const [source, driverId] = profile.driverKey.split(':');
     const driverRef = companyRef.collection(source === 'outside' ? 'external_drivers' : 'independent_dispatch_wb_drivers').doc(driverId);
@@ -59,6 +61,10 @@ export const staffIndependentDriverProfiles = httpsV2.onCall(
       const next = { ...profile, companyId: manager.companyId, revision: revision + 1,
         updatedAt: now, updatedBy: manager.uid };
       tx.set(ref, next);
+      if (source === 'outside' && updatesOutsidePhone && driver.data()?.phoneE164 !== profile.phoneE164) {
+        tx.update(driverRef, { phoneE164: profile.phoneE164,
+          ...(profile.phoneE164 ? {} : { channels: [] }), updatedAt: now, updatedBy: manager.uid });
+      }
       tx.create(ref.collection('revisions').doc(String(next.revision)), {
         companyId: manager.companyId, driverKey: profile.driverKey, revision: next.revision,
         previous: previous || null, next, at: now, actorUid: manager.uid,

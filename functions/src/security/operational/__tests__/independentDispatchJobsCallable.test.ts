@@ -20,6 +20,7 @@ function collectionRef(path: string): any {
 const db = { collection: collectionRef, runTransaction: async (fn: any) => {
   const writes: (() => void)[] = [];
   const result = await fn({ get: (ref: any) => ref.get(), set: (ref: any, value: any) => writes.push(() => records.set(ref.path, value)),
+    update: (ref: any, value: any) => writes.push(() => records.set(ref.path, { ...records.get(ref.path), ...value })),
     create: (ref: any, value: any) => writes.push(() => records.set(ref.path, value)) });
   writes.forEach(write => write()); return result;
 } };
@@ -279,7 +280,7 @@ describe('Independent Dispatch driver profiles', () => {
     records.set('companies/company-a/independent_dispatch_wb_drivers/wb-marcial', linked);
     records.set('companies/company-a/independent_dispatch_customers/mongoose', { companyId: 'company-a', active: true, name: 'Mongoose' });
     const profile = { driverKey: 'wellbuilt:wb-marcial', primaryCustomerId: 'mongoose',
-      standingWork: 'Regular route stays with Marcial.', sideJobs: 'yes', shiftPreference: 'day',
+      phoneE164: '+17015550123', whatsappName: 'Marcial WA', standingWork: 'Regular route stays with Marcial.', sideJobs: 'yes', shiftPreference: 'day',
       operatorNotes: [{ customerId: 'mongoose', dispatchNote: 'Review with management.', operatorFeedback: '', reviewPending: true }] };
     const saved = await profileCall({ op: 'save', profile, expectedRevision: 0 });
     expect(saved.profile).toMatchObject({ ...profile, revision: 1, companyId: 'company-a' });
@@ -300,8 +301,12 @@ describe('Independent Dispatch driver profiles', () => {
     records.set('companies/company-a', { activePackages: ['independent-dispatch'] });
     records.set('companies/company-a/external_drivers/isaac', { companyId: 'company-b', externalDriverId: 'isaac', active: true });
     await expect(profileCall({ op: 'save', profile, expectedRevision: 0 })).rejects.toThrow('driver_not_in_company_roster');
-    records.set('companies/company-a/external_drivers/isaac', { companyId: 'company-a', externalDriverId: 'isaac', active: true, displayName: 'Isaac' });
+    records.set('companies/company-a/external_drivers/isaac', { companyId: 'company-a', externalDriverId: 'isaac', active: true, displayName: 'Isaac', phoneE164: '+17015550123', channels: ['sms'] });
     await profileCall({ op: 'save', profile, expectedRevision: 0 });
+    await profileCall({ op: 'save', profile: { ...profile, phoneE164: '+17015550456', whatsappName: 'Isaac WA' }, expectedRevision: 1 });
+    expect(records.get('companies/company-a/external_drivers/isaac').phoneE164).toBe('+17015550456');
+    await profileCall({ op: 'save', profile: { ...profile, phoneE164: '', whatsappName: '' }, expectedRevision: 2 });
+    expect(records.get('companies/company-a/external_drivers/isaac')).toMatchObject({ phoneE164: '', channels: [] });
     await call(create);
     await expect(call({ op: 'assign', jobId: 'job-a', requestId: 'assign-isaac', expectedRevision: 1, externalDriverId: 'isaac' }))
       .resolves.toMatchObject({ job: { status: 'assigned' } });

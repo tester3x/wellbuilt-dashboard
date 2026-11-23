@@ -7,6 +7,8 @@ export type OperatorReviewNote = {
 
 export type IndependentDriverProfileInput = {
   driverKey: string;
+  phoneE164?: string;
+  whatsappName?: string;
   primaryCustomerId: string;
   standingWork: string;
   sideJobs: 'ask' | 'yes' | 'no';
@@ -27,10 +29,16 @@ export function profileDocumentId(driverKey: string): string {
 export function parseIndependentDriverProfile(raw: unknown): IndependentDriverProfileInput {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_driver_profile');
   const input = raw as Record<string, unknown>;
-  if (Object.keys(input).some(key => !['driverKey', 'primaryCustomerId', 'standingWork', 'sideJobs', 'shiftPreference', 'operatorNotes'].includes(key)))
+  if (Object.keys(input).some(key => !['driverKey', 'phoneE164', 'whatsappName', 'primaryCustomerId', 'standingWork', 'sideJobs', 'shiftPreference', 'operatorNotes'].includes(key)))
     throw Error('unexpected_driver_profile_field');
   if (typeof input.driverKey !== 'string') throw Error('invalid_driver_key');
   profileDocumentId(input.driverKey);
+  const phoneE164 = input.phoneE164 === undefined ? '' : input.phoneE164;
+  if (typeof phoneE164 !== 'string' || (phoneE164 !== '' && !/^\+[1-9]\d{7,14}$/.test(phoneE164)))
+    throw Error('invalid_driver_phone');
+  const whatsappName = input.whatsappName === undefined ? '' : input.whatsappName;
+  if (typeof whatsappName !== 'string' || whatsappName.length > 80 || /[\r\n\u0000-\u001f]/.test(whatsappName))
+    throw Error('invalid_whatsapp_name');
   if (typeof input.primaryCustomerId !== 'string' || (input.primaryCustomerId !== '' && !ID.test(input.primaryCustomerId)))
     throw Error('invalid_primary_customer');
   if (typeof input.standingWork !== 'string' || input.standingWork.length > 1000) throw Error('invalid_standing_work');
@@ -50,7 +58,10 @@ export function parseIndependentDriverProfile(raw: unknown): IndependentDriverPr
     return { customerId: row.customerId, dispatchNote: row.dispatchNote.trim(),
       operatorFeedback: row.operatorFeedback.trim(), reviewPending: row.reviewPending };
   });
-  return { driverKey: input.driverKey, primaryCustomerId: input.primaryCustomerId,
+  return { driverKey: input.driverKey,
+    ...(input.phoneE164 === undefined ? {} : { phoneE164 }),
+    ...(input.whatsappName === undefined ? {} : { whatsappName: whatsappName.trim() }),
+    primaryCustomerId: input.primaryCustomerId,
     standingWork: input.standingWork.trim(), sideJobs: input.sideJobs as IndependentDriverProfileInput['sideJobs'],
     shiftPreference: (input.shiftPreference || 'unset') as IndependentDriverProfileInput['shiftPreference'], operatorNotes };
 }

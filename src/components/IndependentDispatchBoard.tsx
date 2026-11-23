@@ -10,6 +10,7 @@ import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentR
 import { ACTIVE_LANES, pickupTiming, sortDispatchJobs } from '@/lib/independentDispatchBoard';
 import { driverAvailability } from '@/lib/independentDriverAvailability';
 import { listIndependentDriverProfiles, type IndependentDriverProfile } from '@/lib/independentDriverProfiles';
+import { independentDriverContact } from '@/lib/independentDriverContact';
 import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
 import { normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
@@ -33,13 +34,13 @@ function jobCrew(job: IndependentJob) {
   return [];
 }
 
-function JobDialpadLinks({ job, directory, drivers }: { job: IndependentJob; directory: IndependentDirectory | null; drivers: ExternalDriver[] }) {
+function JobDialpadLinks({ job, directory, drivers, profiles }: { job: IndependentJob; directory: IndependentDirectory | null; drivers: ExternalDriver[]; profiles: IndependentDriverProfile[] }) {
   const customer = directory?.customers.find(item => item.id === job.customerId);
   const customerHref = dialpadCallHref(customer?.phoneE164, job.id, directory?.dispatchPhoneE164);
   const contactHref = dialpadCallHref(job.jobContactPhoneE164, job.id, directory?.dispatchPhoneE164);
-  const driverLinks = jobCrew(job).filter(member => member.source === 'outside').map(member => ({
+  const driverLinks = jobCrew(job).map(member => ({
     name: member.name, key: member.key,
-    href: dialpadCallHref(drivers.find(driver => `outside:${driver.externalDriverId}` === member.key)?.phoneE164, job.id, directory?.dispatchPhoneE164),
+    href: dialpadCallHref(independentDriverContact(member, profiles, drivers).phoneE164, job.id, directory?.dispatchPhoneE164),
   })).filter(link => link.href);
   if (!customerHref && !contactHref && !driverLinks.length) return null;
   return <div className="mt-2 flex flex-wrap gap-3 text-sm text-cyan-300 underline">
@@ -185,8 +186,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     });
   }
   function crewRow(job: IndependentJob, driver: ReturnType<typeof jobCrew>[number]) {
-    const missingPhone = driver.source === 'outside' && !normalizeWhatsAppNumber(
-      drivers.find(profile => `outside:${profile.externalDriverId}` === driver.key)?.phoneE164);
+    const missingPhone = !normalizeWhatsAppNumber(independentDriverContact(driver, driverProfiles, drivers).phoneE164);
     return <div key={driver.key} className="grid min-h-[4.75rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 border-t border-gray-700/70 px-2 py-2 first:border-t-0">
       <div className="min-w-0">
         <p className={`flex flex-wrap items-center gap-1 text-xs ${missingPhone ? 'text-red-300' : 'text-white'}`}>
@@ -285,8 +285,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {(job.shift || job.ongoing) && <p className="text-sm text-cyan-200">{job.shift === 'day' ? 'Day shift' : job.shift === 'night' ? 'Night shift' : job.shift === 'both' ? 'Day and night shifts' : 'Any shift'}{job.ongoing ? ' · Ongoing work' : ''}</p>}
       {job.requestedDriverCount && <p className="text-sm text-amber-200">Drivers requested: {job.requestedDriverCount} · Assigned: {jobCrew(job).length}{jobCrew(job).length < job.requestedDriverCount ? ` · ${job.requestedDriverCount - jobCrew(job).length} still needed` : ''}</p>}
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
-      <JobDialpadLinks job={job} directory={directory} drivers={drivers} />
-      {canWrite && <IndependentWhatsAppLinks job={job} />}
+      <JobDialpadLinks job={job} directory={directory} drivers={drivers} profiles={driverProfiles} />
+      {canWrite && <IndependentWhatsAppLinks job={job} drivers={drivers} profiles={driverProfiles} />}
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
       {(job.cargo || job.notes || (job.sector && Object.values(job.sectorFields || {}).some(Boolean))) && <details className="mt-3 rounded border border-gray-700 bg-gray-900/60 p-2 text-sm"><summary className="cursor-pointer text-cyan-200">Details and instructions</summary>
         {job.cargo && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">Cargo: {job.cargo}</p>}

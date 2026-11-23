@@ -34,7 +34,7 @@ const bundle = await build({ stdin: { contents: `import React from 'react';impor
   b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery|independentDriverProfiles)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
     : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],communicationChannels:['sms'],dispatchPhoneE164:'+17015550100',customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],contacts:[{id:'john',name:'John Wick',role:'Company man',phoneE164:'+17015550112'},{id:'jane',name:'Jane Doe',role:'Lead',phoneE164:'+17015550113'}],workCategories:[{id:'rig-work',name:'Rig Work',sector:'water-hauling',sourceChannels:['Rig Work chat'],assets:['Rig 429']}],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']},{id:'bob',name:"Bob's Hot Shot LLC",alternateNames:["Bob's",'BHS'],phoneE164:'',active:true,sectors:['hot-shot'],jobNames:[],pickupLocations:[],deliveryLocations:[]}]});`
-    : a.path.endsWith('independentDriverProfiles') ? `let profiles=[];window.savedProfiles=profiles;export const listIndependentDriverProfiles=async()=>structuredClone(profiles);export const saveIndependentDriverProfile=async(p,expectedRevision)=>{const previous=profiles.find(x=>x.driverKey===p.driverKey);if((previous?.revision||0)!==expectedRevision)throw Error('revision_conflict');const saved={...p,companyId:'fixture',revision:expectedRevision+1,updatedAt:new Date().toISOString(),updatedBy:'fixture'};profiles=profiles.filter(x=>x.driverKey!==p.driverKey).concat(saved);window.savedProfiles=profiles;return saved};`
+    : a.path.endsWith('independentDriverProfiles') ? `let profiles=[{driverKey:'outside:driver-a',phoneE164:'+17015550999',whatsappName:'Outside A WA'},{driverKey:'wellbuilt:wb-marcial',phoneE164:'+17015550888',whatsappName:'Marcial WA'}];window.savedProfiles=profiles;export const listIndependentDriverProfiles=async()=>structuredClone(profiles);export const saveIndependentDriverProfile=async(p,expectedRevision)=>{const previous=profiles.find(x=>x.driverKey===p.driverKey);if((previous?.revision||0)!==expectedRevision)throw Error('revision_conflict');const saved={...p,companyId:'fixture',revision:expectedRevision+1,updatedAt:new Date().toISOString(),updatedBy:'fixture'};profiles=profiles.filter(x=>x.driverKey!==p.driverKey).concat(saved);window.savedProfiles=profiles;return saved};`
     : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true},...['b','c','d','e','f'].map(x=>({externalDriverId:'driver-'+x,displayName:'Driver '+x.toUpperCase(),phoneE164:'',channels:[],active:true,shiftPreference:x==='b'?'night':undefined}))];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{const i=roster.findIndex(x=>x.externalDriverId===d.externalDriverId);if(i>=0)roster[i]=d;else roster.push(d);window.savedDriver=d;window.roster=structuredClone(roster);return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
@@ -274,7 +274,10 @@ try {
     `dialpad://+17015550111?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.equal(await assignedCard.getByRole('link',{name:'Call job contact in Dialpad'}).getAttribute('href'),
     `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
-  assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
+  assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550999?confirmPhone=1&fromNumber=%2B17015550100&customData='));
+  await assignedCard.getByText('WhatsApp: Outside A WA').waitFor();
+  await assignedCard.getByText('+17015550999').waitFor();
+  assert.ok((await assignedCard.getByRole('link',{name:'Open driver chat'}).first().getAttribute('href'))?.startsWith('https://wa.me/17015550999?text='));
   await assignedCard.getByTitle('Driver B').waitFor();
   assert.equal(await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).inputValue(),'night');
   await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('day');
@@ -318,7 +321,9 @@ try {
   const assignedLinkedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run ltl',exact:true})});
   assert.match(await assignedLinkedCard.getByTitle('Nitto–Anthony (Marcial Lebaron)').textContent(),/WB/);
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers'&&r.drivers.some(d=>d.key==='wellbuilt:wb-marcial'))?.drivers[0].key),'wellbuilt:wb-marcial');
-  assert.equal(await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).count(),0);
+  assert.ok((await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550888?confirmPhone=1&fromNumber=%2B17015550100&customData='));
+  await assignedLinkedCard.getByText('WhatsApp: Marcial WA').waitFor();
+  await assignedLinkedCard.getByText('+17015550888').waitFor();
   await queue.getByRole('button',{name:/Needs a driver/}).click();
   const planningCard = dialog.getByRole('article').first();
   await planningCard.getByText('Choose drivers').click();

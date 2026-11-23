@@ -36,12 +36,15 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.getByRole('combobox', { name: 'Driver profile' }).selectOption('wellbuilt:wb-a');
+  await page.getByRole('textbox', { name: 'Driver phone (international format)' }).fill('+17015550123');
+  await page.getByRole('textbox', { name: 'WhatsApp name (optional)' }).fill('Marcial WA');
   await page.getByRole('combobox', { name: 'Usual shift' }).selectOption('day');
   await page.getByRole('combobox', { name: 'Primary customer' }).selectOption('customer-a');
   await page.getByRole('button', { name: 'Save driver profile' }).click();
   await page.getByText('Driver profile saved. Operator review notes remain nonbinding.').waitFor();
-  assert.deepEqual(await page.evaluate(() => ({ key: window.savedProfiles[0].driverKey, shift: window.savedProfiles[0].shiftPreference })),
-    { key: 'wellbuilt:wb-a', shift: 'day' });
+  assert.deepEqual(await page.evaluate(() => ({ key: window.savedProfiles[0].driverKey, shift: window.savedProfiles[0].shiftPreference,
+    phone: window.savedProfiles[0].phoneE164, whatsappName: window.savedProfiles[0].whatsappName })),
+    { key: 'wellbuilt:wb-a', shift: 'day', phone: '+17015550123', whatsappName: 'Marcial WA' });
   await page.getByRole('combobox', { name: 'Driver profile' }).selectOption('outside:outside-a');
   assert.equal(await page.getByRole('combobox', { name: 'Usual shift' }).count(), 0, 'outside shift preference remains in the roster');
   assert.deepEqual(errors, []);
