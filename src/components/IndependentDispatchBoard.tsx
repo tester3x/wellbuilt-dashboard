@@ -9,6 +9,7 @@ import { dialpadCallHref } from '@/lib/dialpad';
 import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentRequestParser';
 import { ACTIVE_LANES, pickupTiming, sortDispatchJobs } from '@/lib/independentDispatchBoard';
 import { driverAvailability } from '@/lib/independentDriverAvailability';
+import { IndependentDriverProfilesPanel } from './IndependentDriverProfilesPanel';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false };
@@ -353,5 +354,6 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     </form>}
     </div>
     {canManageDrivers && <div><ExternalAssignmentDeliveryPanel jobs={[]} canManage={canWrite && canManageDrivers} rosterOnly onRosterChange={refresh} /></div>}
+    {canManageDrivers && canWrite && <IndependentDriverProfilesPanel drivers={drivers} wbDrivers={wbDrivers} customers={directory?.customers || []} />}
   </div>;
 }

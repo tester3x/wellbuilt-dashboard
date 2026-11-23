@@ -2,7 +2,7 @@
   "capturedAt": "2026-10-30",
   "project": "wellbuilt-sync",
   "source": "Existing deployment inventory plus successful scoped Firebase deployment of four fresh-water callables on 2026-10-27; scoped owner signup deployment and live unauthenticated refusal probes on 2026-10-29, source ab549a426d54f55146b62eb0946b2496b9c8ce84; October30 scoped employee onboarding deployment and ACTIVE inventory; existing Watchdog timed-call endpoints independently confirmed ACTIVE, no Watchdog operations/deployments performed.; scoped arrival-location proposal/review callables successfully deployed from499ba1f0 and verified ACTIVE 2026-11-18T03:23:54.566Z. Scoped PW job-exception callables deployed from1a935ac5a0196ba0b6635273239b5f9bb0fb8c24, independently verified ACTIVE in us-central1 with firebase-functions-hash d3b9ee154a86055015d7eed52fccd506713dd4a9. Scoped staffSetCompanyJobPackage deployed from a44791287e4940862f027e182bbc382c803c2e55 and verified ACTIVE in us-central1 on 2026-11-21. Scoped staffIndependentDispatchDirectory created and staffIndependentDispatchJobs updated from de42cf680387fb02ad619ebc20db13f230ebe6b3; both independently verified ACTIVE in us-central1 with firebase-functions-hash 68dddcd09f34463da939cac4f71658c2f1afe2da on 2026-11-21. Both Independent Dispatch callables updated from 99d053b9791fe41fd470f45e415076d6cd859469 and independently verified ACTIVE in us-central1 with firebase-functions-hash 751ebdc088aa338cca8e051597f0189ed3bf18f7 on 2026-11-21. Scoped staffSetCompanyJobPackage updated from d3da10e56bc1e9f0fbf49e16278cd4227c5159e1 and verified ACTIVE in us-central1 with firebase-functions-hash cb4a3ad9c3ab7236ded401fe2e58880f35babf8c. Scoped staffIndependentDispatchDirectory updated from 1c184ca7b1cb704c2247c6349f749fb73ea765ba and verified ACTIVE in us-central1 with firebase-functions-hash 80f2c4b16800f103ed8400fb355bb2416e86f264 on 2026-11-21.",
-  "count": 246,
+  "count": 247,
   "names": [
     "acceptDriverDispatch",
     "acceptTransferRequest",
@@ -216,6 +216,7 @@
     "staffConvertApprovedDriverSecureLogin",
     "staffDeletePull",
     "staffGetPrimaryRouteAssignments",
+    "staffIndependentDriverProfiles",
     "staffIndependentDispatchDirectory",
     "staffIndependentDispatchJobs",
     "staffListFreshWaterPads",

@@ -3642,6 +3642,7 @@ export {
   staffExternalAssignmentDelivery,
   staffIndependentDispatchJobs,
   staffIndependentDispatchDirectory,
+  staffIndependentDriverProfiles,
   staffSetCompanyJobPackage,
   staffCreateExternalGuestLink,
   externalGuestAssignment,

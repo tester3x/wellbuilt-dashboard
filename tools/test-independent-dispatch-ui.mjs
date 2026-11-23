@@ -18,9 +18,10 @@ export async function independentDispatchJobs(data){
  return {ok:true,job};
 }`;
 const bundle = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {IndependentDispatchBoard} from './src/components/IndependentDispatchBoard';createRoot(document.getElementById('root')).render(<IndependentDispatchBoard companyId="fixture" canWrite={true} canManageDrivers={true}/>);`, loader: 'tsx', resolveDir: process.cwd() }, bundle: true, write: false, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, plugins: [{ name: 'fixture', setup(b) {
-  b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
+  b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery|independentDriverProfiles)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
     : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],communicationChannels:['sms'],dispatchPhoneE164:'+17015550100',customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],contacts:[{id:'john',name:'John Wick',role:'Company man',phoneE164:'+17015550112'},{id:'jane',name:'Jane Doe',role:'Lead',phoneE164:'+17015550113'}],workCategories:[{id:'rig-work',name:'Rig Work',sector:'water-hauling',sourceChannels:['Rig Work chat'],assets:['Rig 429']}],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']},{id:'bob',name:"Bob's Hot Shot LLC",alternateNames:["Bob's",'BHS'],phoneE164:'',active:true,sectors:['hot-shot'],jobNames:[],pickupLocations:[],deliveryLocations:[]}]});`
+    : a.path.endsWith('independentDriverProfiles') ? `let profiles=[];window.savedProfiles=profiles;export const listIndependentDriverProfiles=async()=>structuredClone(profiles);export const saveIndependentDriverProfile=async(p,expectedRevision)=>{const previous=profiles.find(x=>x.driverKey===p.driverKey);if((previous?.revision||0)!==expectedRevision)throw Error('revision_conflict');const saved={...p,companyId:'fixture',revision:expectedRevision+1,updatedAt:new Date().toISOString(),updatedBy:'fixture'};profiles=profiles.filter(x=>x.driverKey!==p.driverKey).concat(saved);window.savedProfiles=profiles;return saved};`
     : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true},...['b','c','d','e','f'].map(x=>({externalDriverId:'driver-'+x,displayName:'Driver '+x.toUpperCase(),phoneE164:'',channels:[],active:true}))];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{const i=roster.findIndex(x=>x.externalDriverId===d.externalDriverId);if(i>=0)roster[i]=d;else roster.push(d);window.savedDriver=d;window.roster=structuredClone(roster);return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
@@ -221,6 +222,19 @@ try {
   const completedCard=page.getByRole('region',{name:'Completed jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'});
   await completedCard.waitFor();
   assert.equal(await completedCard.getByRole('button').count(),0);
+  await page.getByRole('button',{name:/Independent Dispatch driver profiles/}).click();
+  await page.getByRole('combobox',{name:'Driver profile'}).selectOption('wellbuilt:wb-marcial');
+  await page.getByRole('combobox',{name:'Primary customer'}).selectOption('customer-a');
+  await page.getByRole('combobox',{name:'Side jobs'}).selectOption('yes');
+  await page.getByRole('textbox',{name:'Standing work'}).fill('Regular route remains assigned to Marcial.');
+  await page.getByRole('combobox',{name:'Operator for review note'}).selectOption('bob');
+  await page.getByRole('button',{name:'Add note'}).click();
+  await page.getByRole('textbox',{name:'Dispatch observation for bob'}).fill('Review customer feedback with management.');
+  await page.getByRole('checkbox',{name:'Mark for management review'}).check();
+  await page.getByRole('button',{name:'Save driver profile'}).click();
+  await page.getByText('Driver profile saved. Operator review notes remain nonbinding.').waitFor();
+  assert.deepEqual(await page.evaluate(()=>{const p=window.savedProfiles[0];return {key:p.driverKey,primary:p.primaryCustomerId,sideJobs:p.sideJobs,pending:p.operatorNotes[0].reviewPending}}),
+    {key:'wellbuilt:wb-marcial',primary:'customer-a',sideJobs:'yes',pending:true});
   assert.deepEqual(await page.evaluate(()=>window.requests.filter(r=>r.op==='create'&&r.job.title.startsWith('Pipe run ')).map(r=>r.job.sector)),sectors.map(([sector])=>sector));
   assert.deepEqual(errors,[]);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');

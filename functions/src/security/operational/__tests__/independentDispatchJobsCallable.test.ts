@@ -31,8 +31,10 @@ jest.mock('../../tokenMint', () => ({ driverAuthUid: (id: string) => `driver_${i
 jest.mock('firebase-functions/v2/https', () => ({ onCall: (_: any, handler: any) => handler,
   HttpsError: class extends Error { constructor(public code: string, message: string) { super(message); } } }));
 import { staffIndependentDispatchJobs } from '../../independentDispatchJobsCallable';
+import { staffIndependentDriverProfiles } from '../../independentDriverProfilesCallable';
 import { requireTrustedCompanyCapability } from '../../trustedStaffAuthority';
 const call = (data: any) => (staffIndependentDispatchJobs as any)({ auth: { uid: authority.uid }, data });
+const profileCall = (data: any) => (staffIndependentDriverProfiles as any)({ auth: { uid: authority.uid }, data });
 const details = { title: 'Delivery', customer: 'Customer', pickup: 'Yard', destination: 'Site' };
 const create = { op: 'create', jobId: 'job-a', requestId: 'request-a', job: details };
 beforeEach(() => {
@@ -185,5 +187,38 @@ describe('Independent Dispatch callable boundaries', () => {
     await expect(call({ op: 'update', jobId: 'job-a', requestId: 'archived-clear', expectedRevision: 2,
       job: { ...water, categoryId: '', asset: '' } }))
       .resolves.toMatchObject({ job: { revision: 3, categoryId: '', asset: '' } });
+  });
+});
+
+describe('Independent Dispatch driver profiles', () => {
+  it('saves a review note without changing assignment eligibility, with revision history and tenant checks', async () => {
+    const linked = { companyId: 'company-a', driverId: 'wb-marcial', displayName: 'Marcial', active: true };
+    records.set('companies/company-a/independent_dispatch_wb_drivers/wb-marcial', linked);
+    records.set('companies/company-a/independent_dispatch_customers/mongoose', { companyId: 'company-a', active: true, name: 'Mongoose' });
+    const profile = { driverKey: 'wellbuilt:wb-marcial', primaryCustomerId: 'mongoose',
+      standingWork: 'Regular route stays with Marcial.', sideJobs: 'yes',
+      operatorNotes: [{ customerId: 'mongoose', dispatchNote: 'Review with management.', operatorFeedback: '', reviewPending: true }] };
+    const saved = await profileCall({ op: 'save', profile, expectedRevision: 0 });
+    expect(saved.profile).toMatchObject({ ...profile, revision: 1, companyId: 'company-a' });
+    expect(records.get('companies/company-a/independent_dispatch_driver_profiles/wellbuilt__wb-marcial/revisions/1'))
+      .toMatchObject({ actorUid: 'dispatcher', revision: 1 });
+    expect((await profileCall({ op: 'list' })).profiles).toHaveLength(1);
+    await expect(profileCall({ op: 'save', profile, expectedRevision: 0 })).rejects.toThrow('driver_profile_changed');
+    await expect(profileCall({ op: 'save', profile: { ...profile, primaryCustomerId: 'foreign' }, expectedRevision: 1 }))
+      .rejects.toThrow('customer_not_in_company_directory');
+    expect(records.get('companies/company-a/independent_dispatch_driver_profiles/wellbuilt__wb-marcial').revision).toBe(1);
+  });
+  it('requires the package and a driver in the same company roster', async () => {
+    const profile = { driverKey: 'outside:isaac', primaryCustomerId: '', standingWork: '', sideJobs: 'ask', operatorNotes: [] };
+    records.set('companies/company-a', { activePackages: ['water-hauling'] });
+    await expect(profileCall({ op: 'list' })).rejects.toThrow('independent_dispatch_package_inactive');
+    records.set('companies/company-a', { activePackages: ['independent-dispatch'] });
+    records.set('companies/company-a/external_drivers/isaac', { companyId: 'company-b', externalDriverId: 'isaac', active: true });
+    await expect(profileCall({ op: 'save', profile, expectedRevision: 0 })).rejects.toThrow('driver_not_in_company_roster');
+    records.set('companies/company-a/external_drivers/isaac', { companyId: 'company-a', externalDriverId: 'isaac', active: true, displayName: 'Isaac' });
+    await profileCall({ op: 'save', profile, expectedRevision: 0 });
+    await call(create);
+    await expect(call({ op: 'assign', jobId: 'job-a', requestId: 'assign-isaac', expectedRevision: 1, externalDriverId: 'isaac' }))
+      .resolves.toMatchObject({ job: { status: 'assigned' } });
   });
 });
