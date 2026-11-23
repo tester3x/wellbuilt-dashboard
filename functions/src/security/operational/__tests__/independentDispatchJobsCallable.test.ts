@@ -133,6 +133,11 @@ describe('Independent Dispatch callable boundaries', () => {
     await expect(call({ ...batch, requestId: 'duplicate', expectedRevision: 2, drivers: [
       { key: 'outside:outside-c', shift: 'day' }, { key: 'outside:outside-c', shift: 'night' },
     ] })).rejects.toThrow('invalid_driver_selection');
+    // An older job may already have a conflicting driver. That must not reject an unrelated new crew member.
+    records.set('independent_dispatch_jobs/legacy-other', { ...records.get('independent_dispatch_jobs/job-a'),
+      drivers: [{ key: 'outside:outside-a', name: 'outside-a', source: 'outside', shift: 'day', assignedAt: '2026-11-20T00:00:00.000Z' }] });
+    await expect(call({ ...batch, requestId: 'add-unrelated', expectedRevision: 2,
+      drivers: [{ key: 'outside:outside-c', shift: 'day' }] })).resolves.toMatchObject({ job: { revision: 3 } });
   });
   it('treats every crew member as busy on an overlapping job', async () => {
     for (const id of ['day-a', 'night-a']) records.set(`companies/company-a/external_drivers/${id}`,
@@ -144,6 +149,19 @@ describe('Independent Dispatch callable boundaries', () => {
     await expect(call({ op: 'addDriver', jobId: 'job-b', requestId: 'overlap-night', expectedRevision: 1, externalDriverId: 'night-a', shift: 'night' }))
       .rejects.toThrow('driver_assignment_conflict');
   });
+  it('confirms a legacy driver shift without changing the rest of the assignment', async () => {
+    records.set('companies/company-a/external_drivers/driver-a', { companyId: 'company-a', active: true, displayName: 'Driver A' });
+    await call(create);
+    await call({ op: 'assign', jobId: 'job-a', requestId: 'assign-a', expectedRevision: 1, externalDriverId: 'driver-a' });
+    const confirmed = await call({ op: 'setDriverShift', jobId: 'job-a', requestId: 'shift-a', expectedRevision: 2,
+      driverKey: 'outside:driver-a', shift: 'day' });
+    expect(confirmed.job).toMatchObject({ revision: 3, status: 'assigned', drivers: [{ key: 'outside:driver-a', shift: 'day' }] });
+    expect(records.get('independent_dispatch_jobs/job-a/events/shift-a')).toMatchObject({
+      beforeDrivers: [{ key: 'outside:driver-a', shift: '' }], afterDrivers: [{ key: 'outside:driver-a', shift: 'day' }],
+    });
+    await expect(call({ op: 'setDriverShift', jobId: 'job-a', requestId: 'bad-shift', expectedRevision: 3,
+      driverKey: 'outside:driver-a', shift: '' })).rejects.toThrow('invalid_driver_shift_change');
+  });
   it('allows known nonoverlapping work and rejects an edit that creates a conflict', async () => {
     records.set('companies/company-a/external_drivers/driver-a', { companyId: 'company-a', active: true, displayName: 'Driver' });
     const first = { ...details, scheduledAt: '2099-11-23T08:00:00.000Z', estimatedEndAt: '2099-11-23T12:00:00.000Z' };
@@ -151,6 +169,9 @@ describe('Independent Dispatch callable boundaries', () => {
     await call({ ...create, job: first });
     await call({ ...create, jobId: 'job-b', requestId: 'create-b', job: later });
     await call({ op: 'assign', jobId: 'job-a', requestId: 'assign-a', expectedRevision: 1, externalDriverId: 'driver-a' });
+    await expect(call({ op: 'assign', jobId: 'job-b', requestId: 'before-start', expectedRevision: 1, externalDriverId: 'driver-a' }))
+      .rejects.toThrow('driver_assignment_conflict');
+    await call({ op: 'status', jobId: 'job-a', requestId: 'start-a', expectedRevision: 2, status: 'in_progress' });
     await call({ op: 'assign', jobId: 'job-b', requestId: 'assign-b', expectedRevision: 1, externalDriverId: 'driver-a' });
     await expect(call({ op: 'update', jobId: 'job-b', requestId: 'overlap-edit', expectedRevision: 2,
       job: { ...later, scheduledAt: '2099-11-23T11:00:00.000Z' } })).rejects.toThrow('driver_assignment_conflict');

@@ -62,6 +62,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [filter, setFilter] = useState('active');
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
+  const [jobActionError, setJobActionError] = useState<{ jobId: string; message: string } | null>(null);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -106,13 +107,17 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   useEffect(() => { if (canManageDrivers) void listIndependentDriverProfiles().then(setDriverProfiles).catch(() => setDriverProfiles([])); }, [canManageDrivers, companyId]);
   useEffect(() => { const timer = window.setInterval(() => setAvailabilityNow(Date.now()), 60_000); return () => window.clearInterval(timer); }, []);
   async function run(payload: Record<string, unknown>, after?: () => void) {
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError(''); setJobActionError(null); setNotice('');
     try {
       await independentDispatchJobs(payload);
       after?.();
       setNotice('Saved.');
       await refresh();
-    } catch (e) { setError(e instanceof Error ? e.message : 'Unable to save. Refresh and try again.'); }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unable to save. Refresh and try again.';
+      setError(message);
+      if (typeof payload.jobId === 'string') setJobActionError({ jobId: payload.jobId, message });
+    }
     finally { setBusy(false); }
   }
   function resetForm() {
@@ -160,7 +165,14 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   function crewRow(job: IndependentJob, driver: ReturnType<typeof jobCrew>[number]) {
     return <div key={driver.key} className="min-h-12 border-t border-gray-700/70 py-1 first:border-t-0">
       <p className="truncate text-xs text-white" title={driver.name}>{driver.name}{driver.source === 'wellbuilt' ? ' · WB' : ''}</p>
-      {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <div className="mt-0.5 flex gap-2 text-xs">
+      {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Shown by profile preference; assignment shift needs confirmation</p>}
+      {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
+        <select aria-label={`Assignment shift for ${driver.name} on ${job.title}`} value={driver.shift || ''} disabled={busy}
+          className="rounded border border-gray-600 bg-gray-950 px-1 py-0.5 text-xs text-white"
+          onChange={event => void run({ op: 'setDriverShift', jobId: job.id, expectedRevision: job.revision,
+            requestId: crypto.randomUUID(), driverKey: driver.key, shift: event.target.value })}>
+          <option value="" disabled>Set shift</option><option value="day">Day</option><option value="night">Night</option>
+        </select>
         <button type="button" disabled={busy || Object.keys(assignments[job.id] || {}).length !== 1 || !canAddSelection(job, true)}
           className="text-cyan-300 underline disabled:opacity-40" title="Replace with the selected driver" onClick={() => {
             const key = Object.keys(assignments[job.id] || {})[0];
@@ -174,6 +186,13 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
             driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID() })}>Remove</button>
       </div>}
     </div>;
+  }
+  function crewShift(driver: ReturnType<typeof jobCrew>[number]): '' | 'day' | 'night' {
+    if (driver.shift === 'day' || driver.shift === 'night') return driver.shift;
+    const preference = driver.source === 'outside'
+      ? drivers.find(item => `outside:${item.externalDriverId}` === driver.key)?.shiftPreference
+      : driverProfiles.find(item => item.driverKey === driver.key)?.shiftPreference;
+    return preference === 'day' || preference === 'night' ? preference : '';
   }
   function chooseSavedCustomer(id: string) {
     const next = directory?.customers.find(customer => customer.id === id);
@@ -241,17 +260,17 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       </details>}
       <div className="mt-2 text-sm text-amber-200">{jobCrew(job).length ? <><span className="font-medium">Drivers ({jobCrew(job).length})</span>
         <div className="mx-auto mt-1 grid w-full max-w-2xl grid-cols-2 gap-2">
-          {(['day', 'night'] as const).map(shift => <div key={shift} className="min-w-0 rounded border border-gray-700 bg-gray-900/70 px-2 py-1">
-            <p className="text-center text-xs font-semibold text-cyan-200">{shift === 'day' ? 'Day' : 'Night'} ({jobCrew(job).filter(driver => driver.shift === shift).length})</p>
-            <div className="max-h-36 overflow-y-auto">{jobCrew(job).filter(driver => driver.shift === shift).map(driver => crewRow(job, driver))}</div>
+          {(['day', 'night'] as const).map(shift => <div key={shift} role="region" aria-label={`${shift === 'day' ? 'Day' : 'Night'} Shift drivers`} className="min-w-0 rounded border border-gray-700 bg-gray-900/70 px-2 py-1">
+            <div className="flex items-center justify-between gap-2 border-b border-gray-700 pb-1 text-xs font-semibold text-cyan-200"><span>{shift === 'day' ? 'Day Shift' : 'Night Shift'}</span><span aria-label={`${jobCrew(job).filter(driver => crewShift(driver) === shift).length} ${shift} shift drivers`}>{jobCrew(job).filter(driver => crewShift(driver) === shift).length}</span></div>
+            <div className="min-h-16 max-h-36 overflow-y-auto">{jobCrew(job).filter(driver => crewShift(driver) === shift).map(driver => crewRow(job, driver))}</div>
           </div>)}
         </div>
-        {jobCrew(job).some(driver => !driver.shift) && <div className="mx-auto mt-2 w-full max-w-2xl rounded border border-gray-700 bg-gray-900/70 px-2 py-1">
-          <p className="text-center text-xs font-semibold text-gray-300">Shift not set ({jobCrew(job).filter(driver => !driver.shift).length})</p>
-          <div className="max-h-36 overflow-y-auto">{jobCrew(job).filter(driver => !driver.shift).map(driver => crewRow(job, driver))}</div>
+        {jobCrew(job).some(driver => !crewShift(driver)) && <div className="mx-auto mt-2 w-full max-w-2xl text-xs text-gray-300">
+          <p>Shift needs review ({jobCrew(job).filter(driver => !crewShift(driver)).length})</p>
+          {jobCrew(job).filter(driver => !crewShift(driver)).map(driver => crewRow(job, driver))}
         </div>}
       </> : 'Needs a driver'}</div>
-      {canWrite && <div className="mt-3 flex flex-wrap gap-2">
+      {canWrite && <div className="mt-3 flex flex-wrap items-start gap-2">
         {['unassigned', 'assigned', 'in_progress'].includes(job.status) && <>
           {['unassigned', 'assigned'].includes(job.status) && <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>}
           {canManageDrivers && <><IndependentDriverPicker job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
@@ -268,6 +287,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
         {!['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
       </div>}
+      {jobActionError?.jobId === job.id && <p role="alert" className="mt-2 text-sm text-red-300">Assignment was not saved: {jobActionError.message}</p>}
       <p className="mt-2 text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
     </article>)}</div>;
         return <section key={lane.status} aria-label={`${lane.label} jobs`} className={`min-w-0 rounded-lg border ${isWaitingQueue ? 'border-amber-700/70 bg-amber-950/20' : 'border-gray-700 bg-gray-950/60'} p-3 ${filter === 'active' && (isWaitingQueue || workingLaneCount === 1) ? 'lg:col-span-2' : ''}`}>

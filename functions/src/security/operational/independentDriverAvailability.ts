@@ -11,6 +11,7 @@ export function hasDriverAssignmentConflict(target: ScheduledJob, driverKey: str
   return jobs.some(job => {
     if (job.id === target.id || !['assigned', 'in_progress'].includes(job.status || '')
       || !assignedDriverKeys(job).includes(driverKey)) return false;
+    if (job.status === 'assigned') return true;
     const start = Date.parse(job.scheduledAt || '');
     const end = Date.parse(job.estimatedEndAt || '');
     const requestedStart = Date.parse(target.scheduledAt || '');

@@ -8,6 +8,7 @@ export function driverAvailability(target: IndependentJob, driverKey: string, jo
     && (Array.isArray(job.drivers) ? job.drivers.some(driver => driver.key === driverKey)
       : driverKey.startsWith('outside:') ? job.externalDriverId === driverKey.slice(8) : job.wbDriverId === driverKey.slice(10)));
   for (const job of otherJobs) {
+    if (job.status === 'assigned') return { available: false, label: `Assigned · start or release before planning another job · ${job.title}` };
     const start = Date.parse(job.scheduledAt || '');
     const end = Date.parse(job.estimatedEndAt || '');
     const requestedStart = Date.parse(target.scheduledAt || '');

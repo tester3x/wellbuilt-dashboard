@@ -2,13 +2,16 @@ import { hasDriverAssignmentConflict } from '../independentDriverAvailability';
 
 const now = Date.parse('2026-11-22T10:00:00.000Z');
 const target = { id: 'new', scheduledAt: '2026-11-23T08:00:00.000Z', estimatedEndAt: '2026-11-23T12:00:00.000Z' };
-const current = { id: 'first', status: 'assigned', externalDriverId: 'driver-a',
+const current = { id: 'first', status: 'in_progress', externalDriverId: 'driver-a',
   scheduledAt: '2026-11-22T08:00:00.000Z', estimatedEndAt: '2026-11-23T07:00:00.000Z' };
 
 describe('Independent Dispatch driver assignment conflicts', () => {
   it('allows a later job only after a known finish', () => {
     expect(hasDriverAssignmentConflict(target, 'outside:driver-a', [current], now)).toBe(false);
     expect(hasDriverAssignmentConflict({ ...target, scheduledAt: '2026-11-23T06:00:00.000Z' }, 'outside:driver-a', [current], now)).toBe(true);
+  });
+  it('holds an assigned driver until the job starts, even when a finish is planned', () => {
+    expect(hasDriverAssignmentConflict(target, 'outside:driver-a', [{ ...current, status: 'assigned' }], now)).toBe(true);
   });
   it('holds a driver with an unknown, passed, or ongoing finish until completion', () => {
     expect(hasDriverAssignmentConflict(target, 'outside:driver-a', [{ ...current, estimatedEndAt: '' }], now)).toBe(true);

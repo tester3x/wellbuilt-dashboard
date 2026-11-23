@@ -24,6 +24,7 @@ export async function independentDispatchJobs(data){
   Object.assign(job,{status:job.status==='unassigned'?'assigned':job.status,drivers:next,driverName:next[0].name,externalDriverId:next[0].source==='outside'?next[0].key.slice(8):'',wbDriverId:next[0].source==='wellbuilt'?next[0].key.slice(10):'',driverSource:next[0].source,revision:job.revision+1});
  }
  if(data.op==='removeDriver'){const next=job.drivers.filter(d=>d.key!==data.driverKey);Object.assign(job,{drivers:next,status:next.length?job.status:'unassigned',driverName:next[0]?.name||'',externalDriverId:next[0]?.source==='outside'?next[0].key.slice(8):'',wbDriverId:next[0]?.source==='wellbuilt'?next[0].key.slice(10):'',revision:job.revision+1});}
+ if(data.op==='setDriverShift'){job.drivers=job.drivers.map(d=>d.key===data.driverKey?{...d,shift:data.shift}:d);job.revision+=1;}
  if(data.op==='status')Object.assign(job,{status:data.status,revision:job.revision+1});
  return {ok:true,job};
 }`;
@@ -189,8 +190,10 @@ try {
   await assignedCard.waitFor();
   await assignedCard.getByText('Drivers (2)').waitFor();
   await assignedCard.getByText('Drivers requested: 3 · Assigned: 2 · 1 still needed').waitFor();
-  await assignedCard.getByText('Day (1)',{exact:true}).waitFor();
-  await assignedCard.getByText('Night (1)',{exact:true}).waitFor();
+  await assignedCard.getByRole('region',{name:'Day Shift drivers'}).getByText('Day Shift',{exact:true}).waitFor();
+  await assignedCard.getByRole('region',{name:'Night Shift drivers'}).getByText('Night Shift',{exact:true}).waitFor();
+  assert.equal(await assignedCard.getByLabel('1 day shift drivers').count(),1);
+  assert.equal(await assignedCard.getByLabel('1 night shift drivers').count(),1);
   assert.deepEqual(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers')?.drivers),
     [{key:'outside:driver-a',shift:'day'},{key:'outside:driver-b',shift:'night'}]);
   assert.equal(await assignedCard.getByText('Day shift · Ongoing work').count(),1);
@@ -201,7 +204,15 @@ try {
     `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
   await assignedCard.getByTitle('Driver B').waitFor();
+  await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('day');
+  await assignedCard.getByLabel('2 day shift drivers').waitFor();
+  await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('night');
+  await assignedCard.getByLabel('1 night shift drivers').waitFor();
   await assignedCard.getByText('Choose drivers').click();
+  assert.ok(await assignedCard.getByRole('button',{name:'Add selected drivers'}).evaluate(button => button.getBoundingClientRect().height < 60),
+    'opening the picker must not stretch the assignment button to the picker height');
+  assert.ok(await assignedCard.getByRole('button',{name:'Mark started'}).evaluate(button => button.getBoundingClientRect().height < 60),
+    'status controls remain compact beside an open picker');
   await assignedCard.getByRole('checkbox',{name:'Choose Driver C for Pipe run water-hauling'}).check();
   await assignedCard.getByRole('combobox',{name:'Shift for Driver C on Pipe run water-hauling'}).selectOption('night');
   await assignedCard.getByRole('button',{name:'Swap'}).last().click();
