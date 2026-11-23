@@ -4,9 +4,9 @@ export type DriverAvailability = { available: boolean; label: string };
 
 export function driverAvailability(target: IndependentJob, driverKey: string, jobs: IndependentJob[], active: boolean, now = Date.now()): DriverAvailability {
   if (!active) return { available: false, label: 'Inactive' };
-  const [source, id] = driverKey.split(':');
   const otherJobs = jobs.filter(job => job.id !== target.id && ['assigned', 'in_progress'].includes(job.status)
-    && (source === 'outside' ? job.externalDriverId === id : job.wbDriverId === id));
+    && (Array.isArray(job.drivers) ? job.drivers.some(driver => driver.key === driverKey)
+      : driverKey.startsWith('outside:') ? job.externalDriverId === driverKey.slice(8) : job.wbDriverId === driverKey.slice(10)));
   for (const job of otherJobs) {
     const start = Date.parse(job.scheduledAt || '');
     const end = Date.parse(job.estimatedEndAt || '');

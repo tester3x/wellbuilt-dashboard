@@ -9,7 +9,7 @@ import { dialpadCallHref } from '@/lib/dialpad';
 import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentRequestParser';
 import { ACTIVE_LANES, pickupTiming, sortDispatchJobs } from '@/lib/independentDispatchBoard';
 import { driverAvailability } from '@/lib/independentDriverAvailability';
-import { IndependentDriverProfilesPanel } from './IndependentDriverProfilesPanel';
+import { listIndependentDriverProfiles, type IndependentDriverProfile } from '@/lib/independentDriverProfiles';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false };
@@ -22,19 +22,27 @@ const FIELDS = [
 ] as const;
 const inputClass = 'w-full rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white';
 const buttonClass = 'rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-40';
+function jobCrew(job: IndependentJob) {
+  if (Array.isArray(job.drivers)) return job.drivers;
+  const shift = job.shift === 'day' || job.shift === 'night' ? job.shift : '';
+  if (job.externalDriverId) return [{ key: `outside:${job.externalDriverId}`, name: job.driverName || '', source: 'outside' as const, shift }];
+  if (job.wbDriverId) return [{ key: `wellbuilt:${job.wbDriverId}`, name: job.driverName || '', source: 'wellbuilt' as const, shift }];
+  return [];
+}
 
 function JobDialpadLinks({ job, directory, drivers }: { job: IndependentJob; directory: IndependentDirectory | null; drivers: ExternalDriver[] }) {
   const customer = directory?.customers.find(item => item.id === job.customerId);
-  const driver = job.driverSource === 'outside' && job.externalDriverId
-    ? drivers.find(item => item.externalDriverId === job.externalDriverId) : undefined;
   const customerHref = dialpadCallHref(customer?.phoneE164, job.id, directory?.dispatchPhoneE164);
   const contactHref = dialpadCallHref(job.jobContactPhoneE164, job.id, directory?.dispatchPhoneE164);
-  const driverHref = dialpadCallHref(driver?.phoneE164, job.id, directory?.dispatchPhoneE164);
-  if (!customerHref && !contactHref && !driverHref) return null;
+  const driverLinks = jobCrew(job).filter(member => member.source === 'outside').map(member => ({
+    name: member.name, key: member.key,
+    href: dialpadCallHref(drivers.find(driver => `outside:${driver.externalDriverId}` === member.key)?.phoneE164, job.id, directory?.dispatchPhoneE164),
+  })).filter(link => link.href);
+  if (!customerHref && !contactHref && !driverLinks.length) return null;
   return <div className="mt-2 flex flex-wrap gap-3 text-sm text-cyan-300 underline">
     {customerHref && <a href={customerHref}>Call customer in Dialpad</a>}
     {contactHref && <a href={contactHref}>Call job contact in Dialpad</a>}
-    {driverHref && <a href={driverHref}>Call driver in Dialpad</a>}
+    {driverLinks.map(link => <a key={link.key} href={link.href || undefined}>{driverLinks.length === 1 ? 'Call driver in Dialpad' : `Call ${link.name} in Dialpad`}</a>)}
   </div>;
 }
 
@@ -44,6 +52,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [jobs, setJobs] = useState<IndependentJob[]>([]);
   const [drivers, setDrivers] = useState<ExternalDriver[]>([]);
   const [wbDrivers, setWbDrivers] = useState<LinkedWellBuiltDriver[]>([]);
+  const [driverProfiles, setDriverProfiles] = useState<IndependentDriverProfile[]>([]);
   const [form, setForm] = useState(EMPTY);
   const [editing, setEditing] = useState<IndependentJob | null>(null);
   const [scheduledLocal, setScheduledLocal] = useState('');
@@ -56,6 +65,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [assignmentShifts, setAssignmentShifts] = useState<Record<string, '' | 'day' | 'night'>>({});
   const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
   const [customerId, setCustomerId] = useState('');
   const [contactId, setContactId] = useState('');
@@ -93,6 +103,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     setLoaded(true);
   }, [companyId, canManageDrivers]);
   useEffect(() => { void refresh().catch(e => setError(e.message)); }, [refresh]);
+  useEffect(() => { if (canManageDrivers) void listIndependentDriverProfiles().then(setDriverProfiles).catch(() => setDriverProfiles([])); }, [canManageDrivers, companyId]);
   useEffect(() => { const timer = window.setInterval(() => setAvailabilityNow(Date.now()), 60_000); return () => window.clearInterval(timer); }, []);
   async function run(payload: Record<string, unknown>, after?: () => void) {
     setBusy(true); setError(''); setNotice('');
@@ -126,7 +137,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     requestAnimationFrame(() => document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' }));
   }
   const visible = jobs.filter(job => (filter === 'all' || (filter === 'active' ? !['completed', 'cancelled'].includes(job.status) : filter === job.status))
-    && [job.title, job.customer, job.reference, job.pickup, job.destination, job.driverName, job.jobContactName].join(' ').toLowerCase().includes(search.toLowerCase()));
+    && [job.title, job.customer, job.reference, job.pickup, job.destination, ...jobCrew(job).map(driver => driver.name), job.jobContactName].join(' ').toLowerCase().includes(search.toLowerCase()));
   const lanes = filter === 'active' ? ACTIVE_LANES : filter === 'all'
     ? [...ACTIVE_LANES, { status: 'completed' as const, label: 'Completed', hint: 'Finished work' }, { status: 'cancelled' as const, label: 'Cancelled', hint: 'Retained history' }]
     : [{ status: filter as IndependentJobStatus, label: STATUS[filter as IndependentJobStatus], hint: '' }];
@@ -171,7 +182,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     <section aria-labelledby="dispatch-board-title" className="space-y-4">
     <div data-testid="independent-board-toolbar" className="sticky z-30 space-y-3 rounded-lg border border-gray-700 bg-gray-900/95 p-3 shadow-lg backdrop-blur" style={{ top: appHeaderHeight }}>
       <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="dispatch-board-title" className="text-lg font-semibold text-white">Dispatch board</h2><p className="text-sm text-gray-400">Save requests now. Assign a driver when one is available. Assigned WellBuilt drivers do not receive these jobs in their phone app yet.</p></div>
-        {canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); requestAnimationFrame(() => document.getElementById('independent-intake')?.scrollIntoView({ behavior: 'smooth' })); }}>New job / paste request</button>}
+        <div className="flex flex-wrap items-center gap-3">{canManageDrivers && <a href="/dispatch/independent/drivers/" className="text-sm text-cyan-300 underline">Driver profiles</a>}{canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); requestAnimationFrame(() => document.getElementById('independent-intake')?.scrollIntoView({ behavior: 'smooth' })); }}>New job / paste request</button>}</div>
         <div className="flex flex-wrap gap-2 text-xs"><span className="rounded bg-amber-900/40 px-2 py-1 text-amber-200">{jobs.filter(job => job.status === 'unassigned').length} need drivers</span><span className="rounded bg-blue-900/40 px-2 py-1 text-blue-200">{jobs.filter(job => job.status === 'assigned').length} assigned</span><span className="rounded bg-emerald-900/40 px-2 py-1 text-emerald-200">{jobs.filter(job => job.status === 'in_progress').length} in progress</span></div>
       </div>
     <div className="flex flex-wrap gap-2">
@@ -190,7 +201,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {(job.categoryId || job.asset) && <p className="text-sm text-cyan-200">{directory?.customers.find(customer => customer.id === job.customerId)?.workCategories?.find(category => category.id === job.categoryId)?.name || (job.categoryId ? 'Archived category' : '')}{job.asset ? ` · ${job.asset}` : ''}</p>}
       <p className={`mt-2 text-sm font-medium ${pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? 'text-red-300' : pickupTiming(job) === 'soon' ? 'text-amber-200' : 'text-gray-300'}`}>Pickup: {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : 'Time not set'}{pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? ' · Past requested time' : ''}</p>
       {job.estimatedEndAt && <p className="text-sm text-gray-300">Estimated finish: {new Date(job.estimatedEndAt).toLocaleString()}</p>}
-      {(job.shift || job.ongoing) && <p className="text-sm text-cyan-200">{job.shift === 'day' ? 'Day shift' : job.shift === 'night' ? 'Night shift' : 'Any shift'}{job.ongoing ? ' · Ongoing work' : ''}</p>}
+      {(job.shift || job.ongoing) && <p className="text-sm text-cyan-200">{job.shift === 'day' ? 'Day shift' : job.shift === 'night' ? 'Night shift' : job.shift === 'both' ? 'Day and night shifts' : 'Any shift'}{job.ongoing ? ' · Ongoing work' : ''}</p>}
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} />
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
@@ -199,23 +210,40 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         {job.sector && job.sectorFields && <dl className="mt-2 grid gap-1 text-xs text-gray-300">{SECTOR_FIELDS[job.sector as IndependentSector]?.map(field => job.sectorFields?.[field.key] ? <div key={field.key}><dt className="inline text-gray-400">{field.label}: </dt><dd className="inline">{job.sectorFields[field.key]}</dd></div> : null)}</dl>}
         {job.notes && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">{job.notes}</p>}
       </details>}
-      <p className="mt-2 text-sm text-amber-200">Driver: {job.driverName || 'Not assigned'}{job.driverSource === 'wellbuilt' ? ' · WellBuilt account' : ''}</p>
+      <div className="mt-2 text-sm text-amber-200">{jobCrew(job).length ? <><span className="font-medium">Drivers ({jobCrew(job).length})</span>
+        <div className="mt-1 flex flex-wrap gap-2">{jobCrew(job).map(driver => <span key={driver.key} className="inline-flex items-center gap-2 rounded bg-gray-900 px-2 py-1">
+          {driver.name}{driver.shift ? ` · ${driver.shift === 'day' ? 'Day' : 'Night'}` : ''}{driver.source === 'wellbuilt' ? ' · WellBuilt' : ''}
+          {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <>
+            <button type="button" disabled={busy || !assignments[job.id]} className="text-cyan-300 underline disabled:opacity-40" title="Replace with the selected driver" onClick={() => {
+              const [kind, id] = (assignments[job.id] || '').split(':'); if (!id) return;
+              void run({ op: 'replaceDriver', jobId: job.id, driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID(),
+                shift: assignmentShifts[job.id] ?? driver.shift ?? '', ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) },
+                () => setAssignments(current => ({ ...current, [job.id]: '' })));
+            }}>Swap</button>
+            <button type="button" disabled={busy || (job.status === 'in_progress' && jobCrew(job).length === 1)} className="text-red-300 underline disabled:opacity-40" onClick={() => void run({ op: 'removeDriver', jobId: job.id, driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID() })}>Remove</button>
+          </>}
+        </span>)}</div></> : 'Needs a driver'}</div>
       {canWrite && <div className="mt-3 flex flex-wrap gap-2">
-        {['unassigned', 'assigned'].includes(job.status) && <>
-          <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>
+        {['unassigned', 'assigned', 'in_progress'].includes(job.status) && <>
+          {['unassigned', 'assigned'].includes(job.status) && <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>}
           {canManageDrivers && <><select aria-label={`Driver for ${job.title}`} className={inputClass + ' !w-auto'} value={assignments[job.id] || ''} onChange={e => setAssignments({ ...assignments, [job.id]: e.target.value })}>
             <option value="">Choose driver…</option>
-            <optgroup label="Drivers without WellBuilt accounts">{drivers.map(d => { const availability = driverAvailability(job, `outside:${d.externalDriverId}`, jobs, d.active, availabilityNow); return <option key={d.externalDriverId} value={`outside:${d.externalDriverId}`} disabled={!availability.available}>{d.displayName} · {availability.label}</option>; })}</optgroup>
-            <optgroup label="Linked WellBuilt accounts">{wbDrivers.map(d => { const availability = driverAvailability(job, `wellbuilt:${d.driverId}`, jobs, d.active, availabilityNow); return <option key={d.driverId} value={`wellbuilt:${d.driverId}`} disabled={!availability.available}>{d.displayName} · {availability.label}</option>; })}</optgroup>
+            <optgroup label="Drivers without WellBuilt accounts">{drivers.map(d => { const availability = driverAvailability(job, `outside:${d.externalDriverId}`, jobs, d.active, availabilityNow); return <option key={d.externalDriverId} value={`outside:${d.externalDriverId}`} disabled={!availability.available || jobCrew(job).some(member => member.key === `outside:${d.externalDriverId}`)}>{d.displayName} · {d.shiftPreference && d.shiftPreference !== 'unset' ? `prefers ${d.shiftPreference} · ` : ''}{availability.label}</option>; })}</optgroup>
+            <optgroup label="Linked WellBuilt accounts">{wbDrivers.map(d => { const availability = driverAvailability(job, `wellbuilt:${d.driverId}`, jobs, d.active, availabilityNow); const preferred = driverProfiles.find(profile => profile.driverKey === `wellbuilt:${d.driverId}`)?.shiftPreference; return <option key={d.driverId} value={`wellbuilt:${d.driverId}`} disabled={!availability.available || jobCrew(job).some(member => member.key === `wellbuilt:${d.driverId}`)}>{d.displayName} · {preferred && preferred !== 'unset' ? `prefers ${preferred} · ` : ''}{availability.label}</option>; })}</optgroup>
           </select>
+          <select aria-label={`Shift for ${job.title}`} className={inputClass + ' !w-auto'} value={assignmentShifts[job.id] ?? (job.shift === 'day' || job.shift === 'night' ? job.shift : '')} onChange={event => setAssignmentShifts(current => ({ ...current, [job.id]: event.target.value as '' | 'day' | 'night' }))}>
+            <option value="">Shift not set</option><option value="day">Day shift</option><option value="night">Night shift</option>
+          </select>
+          <span className="self-center text-xs text-gray-400" title="ID has no verified HOS feed; dispatch decides whether to assign.">HOS unverified</span>
           <button disabled={busy || !assignments[job.id] || !driverAvailability(job, assignments[job.id] || '', jobs,
             assignments[job.id]?.startsWith('outside:') ? drivers.find(d => `outside:${d.externalDriverId}` === assignments[job.id])?.active === true
               : wbDrivers.some(d => `wellbuilt:${d.driverId}` === assignments[job.id] && d.active), availabilityNow).available} className={buttonClass} onClick={() => {
             const [kind, id] = (assignments[job.id] || '').split(':');
             if (!id) return;
-            void run({ op: 'assign', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(),
-              ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) });
-          }}>{job.externalDriverId || job.wbDriverId ? 'Reassign' : 'Assign'}</button></>}
+            void run({ op: 'addDriver', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(),
+              shift: assignmentShifts[job.id] ?? (job.shift === 'day' || job.shift === 'night' ? job.shift : ''), ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) },
+              () => setAssignments(current => ({ ...current, [job.id]: '' })));
+          }}>{jobCrew(job).length ? 'Add driver' : 'Assign'}</button></>}
         </>}
         {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
         {!['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
@@ -345,7 +373,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         </div>}
         <label className="text-xs text-gray-300">Scheduled pickup (your local time)<input type="datetime-local" className={inputClass} value={scheduledLocal} onChange={e => setScheduledLocal(e.target.value)} /></label>
         <label className="text-xs text-gray-300">Estimated finish (your local time)<input type="datetime-local" className={inputClass} value={estimatedEndLocal} min={scheduledLocal || undefined} onChange={e => setEstimatedEndLocal(e.target.value)} /></label>
-        <label className="text-xs text-gray-300">Shift<select aria-label="Job shift" className={inputClass} value={form.shift || ''} onChange={e => setForm(current => ({ ...current, shift: e.target.value as IndependentJobDetails['shift'] }))}><option value="">Not specified</option><option value="day">Day shift</option><option value="night">Night shift</option></select></label>
+        <label className="text-xs text-gray-300">Shift<select aria-label="Job shift" className={inputClass} value={form.shift || ''} onChange={e => setForm(current => ({ ...current, shift: e.target.value as IndependentJobDetails['shift'] }))}><option value="">Not specified</option><option value="day">Day shift</option><option value="night">Night shift</option><option value="both">Day and night shifts</option></select></label>
         <label className="flex items-center gap-2 text-sm text-gray-200"><input type="checkbox" checked={form.ongoing || false} onChange={e => setForm(current => ({ ...current, ongoing: e.target.checked }))} />Ongoing / recurring work</label>
         <p className="text-xs text-gray-400 md:col-span-2">If the finish is unknown, an assigned driver stays unavailable for other jobs until this job is completed or cancelled.</p>
         <div className="flex items-end gap-2"><button disabled={!editing && ((!customerId && !newCustomer) || !sector || !form.customer.trim())} className={buttonClass}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create job'}</button>
@@ -354,6 +382,5 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     </form>}
     </div>
     {canManageDrivers && <div><ExternalAssignmentDeliveryPanel jobs={[]} canManage={canWrite && canManageDrivers} rosterOnly onRosterChange={refresh} /></div>}
-    {canManageDrivers && canWrite && <IndependentDriverProfilesPanel drivers={drivers} wbDrivers={wbDrivers} customers={directory?.customers || []} />}
   </div>;
 }

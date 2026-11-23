@@ -5,7 +5,7 @@ export type IndependentJobStatus = typeof JOB_STATUSES[number];
 export type IndependentJobDetails = {
   title: string; customer: string; reference: string; pickup: string; destination: string;
   cargo: string; scheduledAt: string; estimatedEndAt: string; notes: string;
-  shift: '' | 'day' | 'night'; ongoing: boolean;
+  shift: '' | 'day' | 'night' | 'both'; ongoing: boolean;
   jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
   categoryId?: string; asset?: string;
@@ -29,7 +29,7 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   for (const key of ['title', 'customer', 'pickup', 'destination'] as const) {
     if (!job[key]) throw Error(`required_${key}`);
   }
-  if (input.shift !== undefined && !['', 'day', 'night'].includes(input.shift as string)) throw Error('invalid_shift');
+  if (input.shift !== undefined && !['', 'day', 'night', 'both'].includes(input.shift as string)) throw Error('invalid_shift');
   if (input.ongoing !== undefined && typeof input.ongoing !== 'boolean') throw Error('invalid_ongoing');
   job.shift = (input.shift || '') as IndependentJobDetails['shift'];
   job.ongoing = input.ongoing === true;

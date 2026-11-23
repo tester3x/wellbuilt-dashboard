@@ -4,7 +4,7 @@ import { getFirebaseFunctions } from './firebase';
 export type IndependentJobDetails = {
   title: string; customer: string; reference: string; pickup: string; destination: string;
   cargo: string; scheduledAt: string; estimatedEndAt?: string; notes: string;
-  shift?: '' | 'day' | 'night'; ongoing?: boolean;
+  shift?: '' | 'day' | 'night' | 'both'; ongoing?: boolean;
   jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
   categoryId?: string; asset?: string;
@@ -12,6 +12,7 @@ export type IndependentJobDetails = {
 export type IndependentJobStatus = 'unassigned' | 'assigned' | 'in_progress' | 'completed' | 'cancelled';
 export type IndependentJob = IndependentJobDetails & {
   id: string; companyId: string; revision: number; status: IndependentJobStatus;
+  drivers?: { key: string; name: string; source: 'outside' | 'wellbuilt'; companyId?: string; shift?: '' | 'day' | 'night'; assignedAt: string }[];
   externalDriverId?: string; wbDriverId?: string; wbDriverCompanyId?: string;
   driverSource?: 'outside' | 'wellbuilt'; driverName?: string; createdAt?: string; updatedAt: string;
 };

@@ -81,6 +81,42 @@ describe('Independent Dispatch callable boundaries', () => {
     await call({ op: 'status', jobId: 'job-a', requestId: 'completed-a', expectedRevision: 3, status: 'completed' });
     await expect(call(secondAssign)).resolves.toMatchObject({ job: { status: 'assigned', driverName: 'Driver' } });
   });
+  it('keeps a day and night crew on one job and audits a driver swap without losing the other shift', async () => {
+    for (const id of ['day-a', 'night-a', 'day-b']) records.set(`companies/company-a/external_drivers/${id}`,
+      { companyId: 'company-a', externalDriverId: id, active: true, displayName: id });
+    await call(create);
+    const day = await call({ op: 'addDriver', jobId: 'job-a', requestId: 'day-a', expectedRevision: 1, externalDriverId: 'day-a', shift: 'day' });
+    expect(day.job).toMatchObject({ status: 'assigned', drivers: [{ key: 'outside:day-a', shift: 'day' }] });
+    const night = await call({ op: 'addDriver', jobId: 'job-a', requestId: 'night-a', expectedRevision: 2, externalDriverId: 'night-a', shift: 'night' });
+    expect(night.job.drivers.map((driver: any) => [driver.key, driver.shift])).toEqual([['outside:day-a', 'day'], ['outside:night-a', 'night']]);
+    await expect(call({ op: 'assign', jobId: 'job-a', requestId: 'stale-reassign', expectedRevision: 3, externalDriverId: 'day-b' }))
+      .rejects.toThrow('use_crew_assignment');
+    await expect(call({ op: 'addDriver', jobId: 'job-a', requestId: 'duplicate', expectedRevision: 3, externalDriverId: 'night-a', shift: 'night' }))
+      .rejects.toThrow('driver_already_on_job');
+    const swapped = await call({ op: 'replaceDriver', jobId: 'job-a', requestId: 'swap-day', expectedRevision: 3,
+      driverKey: 'outside:day-a', externalDriverId: 'day-b', shift: 'day' });
+    expect(swapped.job.drivers.map((driver: any) => [driver.key, driver.shift])).toEqual([['outside:day-b', 'day'], ['outside:night-a', 'night']]);
+    expect(records.get('independent_dispatch_jobs/job-a/events/swap-day')).toMatchObject({
+      beforeDrivers: [{ key: 'outside:day-a', shift: 'day' }, { key: 'outside:night-a', shift: 'night' }],
+      afterDrivers: [{ key: 'outside:day-b', shift: 'day' }, { key: 'outside:night-a', shift: 'night' }],
+    });
+    const removed = await call({ op: 'removeDriver', jobId: 'job-a', requestId: 'remove-night', expectedRevision: 4, driverKey: 'outside:night-a' });
+    expect(removed.job.drivers).toHaveLength(1);
+    expect(removed.job.status).toBe('assigned');
+    await call({ op: 'status', jobId: 'job-a', requestId: 'started', expectedRevision: 5, status: 'in_progress' });
+    await expect(call({ op: 'removeDriver', jobId: 'job-a', requestId: 'remove-last', expectedRevision: 6, driverKey: 'outside:day-b' }))
+      .rejects.toThrow('replace_last_active_driver');
+  });
+  it('treats every crew member as busy on an overlapping job', async () => {
+    for (const id of ['day-a', 'night-a']) records.set(`companies/company-a/external_drivers/${id}`,
+      { companyId: 'company-a', externalDriverId: id, active: true, displayName: id });
+    await call(create);
+    await call({ ...create, jobId: 'job-b', requestId: 'create-b' });
+    await call({ op: 'addDriver', jobId: 'job-a', requestId: 'assign-day', expectedRevision: 1, externalDriverId: 'day-a', shift: 'day' });
+    await call({ op: 'addDriver', jobId: 'job-a', requestId: 'assign-night', expectedRevision: 2, externalDriverId: 'night-a', shift: 'night' });
+    await expect(call({ op: 'addDriver', jobId: 'job-b', requestId: 'overlap-night', expectedRevision: 1, externalDriverId: 'night-a', shift: 'night' }))
+      .rejects.toThrow('driver_assignment_conflict');
+  });
   it('allows known nonoverlapping work and rejects an edit that creates a conflict', async () => {
     records.set('companies/company-a/external_drivers/driver-a', { companyId: 'company-a', active: true, displayName: 'Driver' });
     const first = { ...details, scheduledAt: '2099-11-23T08:00:00.000Z', estimatedEndAt: '2099-11-23T12:00:00.000Z' };
@@ -196,7 +232,7 @@ describe('Independent Dispatch driver profiles', () => {
     records.set('companies/company-a/independent_dispatch_wb_drivers/wb-marcial', linked);
     records.set('companies/company-a/independent_dispatch_customers/mongoose', { companyId: 'company-a', active: true, name: 'Mongoose' });
     const profile = { driverKey: 'wellbuilt:wb-marcial', primaryCustomerId: 'mongoose',
-      standingWork: 'Regular route stays with Marcial.', sideJobs: 'yes',
+      standingWork: 'Regular route stays with Marcial.', sideJobs: 'yes', shiftPreference: 'day',
       operatorNotes: [{ customerId: 'mongoose', dispatchNote: 'Review with management.', operatorFeedback: '', reviewPending: true }] };
     const saved = await profileCall({ op: 'save', profile, expectedRevision: 0 });
     expect(saved.profile).toMatchObject({ ...profile, revision: 1, companyId: 'company-a' });
@@ -206,6 +242,8 @@ describe('Independent Dispatch driver profiles', () => {
     await expect(profileCall({ op: 'save', profile, expectedRevision: 0 })).rejects.toThrow('driver_profile_changed');
     await expect(profileCall({ op: 'save', profile: { ...profile, primaryCustomerId: 'foreign' }, expectedRevision: 1 }))
       .rejects.toThrow('customer_not_in_company_directory');
+    await expect(profileCall({ op: 'save', profile: { ...profile, shiftPreference: 'overnight' }, expectedRevision: 1 }))
+      .rejects.toThrow('invalid_shift_preference');
     expect(records.get('companies/company-a/independent_dispatch_driver_profiles/wellbuilt__wb-marcial').revision).toBe(1);
   });
   it('requires the package and a driver in the same company roster', async () => {

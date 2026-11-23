@@ -13,6 +13,7 @@ export type IndependentDriverProfileInput = {
   primaryCustomerId: string;
   standingWork: string;
   sideJobs: 'ask' | 'yes' | 'no';
+  shiftPreference?: 'day' | 'night' | 'either' | 'unset';
   operatorNotes: OperatorReviewNote[];
 };
 

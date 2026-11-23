@@ -135,6 +135,7 @@ execSync('node tools/test-employee-onboarding-dom.mjs', { stdio: 'inherit' });
 execSync('node tools/test-independent-dispatch-gate.mjs', { stdio: 'inherit' });
 execSync('node tools/test-independent-dispatch-shell.mjs', { stdio: 'inherit' });
 execSync('node tools/test-independent-dispatch-ui.mjs', { stdio: 'inherit' });
+execSync('node tools/test-independent-driver-profiles-ui.mjs', { stdio: 'inherit' });
 execSync('node tools/test-job-package-install.mjs', { stdio: 'inherit' });
 console.log('\n--- Running Mandatory Pre-Deploy Test Suites on Fresh Build ---');
 try {

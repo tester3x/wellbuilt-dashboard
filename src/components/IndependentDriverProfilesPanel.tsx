@@ -9,10 +9,10 @@ import { listIndependentDriverProfiles, saveIndependentDriverProfile,
 
 const inputClass = 'w-full rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white';
 
-export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers }: {
-  drivers: ExternalDriver[]; wbDrivers: LinkedWellBuiltDriver[]; customers: IndependentCustomer[];
+export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, initiallyOpen = false }: {
+  drivers: ExternalDriver[]; wbDrivers: LinkedWellBuiltDriver[]; customers: IndependentCustomer[]; initiallyOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   const [profiles, setProfiles] = useState<IndependentDriverProfile[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedKey, setSelectedKey] = useState('');
@@ -47,8 +47,8 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers }
           const saved = profiles.find(profile => profile.driverKey === key);
           setSelectedKey(key); setMessage('');
           setForm(!key ? null : saved ? { driverKey: saved.driverKey, primaryCustomerId: saved.primaryCustomerId,
-            standingWork: saved.standingWork, sideJobs: saved.sideJobs, operatorNotes: saved.operatorNotes }
-            : { driverKey: key, primaryCustomerId: '', standingWork: '', sideJobs: 'ask', operatorNotes: [] });
+            standingWork: saved.standingWork, sideJobs: saved.sideJobs, shiftPreference: saved.shiftPreference || 'unset', operatorNotes: saved.operatorNotes }
+            : { driverKey: key, primaryCustomerId: '', standingWork: '', sideJobs: 'ask', shiftPreference: 'unset', operatorNotes: [] });
         }}>
           <option value="">Choose driver…</option>
           {roster.map(driver => <option key={driver.key} value={driver.key}>{driver.name} · {driver.key.startsWith('wellbuilt:') ? 'WellBuilt' : 'outside'}{driver.active ? '' : ' · inactive'}</option>)}
@@ -63,7 +63,7 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers }
           .finally(() => setBusy(false));
       }}>
         <h3 className="font-medium text-white">{selected.name}</h3>
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-3">
           <label className="text-xs text-gray-300">Primary customer / operator
             <select aria-label="Primary customer" className={inputClass} value={form.primaryCustomerId}
               onChange={event => setForm({ ...form, primaryCustomerId: event.target.value })}>
@@ -76,6 +76,12 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers }
               <option value="ask">Check with dispatch</option><option value="yes">Can take side jobs when they fit</option><option value="no">Standing work only</option>
             </select>
           </label>
+          {selected.key.startsWith('wellbuilt:') && <label className="text-xs text-gray-300">Usual shift
+            <select aria-label="Usual shift" className={inputClass} value={form.shiftPreference || 'unset'}
+              onChange={event => setForm({ ...form, shiftPreference: event.target.value as IndependentDriverProfileInput['shiftPreference'] })}>
+              <option value="unset">Not set</option><option value="day">Day</option><option value="night">Night</option><option value="either">Either</option>
+            </select>
+          </label>}
         </div>
         <label className="block text-xs text-gray-300">Standing route or customer work
           <textarea aria-label="Standing work" className={inputClass} rows={2} maxLength={1000} value={form.standingWork}

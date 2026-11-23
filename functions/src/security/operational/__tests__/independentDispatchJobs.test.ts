@@ -58,6 +58,7 @@ describe('Independent Dispatch job validation and lifecycle', () => {
       expect(oneOff.sector).toBe(sector);
     }
     expect(parseIndependentJob(job).sector).toBeUndefined();
+    expect(parseIndependentJob({ ...job, shift: 'both', ongoing: true })).toMatchObject({ shift: 'both', ongoing: true });
   });
   it('rejects mixed-sector fields, missing required details, and injected fields', () => {
     expect(() => parseSectorFields('ltl', { freightDescription: 'Parts', pieces: '2', waterType: 'PW' })).toThrow('unexpected_sector_field');

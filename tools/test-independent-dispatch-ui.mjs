@@ -13,7 +13,12 @@ export async function independentDispatchJobs(data){
  if(data.op==='create')jobs.push({...data.job,id:data.jobId,revision:1,status:'unassigned',companyId:'fixture',updatedAt:new Date().toISOString()});
  const job=jobs.find(j=>j.id===data.jobId);
  if(data.op==='update')Object.assign(job,data.job,{revision:job.revision+1});
- if(data.op==='assign')Object.assign(job,{status:'assigned',driverName:data.wbDriverId?'Nitto–Anthony (Marcial Lebaron)':'Outside Driver',externalDriverId:data.externalDriverId||'',wbDriverId:data.wbDriverId||'',driverSource:data.wbDriverId?'wellbuilt':'outside',revision:job.revision+1});
+ if(data.op==='assign'||data.op==='addDriver'||data.op==='replaceDriver'){
+  const driver={key:data.wbDriverId?'wellbuilt:'+data.wbDriverId:'outside:'+data.externalDriverId,name:data.wbDriverId?'Nitto–Anthony (Marcial Lebaron)':data.externalDriverId==='driver-a'?'Outside Driver':'Driver '+data.externalDriverId.slice(-1).toUpperCase(),source:data.wbDriverId?'wellbuilt':'outside',shift:data.shift||'',assignedAt:new Date().toISOString()};
+  const crew=job.drivers||[]; const next=data.op==='replaceDriver'?crew.map(d=>d.key===data.driverKey?driver:d):data.op==='assign'?[driver]:[...crew,driver];
+  Object.assign(job,{status:job.status==='unassigned'?'assigned':job.status,drivers:next,driverName:next[0].name,externalDriverId:next[0].source==='outside'?next[0].key.slice(8):'',wbDriverId:next[0].source==='wellbuilt'?next[0].key.slice(10):'',driverSource:next[0].source,revision:job.revision+1});
+ }
+ if(data.op==='removeDriver'){const next=job.drivers.filter(d=>d.key!==data.driverKey);Object.assign(job,{drivers:next,status:next.length?job.status:'unassigned',driverName:next[0]?.name||'',externalDriverId:next[0]?.source==='outside'?next[0].key.slice(8):'',wbDriverId:next[0]?.source==='wellbuilt'?next[0].key.slice(10):'',revision:job.revision+1});}
  if(data.op==='status')Object.assign(job,{status:data.status,revision:job.revision+1});
  return {ok:true,job};
 }`;
@@ -167,7 +172,7 @@ try {
   assert.equal(await dialog.isVisible(),false,'editing a waiting job closes the modal so the form is usable');
   await page.getByRole('button',{name:'Clear / new job'}).click();
   await queue.getByRole('button',{name:/Needs a driver/}).click();
-  await card.getByRole('combobox').selectOption('outside:driver-a');
+  await card.getByRole('combobox',{name:/Driver for/}).selectOption('outside:driver-a');
   await card.getByRole('button',{name:'Assign',exact:true}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
   const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run water-hauling',exact:true})});
@@ -179,22 +184,32 @@ try {
   assert.equal(await assignedCard.getByRole('link',{name:'Call job contact in Dialpad'}).getAttribute('href'),
     `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
+  await assignedCard.getByRole('combobox',{name:/Driver for/}).selectOption('outside:driver-b');
+  await assignedCard.getByRole('combobox',{name:/Shift for/}).selectOption('night');
+  await assignedCard.getByRole('button',{name:'Add driver'}).click();
+  await assignedCard.getByText('Drivers (2)').waitFor();
+  await assignedCard.getByText('Driver B · Night').waitFor();
+  await assignedCard.getByRole('combobox',{name:/Driver for/}).selectOption('outside:driver-c');
+  await assignedCard.getByRole('button',{name:'Swap'}).last().click();
+  await assignedCard.getByText('Driver C · Night').waitFor();
+  await assignedCard.getByRole('button',{name:'Remove'}).last().click();
+  await assignedCard.getByText('Drivers (1)').waitFor();
   await queue.getByRole('button',{name:/Needs a driver/}).click();
   const linkedCard=dialog.getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run ltl',exact:true})});
   assert.equal(await linkedCard.locator('option[value="outside:driver-a"]').isDisabled(),true,'ongoing assignment stays visible but unavailable');
   assert.match(await linkedCard.locator('option[value="outside:driver-a"]').textContent(),/ongoing work/);
   assert.equal(await linkedCard.locator('option').filter({hasText:'Isaac H.'}).isDisabled(),true,'inactive driver stays visible');
-  await linkedCard.getByRole('combobox').selectOption('wellbuilt:wb-marcial');
+  await linkedCard.getByRole('combobox',{name:/Driver for/}).selectOption('wellbuilt:wb-marcial');
   await linkedCard.getByRole('button',{name:'Assign',exact:true}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
   const assignedLinkedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run ltl',exact:true})});
-  assert.equal(await assignedLinkedCard.getByText('WellBuilt account',{exact:false}).count(),1);
-  assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='assign'&&r.wbDriverId)?.wbDriverId),'wb-marcial');
+  assert.equal(await assignedLinkedCard.getByText(/Nitto–Anthony.*WellBuilt/).count(),1);
+  assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='addDriver'&&r.wbDriverId)?.wbDriverId),'wb-marcial');
   assert.equal(await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).count(),0);
   await queue.getByRole('button',{name:/Needs a driver/}).click();
   for (let remaining = 5; remaining > 0; remaining--) {
     const next = dialog.getByRole('article').first();
-    await next.getByRole('combobox').selectOption(`outside:driver-${'bcdef'[5-remaining]}`);
+    await next.getByRole('combobox',{name:/Driver for/}).selectOption(`outside:driver-${'bcdef'[5-remaining]}`);
     await next.getByRole('button',{name:'Assign',exact:true}).click();
     if (remaining > 1) await page.waitForFunction(count => document.querySelectorAll('dialog[open] article').length === count, remaining - 1);
   }
@@ -222,19 +237,7 @@ try {
   const completedCard=page.getByRole('region',{name:'Completed jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'});
   await completedCard.waitFor();
   assert.equal(await completedCard.getByRole('button').count(),0);
-  await page.getByRole('button',{name:/Independent Dispatch driver profiles/}).click();
-  await page.getByRole('combobox',{name:'Driver profile'}).selectOption('wellbuilt:wb-marcial');
-  await page.getByRole('combobox',{name:'Primary customer'}).selectOption('customer-a');
-  await page.getByRole('combobox',{name:'Side jobs'}).selectOption('yes');
-  await page.getByRole('textbox',{name:'Standing work'}).fill('Regular route remains assigned to Marcial.');
-  await page.getByRole('combobox',{name:'Operator for review note'}).selectOption('bob');
-  await page.getByRole('button',{name:'Add note'}).click();
-  await page.getByRole('textbox',{name:'Dispatch observation for bob'}).fill('Review customer feedback with management.');
-  await page.getByRole('checkbox',{name:'Mark for management review'}).check();
-  await page.getByRole('button',{name:'Save driver profile'}).click();
-  await page.getByText('Driver profile saved. Operator review notes remain nonbinding.').waitFor();
-  assert.deepEqual(await page.evaluate(()=>{const p=window.savedProfiles[0];return {key:p.driverKey,primary:p.primaryCustomerId,sideJobs:p.sideJobs,pending:p.operatorNotes[0].reviewPending}}),
-    {key:'wellbuilt:wb-marcial',primary:'customer-a',sideJobs:'yes',pending:true});
+  assert.equal(await page.getByRole('link',{name:'Driver profiles'}).getAttribute('href'),'/dispatch/independent/drivers/');
   assert.deepEqual(await page.evaluate(()=>window.requests.filter(r=>r.op==='create'&&r.job.title.startsWith('Pipe run ')).map(r=>r.job.sector)),sectors.map(([sector])=>sector));
   assert.deepEqual(errors,[]);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');

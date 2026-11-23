@@ -10,6 +10,7 @@ export type IndependentDriverProfileInput = {
   primaryCustomerId: string;
   standingWork: string;
   sideJobs: 'ask' | 'yes' | 'no';
+  shiftPreference?: 'day' | 'night' | 'either' | 'unset';
   operatorNotes: OperatorReviewNote[];
 };
 
@@ -26,7 +27,7 @@ export function profileDocumentId(driverKey: string): string {
 export function parseIndependentDriverProfile(raw: unknown): IndependentDriverProfileInput {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_driver_profile');
   const input = raw as Record<string, unknown>;
-  if (Object.keys(input).some(key => !['driverKey', 'primaryCustomerId', 'standingWork', 'sideJobs', 'operatorNotes'].includes(key)))
+  if (Object.keys(input).some(key => !['driverKey', 'primaryCustomerId', 'standingWork', 'sideJobs', 'shiftPreference', 'operatorNotes'].includes(key)))
     throw Error('unexpected_driver_profile_field');
   if (typeof input.driverKey !== 'string') throw Error('invalid_driver_key');
   profileDocumentId(input.driverKey);
@@ -34,6 +35,7 @@ export function parseIndependentDriverProfile(raw: unknown): IndependentDriverPr
     throw Error('invalid_primary_customer');
   if (typeof input.standingWork !== 'string' || input.standingWork.length > 1000) throw Error('invalid_standing_work');
   if (!['ask', 'yes', 'no'].includes(input.sideJobs as string)) throw Error('invalid_side_jobs');
+  if (input.shiftPreference !== undefined && !['day', 'night', 'either', 'unset'].includes(input.shiftPreference as string)) throw Error('invalid_shift_preference');
   if (!Array.isArray(input.operatorNotes) || input.operatorNotes.length > 20) throw Error('invalid_operator_notes');
   const ids = new Set<string>();
   const operatorNotes = input.operatorNotes.map(value => {
@@ -49,5 +51,6 @@ export function parseIndependentDriverProfile(raw: unknown): IndependentDriverPr
       operatorFeedback: row.operatorFeedback.trim(), reviewPending: row.reviewPending };
   });
   return { driverKey: input.driverKey, primaryCustomerId: input.primaryCustomerId,
-    standingWork: input.standingWork.trim(), sideJobs: input.sideJobs as IndependentDriverProfileInput['sideJobs'], operatorNotes };
+    standingWork: input.standingWork.trim(), sideJobs: input.sideJobs as IndependentDriverProfileInput['sideJobs'],
+    shiftPreference: (input.shiftPreference || 'unset') as IndependentDriverProfileInput['shiftPreference'], operatorNotes };
 }
