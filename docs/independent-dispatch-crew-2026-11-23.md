@@ -26,6 +26,10 @@ beside each driver. The HOS notice sits above the picker. Opening the list moves
 the action buttons down without stretching or covering them.
 Editing a job scrolls its amber form below the sticky board toolbar and names
 the job being edited. Cancel edit returns to the board without saving.
+Clicking a job card selects it with the same amber highlight. Cancel edit and
+Save changes return to that selected card and scroll its top below the sticky
+toolbar. A request opened from the Needs a driver panel returns in the full
+Unassigned board view so its card is visible.
 The assignment shift selector on the card shows the saved shift or, for an older
 unset assignment, the driver's profile Day/Night default. Dispatch can change
 it directly on the card; a change is saved with the job and recorded in its

@@ -80,6 +80,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [pastedRequest, setPastedRequest] = useState('');
   const [parseReport, setParseReport] = useState<ParsedJobRequest | null>(null);
   const [intakeOpen, setIntakeOpen] = useState(false);
+  const [selectedJobId, setSelectedJobId] = useState('');
   const [appHeaderHeight, setAppHeaderHeight] = useState(0);
   const needsDriverDialog = useRef<HTMLDialogElement>(null);
   // Keep create identity through an ambiguous network failure, avoiding duplicate jobs.
@@ -135,11 +136,17 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       window.scrollTo({ top: Math.max(0, window.scrollY + target.getBoundingClientRect().top - offset), behavior: 'smooth' });
     }));
   }
+  function returnToBoardJob(job: IndependentJob) {
+    setIntakeOpen(false); setSelectedJobId(job.id); setFilter(job.status); setSearch('');
+    scrollBelowBoardToolbar(`independent-job-${job.id}`);
+  }
   function leaveEdit() {
-    resetForm(); setIntakeOpen(false);
-    document.getElementById('dispatch-board-title')?.scrollIntoView({ behavior: 'smooth' });
+    const job = editing;
+    resetForm();
+    if (job) returnToBoardJob(job);
   }
   function edit(job: IndependentJob) {
+    setSelectedJobId(job.id);
     setIntakeOpen(true);
     setEditing(job);
     setForm({ ...EMPTY, ...Object.fromEntries(Object.keys(EMPTY).map(k => [k, job[k as keyof IndependentJobDetails] ?? EMPTY[k as keyof IndependentJobDetails]])) } as IndependentJobDetails);
@@ -256,7 +263,10 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {displayedLanes.map(lane => {
         const isWaitingQueue = filter === 'active' && lane.status === 'unassigned';
         const laneJobs = sortDispatchJobs(visible.filter(job => job.status === lane.status), ['completed', 'cancelled'].includes(lane.status));
-        const cards = <div className={isWaitingQueue || (filter === 'active' && workingLaneCount === 1) ? 'grid gap-3 lg:grid-cols-2 2xl:grid-cols-3' : 'space-y-3'}>{laneJobs.length === 0 ? <p className="rounded border border-dashed border-gray-700 p-4 text-sm text-gray-500">No jobs here.</p> : laneJobs.map(job => <article key={job.id} className={`min-w-0 rounded border bg-gray-800 p-4 ${job.status === 'unassigned' ? 'border-amber-700/70' : 'border-gray-700'}`}>
+        const cards = <div className={isWaitingQueue || (filter === 'active' && workingLaneCount === 1) ? 'grid gap-3 lg:grid-cols-2 2xl:grid-cols-3' : 'space-y-3'}>{laneJobs.length === 0 ? <p className="rounded border border-dashed border-gray-700 p-4 text-sm text-gray-500">No jobs here.</p> : laneJobs.map(job => <article key={job.id} id={`independent-job-${job.id}`} tabIndex={0} aria-label={`${job.customer} · ${job.title}`}
+          onClickCapture={() => setSelectedJobId(job.id)} onFocusCapture={() => setSelectedJobId(job.id)}
+          onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setSelectedJobId(job.id); } }}
+          className={`min-w-0 rounded border p-4 transition-colors ${selectedJobId === job.id ? 'border-amber-400 bg-amber-950/30 ring-2 ring-amber-400/70 shadow-lg shadow-amber-950/30' : `bg-gray-800 ${job.status === 'unassigned' ? 'border-amber-700/70' : 'border-gray-700'}`}`}>
       <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold text-white">{job.title}</h2><span className="text-cyan-300">{STATUS[job.status]}</span></div>
       <p className="text-sm text-gray-300">{job.customer}{job.sector ? ` · ${sectorLabel(job.sector)}` : ''}{job.reference ? ` · ${job.reference}` : ''}</p>
       {(job.categoryId || job.asset) && <p className="text-sm text-cyan-200">{directory?.customers.find(customer => customer.id === job.customerId)?.workCategories?.find(category => category.id === job.categoryId)?.name || (job.categoryId ? 'Archived category' : '')}{job.asset ? ` · ${job.asset}` : ''}</p>}
@@ -356,8 +366,10 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         requestId: editing ? crypto.randomUUID() : creation.current.requestId,
         ...(editing ? { expectedRevision: editing.revision } : {}),
         ...(!editing && newCustomer && saveCustomer ? { saveCustomer: true } : {}), job }, () => {
+          const editedJob = editing;
           resetForm();
-          requestAnimationFrame(() => document.getElementById('dispatch-board-title')?.scrollIntoView({ behavior: 'smooth' }));
+          if (editedJob) returnToBoardJob(editedJob);
+          else requestAnimationFrame(() => document.getElementById('dispatch-board-title')?.scrollIntoView({ behavior: 'smooth' }));
         });
     }}>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2"><div><h2 className={`text-lg font-semibold ${editing ? 'text-amber-200' : 'text-cyan-300'}`}>{editing ? `Editing job: ${editing.title}` : 'New Independent Dispatch job'}</h2>{editing && <p className="mt-1 text-sm text-amber-100">{editing.customer} · Review the details below, then Save changes.</p>}</div><button type="button" className="text-sm text-cyan-200 underline" onClick={editing ? leaveEdit : () => setIntakeOpen(false)}>{editing ? 'Cancel edit / back to board' : 'Hide intake'}</button></div>

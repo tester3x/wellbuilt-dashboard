@@ -179,6 +179,8 @@ try {
   assert.equal(await dialog.getByRole('article').count(),7,'all waiting jobs are available in the modal');
   await card.getByText('Job contact: John Wick · Company man · +17015550199').waitFor();
   await dialog.getByRole('article').filter({hasText:'Pipe run ltl'}).getByText('Job contact: Jane Doe · Lead · +17015550113').waitFor();
+  await card.getByRole('heading',{name:'Pipe run water-hauling'}).click();
+  assert.match(await card.getAttribute('class'),/ring-amber-400/,'clicking a job card highlights it');
   await card.getByRole('button',{name:'Edit'}).click();
   assert.equal(await dialog.isVisible(),false,'editing a waiting job closes the modal so the form is usable');
   await page.getByRole('heading',{name:'Editing job: Pipe run water-hauling'}).waitFor();
@@ -188,7 +190,28 @@ try {
     const toolbar = document.querySelector('[data-testid="independent-board-toolbar"]');
     return heading && toolbar && heading.getBoundingClientRect().top >= toolbar.getBoundingClientRect().bottom + 8;
   }, null, {timeout: 3000});
-  await page.getByRole('button',{name:'Clear / new job'}).click();
+  await page.getByRole('button',{name:'Cancel edit / back to board'}).click();
+  const boardCard = page.getByRole('region',{name:'Unassigned jobs'}).getByRole('article',{name:'Customer A · Pipe run water-hauling'});
+  await boardCard.waitFor();
+  assert.match(await boardCard.getAttribute('class'),/ring-amber-400/,'cancel returns to the selected card');
+  await page.waitForFunction(() => {
+    const card = document.querySelector('[id^="independent-job-"][aria-label="Customer A · Pipe run water-hauling"]');
+    const toolbar = document.querySelector('[data-testid="independent-board-toolbar"]');
+    const gap = card && toolbar && card.getBoundingClientRect().top - toolbar.getBoundingClientRect().bottom;
+    return gap >= 8 && gap <= 40;
+  }, null, {timeout: 3000});
+  await boardCard.getByRole('button',{name:'Edit'}).click();
+  await page.getByLabel('Customer reference / load number').fill('TEST-REF');
+  await page.getByRole('button',{name:'Save changes'}).click();
+  await boardCard.getByText('TEST-REF').waitFor();
+  assert.match(await boardCard.getAttribute('class'),/ring-amber-400/,'save returns to the selected card');
+  await page.waitForFunction(() => {
+    const card = document.querySelector('[id^="independent-job-"][aria-label="Customer A · Pipe run water-hauling"]');
+    const toolbar = document.querySelector('[data-testid="independent-board-toolbar"]');
+    const gap = card && toolbar && card.getBoundingClientRect().top - toolbar.getBoundingClientRect().bottom;
+    return gap >= 8 && gap <= 40;
+  }, null, {timeout: 3000});
+  await page.getByRole('combobox',{name:'Job status',exact:true}).selectOption('active');
   await queue.getByRole('button',{name:/Needs a driver/}).click();
   const waitingPicker = card.locator('details').filter({hasText:'Choose drivers'});
   if (!await waitingPicker.evaluate(details => details.open)) await waitingPicker.locator('summary').click();
