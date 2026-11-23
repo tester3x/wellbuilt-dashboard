@@ -188,9 +188,9 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   function crewRow(job: IndependentJob, driver: ReturnType<typeof jobCrew>[number]) {
     const missingPhone = driver.source === 'outside' && !normalizeWhatsAppNumber(
       drivers.find(profile => `outside:${profile.externalDriverId}` === driver.key)?.phoneE164);
-    return <div key={driver.key} className="min-h-12 border-t border-gray-700/70 py-1 first:border-t-0">
+    return <div key={driver.key} className="min-h-[4.75rem] border-t border-gray-700/70 px-2 py-2 first:border-t-0">
       <p className={`flex flex-wrap items-center gap-1 text-xs ${missingPhone ? 'text-red-300' : 'text-white'}`}>
-        <span className="min-w-0 truncate" title={driver.name}>{driver.name}{driver.source === 'wellbuilt' ? ' · WB' : ''}</span>
+        <span className="min-w-0 break-words whitespace-normal" title={driver.name}>{driver.name}{driver.source === 'wellbuilt' ? ' · WB' : ''}</span>
         {missingPhone && <span className="rounded border border-red-600 bg-red-950/80 px-1 py-0.5 text-[10px] font-semibold text-red-200">No Contact Info</span>}
       </p>
       {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
@@ -291,10 +291,10 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         {job.notes && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">{job.notes}</p>}
       </details>}
       <div className="mt-2 text-sm text-amber-200">{jobCrew(job).length ? <><span className="font-medium">Drivers ({jobCrew(job).length})</span>
-        <div className="mx-auto mt-1 grid w-full max-w-2xl grid-cols-2 gap-2">
-          {(['day', 'night'] as const).map(shift => <div key={shift} role="region" aria-label={`${shift === 'day' ? 'Day' : 'Night'} Shift drivers`} className="min-w-0 rounded border border-gray-700 bg-gray-900/70 px-2 py-1">
+        <div className="mt-2 grid w-full grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-3">
+          {(['day', 'night'] as const).map(shift => <div key={shift} role="region" aria-label={`${shift === 'day' ? 'Day' : 'Night'} Shift drivers`} className="min-w-0 rounded border border-gray-700 bg-gray-900/70 px-3 py-2">
             <div className="flex items-center justify-between gap-2 border-b border-gray-700 pb-1 text-xs font-semibold text-cyan-200"><span>{shift === 'day' ? 'Day Shift' : 'Night Shift'}</span><span aria-label={`${jobCrew(job).filter(driver => crewShift(driver) === shift).length} ${shift} shift drivers`}>{jobCrew(job).filter(driver => crewShift(driver) === shift).length}</span></div>
-            <div className="min-h-16 max-h-36 overflow-y-auto">{jobCrew(job).filter(driver => crewShift(driver) === shift).map(driver => crewRow(job, driver))}</div>
+            <div className="h-[15rem] overflow-y-auto">{jobCrew(job).filter(driver => crewShift(driver) === shift).map(driver => crewRow(job, driver))}</div>
           </div>)}
         </div>
         {jobCrew(job).some(driver => !crewShift(driver)) && <div className="mx-auto mt-2 w-full max-w-2xl text-xs text-gray-300">

@@ -239,6 +239,22 @@ try {
   await assignedCard.getByText('Drivers requested: 3 · Assigned: 2 · 1 still needed').waitFor();
   await assignedCard.getByRole('region',{name:'Day Shift drivers'}).getByText('Day Shift',{exact:true}).waitFor();
   await assignedCard.getByRole('region',{name:'Night Shift drivers'}).getByText('Night Shift',{exact:true}).waitFor();
+  // Each shift list must show three padded two-line rows, without clipping driver names.
+  for (const shift of ['Day', 'Night']) {
+    const metrics = await assignedCard.getByRole('region',{name:`${shift} Shift drivers`}).evaluate(panel => {
+      const list = panel.querySelector('.overflow-y-auto');
+      const row = list?.querySelector('div[class*="min-h-"]');
+      const name = row?.querySelector('[title]');
+      return { width: panel.getBoundingClientRect().width, listHeight: list?.getBoundingClientRect().height || 0,
+        rowMinHeight: row ? parseFloat(getComputedStyle(row).minHeight) : 0,
+        whiteSpace: name ? getComputedStyle(name).whiteSpace : '', textOverflow: name ? getComputedStyle(name).textOverflow : '' };
+    });
+    assert.ok(metrics.width >= 240, `${shift} shift panel should be wide enough for wrapped names at ${width}px`);
+    assert.ok(metrics.listHeight >= metrics.rowMinHeight * 3 && metrics.rowMinHeight >= 70,
+      `${shift} shift list must fit three two-line driver rows at ${width}px`);
+    assert.equal(metrics.whiteSpace, 'normal', `${shift} shift names should wrap`);
+    assert.notEqual(metrics.textOverflow, 'ellipsis', `${shift} shift names must not truncate`);
+  }
   assert.equal(await assignedCard.getByLabel('1 day shift drivers').count(),1);
   assert.equal(await assignedCard.getByLabel('1 night shift drivers').count(),1);
   assert.deepEqual(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers')?.drivers),
