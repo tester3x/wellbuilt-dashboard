@@ -19,7 +19,7 @@ const browser = await chromium.launch();
 try {
   for (const [route, mode, mounted, target] of [
     ['/', 'only', false, '/dispatch/independent'], ['/dispatch', 'only', false, '/dispatch/independent'], ['/tickets', 'only', false, '/dispatch/independent'],
-    ['/dispatch/independent', 'only', true, null], ['/settings', 'only', true, null],
+    ['/dispatch/independent', 'only', true, null], ['/dispatch/independent/drivers/', 'only', true, null], ['/settings', 'only', true, null],
     ['/', 'free', false, '/welcome'], ['/tickets', 'free', false, '/welcome'],
     ['/welcome', 'free', true, null], ['/equipment', 'free', true, null], ['/safety', 'free', true, null], ['/settings', 'free', true, null],
     ['/tickets', 'dual', true, null], ['/dispatch/independent', 'loading', false, null],

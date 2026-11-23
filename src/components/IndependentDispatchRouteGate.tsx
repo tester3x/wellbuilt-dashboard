@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasFreeOwnerWorkspace, hasOnlyIndependentDispatchPackage } from '@/lib/independentDispatchPackage';
 
-const INDEPENDENT_ROUTES = ['/dispatch/independent', '/settings', '/login'];
+const INDEPENDENT_ROUTES = ['/dispatch/independent', '/dispatch/independent/drivers', '/settings', '/login'];
 const FREE_OWNER_ROUTES = ['/welcome', '/settings', '/equipment', '/safety', '/login'];
 
 /** Keep package-only tenants out of WB-M, tickets, billing, and the standard dispatch workspace. */
