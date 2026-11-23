@@ -71,3 +71,29 @@ needed for this host activation.
 Private installation backups and evidence:
 `C:/dev/release-artifacts/watchdog-hp-backup-20261123/` on the laptop, and HP's
 existing Watchdog data directory under `backups/hp-backup-20261123-*`.
+
+## Follow-up while watching the next photo
+
+The HP's preserved queue exposed a separate photo-inbox problem: image fallback
+did not honor the structured transport activation cutoff and attempted to download
+old unresolved photos. Some old media IDs were no longer available, producing an
+invalid serialized message ID error. The ROG remained healthy.
+
+Fixed in `d18e2ec42ce9311e9e58c561470b22e39e4cf1e6`: photo fallback now skips
+pre-activation or undated posts when a cutoff is configured, and skips completed,
+duplicate, excluded, archived, before-activation and ignored rows. New unresolved
+photos at or after the cutoff remain eligible. No historical queue entries were
+deleted or manually resent.
+
+Nine relevant tests passed locally and on HP. Installed the new HP runtime from
+archive SHA256 `5a552ccc3187abcc18362a89d62ff3991c08cab9eab9241bd17dd4bf185163f0`.
+The compiled parser is unchanged. The dependency lock is byte-identical; the new
+runtime uses the previous installed dependencies through a directory junction.
+The previous runtime is retained and must not be removed while that junction is
+in use. The existing activation cutoff and queue were preserved.
+
+HP reconnected with fallback enabled and reported captureHealthy with no error;
+ROG also reported captureHealthy. ROG remains on its previous runtime. The next
+new Tallgrass photo after the watch began remains pending acceptance; this
+follow-up does not claim a future photo was processed. Private watch evidence is
+under `C:/dev/release-artifacts/watchdog-next-dwyer-20261123/`.
