@@ -10,6 +10,7 @@ import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentR
 import { ACTIVE_LANES, pickupTiming, sortDispatchJobs } from '@/lib/independentDispatchBoard';
 import { driverAvailability } from '@/lib/independentDriverAvailability';
 import { listIndependentDriverProfiles, type IndependentDriverProfile } from '@/lib/independentDriverProfiles';
+import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false };
@@ -64,8 +65,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [assignments, setAssignments] = useState<Record<string, string>>({});
-  const [assignmentShifts, setAssignmentShifts] = useState<Record<string, '' | 'day' | 'night'>>({});
+  const [assignments, setAssignments] = useState<Record<string, SelectedDriverShifts>>({});
   const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
   const [customerId, setCustomerId] = useState('');
   const [contactId, setContactId] = useState('');
@@ -147,6 +147,16 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const availableCategories = (selectedCustomer?.workCategories || []).filter(category => category.sector === sector);
   const selectedCategory = availableCategories.find(category => category.id === categoryId);
   const availableSectors = newCustomer ? directory?.sectors || [] : (selectedCustomer?.sectors || []).filter(id => directory?.sectors.includes(id));
+  function canAddSelection(job: IndependentJob, replacing = false) {
+    const selected = Object.keys(assignments[job.id] || {});
+    if (!selected.length || (!replacing && jobCrew(job).length + selected.length > 30)) return false;
+    return selected.every(key => {
+      const active = key.startsWith('outside:') ? drivers.some(driver => `outside:${driver.externalDriverId}` === key && driver.active)
+        : wbDrivers.some(driver => `wellbuilt:${driver.driverId}` === key && driver.active);
+      return active && !jobCrew(job).some(member => member.key === key)
+        && driverAvailability(job, key, jobs, active, availabilityNow).available;
+    });
+  }
   function chooseSavedCustomer(id: string) {
     const next = directory?.customers.find(customer => customer.id === id);
     const retainParsed = !!parseReport && !customerId;
@@ -214,11 +224,12 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         <div className="mt-1 flex flex-wrap gap-2">{jobCrew(job).map(driver => <span key={driver.key} className="inline-flex items-center gap-2 rounded bg-gray-900 px-2 py-1">
           {driver.name}{driver.shift ? ` · ${driver.shift === 'day' ? 'Day' : 'Night'}` : ''}{driver.source === 'wellbuilt' ? ' · WellBuilt' : ''}
           {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <>
-            <button type="button" disabled={busy || !assignments[job.id]} className="text-cyan-300 underline disabled:opacity-40" title="Replace with the selected driver" onClick={() => {
-              const [kind, id] = (assignments[job.id] || '').split(':'); if (!id) return;
+            <button type="button" disabled={busy || Object.keys(assignments[job.id] || {}).length !== 1 || !canAddSelection(job, true)} className="text-cyan-300 underline disabled:opacity-40" title="Replace with the selected driver" onClick={() => {
+              const key = Object.keys(assignments[job.id] || {})[0];
+              const [kind, id] = key.split(':'); if (!id) return;
               void run({ op: 'replaceDriver', jobId: job.id, driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID(),
-                shift: assignmentShifts[job.id] ?? driver.shift ?? '', ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) },
-                () => setAssignments(current => ({ ...current, [job.id]: '' })));
+                shift: assignments[job.id]?.[key] ?? driver.shift ?? '', ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) },
+                () => setAssignments(current => ({ ...current, [job.id]: {} })));
             }}>Swap</button>
             <button type="button" disabled={busy || (job.status === 'in_progress' && jobCrew(job).length === 1)} className="text-red-300 underline disabled:opacity-40" onClick={() => void run({ op: 'removeDriver', jobId: job.id, driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID() })}>Remove</button>
           </>}
@@ -226,24 +237,16 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {canWrite && <div className="mt-3 flex flex-wrap gap-2">
         {['unassigned', 'assigned', 'in_progress'].includes(job.status) && <>
           {['unassigned', 'assigned'].includes(job.status) && <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>}
-          {canManageDrivers && <><select aria-label={`Driver for ${job.title}`} className={inputClass + ' !w-auto'} value={assignments[job.id] || ''} onChange={e => setAssignments({ ...assignments, [job.id]: e.target.value })}>
-            <option value="">Choose driver…</option>
-            <optgroup label="Drivers without WellBuilt accounts">{drivers.map(d => { const availability = driverAvailability(job, `outside:${d.externalDriverId}`, jobs, d.active, availabilityNow); return <option key={d.externalDriverId} value={`outside:${d.externalDriverId}`} disabled={!availability.available || jobCrew(job).some(member => member.key === `outside:${d.externalDriverId}`)}>{d.displayName} · {d.shiftPreference && d.shiftPreference !== 'unset' ? `prefers ${d.shiftPreference} · ` : ''}{availability.label}</option>; })}</optgroup>
-            <optgroup label="Linked WellBuilt accounts">{wbDrivers.map(d => { const availability = driverAvailability(job, `wellbuilt:${d.driverId}`, jobs, d.active, availabilityNow); const preferred = driverProfiles.find(profile => profile.driverKey === `wellbuilt:${d.driverId}`)?.shiftPreference; return <option key={d.driverId} value={`wellbuilt:${d.driverId}`} disabled={!availability.available || jobCrew(job).some(member => member.key === `wellbuilt:${d.driverId}`)}>{d.displayName} · {preferred && preferred !== 'unset' ? `prefers ${preferred} · ` : ''}{availability.label}</option>; })}</optgroup>
-          </select>
-          <select aria-label={`Shift for ${job.title}`} className={inputClass + ' !w-auto'} value={assignmentShifts[job.id] ?? (job.shift === 'day' || job.shift === 'night' ? job.shift : '')} onChange={event => setAssignmentShifts(current => ({ ...current, [job.id]: event.target.value as '' | 'day' | 'night' }))}>
-            <option value="">Shift not set</option><option value="day">Day shift</option><option value="night">Night shift</option>
-          </select>
+          {canManageDrivers && <><IndependentDriverPicker job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
+            now={availabilityNow} selected={assignments[job.id] || {}} disabled={busy}
+            onChange={next => setAssignments(current => ({ ...current, [job.id]: next }))} />
           <span className="self-center text-xs text-gray-400" title="ID has no verified HOS feed; dispatch decides whether to assign.">HOS unverified</span>
-          <button disabled={busy || !assignments[job.id] || !driverAvailability(job, assignments[job.id] || '', jobs,
-            assignments[job.id]?.startsWith('outside:') ? drivers.find(d => `outside:${d.externalDriverId}` === assignments[job.id])?.active === true
-              : wbDrivers.some(d => `wellbuilt:${d.driverId}` === assignments[job.id] && d.active), availabilityNow).available} className={buttonClass} onClick={() => {
-            const [kind, id] = (assignments[job.id] || '').split(':');
-            if (!id) return;
-            void run({ op: 'addDriver', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(),
-              shift: assignmentShifts[job.id] ?? (job.shift === 'day' || job.shift === 'night' ? job.shift : ''), ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) },
-              () => setAssignments(current => ({ ...current, [job.id]: '' })));
-          }}>{jobCrew(job).length ? 'Add driver' : 'Assign'}</button></>}
+          <button disabled={busy || !canAddSelection(job)} className={buttonClass} onClick={() => {
+            const selected = Object.entries(assignments[job.id] || {}).map(([key, shift]) => ({ key, shift }));
+            if (!selected.length) return;
+            void run({ op: 'addDrivers', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), drivers: selected },
+              () => setAssignments(current => ({ ...current, [job.id]: {} })));
+          }}>{jobCrew(job).length ? 'Add selected drivers' : 'Assign selected drivers'}</button></>}
         </>}
         {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
         {!['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}

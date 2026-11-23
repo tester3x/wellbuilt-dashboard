@@ -107,6 +107,33 @@ describe('Independent Dispatch callable boundaries', () => {
     await expect(call({ op: 'removeDriver', jobId: 'job-a', requestId: 'remove-last', expectedRevision: 6, driverKey: 'outside:day-b' }))
       .rejects.toThrow('replace_last_active_driver');
   });
+  it('adds a checked crew atomically with one revision and rejects a partly unavailable selection', async () => {
+    for (const id of ['outside-a', 'outside-b', 'outside-c']) records.set(`companies/company-a/external_drivers/${id}`,
+      { companyId: 'company-a', externalDriverId: id, active: true, displayName: id });
+    const id = 'wb-marcial';
+    records.set(`companies/company-a/independent_dispatch_wb_drivers/${id}`, {
+      companyId: 'company-a', sourceCompanyId: 'liquid-gold', driverId: id, authUid: `driver_${id}`,
+      displayName: 'Marcial', active: true,
+    });
+    profiles.set(`drivers/profiles/${id}`, { companyId: 'liquid-gold', active: true });
+    await call(create);
+    const batch = { op: 'addDrivers', jobId: 'job-a', requestId: 'crew-a', expectedRevision: 1,
+      drivers: [{ key: 'outside:outside-a', shift: 'day' }, { key: `wellbuilt:${id}`, shift: 'night' }] };
+    const result = await call(batch);
+    expect(result.job).toMatchObject({ status: 'assigned', revision: 2, drivers: [
+      { key: 'outside:outside-a', shift: 'day' }, { key: `wellbuilt:${id}`, shift: 'night' },
+    ] });
+    await expect(call(batch)).resolves.toMatchObject({ idempotent: true });
+    expect(records.get('independent_dispatch_jobs/job-a/events/crew-a').afterDrivers).toHaveLength(2);
+    await call({ ...create, jobId: 'job-b', requestId: 'create-b' });
+    await expect(call({ ...batch, jobId: 'job-b', requestId: 'blocked-b', drivers: [
+      { key: 'outside:outside-b', shift: 'day' }, { key: 'outside:outside-a', shift: 'night' },
+    ] })).rejects.toThrow('driver_assignment_conflict');
+    expect(records.get('independent_dispatch_jobs/job-b').revision).toBe(1);
+    await expect(call({ ...batch, requestId: 'duplicate', expectedRevision: 2, drivers: [
+      { key: 'outside:outside-c', shift: 'day' }, { key: 'outside:outside-c', shift: 'night' },
+    ] })).rejects.toThrow('invalid_driver_selection');
+  });
   it('treats every crew member as busy on an overlapping job', async () => {
     for (const id of ['day-a', 'night-a']) records.set(`companies/company-a/external_drivers/${id}`,
       { companyId: 'company-a', externalDriverId: id, active: true, displayName: id });

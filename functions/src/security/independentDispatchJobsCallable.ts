@@ -12,8 +12,9 @@ const COLLECTION = 'independent_dispatch_jobs';
 const WB_DRIVER_LINKS = 'independent_dispatch_wb_drivers';
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const normalizeCustomerName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-const KEYS = new Set(['op', 'jobId', 'job', 'expectedRevision', 'externalDriverId', 'wbDriverId', 'driverKey', 'shift', 'status', 'requestId', 'saveCustomer']);
+const KEYS = new Set(['op', 'jobId', 'job', 'expectedRevision', 'externalDriverId', 'wbDriverId', 'driverKey', 'drivers', 'shift', 'status', 'requestId', 'saveCustomer']);
 type JobDriver = { key: string; name: string; source: 'outside' | 'wellbuilt'; companyId?: string; shift: '' | 'day' | 'night'; assignedAt: string };
+type DriverSelection = { key: string; shift: '' | 'day' | 'night' };
 function jobDrivers(job: Record<string, any> | undefined): JobDriver[] {
   if (Array.isArray(job?.drivers)) return job.drivers;
   const shift = job?.shift === 'day' || job?.shift === 'night' ? job.shift : '';
@@ -30,10 +31,12 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !KEYS.has(k)))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_request');
     const op = raw.op;
-    if (!['list', 'create', 'update', 'assign', 'addDriver', 'replaceDriver', 'removeDriver', 'status'].includes(op))
+    if (!['list', 'create', 'update', 'assign', 'addDriver', 'addDrivers', 'replaceDriver', 'removeDriver', 'status'].includes(op))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_operation');
+    if (raw.drivers !== undefined && op !== 'addDrivers')
+      throw new httpsV2.HttpsError('invalid-argument', 'unexpected_drivers');
     const authority = await requireIndependentDispatchAuthority(request.auth?.uid, op === 'list' ? 'viewDispatch' : 'createDispatch');
-    if (['assign', 'addDriver', 'replaceDriver', 'removeDriver'].includes(op)) await requireTrustedCompanyCapability(request.auth?.uid, 'manageDrivers');
+    if (['assign', 'addDriver', 'addDrivers', 'replaceDriver', 'removeDriver'].includes(op)) await requireTrustedCompanyCapability(request.auth?.uid, 'manageDrivers');
     const db = admin.firestore();
     const companyRef = db.collection('companies').doc(authority.companyId);
     const company = await companyRef.get();
@@ -59,6 +62,24 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
     catch (error) { throw new httpsV2.HttpsError('invalid-argument', (error as Error).message); }
     if (raw.saveCustomer !== undefined && (raw.saveCustomer !== true || op !== 'create' || !details?.sector || details.customerId))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_save_customer');
+    let selectedDrivers: DriverSelection[] = [];
+    if (op === 'addDrivers') {
+      if (raw.externalDriverId !== undefined || raw.wbDriverId !== undefined || raw.driverKey !== undefined || raw.shift !== undefined
+        || !Array.isArray(raw.drivers) || raw.drivers.length < 1 || raw.drivers.length > 30)
+        throw new httpsV2.HttpsError('invalid-argument', 'invalid_driver_selection');
+      const seen = new Set<string>();
+      selectedDrivers = raw.drivers.map((entry: unknown) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+          throw new httpsV2.HttpsError('invalid-argument', 'invalid_driver_selection');
+        const driver = entry as Record<string, unknown>;
+        if (Object.keys(driver).some(key => !['key', 'shift'].includes(key))
+          || typeof driver.key !== 'string' || !/^(outside|wellbuilt):[A-Za-z0-9_-]{1,100}$/.test(driver.key)
+          || seen.has(driver.key) || !['', 'day', 'night'].includes(driver.shift as string))
+          throw new httpsV2.HttpsError('invalid-argument', 'invalid_driver_selection');
+        seen.add(driver.key);
+        return { key: driver.key, shift: driver.shift as DriverSelection['shift'] };
+      });
+    }
     let wbProfile: Record<string, unknown> | null = null;
     if (['assign', 'addDriver', 'replaceDriver'].includes(op) && typeof raw.wbDriverId === 'string' && ID.test(raw.wbDriverId)) {
       const profile = await admin.database().ref(`drivers/profiles/${raw.wbDriverId}`).get();
@@ -69,6 +90,17 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
       if (!wbProfile || wbProfile.active !== true || !activeAuth)
         throw new httpsV2.HttpsError('failed-precondition', 'wellbuilt_driver_inactive');
     }
+    const wbProfiles = new Map<string, Record<string, unknown>>();
+    await Promise.all(selectedDrivers.filter(driver => driver.key.startsWith('wellbuilt:')).map(async driver => {
+      const id = driver.key.slice(10);
+      const profile = (await admin.database().ref(`drivers/profiles/${id}`).get()).val();
+      let activeAuth = false;
+      try { activeAuth = !(await admin.auth().getUser(driverAuthUid(id))).disabled; }
+      catch { /* Missing or disabled account is not assignable. */ }
+      if (!profile || profile.active !== true || !activeAuth)
+        throw new httpsV2.HttpsError('failed-precondition', 'wellbuilt_driver_inactive');
+      wbProfiles.set(id, profile);
+    }));
     const jobRef = db.collection(COLLECTION).doc(raw.jobId);
     const eventRef = jobRef.collection('events').doc(raw.requestId);
     return db.runTransaction(async tx => {
@@ -81,7 +113,7 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
         customerRef ? tx.get(customerRef) : Promise.resolve(null),
         newCustomerRef ? tx.get(newCustomerRef) : Promise.resolve(null),
         newCustomerRef ? tx.get(companyRef.collection('independent_dispatch_customers').limit(500)) : Promise.resolve(null),
-        ['assign', 'addDriver', 'replaceDriver', 'update'].includes(op) ? tx.get(db.collection(COLLECTION).where('companyId', '==', authority.companyId)) : Promise.resolve(null),
+        ['assign', 'addDriver', 'addDrivers', 'replaceDriver', 'update'].includes(op) ? tx.get(db.collection(COLLECTION).where('companyId', '==', authority.companyId)) : Promise.resolve(null),
       ]);
       if (!hasIndependentDispatchPackage(freshCompany.data()))
         throw new httpsV2.HttpsError('permission-denied', 'independent_dispatch_package_inactive');
@@ -112,7 +144,8 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
       // Idempotency includes the exact payload: retries cannot reuse a key for different work.
       const payload = JSON.stringify({ op, job: details ?? null, expectedRevision: raw.expectedRevision ?? null,
         externalDriverId: raw.externalDriverId ?? null, wbDriverId: raw.wbDriverId ?? null,
-        driverKey: raw.driverKey ?? null, shift: raw.shift ?? null, status: raw.status ?? null });
+        driverKey: raw.driverKey ?? null, ...(op === 'addDrivers' ? { drivers: selectedDrivers } : {}),
+        shift: raw.shift ?? null, status: raw.status ?? null });
       if (eventSnap.exists) {
         if (eventSnap.data()?.companyId !== authority.companyId || eventSnap.data()?.payload !== payload)
           throw new httpsV2.HttpsError('already-exists', 'request_conflict');
@@ -145,12 +178,12 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
         try { assertIndependentJobMutable(previous!.status); }
         catch { throw new httpsV2.HttpsError('failed-precondition', 'job_not_editable'); }
       }
-      if (['assign', 'addDriver', 'replaceDriver', 'removeDriver'].includes(op)) {
-        if (!['assigned', 'in_progress'].includes(previous!.status) && op !== 'assign' && op !== 'addDriver')
+      if (['assign', 'addDriver', 'addDrivers', 'replaceDriver', 'removeDriver'].includes(op)) {
+        if (!['assigned', 'in_progress'].includes(previous!.status) && op !== 'assign' && op !== 'addDriver' && op !== 'addDrivers')
           throw new httpsV2.HttpsError('failed-precondition', 'job_has_no_drivers');
         if (['completed', 'cancelled'].includes(previous!.status))
           throw new httpsV2.HttpsError('failed-precondition', 'job_not_editable');
-        if (op === 'addDriver' && previous!.status === 'unassigned' && jobDrivers(previous).length)
+        if (['addDriver', 'addDrivers'].includes(op) && previous!.status === 'unassigned' && jobDrivers(previous).length)
           throw new httpsV2.HttpsError('failed-precondition', 'invalid_job_state');
         if (['replaceDriver', 'removeDriver'].includes(op) && (typeof raw.driverKey !== 'string' || !/^(outside|wellbuilt):[A-Za-z0-9_-]{1,100}$/.test(raw.driverKey)
           || !assignedDriverKeys(previous!).includes(raw.driverKey)))
@@ -197,6 +230,39 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
           driverSource: primary.source, driverName: primary.name,
           status: previous!.status === 'unassigned' ? 'assigned' : previous!.status };
       }
+      if (op === 'addDrivers') {
+        const existing = jobDrivers(previous);
+        if (existing.length + selectedDrivers.length > 30)
+          throw new httpsV2.HttpsError('failed-precondition', 'job_driver_limit');
+        if (selectedDrivers.some(driver => existing.some(member => member.key === driver.key)))
+          throw new httpsV2.HttpsError('already-exists', 'driver_already_on_job');
+        const snapshots = await Promise.all(selectedDrivers.map(driver => {
+          const [source, id] = driver.key.split(':');
+          return tx.get(companyRef.collection(source === 'outside' ? 'external_drivers' : WB_DRIVER_LINKS).doc(id));
+        }));
+        const added: JobDriver[] = selectedDrivers.map((driver, index) => {
+          const [source, id] = driver.key.split(':');
+          const data = snapshots[index].data();
+          if (source === 'outside') {
+            if (!snapshots[index].exists || data?.companyId !== authority.companyId || data?.active !== true
+              || typeof data?.displayName !== 'string')
+              throw new httpsV2.HttpsError('failed-precondition', 'external_driver_inactive');
+            return { key: driver.key, name: data.displayName, source: 'outside', shift: driver.shift, assignedAt: now };
+          }
+          if (!snapshots[index].exists || data?.companyId !== authority.companyId || data?.driverId !== id
+            || data?.active !== true || data?.authUid !== driverAuthUid(id)
+            || data?.sourceCompanyId !== wbProfiles.get(id)?.companyId || typeof data?.displayName !== 'string')
+            throw new httpsV2.HttpsError('failed-precondition', 'wellbuilt_driver_not_linked');
+          return { key: driver.key, name: data.displayName, source: 'wellbuilt', companyId: data.sourceCompanyId,
+            shift: driver.shift, assignedAt: now };
+        });
+        const nextDrivers = [...existing, ...added];
+        const primary = nextDrivers[0];
+        patch = { drivers: nextDrivers, externalDriverId: primary.source === 'outside' ? primary.key.slice(8) : '',
+          wbDriverId: primary.source === 'wellbuilt' ? primary.key.slice(10) : '', wbDriverCompanyId: primary.companyId || '',
+          driverSource: primary.source, driverName: primary.name,
+          status: previous!.status === 'unassigned' ? 'assigned' : previous!.status };
+      }
       if (op === 'removeDriver') {
         const nextDrivers = jobDrivers(previous).filter(driver => driver.key !== raw.driverKey);
         if (!nextDrivers.length && previous!.status === 'in_progress')
@@ -211,7 +277,7 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
           throw new httpsV2.HttpsError('failed-precondition', 'invalid_job_transition');
         patch = { status: raw.status, ...(raw.status === 'completed' ? { completedAt: now } : {}) };
       }
-      if (['assign', 'addDriver', 'replaceDriver', 'update'].includes(op)) {
+      if (['assign', 'addDriver', 'addDrivers', 'replaceDriver', 'update'].includes(op)) {
         const candidate = { ...previous, ...patch, id: jobRef.id };
         for (const key of assignedDriverKeys(candidate)) {
           if (hasDriverAssignmentConflict(candidate, key, otherJobs?.docs.map(doc => ({ ...doc.data(), id: doc.id })) || []))

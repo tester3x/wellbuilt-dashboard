@@ -3,6 +3,9 @@
 Independent Dispatch jobs can have several drivers. Each assignment records the
 driver source, display name, assigned time, and day or night shift. Dispatch can
 add a driver, remove one, or replace one while preserving the other crew members.
+The board picker has checkboxes and an individual shift selector for each checked
+driver. Add/Assign saves the selected crew in one transaction and one job revision;
+if any selection is unavailable, none of the checked drivers is added.
 The job event records the before and after roster. Existing single-driver jobs
 are read as one-member crews and are upgraded when their roster changes.
 
