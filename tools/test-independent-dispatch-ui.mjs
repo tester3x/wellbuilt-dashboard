@@ -34,9 +34,8 @@ try {
   const errors=[]; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.getByRole('heading',{name:'Dispatch board'}).waitFor();
-  await page.getByRole('region',{name:'Needs a driver jobs'}).waitFor();
-  const laneColumns = await page.locator('section[aria-labelledby="dispatch-board-title"] > div.grid').evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length);
-  assert.equal(laneColumns, width >= 1024 ? 3 : 1, `dispatch lanes should use ${width >= 1024 ? 'three' : 'one'} columns at ${width}px`);
+  await page.getByText('No active jobs. New requests will appear here.').waitFor();
+  assert.equal(await page.getByRole('region',{name:'Needs a driver jobs'}).count(),0,'empty waiting queue does not reserve board space');
   assert.equal(await page.getByRole('heading',{name:'New Independent Dispatch job'}).count(),0,'intake starts collapsed so the board is visible first');
   await page.getByRole('button',{name:'New job / paste request'}).click();
   await page.getByText('New Independent Dispatch job').waitFor();
@@ -113,7 +112,7 @@ try {
     }
     for (const [label,value] of [['Job name',`Pipe run ${sector}`],['Pickup address / location','Yard A'],['Delivery address / location','Site B']]) await page.getByLabel(label + ' *',{exact:true}).fill(value);
     await page.getByRole('button',{name:'Create job',exact:true}).click();
-    await page.getByRole('article').filter({hasText:`Pipe run ${sector}`}).waitFor();
+    await page.waitForFunction(title => window.requests.some(request => request.op === 'create' && request.job.title === title),`Pipe run ${sector}`);
   }
   await page.getByRole('combobox',{name:'Customer',exact:true}).selectOption('__new__');
   await page.getByRole('textbox',{name:"New customer's official company name"}).fill('One Time Freight LLC');
@@ -124,7 +123,7 @@ try {
   await page.getByLabel('Pickup address / location *').fill('Yard');
   await page.getByLabel('Delivery address / location *').fill('Site');
   await page.getByRole('button',{name:'Create job',exact:true}).click();
-  await page.getByRole('article').filter({hasText:'One-time job'}).waitFor();
+  await page.waitForFunction(() => window.requests.some(request => request.op === 'create' && request.job.title === 'One-time job'));
   assert.deepEqual(await page.evaluate(()=>{const r=window.requests.find(r=>r.op==='create'&&r.job.title==='One-time job');return {customer:r.job.customer,customerId:r.job.customerId,saveCustomer:r.saveCustomer}}),
     {customer:'One Time Freight LLC',customerId:undefined,saveCustomer:undefined});
   await page.getByRole('combobox',{name:'Customer',exact:true}).selectOption('__new__');
@@ -138,45 +137,76 @@ try {
   await page.getByLabel('Delivery address / location *').fill('Site');
   await page.getByRole('button',{name:'Create job',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='create'&&r.job.title==='First repeat job')?.saveCustomer),true);
-  const card=page.getByRole('article').filter({hasText:'Pipe run water-hauling'});
+  const queue=page.getByRole('region',{name:'Needs a driver jobs'});
+  await queue.getByRole('button',{name:/Needs a driver 7/}).waitFor();
+  assert.equal(await queue.getByText('Customer A · Pipe run water-hauling',{exact:true}).isVisible(),true,'collapsed alert previews a waiting job');
+  assert.equal(await page.getByRole('dialog',{name:'Jobs needing a driver'}).isVisible(),false,'waiting cards start collapsed');
+  await queue.getByRole('button',{name:/Needs a driver 7/}).click();
+  const dialog=page.getByRole('dialog',{name:'Jobs needing a driver'});
+  const card=dialog.getByRole('article').filter({hasText:'Pipe run water-hauling'});
   await card.waitFor();
-  assert.equal(await page.getByRole('region',{name:'Needs a driver jobs'}).getByRole('article').count(),7,'new requests remain in the unassigned lane');
-  await page.evaluate(() => window.scrollTo({ top: 700, behavior: 'instant' }));
+  assert.equal(await dialog.getByRole('article').count(),7,'all waiting jobs are available in the modal');
+  await card.getByText('Job contact: John Wick · Company man · +17015550199').waitFor();
+  await dialog.getByRole('article').filter({hasText:'Pipe run ltl'}).getByText('Job contact: Jane Doe · Lead · +17015550113').waitFor();
+  await card.getByRole('button',{name:'Edit'}).click();
+  assert.equal(await dialog.isVisible(),false,'editing a waiting job closes the modal so the form is usable');
+  await page.getByRole('button',{name:'Clear / new job'}).click();
+  await queue.getByRole('button',{name:/Needs a driver/}).click();
+  await card.getByRole('combobox').selectOption('outside:driver-a');
+  await card.getByRole('button',{name:'Assign',exact:true}).click();
+  await dialog.getByRole('button',{name:'Close'}).click();
+  const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'});
+  await assignedCard.waitFor();
+  const firstJobId = await page.evaluate(() => window.requests.find(request => request.op === 'create'&&request.job.title==='Pipe run water-hauling').jobId);
+  assert.equal(await assignedCard.getByRole('link',{name:'Call customer in Dialpad'}).getAttribute('href'),
+    `dialpad://+17015550111?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
+  assert.equal(await assignedCard.getByRole('link',{name:'Call job contact in Dialpad'}).getAttribute('href'),
+    `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
+  assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
+  await queue.getByRole('button',{name:/Needs a driver/}).click();
+  const linkedCard=dialog.getByRole('article').filter({hasText:'Pipe run ltl'});
+  await linkedCard.getByRole('combobox').selectOption('wellbuilt:wb-marcial');
+  await linkedCard.getByRole('button',{name:'Assign',exact:true}).click();
+  await dialog.getByRole('button',{name:'Close'}).click();
+  const assignedLinkedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({hasText:'Pipe run ltl'});
+  assert.equal(await assignedLinkedCard.getByText('WellBuilt account',{exact:false}).count(),1);
+  assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='assign'&&r.wbDriverId)?.wbDriverId),'wb-marcial');
+  assert.equal(await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).count(),0);
+  await queue.getByRole('button',{name:/Needs a driver/}).click();
+  for (let remaining = 5; remaining > 0; remaining--) {
+    const next = dialog.getByRole('article').first();
+    await next.getByRole('combobox').selectOption('outside:driver-a');
+    await next.getByRole('button',{name:'Assign',exact:true}).click();
+    if (remaining > 1) await page.waitForFunction(count => document.querySelectorAll('dialog[open] article').length === count, remaining - 1);
+  }
+  await page.waitForFunction(() => !document.querySelector('section[aria-label="Needs a driver jobs"]'));
+  const assignedWidth=await page.getByRole('region',{name:'Assigned jobs'}).evaluate(element => element.getBoundingClientRect().width / element.parentElement.getBoundingClientRect().width);
+  assert.ok(assignedWidth > .95, `assigned jobs should fill the board when no other lane has jobs at ${width}px`);
+  await page.evaluate(() => window.scrollTo({ top: 300, behavior: 'instant' }));
   await page.waitForFunction(() => {
     const toolbar = document.querySelector('[data-testid="independent-board-toolbar"]');
     const header = document.querySelector('header');
     return !!toolbar && !!header && Math.abs(toolbar.getBoundingClientRect().top - header.getBoundingClientRect().bottom) <= 2;
   });
   assert.equal(await page.getByRole('textbox',{name:'Search dispatch jobs'}).isVisible(),true,'search remains in the pinned toolbar');
-  await card.getByText('Job contact: John Wick · Company man · +17015550199').waitFor();
-  await page.getByRole('article').filter({hasText:'Pipe run ltl'}).getByText('Job contact: Jane Doe · Lead · +17015550113').waitFor();
-  await card.getByRole('combobox').selectOption('outside:driver-a');
-  await card.getByRole('button',{name:'Assign',exact:true}).click();
-  await page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'}).waitFor();
-  const firstJobId = await page.evaluate(() => window.requests.find(request => request.op === 'create'&&request.job.title==='Pipe run water-hauling').jobId);
-  assert.equal(await card.getByRole('link',{name:'Call customer in Dialpad'}).getAttribute('href'),
-    `dialpad://+17015550111?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
-  assert.equal(await card.getByRole('link',{name:'Call job contact in Dialpad'}).getAttribute('href'),
-    `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
-  assert.ok((await card.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
-  const linkedCard=page.getByRole('article').filter({hasText:'Pipe run ltl'});
-  await linkedCard.getByRole('combobox').selectOption('wellbuilt:wb-marcial');
-  await linkedCard.getByRole('button',{name:'Assign',exact:true}).click();
-  assert.equal(await linkedCard.getByText('WellBuilt account',{exact:false}).count(),1);
-  assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='assign'&&r.wbDriverId)?.wbDriverId),'wb-marcial');
-  assert.equal(await linkedCard.getByRole('link',{name:'Call driver in Dialpad'}).count(),0);
-  await card.getByRole('button',{name:'Mark started',exact:true}).click();
+  await assignedCard.getByRole('button',{name:'Mark started',exact:true}).click();
   await page.getByRole('region',{name:'In progress jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'}).waitFor();
-  assert.equal(await card.getByRole('button',{name:'Edit',exact:true}).count(),0);
-  await card.getByRole('button',{name:'Mark completed',exact:true}).click();
-  await card.waitFor({state:'detached'});
+  if (width >= 1024) {
+    const workLaneWidth=await page.getByRole('region',{name:'Assigned jobs'}).evaluate(element => element.getBoundingClientRect().width / element.parentElement.getBoundingClientRect().width);
+    assert.ok(workLaneWidth > .45 && workLaneWidth < .55, `assigned and in-progress jobs should split the board at ${width}px`);
+  }
+  const progressCard=page.getByRole('region',{name:'In progress jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'});
+  assert.equal(await progressCard.getByRole('button',{name:'Edit',exact:true}).count(),0);
+  await progressCard.getByRole('button',{name:'Mark completed',exact:true}).click();
+  await progressCard.waitFor({state:'detached'});
   await page.getByRole('combobox',{name:'Job status',exact:true}).selectOption('completed');
-  await card.waitFor();
-  assert.equal(await card.getByRole('button').count(),0);
+  const completedCard=page.getByRole('region',{name:'Completed jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'});
+  await completedCard.waitFor();
+  assert.equal(await completedCard.getByRole('button').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.requests.filter(r=>r.op==='create'&&r.job.title.startsWith('Pipe run ')).map(r=>r.job.sector)),sectors.map(([sector])=>sector));
   assert.deepEqual(errors,[]);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');
   await page.close();
  }
- console.log('Independent Dispatch actual UI: five sector forms, customer selection, assign/start/complete, filters, terminal lock; desktop/mobile; no messaging.');
+ console.log('Independent Dispatch actual UI: five sector forms, compact waiting alert/modal, adaptive work lanes, assign/start/complete, filters, terminal lock; desktop/mobile; no messaging.');
 } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }
