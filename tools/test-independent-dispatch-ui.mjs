@@ -245,15 +245,20 @@ try {
       const list = panel.querySelector('.overflow-y-auto');
       const row = list?.querySelector('div[class*="min-h-"]');
       const name = row?.querySelector('[title]');
+      const controls = row?.querySelector('select')?.parentElement;
       return { width: panel.getBoundingClientRect().width, listHeight: list?.getBoundingClientRect().height || 0,
         rowMinHeight: row ? parseFloat(getComputedStyle(row).minHeight) : 0,
-        whiteSpace: name ? getComputedStyle(name).whiteSpace : '', textOverflow: name ? getComputedStyle(name).textOverflow : '' };
+        whiteSpace: name ? getComputedStyle(name).whiteSpace : '', textOverflow: name ? getComputedStyle(name).textOverflow : '',
+        rowRight: row?.getBoundingClientRect().right || 0, controlsRight: controls?.getBoundingClientRect().right || 0,
+        nameRight: name?.getBoundingClientRect().right || 0, controlsLeft: controls?.getBoundingClientRect().left || 0 };
     });
     assert.ok(metrics.width >= 240, `${shift} shift panel should be wide enough for wrapped names at ${width}px`);
     assert.ok(metrics.listHeight >= metrics.rowMinHeight * 3 && metrics.rowMinHeight >= 70,
       `${shift} shift list must fit three two-line driver rows at ${width}px`);
     assert.equal(metrics.whiteSpace, 'normal', `${shift} shift names should wrap`);
     assert.notEqual(metrics.textOverflow, 'ellipsis', `${shift} shift names must not truncate`);
+    assert.ok(metrics.rowRight - metrics.controlsRight < 12 && metrics.nameRight <= metrics.controlsLeft,
+      `${shift} shift controls should use the right side without overlapping the driver name at ${width}px`);
   }
   assert.equal(await assignedCard.getByLabel('1 day shift drivers').count(),1);
   assert.equal(await assignedCard.getByLabel('1 night shift drivers').count(),1);
@@ -284,6 +289,12 @@ try {
     'opening the picker must not stretch the assignment button to the picker height');
   assert.ok(await assignedCard.getByRole('button',{name:'Mark started'}).evaluate(button => button.getBoundingClientRect().height < 60),
     'status controls remain compact beside an open picker');
+  assert.ok(await assignedCard.getByRole('button',{name:'Cancel job'}).evaluate(button => {
+    const card = button.closest('article');
+    const actions = card?.querySelector('button:not([disabled])');
+    return card && actions && card.getBoundingClientRect().right - button.getBoundingClientRect().right < 24
+      && button.getBoundingClientRect().top > actions.getBoundingClientRect().top;
+  }), 'Cancel job sits at the bottom right of the card');
   await assignedCard.getByRole('checkbox',{name:'Choose Driver C for Pipe run water-hauling'}).check();
   await assignedCard.getByRole('combobox',{name:'Shift for Driver C on Pipe run water-hauling'}).selectOption('night');
   await assignedCard.getByRole('button',{name:'Swap'}).last().click();

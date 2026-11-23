@@ -188,30 +188,34 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   function crewRow(job: IndependentJob, driver: ReturnType<typeof jobCrew>[number]) {
     const missingPhone = driver.source === 'outside' && !normalizeWhatsAppNumber(
       drivers.find(profile => `outside:${profile.externalDriverId}` === driver.key)?.phoneE164);
-    return <div key={driver.key} className="min-h-[4.75rem] border-t border-gray-700/70 px-2 py-2 first:border-t-0">
-      <p className={`flex flex-wrap items-center gap-1 text-xs ${missingPhone ? 'text-red-300' : 'text-white'}`}>
-        <span className="min-w-0 break-words whitespace-normal" title={driver.name}>{driver.name}{driver.source === 'wellbuilt' ? ' · WB' : ''}</span>
-        {missingPhone && <span className="rounded border border-red-600 bg-red-950/80 px-1 py-0.5 text-[10px] font-semibold text-red-200">No Contact Info</span>}
-      </p>
-      {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
-      {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
+    return <div key={driver.key} className="grid min-h-[4.75rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 border-t border-gray-700/70 px-2 py-2 first:border-t-0">
+      <div className="min-w-0">
+        <p className={`flex flex-wrap items-center gap-1 text-xs ${missingPhone ? 'text-red-300' : 'text-white'}`}>
+          <span className="min-w-0 break-words whitespace-normal" title={driver.name}>{driver.name}{driver.source === 'wellbuilt' ? ' · WB' : ''}</span>
+          {missingPhone && <span className="rounded border border-red-600 bg-red-950/80 px-1 py-0.5 text-[10px] font-semibold text-red-200">No Contact Info</span>}
+        </p>
+        {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
+      </div>
+      {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <div className="flex flex-col items-end gap-1 text-xs">
         <select aria-label={`Assignment shift for ${driver.name} on ${job.title}`} value={crewShift(driver)} disabled={busy}
           className="rounded border border-gray-600 bg-gray-950 px-1 py-0.5 text-xs text-white"
           onChange={event => void run({ op: 'setDriverShift', jobId: job.id, expectedRevision: job.revision,
             requestId: crypto.randomUUID(), driverKey: driver.key, shift: event.target.value })}>
           <option value="" disabled>Set shift</option><option value="day">Day</option><option value="night">Night</option>
         </select>
-        <button type="button" disabled={busy || Object.keys(assignments[job.id] || {}).length !== 1 || !canAddSelection(job, true)}
-          className="text-cyan-300 underline disabled:opacity-40" title="Replace with the selected driver" onClick={() => {
-            const key = Object.keys(assignments[job.id] || {})[0];
-            const [kind, id] = key.split(':'); if (!id) return;
-            void run({ op: 'replaceDriver', jobId: job.id, driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID(),
-              shift: assignments[job.id]?.[key] ?? driver.shift ?? '', ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) },
-              () => setAssignments(current => ({ ...current, [job.id]: {} })));
-          }}>Swap</button>
-        <button type="button" disabled={busy || (job.status === 'in_progress' && jobCrew(job).length === 1)}
-          className="text-red-300 underline disabled:opacity-40" onClick={() => void run({ op: 'removeDriver', jobId: job.id,
-            driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID() })}>Remove</button>
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" disabled={busy || Object.keys(assignments[job.id] || {}).length !== 1 || !canAddSelection(job, true)}
+            className="text-cyan-300 underline disabled:opacity-40" title="Replace with the selected driver" onClick={() => {
+              const key = Object.keys(assignments[job.id] || {})[0];
+              const [kind, id] = key.split(':'); if (!id) return;
+              void run({ op: 'replaceDriver', jobId: job.id, driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID(),
+                shift: assignments[job.id]?.[key] ?? driver.shift ?? '', ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) },
+                () => setAssignments(current => ({ ...current, [job.id]: {} })));
+            }}>Swap</button>
+          <button type="button" disabled={busy || (job.status === 'in_progress' && jobCrew(job).length === 1)}
+            className="text-red-300 underline disabled:opacity-40" onClick={() => void run({ op: 'removeDriver', jobId: job.id,
+              driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID() })}>Remove</button>
+        </div>
       </div>}
     </div>;
   }
@@ -318,11 +322,13 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           }}>{jobCrew(job).length ? 'Add selected drivers' : 'Assign selected drivers'}</button>}
         </>}
         {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
-        {!['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
         </div>
       </div>}
       {jobActionError?.jobId === job.id && <p role="alert" className="mt-2 text-sm text-red-300">Assignment was not saved: {jobActionError.message}</p>}
-      <p className="mt-2 text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
+      <div className="mt-2 flex flex-wrap items-end justify-between gap-2">
+        <p className="text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
+        {canWrite && !['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
+      </div>
     </article>)}</div>;
         return <section key={lane.status} aria-label={`${lane.label} jobs`} className={`min-w-0 rounded-lg border ${isWaitingQueue ? 'border-amber-700/70 bg-amber-950/20' : 'border-gray-700 bg-gray-950/60'} p-3 ${filter === 'active' && (isWaitingQueue || workingLaneCount === 1) ? 'lg:col-span-2' : ''}`}>
           {isWaitingQueue ? <>
