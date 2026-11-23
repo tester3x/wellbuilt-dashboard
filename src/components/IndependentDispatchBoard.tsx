@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { independentDispatchJobs, type IndependentJob, type IndependentJobDetails, type IndependentJobStatus, type LinkedWellBuiltDriver } from '@/lib/independentDispatchJobs';
 import { listExternalDrivers, type ExternalDriver } from '@/lib/externalAssignmentDelivery';
-import { ExternalAssignmentDeliveryPanel } from './ExternalAssignmentDeliveryPanel';
 import { independentDispatchDirectory, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
 import { SECTOR_FIELDS, sectorLabel, type IndependentSector } from '@/lib/independentDispatchSectors';
 import { dialpadCallHref } from '@/lib/dialpad';
@@ -462,6 +461,5 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       </fieldset>
     </form>}
     </div>
-    {canManageDrivers && <div><ExternalAssignmentDeliveryPanel jobs={[]} canManage={canWrite && canManageDrivers} rosterOnly onRosterChange={refresh} /></div>}
   </div>;
 }

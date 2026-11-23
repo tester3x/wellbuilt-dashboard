@@ -42,15 +42,17 @@ export function ExternalAssignmentDeliveryPanel({
   jobs,
   canManage,
   rosterOnly = false,
+  initiallyExpanded = false,
   onRosterChange,
 }: {
   jobs: ExternalDispatchOption[];
   canManage: boolean;
   rosterOnly?: boolean;
+  initiallyExpanded?: boolean;
   onRosterChange?: () => Promise<void>;
 }) {
   const [drivers, setDrivers] = useState<ExternalDriver[]>([]);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const [deliveries, setDeliveries] = useState<ExternalDelivery[]>([]);
   const [dispatchId, setDispatchId] = useState('');
   const [externalDriverId, setExternalDriverId] = useState('');
@@ -131,23 +133,25 @@ export function ExternalAssignmentDeliveryPanel({
         className="w-full flex items-center justify-between gap-3 text-left">
         <span>
           <span id="external-delivery-heading" className="block font-semibold text-amber-300">Drivers Without WellBuilt Accounts ({drivers.length})</span>
-          <span className="text-xs text-gray-400">Outside / temporary drivers · expand to manage assignments</span>
+          <span className="text-xs text-gray-400">{rosterOnly ? 'Outside / temporary drivers · add and edit the company roster' : 'Outside / temporary drivers · expand to manage assignments'}</span>
         </span>
         <span aria-hidden="true" className="text-amber-300">{expanded ? '▾' : '▸'}</span>
       </button>
       {expanded && <div id="external-drivers-details" className="mt-3">
-      <p className="mb-2 text-xs text-amber-200">{rosterOnly ? <>Add or edit outside-driver contacts here, then assign them on the job below. Company communication options are in <a href="/settings" className="underline">Independent Dispatch settings</a>. No messages are sent.</> : 'Messaging provider not configured — no SMS or WhatsApp messages are sent.'}</p>
+      <p className="mb-2 text-xs text-amber-200">{rosterOnly ? 'Add drivers here, then open their profile below for WhatsApp name, contact details, and work preferences.' : 'Messaging provider not configured — no SMS or WhatsApp messages are sent.'}</p>
 
       {message && <div className="mt-3 rounded bg-gray-900 px-3 py-2 text-sm text-gray-200">{message}</div>}
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+      <div className={`mt-4 grid gap-4 ${rosterOnly ? '' : 'xl:grid-cols-2'}`}>
         <form className="rounded border border-gray-700 p-3" onSubmit={event => {
           event.preventDefault();
+          const currentDriver = drivers.find(driver => driver.externalDriverId === editingDriverId);
+          const phoneE164 = rosterOnly ? currentDriver?.phoneE164 || '' : phone.trim();
           const driver = {
             externalDriverId: editingDriverId || rosterId(name),
             displayName: name.trim(),
-            phoneE164: phone.trim(),
-            channels: phone.trim() ? drivers.find(driver => driver.externalDriverId === editingDriverId)?.channels || [] : [],
+            phoneE164,
+            channels: phoneE164 ? currentDriver?.channels || [] : [],
             active: driverActive,
             shiftPreference,
           };
@@ -158,11 +162,11 @@ export function ExternalAssignmentDeliveryPanel({
           }, editingDriverId ? 'Driver changes saved to this company roster.' : 'External driver saved to this company roster.');
         }}>
           <h3 className="text-sm font-medium text-white">{editingDriverId ? 'Edit outside driver' : 'Company roster'}</h3>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <div className={`mt-2 grid gap-2 ${rosterOnly ? '' : 'sm:grid-cols-2'}`}>
             <input id="outside-driver-name" required value={name} onChange={event => setName(event.target.value)} maxLength={120}
               aria-label="Driver name" placeholder="Driver name" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />
-            <input value={phone} onChange={event => setPhone(event.target.value)}
-              aria-label="Driver phone (optional)" placeholder="Phone (optional) · +17015550123" inputMode="tel" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />
+            {!rosterOnly && <input value={phone} onChange={event => setPhone(event.target.value)}
+              aria-label="Driver phone (optional)" placeholder="Phone (optional) · +17015550123" inputMode="tel" className="rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white" />}
           </div>
           <label className="mt-2 block text-xs text-gray-300">Shift preference
             <select value={shiftPreference} onChange={event => setShiftPreference(event.target.value as DriverShiftPreference)}

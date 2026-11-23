@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppHeader } from '@/components/AppHeader';
 import { IndependentDriverProfilesPanel } from '@/components/IndependentDriverProfilesPanel';
+import { ExternalAssignmentDeliveryPanel } from '@/components/ExternalAssignmentDeliveryPanel';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
 import { independentDispatchJobs, type LinkedWellBuiltDriver } from '@/lib/independentDispatchJobs';
@@ -15,6 +16,11 @@ export default function IndependentDispatchDriversPage() {
   const { user, loading } = useAuth();
   const [data, setData] = useState<{ drivers: ExternalDriver[]; wbDrivers: LinkedWellBuiltDriver[]; customers: IndependentCustomer[] } | null>(null);
   const [error, setError] = useState('');
+
+  async function refreshRoster() {
+    const drivers = await listExternalDrivers();
+    setData(current => current ? { ...current, drivers } : current);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -39,7 +45,10 @@ export default function IndependentDispatchDriversPage() {
     <main className="mx-auto w-full max-w-5xl px-4 py-4 2xl:px-8">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h1 className="text-xl font-semibold">Driver profiles</h1><a className="text-sm text-cyan-300 underline" href="/dispatch/independent/">Back to Independent Dispatch</a></div>
       {error ? <p role="alert" className="rounded border border-red-700 bg-red-950 p-3 text-red-200">{error}</p> : !data ? <p>Loading driver profiles…</p>
-        : <IndependentDriverProfilesPanel {...data} initiallyOpen />}
+        : <>
+          <ExternalAssignmentDeliveryPanel jobs={[]} canManage rosterOnly initiallyExpanded onRosterChange={refreshRoster} />
+          <IndependentDriverProfilesPanel {...data} initiallyOpen />
+        </>}
     </main>
   </div>;
 }
