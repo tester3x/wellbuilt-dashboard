@@ -8,9 +8,10 @@ import { SECTOR_FIELDS, sectorLabel, type IndependentSector } from '@/lib/indepe
 import { dialpadCallHref } from '@/lib/dialpad';
 import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentRequestParser';
 import { ACTIVE_LANES, pickupTiming, sortDispatchJobs } from '@/lib/independentDispatchBoard';
+import { driverAvailability } from '@/lib/independentDriverAvailability';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
-  jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' };
+  jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false };
 const STATUS: Record<IndependentJobStatus, string> = { unassigned: 'Unassigned', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
 const FIELDS = [
   ['title', 'Job name', 180, true],
@@ -23,7 +24,8 @@ const buttonClass = 'rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:o
 
 function JobDialpadLinks({ job, directory, drivers }: { job: IndependentJob; directory: IndependentDirectory | null; drivers: ExternalDriver[] }) {
   const customer = directory?.customers.find(item => item.id === job.customerId);
-  const driver = drivers.find(item => item.externalDriverId === job.externalDriverId);
+  const driver = job.driverSource === 'outside' && job.externalDriverId
+    ? drivers.find(item => item.externalDriverId === job.externalDriverId) : undefined;
   const customerHref = dialpadCallHref(customer?.phoneE164, job.id, directory?.dispatchPhoneE164);
   const contactHref = dialpadCallHref(job.jobContactPhoneE164, job.id, directory?.dispatchPhoneE164);
   const driverHref = dialpadCallHref(driver?.phoneE164, job.id, directory?.dispatchPhoneE164);
@@ -44,6 +46,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [form, setForm] = useState(EMPTY);
   const [editing, setEditing] = useState<IndependentJob | null>(null);
   const [scheduledLocal, setScheduledLocal] = useState('');
+  const [estimatedEndLocal, setEstimatedEndLocal] = useState('');
+  const [availabilityNow, setAvailabilityNow] = useState(() => Date.now());
   const [filter, setFilter] = useState('active');
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
@@ -88,6 +92,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     setLoaded(true);
   }, [companyId, canManageDrivers]);
   useEffect(() => { void refresh().catch(e => setError(e.message)); }, [refresh]);
+  useEffect(() => { const timer = window.setInterval(() => setAvailabilityNow(Date.now()), 60_000); return () => window.clearInterval(timer); }, []);
   async function run(payload: Record<string, unknown>, after?: () => void) {
     setBusy(true); setError(''); setNotice('');
     try {
@@ -99,14 +104,14 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     finally { setBusy(false); }
   }
   function resetForm() {
-    setForm(EMPTY); setEditing(null); setScheduledLocal(''); setCustomerId(''); setContactId(''); setNewCustomer(false); setSaveCustomer(false); setSector(''); setSectorFields({}); setCategoryId(''); setAsset('');
+    setForm(EMPTY); setEditing(null); setScheduledLocal(''); setEstimatedEndLocal(''); setCustomerId(''); setContactId(''); setNewCustomer(false); setSaveCustomer(false); setSector(''); setSectorFields({}); setCategoryId(''); setAsset('');
     setPastedRequest(''); setParseReport(null);
     creation.current = { jobId: crypto.randomUUID(), requestId: crypto.randomUUID() };
   }
   function edit(job: IndependentJob) {
     setIntakeOpen(true);
     setEditing(job);
-    setForm(Object.fromEntries(Object.keys(EMPTY).map(k => [k, job[k as keyof IndependentJobDetails] || ''])) as IndependentJobDetails);
+    setForm({ ...EMPTY, ...Object.fromEntries(Object.keys(EMPTY).map(k => [k, job[k as keyof IndependentJobDetails] ?? EMPTY[k as keyof IndependentJobDetails]])) } as IndependentJobDetails);
     setCustomerId(job.customerId || ''); setNewCustomer(!!job.sector && !job.customerId); setSaveCustomer(false);
     const savedContact = directory?.customers.find(customer => customer.id === job.customerId)?.contacts?.find(contact =>
       contact.name === job.jobContactName && contact.phoneE164 === job.jobContactPhoneE164 && contact.role === job.jobContactRole);
@@ -115,6 +120,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     setCategoryId(job.categoryId || ''); setAsset(job.asset || '');
     const date = job.scheduledAt ? new Date(job.scheduledAt) : null;
     setScheduledLocal(date ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
+    const end = job.estimatedEndAt ? new Date(job.estimatedEndAt) : null;
+    setEstimatedEndLocal(end ? new Date(end.getTime() - end.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
     requestAnimationFrame(() => document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' }));
   }
   const visible = jobs.filter(job => (filter === 'all' || (filter === 'active' ? !['completed', 'cancelled'].includes(job.status) : filter === job.status))
@@ -152,6 +159,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     setSectorFields(result.sectorFields);
     setCategoryId(''); setAsset('');
     setScheduledLocal(result.scheduledLocal);
+    setEstimatedEndLocal('');
     setForm({ ...EMPTY, ...result.fields, customer: customer?.name || result.customerLabel });
     setParseReport(result);
     document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' });
@@ -180,6 +188,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       <p className="text-sm text-gray-300">{job.customer}{job.sector ? ` · ${sectorLabel(job.sector)}` : ''}{job.reference ? ` · ${job.reference}` : ''}</p>
       {(job.categoryId || job.asset) && <p className="text-sm text-cyan-200">{directory?.customers.find(customer => customer.id === job.customerId)?.workCategories?.find(category => category.id === job.categoryId)?.name || (job.categoryId ? 'Archived category' : '')}{job.asset ? ` · ${job.asset}` : ''}</p>}
       <p className={`mt-2 text-sm font-medium ${pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? 'text-red-300' : pickupTiming(job) === 'soon' ? 'text-amber-200' : 'text-gray-300'}`}>Pickup: {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : 'Time not set'}{pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? ' · Past requested time' : ''}</p>
+      {job.estimatedEndAt && <p className="text-sm text-gray-300">Estimated finish: {new Date(job.estimatedEndAt).toLocaleString()}</p>}
+      {(job.shift || job.ongoing) && <p className="text-sm text-cyan-200">{job.shift === 'day' ? 'Day shift' : job.shift === 'night' ? 'Night shift' : 'Any shift'}{job.ongoing ? ' · Ongoing work' : ''}</p>}
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} />
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
@@ -194,10 +204,12 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>
           {canManageDrivers && <><select aria-label={`Driver for ${job.title}`} className={inputClass + ' !w-auto'} value={assignments[job.id] || ''} onChange={e => setAssignments({ ...assignments, [job.id]: e.target.value })}>
             <option value="">Choose driver…</option>
-            <optgroup label="Drivers without WellBuilt accounts">{drivers.filter(d => d.active).map(d => <option key={d.externalDriverId} value={`outside:${d.externalDriverId}`}>{d.displayName}</option>)}</optgroup>
-            <optgroup label="Linked WellBuilt accounts">{wbDrivers.map(d => <option key={d.driverId} value={`wellbuilt:${d.driverId}`}>{d.displayName}</option>)}</optgroup>
+            <optgroup label="Drivers without WellBuilt accounts">{drivers.map(d => { const availability = driverAvailability(job, `outside:${d.externalDriverId}`, jobs, d.active, availabilityNow); return <option key={d.externalDriverId} value={`outside:${d.externalDriverId}`} disabled={!availability.available}>{d.displayName} · {availability.label}</option>; })}</optgroup>
+            <optgroup label="Linked WellBuilt accounts">{wbDrivers.map(d => { const availability = driverAvailability(job, `wellbuilt:${d.driverId}`, jobs, d.active, availabilityNow); return <option key={d.driverId} value={`wellbuilt:${d.driverId}`} disabled={!availability.available}>{d.displayName} · {availability.label}</option>; })}</optgroup>
           </select>
-          <button disabled={busy || !assignments[job.id]} className={buttonClass} onClick={() => {
+          <button disabled={busy || !assignments[job.id] || !driverAvailability(job, assignments[job.id] || '', jobs,
+            assignments[job.id]?.startsWith('outside:') ? drivers.find(d => `outside:${d.externalDriverId}` === assignments[job.id])?.active === true
+              : wbDrivers.some(d => `wellbuilt:${d.driverId}` === assignments[job.id] && d.active), availabilityNow).available} className={buttonClass} onClick={() => {
             const [kind, id] = (assignments[job.id] || '').split(':');
             if (!id) return;
             void run({ op: 'assign', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(),
@@ -252,6 +264,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     {canWrite && <form id="independent-job-form" className="rounded border border-gray-700 bg-gray-800 p-4" onSubmit={event => {
       event.preventDefault();
       const job = { ...form, scheduledAt: scheduledLocal ? new Date(scheduledLocal).toISOString() : '',
+        estimatedEndAt: estimatedEndLocal ? new Date(estimatedEndLocal).toISOString() : '',
         ...(sector ? { ...(customerId ? { customerId } : {}), sector, sectorFields } : {}),
         ...(customerId ? { categoryId, asset: categoryId ? asset.trim() : '' } : {}) };
       void run({ op: editing ? 'update' : 'create', jobId: editing?.id || creation.current.jobId,
@@ -330,6 +343,10 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           </label>)}</div>
         </div>}
         <label className="text-xs text-gray-300">Scheduled pickup (your local time)<input type="datetime-local" className={inputClass} value={scheduledLocal} onChange={e => setScheduledLocal(e.target.value)} /></label>
+        <label className="text-xs text-gray-300">Estimated finish (your local time)<input type="datetime-local" className={inputClass} value={estimatedEndLocal} min={scheduledLocal || undefined} onChange={e => setEstimatedEndLocal(e.target.value)} /></label>
+        <label className="text-xs text-gray-300">Shift<select aria-label="Job shift" className={inputClass} value={form.shift || ''} onChange={e => setForm(current => ({ ...current, shift: e.target.value as IndependentJobDetails['shift'] }))}><option value="">Not specified</option><option value="day">Day shift</option><option value="night">Night shift</option></select></label>
+        <label className="flex items-center gap-2 text-sm text-gray-200"><input type="checkbox" checked={form.ongoing || false} onChange={e => setForm(current => ({ ...current, ongoing: e.target.checked }))} />Ongoing / recurring work</label>
+        <p className="text-xs text-gray-400 md:col-span-2">If the finish is unknown, an assigned driver stays unavailable for other jobs until this job is completed or cancelled.</p>
         <div className="flex items-end gap-2"><button disabled={!editing && ((!customerId && !newCustomer) || !sector || !form.customer.trim())} className={buttonClass}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create job'}</button>
           <button type="button" className="text-sm text-gray-300" onClick={resetForm}>Clear / new job</button></div>
       </fieldset>

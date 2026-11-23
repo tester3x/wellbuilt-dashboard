@@ -65,6 +65,31 @@ describe('Independent Dispatch callable boundaries', () => {
     await expect(call(assign)).resolves.toMatchObject({ job: { status: 'assigned', revision: 2 } });
     expect(requireTrustedCompanyCapability).toHaveBeenCalledWith('dispatcher', 'manageDrivers');
   });
+  it('blocks overlapping assignments, including ongoing shift work, until the open job is completed', async () => {
+    const shiftJob = { ...details, scheduledAt: '2026-11-23T08:00:00.000Z', estimatedEndAt: '2026-11-23T20:00:00.000Z', shift: 'day', ongoing: true };
+    const nextJob = { ...details, scheduledAt: '2026-11-24T08:00:00.000Z', estimatedEndAt: '2026-11-24T20:00:00.000Z', shift: 'night' };
+    records.set('companies/company-a/external_drivers/driver-a', { companyId: 'company-a', active: true, displayName: 'Driver' });
+    await call({ ...create, job: shiftJob });
+    await call({ ...create, jobId: 'job-b', requestId: 'create-b', job: nextJob });
+    await call({ op: 'assign', jobId: 'job-a', requestId: 'assign-a', expectedRevision: 1, externalDriverId: 'driver-a' });
+    const secondAssign = { op: 'assign', jobId: 'job-b', requestId: 'assign-b', expectedRevision: 1, externalDriverId: 'driver-a' };
+    await expect(call(secondAssign)).rejects.toThrow('driver_assignment_conflict');
+    await call({ op: 'status', jobId: 'job-a', requestId: 'started-a', expectedRevision: 2, status: 'in_progress' });
+    await expect(call(secondAssign)).rejects.toThrow('driver_assignment_conflict');
+    await call({ op: 'status', jobId: 'job-a', requestId: 'completed-a', expectedRevision: 3, status: 'completed' });
+    await expect(call(secondAssign)).resolves.toMatchObject({ job: { status: 'assigned', driverName: 'Driver' } });
+  });
+  it('allows known nonoverlapping work and rejects an edit that creates a conflict', async () => {
+    records.set('companies/company-a/external_drivers/driver-a', { companyId: 'company-a', active: true, displayName: 'Driver' });
+    const first = { ...details, scheduledAt: '2099-11-23T08:00:00.000Z', estimatedEndAt: '2099-11-23T12:00:00.000Z' };
+    const later = { ...details, scheduledAt: '2099-11-23T13:00:00.000Z', estimatedEndAt: '2099-11-23T20:00:00.000Z' };
+    await call({ ...create, job: first });
+    await call({ ...create, jobId: 'job-b', requestId: 'create-b', job: later });
+    await call({ op: 'assign', jobId: 'job-a', requestId: 'assign-a', expectedRevision: 1, externalDriverId: 'driver-a' });
+    await call({ op: 'assign', jobId: 'job-b', requestId: 'assign-b', expectedRevision: 1, externalDriverId: 'driver-a' });
+    await expect(call({ op: 'update', jobId: 'job-b', requestId: 'overlap-edit', expectedRevision: 2,
+      job: { ...later, scheduledAt: '2099-11-23T11:00:00.000Z' } })).rejects.toThrow('driver_assignment_conflict');
+  });
   it('lists only approved WellBuilt links and assigns a live linked profile without phone-app delivery', async () => {
     const id = 'wb-marcial';
     const link = { companyId: 'company-a', sourceCompanyId: 'liquid-gold', driverId: id,
@@ -73,7 +98,11 @@ describe('Independent Dispatch callable boundaries', () => {
     records.set('companies/company-a/independent_dispatch_wb_drivers/foreign', { ...link, driverId: 'foreign', companyId: 'company-b' });
     records.set('companies/company-a/independent_dispatch_wb_drivers/disabled', { ...link, driverId: 'disabled', active: false });
     profiles.set(`drivers/profiles/${id}`, { companyId: 'liquid-gold', active: true });
-    await expect(call({ op: 'list' })).resolves.toMatchObject({ wbDrivers: [{ driverId: id, displayName: link.displayName }] });
+    const roster = (await call({ op: 'list' })).wbDrivers;
+    expect(roster).toEqual(expect.arrayContaining([
+      expect.objectContaining({ driverId: id, displayName: link.displayName, active: true }),
+      expect.objectContaining({ driverId: 'disabled', active: false }),
+    ]));
     await call(create);
     const assigned = await call({ op: 'assign', jobId: 'job-a', requestId: 'wb-assign', expectedRevision: 1, wbDriverId: id });
     expect(assigned.job).toMatchObject({ wbDriverId: id, wbDriverCompanyId: 'liquid-gold',

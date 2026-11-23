@@ -3,7 +3,8 @@ import { getFirebaseFunctions } from './firebase';
 
 export type IndependentJobDetails = {
   title: string; customer: string; reference: string; pickup: string; destination: string;
-  cargo: string; scheduledAt: string; notes: string;
+  cargo: string; scheduledAt: string; estimatedEndAt?: string; notes: string;
+  shift?: '' | 'day' | 'night'; ongoing?: boolean;
   jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
   categoryId?: string; asset?: string;
@@ -14,7 +15,7 @@ export type IndependentJob = IndependentJobDetails & {
   externalDriverId?: string; wbDriverId?: string; wbDriverCompanyId?: string;
   driverSource?: 'outside' | 'wellbuilt'; driverName?: string; createdAt?: string; updatedAt: string;
 };
-export type LinkedWellBuiltDriver = { driverId: string; sourceCompanyId: string; displayName: string };
+export type LinkedWellBuiltDriver = { driverId: string; sourceCompanyId: string; displayName: string; active: boolean };
 export async function independentDispatchJobs(payload: Record<string, unknown>) {
   const result = await httpsCallable<Record<string, unknown>, {
     ok: true; companyId?: string; jobs?: IndependentJob[]; wbDrivers?: LinkedWellBuiltDriver[]; job?: IndependentJob;

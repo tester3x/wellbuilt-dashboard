@@ -6,6 +6,7 @@ import { hasIndependentDispatchPackage } from './operational/independentDispatch
 import { assertIndependentJobMutable, independentJobTransition, parseIndependentJob, type IndependentJobStatus, type IndependentJobDetails } from './operational/independentDispatchJobs';
 import { INDEPENDENT_SECTORS, parseIndependentSectors } from './operational/independentDispatchSectors';
 import { driverAuthUid } from './tokenMint';
+import { hasDriverAssignmentConflict } from './operational/independentDriverAvailability';
 
 const COLLECTION = 'independent_dispatch_jobs';
 const WB_DRIVER_LINKS = 'independent_dispatch_wb_drivers';
@@ -37,9 +38,9 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
       ]);
       return { ok: true, companyId: authority.companyId, jobs: snap.docs.map(d => ({ ...d.data(), id: d.id }))
         .sort((a, b) => String((b as any).updatedAt).localeCompare(String((a as any).updatedAt))),
-        wbDrivers: links.docs.map(d => d.data()).filter(d => d.active === true && typeof d.driverId === 'string'
+        wbDrivers: links.docs.map(d => d.data()).filter(d => typeof d.active === 'boolean' && typeof d.driverId === 'string'
           && typeof d.sourceCompanyId === 'string' && typeof d.displayName === 'string')
-          .map(d => ({ driverId: d.driverId, sourceCompanyId: d.sourceCompanyId, displayName: d.displayName })) };
+          .map(d => ({ driverId: d.driverId, sourceCompanyId: d.sourceCompanyId, displayName: d.displayName, active: d.active })) };
     }
     if (typeof raw.jobId !== 'string' || !ID.test(raw.jobId) || typeof raw.requestId !== 'string' || !ID.test(raw.requestId))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_job_or_request_id');
@@ -66,12 +67,13 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
       const directoryConfigRef = companyRef.collection('independent_dispatch_config').doc('settings');
       const customerRef = details?.customerId ? companyRef.collection('independent_dispatch_customers').doc(details.customerId) : null;
       const newCustomerRef = raw.saveCustomer === true ? companyRef.collection('independent_dispatch_customers').doc(`job_${raw.jobId}`) : null;
-      const [jobSnap, eventSnap, freshCompany, directoryConfig, customer, newCustomer, otherCustomers] = await Promise.all([
+      const [jobSnap, eventSnap, freshCompany, directoryConfig, customer, newCustomer, otherCustomers, otherJobs] = await Promise.all([
         tx.get(jobRef), tx.get(eventRef), tx.get(companyRef),
         details?.sector ? tx.get(directoryConfigRef) : Promise.resolve(null),
         customerRef ? tx.get(customerRef) : Promise.resolve(null),
         newCustomerRef ? tx.get(newCustomerRef) : Promise.resolve(null),
         newCustomerRef ? tx.get(companyRef.collection('independent_dispatch_customers').limit(500)) : Promise.resolve(null),
+        ['assign', 'update'].includes(op) ? tx.get(db.collection(COLLECTION).where('companyId', '==', authority.companyId)) : Promise.resolve(null),
       ]);
       if (!hasIndependentDispatchPackage(freshCompany.data()))
         throw new httpsV2.HttpsError('permission-denied', 'independent_dispatch_package_inactive');
@@ -163,6 +165,12 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
           throw new httpsV2.HttpsError('failed-precondition', 'invalid_job_transition');
         patch = { status: raw.status, ...(raw.status === 'completed' ? { completedAt: now } : {}) };
       }
+      const assignedKey = op === 'assign' ? (raw.externalDriverId ? `outside:${raw.externalDriverId}` : `wellbuilt:${raw.wbDriverId}`)
+        : op === 'update' && (previous?.externalDriverId || previous?.wbDriverId)
+          ? (previous.externalDriverId ? `outside:${previous.externalDriverId}` : `wellbuilt:${previous.wbDriverId}`) : '';
+      if (assignedKey && hasDriverAssignmentConflict({ ...previous, ...patch, id: jobRef.id }, assignedKey,
+        otherJobs?.docs.map(doc => ({ ...doc.data(), id: doc.id })) || []))
+        throw new httpsV2.HttpsError('failed-precondition', 'driver_assignment_conflict');
       const job = { ...previous, ...patch,
         ...(op === 'create' ? { companyId: authority.companyId, packageId: 'independent-dispatch', status: 'unassigned', createdAt: now, createdBy: authority.uid } : {}),
         revision: (previous?.revision || 0) + 1, updatedAt: now, updatedBy: authority.uid };

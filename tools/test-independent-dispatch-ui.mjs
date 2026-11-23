@@ -9,7 +9,7 @@ const transport = `
 let jobs=[]; window.requests=[];
 export async function independentDispatchJobs(data){
  window.requests.push(data);
- if(data.op==='list')return {companyId:'fixture',jobs:structuredClone(jobs),wbDrivers:[{driverId:'wb-marcial',sourceCompanyId:'liquid-gold',displayName:'Nitto–Anthony (Marcial Lebaron)'}]};
+ if(data.op==='list')return {companyId:'fixture',jobs:structuredClone(jobs),wbDrivers:[{driverId:'wb-marcial',sourceCompanyId:'liquid-gold',displayName:'Nitto–Anthony (Marcial Lebaron)',active:true}]};
  if(data.op==='create')jobs.push({...data.job,id:data.jobId,revision:1,status:'unassigned',companyId:'fixture',updatedAt:new Date().toISOString()});
  const job=jobs.find(j=>j.id===data.jobId);
  if(data.op==='update')Object.assign(job,data.job,{revision:job.revision+1});
@@ -21,7 +21,7 @@ const bundle = await build({ stdin: { contents: `import React from 'react';impor
   b.onResolve({ filter: /^@\/lib\/(independentDispatchJobs|independentDispatchDirectory|externalAssignmentDelivery)$/ }, a => ({ path: a.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: a.path.endsWith('independentDispatchJobs') ? transport
     : a.path.endsWith('independentDispatchDirectory') ? `export const independentDispatchDirectory=async()=>({ok:true,companyId:'fixture',sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],communicationChannels:['sms'],dispatchPhoneE164:'+17015550100',customers:[{id:'customer-a',name:'Customer A',phoneE164:'+17015550111',active:true,sectors:['water-hauling','ltl','otr','hot-shot','aggregate'],contacts:[{id:'john',name:'John Wick',role:'Company man',phoneE164:'+17015550112'},{id:'jane',name:'Jane Doe',role:'Lead',phoneE164:'+17015550113'}],workCategories:[{id:'rig-work',name:'Rig Work',sector:'water-hauling',sourceChannels:['Rig Work chat'],assets:['Rig 429']}],jobNames:['Pipe run'],pickupLocations:['Yard A'],deliveryLocations:['Site B']},{id:'bob',name:"Bob's Hot Shot LLC",alternateNames:["Bob's",'BHS'],phoneE164:'',active:true,sectors:['hot-shot'],jobNames:[],pickupLocations:[],deliveryLocations:[]}]});`
-    : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true}];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{const i=roster.findIndex(x=>x.externalDriverId===d.externalDriverId);if(i>=0)roster[i]=d;else roster.push(d);window.savedDriver=d;window.roster=structuredClone(roster);return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
+    : `let roster=[{externalDriverId:'driver-a',displayName:'Outside Driver',phoneE164:'+17015550123',channels:['sms'],active:true},...['b','c','d','e','f'].map(x=>({externalDriverId:'driver-'+x,displayName:'Driver '+x.toUpperCase(),phoneE164:'',channels:[],active:true}))];export const listExternalDrivers=async()=>structuredClone(roster);export const listExternalDeliveries=async()=>[];export const saveExternalDriver=async(d)=>{const i=roster.findIndex(x=>x.externalDriverId===d.externalDriverId);if(i>=0)roster[i]=d;else roster.push(d);window.savedDriver=d;window.roster=structuredClone(roster);return d};export const writeExternalDelivery=async()=>{throw Error('Unexpected messaging call')};`, loader: 'js' }));
 } }] });
 const cssDir = 'out/_next/static/css';
 const css = fs.existsSync(cssDir) ? fs.readdirSync(cssDir).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(`${cssDir}/${f}`, 'utf8')).join('\n') : '';
@@ -43,7 +43,7 @@ try {
   await page.getByPlaceholder('Driver name').fill('Isaac Hickert');
   await page.getByRole('button',{name:'Add driver'}).click();
   await page.getByText('Isaac Hickert · No phone on file').waitFor();
-  await page.getByRole('heading',{name:'Preference not set (2)'}).waitFor();
+  await page.getByRole('heading',{name:'Preference not set (7)'}).waitFor();
   assert.deepEqual(await page.evaluate(()=>({phone:window.savedDriver.phoneE164,channels:window.savedDriver.channels})),{phone:'',channels:[]});
   const originalId=await page.evaluate(()=>window.savedDriver.externalDriverId);
   await page.getByRole('button',{name:'Edit Isaac Hickert'}).click();
@@ -115,6 +115,12 @@ try {
       else await field.fill(value);
     }
     for (const [label,value] of [['Job name',`Pipe run ${sector}`],['Pickup address / location','Yard A'],['Delivery address / location','Site B']]) await page.getByLabel(label + ' *',{exact:true}).fill(value);
+    if (sector === 'water-hauling') {
+      await page.getByLabel('Scheduled pickup (your local time)').fill('2099-11-23T08:00');
+      await page.getByLabel('Estimated finish (your local time)').fill('2099-11-23T20:00');
+      await page.getByLabel('Job shift').selectOption('day');
+      await page.getByRole('checkbox',{name:'Ongoing / recurring work'}).check();
+    }
     await page.getByRole('button',{name:'Create job',exact:true}).click();
     await page.waitForFunction(title => window.requests.some(request => request.op === 'create' && request.job.title === title),`Pipe run ${sector}`);
     if (sector === 'water-hauling') assert.deepEqual(await page.evaluate(() => {
@@ -163,8 +169,9 @@ try {
   await card.getByRole('combobox').selectOption('outside:driver-a');
   await card.getByRole('button',{name:'Assign',exact:true}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
-  const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'});
+  const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run water-hauling',exact:true})});
   await assignedCard.waitFor();
+  assert.equal(await assignedCard.getByText('Day shift · Ongoing work').count(),1);
   const firstJobId = await page.evaluate(() => window.requests.find(request => request.op === 'create'&&request.job.title==='Pipe run water-hauling').jobId);
   assert.equal(await assignedCard.getByRole('link',{name:'Call customer in Dialpad'}).getAttribute('href'),
     `dialpad://+17015550111?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
@@ -172,18 +179,21 @@ try {
     `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
   await queue.getByRole('button',{name:/Needs a driver/}).click();
-  const linkedCard=dialog.getByRole('article').filter({hasText:'Pipe run ltl'});
+  const linkedCard=dialog.getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run ltl',exact:true})});
+  assert.equal(await linkedCard.locator('option[value="outside:driver-a"]').isDisabled(),true,'ongoing assignment stays visible but unavailable');
+  assert.match(await linkedCard.locator('option[value="outside:driver-a"]').textContent(),/ongoing work/);
+  assert.equal(await linkedCard.locator('option').filter({hasText:'Isaac H.'}).isDisabled(),true,'inactive driver stays visible');
   await linkedCard.getByRole('combobox').selectOption('wellbuilt:wb-marcial');
   await linkedCard.getByRole('button',{name:'Assign',exact:true}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
-  const assignedLinkedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({hasText:'Pipe run ltl'});
+  const assignedLinkedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run ltl',exact:true})});
   assert.equal(await assignedLinkedCard.getByText('WellBuilt account',{exact:false}).count(),1);
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='assign'&&r.wbDriverId)?.wbDriverId),'wb-marcial');
   assert.equal(await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).count(),0);
   await queue.getByRole('button',{name:/Needs a driver/}).click();
   for (let remaining = 5; remaining > 0; remaining--) {
     const next = dialog.getByRole('article').first();
-    await next.getByRole('combobox').selectOption('outside:driver-a');
+    await next.getByRole('combobox').selectOption(`outside:driver-${'bcdef'[5-remaining]}`);
     await next.getByRole('button',{name:'Assign',exact:true}).click();
     if (remaining > 1) await page.waitForFunction(count => document.querySelectorAll('dialog[open] article').length === count, remaining - 1);
   }

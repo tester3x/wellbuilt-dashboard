@@ -4,8 +4,8 @@ import { INDEPENDENT_SECTORS, parseSectorFields } from '../independentDispatchSe
 describe('Independent Dispatch job validation and lifecycle', () => {
   const job = { title: 'Pipe delivery', customer: 'Customer', pickup: 'Yard', destination: 'Site' };
   it('supports jobs without wells, water, accounts, or ticket fields', () => {
-    expect(parseIndependentJob(job)).toEqual({ ...job, reference: '', cargo: '', scheduledAt: '', notes: '',
-      jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' });
+    expect(parseIndependentJob(job)).toEqual({ ...job, reference: '', cargo: '', scheduledAt: '', estimatedEndAt: '', notes: '',
+      jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false });
   });
   it('rejects injected tenant, status, and identity fields', () => {
     for (const field of ['companyId', 'driverId', 'status', 'revision', 'wellName', '__proto__']) {
@@ -23,6 +23,15 @@ describe('Independent Dispatch job validation and lifecycle', () => {
       .toMatchObject({ jobContactName: 'John Wick', jobContactPhoneE164: '+17015550123' });
     expect(() => parseIndependentJob({ ...job, jobContactPhoneE164: '+17015550123' })).toThrow('required_job_contact_name');
     expect(() => parseIndependentJob({ ...job, jobContactName: 'John Wick', jobContactPhoneE164: '701-555-0123' })).toThrow('invalid_job_contact_phone');
+  });
+  it('validates estimated finish, shift, and ongoing work', () => {
+    const scheduledAt = '2026-11-23T08:00:00.000Z';
+    expect(parseIndependentJob({ ...job, scheduledAt, estimatedEndAt: '2026-11-23T20:00:00.000Z', shift: 'day', ongoing: true }))
+      .toMatchObject({ shift: 'day', ongoing: true });
+    expect(() => parseIndependentJob({ ...job, estimatedEndAt: '2026-11-23T20:00:00.000Z' })).toThrow('invalid_estimatedEndAt');
+    expect(() => parseIndependentJob({ ...job, scheduledAt, estimatedEndAt: scheduledAt })).toThrow('invalid_estimatedEndAt');
+    expect(() => parseIndependentJob({ ...job, shift: 'swing' })).toThrow('invalid_shift');
+    expect(() => parseIndependentJob({ ...job, ongoing: 'true' })).toThrow('invalid_ongoing');
   });
   it('cannot complete unassigned work or reopen terminal jobs', () => {
     expect(independentJobTransition('unassigned', 'completed')).toBe(false);
