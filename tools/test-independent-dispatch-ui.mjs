@@ -181,6 +181,13 @@ try {
   await dialog.getByRole('article').filter({hasText:'Pipe run ltl'}).getByText('Job contact: Jane Doe · Lead · +17015550113').waitFor();
   await card.getByRole('button',{name:'Edit'}).click();
   assert.equal(await dialog.isVisible(),false,'editing a waiting job closes the modal so the form is usable');
+  await page.getByRole('heading',{name:'Editing job: Pipe run water-hauling'}).waitFor();
+  await page.getByRole('button',{name:'Cancel edit / back to board'}).waitFor();
+  await page.waitForFunction(() => {
+    const heading = document.querySelector('#independent-job-form h2');
+    const toolbar = document.querySelector('[data-testid="independent-board-toolbar"]');
+    return heading && toolbar && heading.getBoundingClientRect().top >= toolbar.getBoundingClientRect().bottom + 8;
+  }, null, {timeout: 3000});
   await page.getByRole('button',{name:'Clear / new job'}).click();
   await queue.getByRole('button',{name:/Needs a driver/}).click();
   const waitingPicker = card.locator('details').filter({hasText:'Choose drivers'});
@@ -221,10 +228,13 @@ try {
   await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('night');
   await assignedCard.getByLabel('1 night shift drivers').waitFor();
   await assignedCard.getByText('Choose drivers').click();
-  assert.ok(await assignedCard.locator('details').filter({hasText:'Choose drivers'}).evaluate(details => details.getBoundingClientRect().width <= 160),
-    'the closed picker stays compact even when the candidate list is open');
+  assert.ok(await assignedCard.locator('details').filter({hasText:'Choose drivers'}).evaluate(details => details.getBoundingClientRect().width >= details.parentElement.getBoundingClientRect().width - 1),
+    'the driver picker spans the job card action area');
   assert.ok(await assignedCard.getByText('HOS unverified').evaluate(label => label.tagName === 'P' && label.nextElementSibling?.querySelector('details')),
     'HOS notice is independent of the driver picker');
+  assert.ok(await assignedCard.getByRole('button',{name:'Add selected drivers'}).evaluate(button =>
+    button.getBoundingClientRect().top >= button.parentElement.previousElementSibling.getBoundingClientRect().bottom),
+    'action buttons sit below the open picker');
   assert.ok(await assignedCard.getByRole('button',{name:'Add selected drivers'}).evaluate(button => button.getBoundingClientRect().height < 60),
     'opening the picker must not stretch the assignment button to the picker height');
   assert.ok(await assignedCard.getByRole('button',{name:'Mark started'}).evaluate(button => button.getBoundingClientRect().height < 60),

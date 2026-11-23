@@ -31,9 +31,9 @@ export function IndependentDriverPicker({ job, jobs, outside, linked, profiles, 
     return defaultShift;
   }
   const count = Object.keys(selected).length;
-  return <details className="w-36 shrink-0 rounded border border-gray-600 bg-gray-900 text-sm text-white">
-    <summary className="cursor-pointer px-2 py-2 text-cyan-200">Choose drivers{count ? ` · ${count}` : ''}</summary>
-    <div className="absolute left-0 top-full z-40 mt-1 max-h-64 w-[min(28rem,calc(100vw-2rem))] overflow-auto rounded border border-gray-600 bg-gray-900 p-2 shadow-xl">
+  return <details className="w-full rounded border border-gray-600 bg-gray-900 text-sm text-white">
+    <summary className="cursor-pointer px-3 py-2 text-cyan-200">Choose drivers{count ? ` · ${count}` : ''}</summary>
+    <div className="max-h-64 overflow-auto border-t border-gray-700 p-2">
       {([{ shift: 'day', label: 'Day Shift' }, { shift: 'night', label: 'Night Shift' }, { shift: '', label: 'Shift not set' }] as const).map(group => {
         const groupRows = rows.filter(driver => shiftFor(driver) === group.shift);
         if (!groupRows.length) return null;

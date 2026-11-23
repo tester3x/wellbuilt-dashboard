@@ -19,10 +19,12 @@ job card, with each box's count at the right of its header. Each list shows abou
 three drivers before scrolling. An older assignment without a saved shift appears
 under its driver's Day or Night profile preference with a review note. If no
 preference exists, it remains in a compact shift-review row outside the two lists.
-The picker is a compact control in the action row; its bounded panel opens over
-the card below the entire action row, and availability details wrap in their own
-column beside each driver. The HOS notice sits above the actions. Opening the
-picker does not stretch or cover the job action buttons.
+The picker spans the job card above a separate action button row. Its open list
+has a bounded scroll area, and availability details wrap in their own column
+beside each driver. The HOS notice sits above the picker. Opening the list moves
+the action buttons down without stretching or covering them.
+Editing a job scrolls its amber form below the sticky board toolbar and names
+the job being edited. Cancel edit returns to the board without saving.
 The assignment shift selector on the card shows the saved shift or, for an older
 unset assignment, the driver's profile Day/Night default. Dispatch can change
 it directly on the card; a change is saved with the job and recorded in its

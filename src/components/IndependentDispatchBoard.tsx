@@ -126,6 +126,19 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     setPastedRequest(''); setParseReport(null);
     creation.current = { jobId: crypto.randomUUID(), requestId: crypto.randomUUID() };
   }
+  function scrollBelowBoardToolbar(targetId: string) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const target = document.getElementById(targetId);
+      const toolbar = document.querySelector<HTMLElement>('[data-testid="independent-board-toolbar"]');
+      if (!target) return;
+      const offset = appHeaderHeight + (toolbar?.getBoundingClientRect().height || 0) + 16;
+      window.scrollTo({ top: Math.max(0, window.scrollY + target.getBoundingClientRect().top - offset), behavior: 'smooth' });
+    }));
+  }
+  function leaveEdit() {
+    resetForm(); setIntakeOpen(false);
+    document.getElementById('dispatch-board-title')?.scrollIntoView({ behavior: 'smooth' });
+  }
   function edit(job: IndependentJob) {
     setIntakeOpen(true);
     setEditing(job);
@@ -140,7 +153,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     setScheduledLocal(date ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
     const end = job.estimatedEndAt ? new Date(job.estimatedEndAt) : null;
     setEstimatedEndLocal(end ? new Date(end.getTime() - end.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
-    requestAnimationFrame(() => document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' }));
+    scrollBelowBoardToolbar('independent-job-form');
   }
   const visible = jobs.filter(job => (filter === 'all' || (filter === 'active' ? !['completed', 'cancelled'].includes(job.status) : filter === job.status))
     && [job.title, job.customer, job.reference, job.pickup, job.destination, ...jobCrew(job).map(driver => driver.name), job.jobContactName].join(' ').toLowerCase().includes(search.toLowerCase()));
@@ -230,7 +243,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     <section aria-labelledby="dispatch-board-title" className="space-y-4">
     <div data-testid="independent-board-toolbar" className="sticky z-30 space-y-3 rounded-lg border border-gray-700 bg-gray-900/95 p-3 shadow-lg backdrop-blur" style={{ top: appHeaderHeight }}>
       <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="dispatch-board-title" className="text-lg font-semibold text-white">Dispatch board</h2><p className="text-sm text-gray-400">Save requests now. Assign a driver when one is available. Assigned WellBuilt drivers do not receive these jobs in their phone app yet.</p></div>
-        <div className="flex flex-wrap items-center gap-3">{canManageDrivers && <Link href="/dispatch/independent/drivers/" className="text-sm text-cyan-300 underline">Driver profiles</Link>}{canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); requestAnimationFrame(() => document.getElementById('independent-intake')?.scrollIntoView({ behavior: 'smooth' })); }}>New job / paste request</button>}</div>
+        <div className="flex flex-wrap items-center gap-3">{canManageDrivers && <Link href="/dispatch/independent/drivers/" className="text-sm text-cyan-300 underline">Driver profiles</Link>}{canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); scrollBelowBoardToolbar('independent-intake'); }}>New job / paste request</button>}</div>
         <div className="flex flex-wrap gap-2 text-xs"><span className="rounded bg-amber-900/40 px-2 py-1 text-amber-200">{jobs.filter(job => job.status === 'unassigned').length} need drivers</span><span className="rounded bg-blue-900/40 px-2 py-1 text-blue-200">{jobs.filter(job => job.status === 'assigned').length} assigned</span><span className="rounded bg-emerald-900/40 px-2 py-1 text-emerald-200">{jobs.filter(job => job.status === 'in_progress').length} in progress</span></div>
       </div>
     <div className="flex flex-wrap gap-2">
@@ -272,21 +285,23 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         </div>}
       </> : 'Needs a driver'}</div>
       {canWrite && canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <p className="mt-3 text-xs text-gray-400" title="ID has no verified HOS feed; dispatch decides whether to assign.">HOS unverified</p>}
-      {canWrite && <div className="relative mt-2 flex flex-wrap items-center gap-2">
+      {canWrite && <div className="mt-2">
+        {canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <IndependentDriverPicker job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
+          now={availabilityNow} selected={assignments[job.id] || {}} disabled={busy}
+          onChange={next => setAssignments(current => ({ ...current, [job.id]: next }))} />}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
         {['unassigned', 'assigned', 'in_progress'].includes(job.status) && <>
           {['unassigned', 'assigned'].includes(job.status) && <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>}
-          {canManageDrivers && <><IndependentDriverPicker job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
-            now={availabilityNow} selected={assignments[job.id] || {}} disabled={busy}
-            onChange={next => setAssignments(current => ({ ...current, [job.id]: next }))} />
-          <button disabled={busy || !canAddSelection(job)} className={buttonClass} onClick={() => {
+          {canManageDrivers && <button disabled={busy || !canAddSelection(job)} className={buttonClass} onClick={() => {
             const selected = Object.entries(assignments[job.id] || {}).map(([key, shift]) => ({ key, shift }));
             if (!selected.length) return;
             void run({ op: 'addDrivers', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), drivers: selected },
               () => setAssignments(current => ({ ...current, [job.id]: {} })));
-          }}>{jobCrew(job).length ? 'Add selected drivers' : 'Assign selected drivers'}</button></>}
+          }}>{jobCrew(job).length ? 'Add selected drivers' : 'Assign selected drivers'}</button>}
         </>}
         {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
         {!['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
+        </div>
       </div>}
       {jobActionError?.jobId === job.id && <p role="alert" className="mt-2 text-sm text-red-300">Assignment was not saved: {jobActionError.message}</p>}
       <p className="mt-2 text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
@@ -331,7 +346,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         {parseReport.warnings.map(warning => <p key={warning} className="text-amber-200">{warning}</p>)}
       </div>}
     </section>}
-    {canWrite && <form id="independent-job-form" className="rounded border border-gray-700 bg-gray-800 p-4" onSubmit={event => {
+    {canWrite && <form id="independent-job-form" className={`rounded p-4 ${editing ? 'border-2 border-amber-400 bg-amber-950/30 ring-2 ring-amber-500/30 shadow-xl shadow-amber-950/30' : 'border border-gray-700 bg-gray-800'}`} onSubmit={event => {
       event.preventDefault();
       const job = { ...form, scheduledAt: scheduledLocal ? new Date(scheduledLocal).toISOString() : '',
         estimatedEndAt: estimatedEndLocal ? new Date(estimatedEndLocal).toISOString() : '',
@@ -345,7 +360,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           requestAnimationFrame(() => document.getElementById('dispatch-board-title')?.scrollIntoView({ behavior: 'smooth' }));
         });
     }}>
-      <div className="mb-3 flex items-center justify-between gap-2"><h2 className="font-semibold text-cyan-300">{editing ? 'Edit job' : 'New Independent Dispatch job'}</h2><button type="button" className="text-sm text-gray-300 underline" onClick={() => setIntakeOpen(false)}>Hide intake</button></div>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2"><div><h2 className={`text-lg font-semibold ${editing ? 'text-amber-200' : 'text-cyan-300'}`}>{editing ? `Editing job: ${editing.title}` : 'New Independent Dispatch job'}</h2>{editing && <p className="mt-1 text-sm text-amber-100">{editing.customer} · Review the details below, then Save changes.</p>}</div><button type="button" className="text-sm text-cyan-200 underline" onClick={editing ? leaveEdit : () => setIntakeOpen(false)}>{editing ? 'Cancel edit / back to board' : 'Hide intake'}</button></div>
       <fieldset disabled={busy || !loaded} className="grid gap-3 md:grid-cols-2">
         {(!editing || editing.sector) ? <>
           <div className="text-xs text-gray-300">Customer *<select aria-label="Customer" required value={newCustomer ? '__new__' : customerId} className={inputClass} onChange={event => {
