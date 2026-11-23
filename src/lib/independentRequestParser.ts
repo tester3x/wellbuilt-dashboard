@@ -26,6 +26,7 @@ const ALIASES: Record<string, string[]> = {
   destination: ['delivery', 'delivery location', 'delivery address', 'drop off', 'drop-off', 'dropoff', 'destination', 'deliver to', 'to'],
   cargo: ['cargo', 'equipment', 'freight', 'load description'],
   notes: ['notes', 'instructions', 'special instructions'],
+  requestedDriverCount: ['requested drivers', 'drivers requested', 'driver count', 'number of drivers', 'drivers', 'trucks requested', 'truck count', 'trucks'],
   scheduledLocal: ['pickup time', 'pickup date/time', 'scheduled pickup', 'pickup appointment'],
   waterType: ['water type'], volumeBbl: ['estimated barrels', 'barrels', 'bbl', 'volume'],
   sourceReference: ['well', 'source reference'], disposalReference: ['disposal', 'disposal reference'],
@@ -126,6 +127,26 @@ function contactPhone(raw: string): string {
   return '';
 }
 
+function requestedDrivers(lines: string[], warnings: string[]): number | undefined {
+  const labeledCount = labeled(lines, ALIASES.requestedDriverCount);
+  const naturalCounts = lines.flatMap(line => [
+    ...line.matchAll(/\b(?:need|send|request|want|require|cover(?:\s+with)?)\s+(\d{1,2})\s+(?:\w+\s+)?(?:drivers?|trucks?)\b/gi),
+    ...line.matchAll(/\b(\d{1,2})\s+(?:\w+\s+)?(?:drivers?|trucks?)\s+(?:needed|required|requested)\b/gi),
+  ].map(match => match[1]));
+  if (!labeledCount && new Set(naturalCounts).size > 1) {
+    warnings.push('The request mentions different driver counts; confirm the staffing target.');
+    return undefined;
+  }
+  const candidate = labeledCount || naturalCounts[0];
+  if (!candidate) return undefined;
+  const count = Number(/^\s*(\d{1,2})\b/.exec(candidate)?.[1]);
+  if (!Number.isInteger(count) || count < 1 || count > 30) {
+    warnings.push('Requested driver count needs review; enter a number from 1 to 30.');
+    return undefined;
+  }
+  return count;
+}
+
 /** Local, review-first extraction. Never creates a job or sends the source text anywhere. */
 export function parsePastedJobRequest(text: string, directory: IndependentDirectory): ParsedJobRequest {
   const lines = text.slice(0, 10000).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -137,6 +158,7 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
   const orderedBy = service.match(/\bOrdered by\s+([^.,;]+)(?=[.,;]|$)/i)?.[1]?.trim() || '';
   const warnings: string[] = [];
   const fields: Partial<IndependentJobDetails> = {};
+  fields.requestedDriverCount = requestedDrivers(lines, warnings);
   const requestedSector = labeled(lines, ALIASES.sector);
   let sector = requestedSector ? sectorFrom(requestedSector) : inferSector(text);
   if (requestedSector && !sector) warnings.push(`Transportation sector “${requestedSector}” was not recognized.`);

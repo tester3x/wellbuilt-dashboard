@@ -3,6 +3,11 @@
 Independent Dispatch jobs can have several drivers. Each assignment records the
 driver source, display name, assigned time, and day or night shift. Dispatch can
 add a driver, remove one, or replace one while preserving the other crew members.
+The job may also record a customer's requested driver count. The paste parser
+fills it only from an explicit staffing request; tank count, volume, and a
+completion deadline do not imply a crew size. Dispatch reviews and may edit the
+count before saving. Job cards show assigned drivers against the requested count
+without blocking a partial crew or forcing one for a fill-by order.
 The board picker has checkboxes and an individual shift selector for each checked
 driver. Add/Assign saves the selected crew in one transaction and one job revision;
 if any selection is unavailable, none of the checked drivers is added.

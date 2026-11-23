@@ -28,6 +28,18 @@ Pickup: Well 12 pad\nDrop-off: South SWD\nReference: LG-42\nWater type: Producti
   assert.deepEqual(parsed.missing, []);
 });
 
+test('extracts an explicit staffing request but never infers drivers from tank volume or a fill deadline', () => {
+  const base = 'Customer: Liquid Gold\nSector: Water hauling\nJob: Fill 4 frac tanks\nPickup: Fresh water source\nDelivery: Frac pad\nWater type: Fresh water\nBarrels: 1840';
+  assert.equal(parsePastedJobRequest(`${base}\nNeed 3 drivers to keep up with demand`, directory).fields.requestedDriverCount, 3);
+  assert.equal(parsePastedJobRequest(`${base}\nRequested drivers: 2`, directory).fields.requestedDriverCount, 2);
+  assert.equal(parsePastedJobRequest(`${base}\nSend 4 water trucks`, directory).fields.requestedDriverCount, 4);
+  const conflicting = parsePastedJobRequest(`${base}\nNeed 3 drivers today\nNeed 2 drivers tomorrow`, directory);
+  assert.equal(conflicting.fields.requestedDriverCount, undefined);
+  assert.ok(conflicting.warnings.some(warning => warning.includes('different driver counts')));
+  assert.equal(parsePastedJobRequest(`${base}\nFill by Sunday`, directory).fields.requestedDriverCount, undefined);
+  assert.equal(parsePastedJobRequest(base, directory).fields.requestedDriverCount, undefined);
+});
+
 test('LTL, OTR, hot shot and aggregate use distinct sector fields', () => {
   const cases = [
     ['Customer: Prairie Freight\nSector: LTL\nJob: Parts\nFrom: Fargo dock\nTo: Bismarck yard\nPieces: 12\nPallets: 3\nFreight description: Pump parts', 'ltl', 'pieces', '12'],

@@ -5,7 +5,7 @@ describe('Independent Dispatch job validation and lifecycle', () => {
   const job = { title: 'Pipe delivery', customer: 'Customer', pickup: 'Yard', destination: 'Site' };
   it('supports jobs without wells, water, accounts, or ticket fields', () => {
     expect(parseIndependentJob(job)).toEqual({ ...job, reference: '', cargo: '', scheduledAt: '', estimatedEndAt: '', notes: '',
-      jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false });
+      jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null });
   });
   it('rejects injected tenant, status, and identity fields', () => {
     for (const field of ['companyId', 'driverId', 'status', 'revision', 'wellName', '__proto__']) {
@@ -32,6 +32,13 @@ describe('Independent Dispatch job validation and lifecycle', () => {
     expect(() => parseIndependentJob({ ...job, scheduledAt, estimatedEndAt: scheduledAt })).toThrow('invalid_estimatedEndAt');
     expect(() => parseIndependentJob({ ...job, shift: 'swing' })).toThrow('invalid_shift');
     expect(() => parseIndependentJob({ ...job, ongoing: 'true' })).toThrow('invalid_ongoing');
+  });
+  it('stores an optional requested crew size separately from assignments', () => {
+    expect(parseIndependentJob({ ...job, requestedDriverCount: 3 }).requestedDriverCount).toBe(3);
+    expect(parseIndependentJob({ ...job, requestedDriverCount: null }).requestedDriverCount).toBeNull();
+    for (const requestedDriverCount of [0, 31, 2.5, '3']) {
+      expect(() => parseIndependentJob({ ...job, requestedDriverCount })).toThrow('invalid_requestedDriverCount');
+    }
   });
   it('cannot complete unassigned work or reopen terminal jobs', () => {
     expect(independentJobTransition('unassigned', 'completed')).toBe(false);

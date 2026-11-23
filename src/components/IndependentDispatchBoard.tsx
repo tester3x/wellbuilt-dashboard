@@ -13,7 +13,7 @@ import { listIndependentDriverProfiles, type IndependentDriverProfile } from '@/
 import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
-  jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false };
+  jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
 const STATUS: Record<IndependentJobStatus, string> = { unassigned: 'Unassigned', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
 const FIELDS = [
   ['title', 'Job name', 180, true],
@@ -230,6 +230,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       <p className={`mt-2 text-sm font-medium ${pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? 'text-red-300' : pickupTiming(job) === 'soon' ? 'text-amber-200' : 'text-gray-300'}`}>Pickup: {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : 'Time not set'}{pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? ' · Past requested time' : ''}</p>
       {job.estimatedEndAt && <p className="text-sm text-gray-300">Estimated finish: {new Date(job.estimatedEndAt).toLocaleString()}</p>}
       {(job.shift || job.ongoing) && <p className="text-sm text-cyan-200">{job.shift === 'day' ? 'Day shift' : job.shift === 'night' ? 'Night shift' : job.shift === 'both' ? 'Day and night shifts' : 'Any shift'}{job.ongoing ? ' · Ongoing work' : ''}</p>}
+      {job.requestedDriverCount && <p className="text-sm text-amber-200">Drivers requested: {job.requestedDriverCount} · Assigned: {jobCrew(job).length}{jobCrew(job).length < job.requestedDriverCount ? ` · ${job.requestedDriverCount - jobCrew(job).length} still needed` : ''}</p>}
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} />
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
@@ -277,7 +278,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
             </button>
             <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">{laneJobs.slice(0, 3).map(job => <div key={job.id} className="min-w-0 rounded border border-amber-900/60 bg-gray-900/70 px-3 py-2">
               <p className="truncate font-medium text-white">{job.customer} · {job.title}</p>
-              <p className="truncate text-gray-300">Pickup {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : 'time not set'} · {job.pickup}</p>
+              <p className="truncate text-gray-300">Pickup {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : 'time not set'} · {job.pickup}{job.requestedDriverCount ? ` · ${job.requestedDriverCount} drivers requested` : ''}</p>
             </div>)}</div>
             {laneJobs.length > 3 && <p className="mt-2 text-xs text-amber-200">+{laneJobs.length - 3} more waiting</p>}
             <dialog ref={needsDriverDialog} aria-label="Jobs needing a driver" className="fixed inset-0 m-auto max-h-[90vh] w-[min(96vw,90rem)] max-w-none overflow-y-auto rounded-xl border border-amber-700 bg-gray-950 p-4 text-white shadow-2xl backdrop:bg-black/75">
@@ -393,6 +394,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         <label className="text-xs text-gray-300">Scheduled pickup (your local time)<input type="datetime-local" className={inputClass} value={scheduledLocal} onChange={e => setScheduledLocal(e.target.value)} /></label>
         <label className="text-xs text-gray-300">Estimated finish (your local time)<input type="datetime-local" className={inputClass} value={estimatedEndLocal} min={scheduledLocal || undefined} onChange={e => setEstimatedEndLocal(e.target.value)} /></label>
         <label className="text-xs text-gray-300">Shift<select aria-label="Job shift" className={inputClass} value={form.shift || ''} onChange={e => setForm(current => ({ ...current, shift: e.target.value as IndependentJobDetails['shift'] }))}><option value="">Not specified</option><option value="day">Day shift</option><option value="night">Night shift</option><option value="both">Day and night shifts</option></select></label>
+        <label className="text-xs text-gray-300">Drivers requested<input aria-label="Drivers requested" type="number" min={1} max={30} step={1} className={inputClass} value={form.requestedDriverCount ?? ''} onChange={e => setForm(current => ({ ...current, requestedDriverCount: e.target.value ? Number(e.target.value) : null }))} /></label>
         <label className="flex items-center gap-2 text-sm text-gray-200"><input type="checkbox" checked={form.ongoing || false} onChange={e => setForm(current => ({ ...current, ongoing: e.target.checked }))} />Ongoing / recurring work</label>
         <p className="text-xs text-gray-400 md:col-span-2">If the finish is unknown, an assigned driver stays unavailable for other jobs until this job is completed or cancelled.</p>
         <div className="flex items-end gap-2"><button disabled={!editing && ((!customerId && !newCustomer) || !sector || !form.customer.trim())} className={buttonClass}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create job'}</button>

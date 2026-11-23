@@ -5,6 +5,7 @@ export type IndependentJobDetails = {
   title: string; customer: string; reference: string; pickup: string; destination: string;
   cargo: string; scheduledAt: string; estimatedEndAt?: string; notes: string;
   shift?: '' | 'day' | 'night' | 'both'; ongoing?: boolean;
+  requestedDriverCount?: number | null;
   jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
   categoryId?: string; asset?: string;

@@ -6,6 +6,7 @@ export type IndependentJobDetails = {
   title: string; customer: string; reference: string; pickup: string; destination: string;
   cargo: string; scheduledAt: string; estimatedEndAt: string; notes: string;
   shift: '' | 'day' | 'night' | 'both'; ongoing: boolean;
+  requestedDriverCount: number | null;
   jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
   categoryId?: string; asset?: string;
@@ -19,7 +20,7 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_job');
   const input = raw as Record<string, unknown>;
   if (Object.keys(input).some(key => !Object.prototype.hasOwnProperty.call(LIMITS, key)
-    && !['customerId', 'sector', 'sectorFields', 'categoryId', 'asset', 'shift', 'ongoing'].includes(key))) throw Error('unexpected_job_field');
+    && !['customerId', 'sector', 'sectorFields', 'categoryId', 'asset', 'shift', 'ongoing', 'requestedDriverCount'].includes(key))) throw Error('unexpected_job_field');
   const job = {} as IndependentJobDetails;
   for (const key of Object.keys(LIMITS) as (keyof typeof LIMITS)[]) {
     const value = input[key] ?? '';
@@ -33,6 +34,11 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   if (input.ongoing !== undefined && typeof input.ongoing !== 'boolean') throw Error('invalid_ongoing');
   job.shift = (input.shift || '') as IndependentJobDetails['shift'];
   job.ongoing = input.ongoing === true;
+  if (input.requestedDriverCount !== undefined && input.requestedDriverCount !== null) {
+    if (!Number.isInteger(input.requestedDriverCount) || (input.requestedDriverCount as number) < 1 || (input.requestedDriverCount as number) > 30)
+      throw Error('invalid_requestedDriverCount');
+    job.requestedDriverCount = input.requestedDriverCount as number;
+  } else job.requestedDriverCount = null;
   if (job.jobContactPhoneE164 && !/^\+[1-9]\d{7,14}$/.test(job.jobContactPhoneE164)) throw Error('invalid_job_contact_phone');
   if ((job.jobContactPhoneE164 || job.jobContactRole) && !job.jobContactName) throw Error('required_job_contact_name');
   if (job.scheduledAt && (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(job.scheduledAt)

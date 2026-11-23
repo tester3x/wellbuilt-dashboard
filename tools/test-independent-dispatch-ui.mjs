@@ -74,12 +74,13 @@ try {
   await page.getByText('Isaac H. · +17015550124 · inactive').waitFor();
   await page.getByRole('heading',{name:'Day shift (1)'}).waitFor();
   assert.equal(await page.evaluate(id=>window.roster.find(d=>d.externalDriverId===id)?.active,originalId),false);
-  await page.getByRole('textbox',{name:'Job request text'}).fill('Customer: Customer A\nSector: Water hauling\nJob: Production water run\nPickup: Yard A\nDelivery: Site B\nWater type: Production water\nBarrels: 120');
+  await page.getByRole('textbox',{name:'Job request text'}).fill('Customer: Customer A\nSector: Water hauling\nJob: Production water run\nPickup: Yard A\nDelivery: Site B\nWater type: Production water\nBarrels: 120\nNeed 3 drivers');
   await page.getByRole('button',{name:'Fill job form from text'}).click();
   assert.equal(await page.getByRole('combobox',{name:'Customer',exact:true}).inputValue(),'customer-a');
   assert.equal(await page.getByRole('combobox',{name:'Transportation sector',exact:true}).inputValue(),'water-hauling');
   assert.equal(await page.getByLabel('Job name *').inputValue(),'Production water run');
   assert.equal(await page.getByLabel('Estimated barrels').inputValue(),'120');
+  assert.equal(await page.getByRole('spinbutton',{name:'Drivers requested'}).inputValue(),'3');
   assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.op==='create').length),0,'parsing never creates a job');
   await page.getByRole('button',{name:'Clear / new job'}).click();
   await page.getByRole('textbox',{name:'Job request text'}).fill("Customer: Bob's Hot Shot\nSector: Hot shot\nJob: Pump\nPickup: Yard\nDelivery: Rig\nUrgency: Same day\nCargo details: Pump skid");
@@ -131,6 +132,7 @@ try {
       await page.getByLabel('Estimated finish (your local time)').fill('2099-11-23T20:00');
       await page.getByLabel('Job shift').selectOption('day');
       await page.getByRole('checkbox',{name:'Ongoing / recurring work'}).check();
+      await page.getByRole('spinbutton',{name:'Drivers requested'}).fill('3');
     }
     await page.getByRole('button',{name:'Create job',exact:true}).click();
     await page.waitForFunction(title => window.requests.some(request => request.op === 'create' && request.job.title === title),`Pipe run ${sector}`);
@@ -186,6 +188,7 @@ try {
   const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run water-hauling',exact:true})});
   await assignedCard.waitFor();
   await assignedCard.getByText('Drivers (2)').waitFor();
+  await assignedCard.getByText('Drivers requested: 3 · Assigned: 2 · 1 still needed').waitFor();
   await assignedCard.getByText('Day (1)',{exact:true}).waitFor();
   await assignedCard.getByText('Night (1)',{exact:true}).waitFor();
   assert.deepEqual(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers')?.drivers),
