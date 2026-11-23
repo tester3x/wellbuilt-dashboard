@@ -21,7 +21,7 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     job.jobContactName ? `Job contact: ${job.jobContactName}` : '',
     job.jobContactPhoneE164 ? `Contact phone: ${job.jobContactPhoneE164}` : '',
     job.notes ? `Instructions: ${job.notes}` : '',
-    recipientName ? 'Please acknowledge this assignment in WhatsApp.' : '',
+    'Drivers: reply ACK privately to dispatch in WhatsApp to confirm this assignment. Do not reply in the group.',
   ];
   return rows.filter(Boolean).join('\n');
 }

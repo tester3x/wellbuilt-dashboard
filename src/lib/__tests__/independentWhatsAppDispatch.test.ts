@@ -31,11 +31,13 @@ test('prepares main WhatsApp share without guessing pickup or sending', () => {
   assert.match(message, /2 loads of 10 PPG brine/);
   assert.match(message, /Scheduled pickup \(UTC\)/);
   assert.match(message, /Assigned drivers: Demo driver/);
+  assert.match(message, /reply ACK privately to dispatch/);
+  assert.match(message, /Do not reply in the group/);
 });
 test('direct WhatsApp link uses exact verified international number and personalizes request', () => {
   const url = independentWhatsAppDriverUrl(job,'Demo driver','+17015550123');
   assert.ok(url?.startsWith('https://wa.me/17015550123?text='));
-  assert.match(decodeURIComponent(url!.split('?text=')[1]), /Please acknowledge this assignment/);
+  assert.match(decodeURIComponent(url!.split('?text=')[1]), /reply ACK privately to dispatch/);
 });
 test('rejects missing and malformed numbers rather than selecting a wrong recipient', () => {
   for (const phone of [undefined, '', '7015550123', '+01234567890', '+123']) {
