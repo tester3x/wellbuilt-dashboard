@@ -29,6 +29,14 @@ export class PhotoInbox {
     try {
       const posts = Object.values(this.queue.data.messages).filter(post =>
         !post.deleted && post.rows?.some(row => row.photo) && channels.some(channel => channel.id === post.channel))
+        // The image fallback must honor the same activation boundary as structured
+        // delivery. Preserved backup queues are not authority to replay old photos.
+        .filter(post => {
+          const cutoff = this.transport.config?.enabledAt;
+          if (!Number.isFinite(cutoff)) return true;
+          const postedAt = Date.parse(post.postedAt);
+          return Number.isFinite(postedAt) && postedAt >= cutoff;
+        })
         .sort((a, b) => Date.parse(b.postedAt || b.updatedAt) - Date.parse(a.postedAt || a.updatedAt));
       const errors = [];
       for (const post of posts) {
@@ -37,7 +45,8 @@ export class PhotoInbox {
           // metadata. Only unresolved photos need the private image upload.
           const unresolved=post.rows.some(row=>{
             const delivery=this.queue.data.deliveries?.[row.id];
-            return row.photo && !row.photo.autoSend && delivery?.status!=='complete';
+            return row.photo && !row.photo.autoSend &&
+              !['complete','duplicate','excluded','archived','before_activation','ignored'].includes(delivery?.status);
           });
           if(!unresolved)continue;
           const key = createHash('sha256').update(post.channel + ':' + post.id).digest('hex');

@@ -45,3 +45,26 @@ test('a verified cloud receipt clears the held local photo without another send'
  assert.equal(inbox.settle({rows:[{id:'photo'}]},{...receipt,recordedCount:2}),false);
  assert.throws(()=>inbox.settle({rows:[{id:'photo'}]},{...receipt,receipts:[{...receipt.receipts[0],identity:'different'}]}),/conflicts/);
 });
+
+test('backup activation never downloads or uploads historical, undated or dismissed photos',async()=>{
+ const cutoff=Date.parse('2026-11-23T20:00:00Z');
+ const posts={old:{id:'old',channel:'g',postedAt:'2026-11-23T19:59:59Z',rows:[{id:'old',photo:{}}]},undated:{id:'undated',channel:'g',rows:[{id:'undated',photo:{}}]}};
+ const deliveries={};
+ for(const status of ['complete','duplicate','excluded','archived','before_activation','ignored']){
+  posts[status]={id:status,channel:'g',postedAt:'2026-11-23T21:00:00Z',rows:[{id:status,photo:{}}]};
+  deliveries[status]={status};
+ }
+ const queue={data:{messages:posts,deliveries},save(){}};
+ const before=JSON.stringify(queue.data.messages);
+ const inbox=new PhotoInbox(queue,{secret:'test',config:{enabledAt:cutoff},request:()=>assert.fail('no cloud request')},()=>assert.fail('no historical download'));
+ await inbox.tick([{id:'g'}]);
+ assert.equal(inbox.error,'');assert.equal(JSON.stringify(queue.data.messages),before);assert.deepEqual(queue.data.photoInbox,{});
+});
+
+test('a new unresolved photo at the activation boundary still reaches the fallback',async()=>{
+ const at='2026-11-23T20:00:00Z';
+ const queue={data:{messages:{fresh:{id:'fresh',channel:'g',postedAt:at,rows:[{id:'fresh',photo:{autoSend:false}}]}}},save(){}};
+ let downloads=0;
+ const inbox=new PhotoInbox(queue,{secret:'test',config:{enabledAt:Date.parse(at)}},async()=>{downloads++;return null;});
+ await inbox.tick([{id:'g'}]);assert.equal(downloads,1);assert.match(inbox.error,/Original photo unavailable/);
+});
