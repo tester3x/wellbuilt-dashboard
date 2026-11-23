@@ -97,3 +97,35 @@ ROG also reported captureHealthy. ROG remains on its previous runtime. The next
 new Tallgrass photo after the watch began remains pending acceptance; this
 follow-up does not claim a future photo was processed. Private watch evidence is
 under `C:/dev/release-artifacts/watchdog-next-dwyer-20261123/`.
+
+## Recovery correction during the watch
+
+HP later hit an HTTP stall and a profile-lock reconnect failure. Its old native
+taskkill call could raise a PowerShell stderr error before cleanup completed;
+checking only whether Get-Process returned an object also confused retained
+exited process handles with active processes. Cleanup now selects the exact
+Watchdog profile and its browser descendants, signals the full selected tree,
+then waits for exit. Unrelated profiles are excluded. The maintained helper is
+`tools/whatsapp-watchdog/hp-profile-cleanup.ps1`; the HP supervisor embeds it.
+
+Worker source `b9a338aff799544e07bc3e329e7777c832907840` additionally requires
+confirmed browser closure before reconnecting. A failed/timed-out close exits the
+worker for supervised profile cleanup instead of immediately launching another
+browser over the same profile. Duplicate restart attempts are guarded.
+
+Installed HP runtime archive SHA256:
+`f78722869f26fb04f325efe61d5a76ba817a4e33f9ddbfbf46e53ddd2274943b`.
+Parser and dependency lock remain unchanged. Supervisor cleanup was subsequently
+refined in `ecc41457`; its live/exited parent and unrelated-profile isolation test
+is retained in `hp-profile-cleanup.test.ps1` (`33724946`). Thus worker runtime and
+the separately maintained supervisor revision are distinct recorded components.
+
+Twenty-four recovery/photo-inbox/coordinator tests passed locally and on HP.
+The isolated Windows cleanup test passed without terminating any real process.
+For the live recovery check, stopped only HP's verified receiver Node process;
+its supervisor stopped eight browser processes from one exact profile root,
+verified cleanup, launched a new receiver, and returned to healthy capture with
+no current error. ROG stayed connected and healthy. Cold recovery on this
+memory-constrained HP took several minutes; this is not an instantaneous failover
+claim. No load was manually resent and original queue/activation boundary stayed
+intact. The next new Tallgrass photo is still pending at this checkpoint.
