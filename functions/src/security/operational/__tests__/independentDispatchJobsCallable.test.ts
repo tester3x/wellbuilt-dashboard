@@ -116,7 +116,7 @@ describe('Independent Dispatch callable boundaries', () => {
       displayName: 'Marcial', active: true,
     });
     profiles.set(`drivers/profiles/${id}`, { companyId: 'liquid-gold', active: true });
-    await call(create);
+    await call({ ...create, job: { ...details, ongoing: true } });
     const batch = { op: 'addDrivers', jobId: 'job-a', requestId: 'crew-a', expectedRevision: 1,
       drivers: [{ key: 'outside:outside-a', shift: 'day' }, { key: `wellbuilt:${id}`, shift: 'night' }] };
     const result = await call(batch);
@@ -142,7 +142,7 @@ describe('Independent Dispatch callable boundaries', () => {
   it('treats every crew member as busy on an overlapping job', async () => {
     for (const id of ['day-a', 'night-a']) records.set(`companies/company-a/external_drivers/${id}`,
       { companyId: 'company-a', externalDriverId: id, active: true, displayName: id });
-    await call(create);
+    await call({ ...create, job: { ...details, ongoing: true } });
     await call({ ...create, jobId: 'job-b', requestId: 'create-b' });
     await call({ op: 'addDriver', jobId: 'job-a', requestId: 'assign-day', expectedRevision: 1, externalDriverId: 'day-a', shift: 'day' });
     await call({ op: 'addDriver', jobId: 'job-a', requestId: 'assign-night', expectedRevision: 2, externalDriverId: 'night-a', shift: 'night' });
@@ -170,9 +170,8 @@ describe('Independent Dispatch callable boundaries', () => {
     await call({ ...create, jobId: 'job-b', requestId: 'create-b', job: later });
     await call({ op: 'assign', jobId: 'job-a', requestId: 'assign-a', expectedRevision: 1, externalDriverId: 'driver-a' });
     await expect(call({ op: 'assign', jobId: 'job-b', requestId: 'before-start', expectedRevision: 1, externalDriverId: 'driver-a' }))
-      .rejects.toThrow('driver_assignment_conflict');
+      .resolves.toMatchObject({ job: { status: 'assigned' } });
     await call({ op: 'status', jobId: 'job-a', requestId: 'start-a', expectedRevision: 2, status: 'in_progress' });
-    await call({ op: 'assign', jobId: 'job-b', requestId: 'assign-b', expectedRevision: 1, externalDriverId: 'driver-a' });
     await expect(call({ op: 'update', jobId: 'job-b', requestId: 'overlap-edit', expectedRevision: 2,
       job: { ...later, scheduledAt: '2099-11-23T11:00:00.000Z' } })).rejects.toThrow('driver_assignment_conflict');
   });

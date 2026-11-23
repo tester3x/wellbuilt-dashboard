@@ -10,8 +10,12 @@ describe('Independent Dispatch driver assignment conflicts', () => {
     expect(hasDriverAssignmentConflict(target, 'outside:driver-a', [current], now)).toBe(false);
     expect(hasDriverAssignmentConflict({ ...target, scheduledAt: '2026-11-23T06:00:00.000Z' }, 'outside:driver-a', [current], now)).toBe(true);
   });
-  it('holds an assigned driver until the job starts, even when a finish is planned', () => {
-    expect(hasDriverAssignmentConflict(target, 'outside:driver-a', [{ ...current, status: 'assigned' }], now)).toBe(true);
+  it('allows planning after a known pending finish and blocks a known overlap', () => {
+    expect(hasDriverAssignmentConflict(target, 'outside:driver-a', [{ ...current, status: 'assigned' }], now)).toBe(false);
+    expect(hasDriverAssignmentConflict({ ...target, scheduledAt: '2026-11-23T06:00:00.000Z' },
+      'outside:driver-a', [{ ...current, status: 'assigned' }], now)).toBe(true);
+    expect(hasDriverAssignmentConflict(target, 'outside:driver-a', [{ ...current, status: 'assigned', estimatedEndAt: '' }], now)).toBe(false);
+    expect(hasDriverAssignmentConflict(target, 'outside:driver-a', [{ ...current, status: 'assigned', ongoing: true }], now)).toBe(true);
   });
   it('holds a driver with an unknown, passed, or ongoing finish until completion', () => {
     expect(hasDriverAssignmentConflict(target, 'outside:driver-a', [{ ...current, estimatedEndAt: '' }], now)).toBe(true);

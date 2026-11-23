@@ -8,16 +8,23 @@ export function driverAvailability(target: IndependentJob, driverKey: string, jo
     && (Array.isArray(job.drivers) ? job.drivers.some(driver => driver.key === driverKey)
       : driverKey.startsWith('outside:') ? job.externalDriverId === driverKey.slice(8) : job.wbDriverId === driverKey.slice(10)));
   for (const job of otherJobs) {
-    if (job.status === 'assigned') return { available: false, label: `Assigned · start or release before planning another job · ${job.title}` };
     const start = Date.parse(job.scheduledAt || '');
     const end = Date.parse(job.estimatedEndAt || '');
     const requestedStart = Date.parse(target.scheduledAt || '');
     const requestedEnd = Date.parse(target.estimatedEndAt || '');
     const knownFinish = job.ongoing !== true && Number.isFinite(end) && end > now && end > start;
     const finishesBeforeRequest = knownFinish && Number.isFinite(requestedStart) && requestedStart >= end;
-    const requestFinishesBeforeJob = knownFinish && Number.isFinite(requestedEnd) && Number.isFinite(start) && requestedEnd <= start;
+    const requestFinishesBeforeJob = Number.isFinite(requestedEnd) && Number.isFinite(start) && requestedEnd <= start;
     if (finishesBeforeRequest || requestFinishesBeforeJob) continue;
+    if (job.status === 'assigned') {
+      if (job.ongoing) return { available: false, label: `Assigned · ongoing work · ${job.title}` };
+      if (knownFinish && Number.isFinite(requestedStart) && Number.isFinite(requestedEnd))
+        return { available: false, label: `Assigned · time overlaps · ${job.title}` };
+      continue;
+    }
     return { available: false, label: `${job.status === 'in_progress' ? 'In progress' : 'Assigned'} · ${job.ongoing ? 'ongoing work' : knownFinish ? 'time overlaps' : 'finish unknown'} · ${job.title}` };
   }
-  return { available: true, label: otherJobs.length ? 'Available for this job · other work does not overlap' : 'Available' };
+  return { available: true, label: otherJobs.some(job => job.status === 'assigned')
+    ? 'Planning available · confirm timing with existing assignment' : otherJobs.length
+      ? 'Available for this job · other work does not overlap' : 'Available' };
 }

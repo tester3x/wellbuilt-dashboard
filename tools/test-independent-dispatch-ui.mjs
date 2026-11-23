@@ -9,7 +9,7 @@ const transport = `
 let jobs=[]; window.requests=[];
 export async function independentDispatchJobs(data){
  window.requests.push(data);
- if(data.op==='list')return {companyId:'fixture',jobs:structuredClone(jobs),wbDrivers:[{driverId:'wb-marcial',sourceCompanyId:'liquid-gold',displayName:'Nitto–Anthony (Marcial Lebaron)',active:true}]};
+ if(data.op==='list')return {companyId:'fixture',jobs:structuredClone(jobs),wbDrivers:[{driverId:'wb-marcial',sourceCompanyId:'liquid-gold',displayName:'Nitto–Anthony (Marcial Lebaron)',active:true},{driverId:'wb-luiz',sourceCompanyId:'liquid-gold',displayName:'Luiz Lebaron',active:true}]};
  if(data.op==='create')jobs.push({...data.job,id:data.jobId,revision:1,status:'unassigned',companyId:'fixture',updatedAt:new Date().toISOString()});
  const job=jobs.find(j=>j.id===data.jobId);
  if(data.op==='update')Object.assign(job,data.job,{revision:job.revision+1});
@@ -193,14 +193,20 @@ try {
   const waitingPicker = card.locator('details').filter({hasText:'Choose drivers'});
   if (!await waitingPicker.evaluate(details => details.open)) await waitingPicker.locator('summary').click();
   assert.equal(await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).inputValue(),'night');
-  await card.getByRole('group',{name:'Night Shift candidates'}).getByText('Driver B').waitFor();
+  await card.getByRole('group',{name:'Prefers night shift candidates'}).getByText('Driver B').waitFor();
   await card.getByRole('checkbox',{name:'Choose Nitto–Anthony (Marcial Lebaron) for Pipe run water-hauling'}).locator('..').getByText('WB',{exact:true}).waitFor();
   await card.getByRole('checkbox',{name:'Choose Outside Driver for Pipe run water-hauling'}).check();
   await card.getByRole('checkbox',{name:'Choose Driver B for Pipe run water-hauling'}).check();
   await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).selectOption('day');
-  await card.getByRole('group',{name:'Day Shift candidates'}).getByText('Driver B').waitFor();
+  await card.getByRole('group',{name:'Prefers night shift candidates'}).getByText('Driver B').waitFor();
+  await card.getByRole('group',{name:'Prefers night shift candidates'}).getByText('This job · Day').waitFor();
   await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).selectOption('night');
-  await card.getByRole('group',{name:'Night Shift candidates'}).getByText('Driver B').waitFor();
+  await card.getByRole('group',{name:'Prefers night shift candidates'}).getByText('Driver B').waitFor();
+  const luiz = card.getByRole('checkbox',{name:'Choose Luiz Lebaron for Pipe run water-hauling'});
+  await luiz.check();
+  await card.getByRole('combobox',{name:'Shift for Luiz Lebaron on Pipe run water-hauling'}).selectOption('day');
+  await card.getByRole('group',{name:'Preference not set candidates'}).getByText('Luiz Lebaron').waitFor();
+  await luiz.uncheck();
   assert.equal(await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).inputValue(),'night','saved night preference overrides the job day shift');
   await card.getByRole('button',{name:'Assign selected drivers'}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
@@ -251,6 +257,8 @@ try {
   assert.equal(await linkedCard.getByRole('checkbox',{name:'Choose Outside Driver for Pipe run ltl'}).isDisabled(),true,'ongoing assignment stays visible but unavailable');
   assert.equal(await linkedCard.getByRole('checkbox',{name:'Choose Isaac H. for Pipe run ltl'}).isDisabled(),true,'inactive driver stays visible');
   await linkedCard.getByRole('checkbox',{name:'Choose Nitto–Anthony (Marcial Lebaron) for Pipe run ltl'}).check();
+  await linkedCard.getByRole('combobox',{name:'Shift for Nitto–Anthony (Marcial Lebaron) on Pipe run ltl'}).selectOption('night');
+  await linkedCard.getByRole('group',{name:'Preference not set candidates'}).getByText('Nitto–Anthony (Marcial Lebaron)').waitFor();
   await linkedCard.getByRole('button',{name:'Assign selected drivers'}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
   const assignedLinkedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run ltl',exact:true})});
@@ -258,6 +266,12 @@ try {
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers'&&r.drivers.some(d=>d.key==='wellbuilt:wb-marcial'))?.drivers[0].key),'wellbuilt:wb-marcial');
   assert.equal(await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).count(),0);
   await queue.getByRole('button',{name:/Needs a driver/}).click();
+  const planningCard = dialog.getByRole('article').first();
+  await planningCard.getByText('Choose drivers').click();
+  const marcialPlanning = planningCard.getByRole('checkbox',{name:/^Choose Nitto–Anthony \(Marcial Lebaron\) for /});
+  assert.equal(await marcialPlanning.isEnabled(),true,'a pending nonongoing assignment permits another reviewed plan');
+  await planningCard.getByRole('group',{name:'Preference not set candidates'}).getByText('Assigned · Night').waitFor();
+  await planningCard.getByText('Choose drivers').click();
   for (let remaining = 5; remaining > 0; remaining--) {
     const next = dialog.getByRole('article').first();
     await next.getByText('Choose drivers').click();
@@ -277,6 +291,8 @@ try {
   assert.equal(await page.getByRole('textbox',{name:'Search dispatch jobs'}).isVisible(),true,'search remains in the pinned toolbar');
   await assignedCard.getByRole('button',{name:'Mark started',exact:true}).click();
   await page.getByRole('region',{name:'In progress jobs'}).getByRole('article').filter({hasText:'Pipe run water-hauling'}).waitFor();
+  await assignedLinkedCard.getByText('Choose drivers').click();
+  await assignedLinkedCard.getByText('Working · Day').waitFor();
   if (width >= 1024) {
     const workLaneWidth=await page.getByRole('region',{name:'Assigned jobs'}).evaluate(element => element.getBoundingClientRect().width / element.parentElement.getBoundingClientRect().width);
     assert.ok(workLaneWidth > .45 && workLaneWidth < .55, `assigned and in-progress jobs should split the board at ${width}px`);

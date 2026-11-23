@@ -34,16 +34,23 @@ export function IndependentDriverPicker({ job, jobs, outside, linked, profiles, 
   return <details className="w-full rounded border border-gray-600 bg-gray-900 text-sm text-white">
     <summary className="cursor-pointer px-3 py-2 text-cyan-200">Choose drivers{count ? ` · ${count}` : ''}</summary>
     <div className="max-h-64 overflow-auto border-t border-gray-700 p-2">
-      {([{ shift: 'day', label: 'Day Shift' }, { shift: 'night', label: 'Night Shift' }, { shift: '', label: 'Shift not set' }] as const).map(group => {
-        const groupRows = rows.filter(driver => shiftFor(driver) === group.shift);
+      {([{ preference: 'day', label: 'Prefers day shift' }, { preference: 'night', label: 'Prefers night shift' },
+        { preference: 'either', label: 'Either shift' }, { preference: 'unset', label: 'Preference not set' }] as const).map(group => {
+        const groupRows = rows.filter(driver => driver.preference === group.preference);
         if (!groupRows.length) return null;
         return <div key={group.label} role="group" aria-label={`${group.label} candidates`} className="mb-2 last:mb-0">
-        <p className="mb-1 flex justify-between text-xs font-semibold text-cyan-200"><span>{group.label}</span><span>{groupRows.length}</span></p>
+        <p className="mb-1 flex justify-between text-xs font-semibold text-cyan-200"><span>{group.label} · {groupRows.length}</span><span>Shift on this job</span></p>
         {groupRows.map(driver => {
           const current = assignedShifts.has(driver.key);
           const availability = driverAvailability(job, driver.key, jobs, driver.active, now);
           const unavailable = current || !availability.available;
           const checked = Object.prototype.hasOwnProperty.call(selected, driver.key);
+          const commitments = jobs.filter(item => ['assigned', 'in_progress'].includes(item.status)).flatMap(item => {
+            const legacyMatch = driver.key === `outside:${item.externalDriverId}` || driver.key === `wellbuilt:${item.wbDriverId}`;
+            const member = Array.isArray(item.drivers) ? item.drivers.find(entry => entry.key === driver.key)
+              : legacyMatch ? { shift: item.shift === 'day' || item.shift === 'night' ? item.shift : '' } : null;
+            return member ? [{ id: item.id, status: item.status, title: item.title, shift: member.shift || '' }] : [];
+          });
           return <div key={driver.key} className="grid grid-cols-[minmax(8rem,1fr)_minmax(0,1.5fr)_auto] items-center gap-2 rounded px-2 py-1 hover:bg-gray-800">
             <label className={`flex min-w-0 items-center gap-2 ${unavailable ? 'text-gray-500' : 'text-white'}`}>
               <input type="checkbox" aria-label={`Choose ${driver.name} for ${job.title}`} checked={checked} disabled={disabled || (unavailable && !checked)}
@@ -56,7 +63,13 @@ export function IndependentDriverPicker({ job, jobs, outside, linked, profiles, 
               <span className="truncate">{driver.name}</span>
               <span className="shrink-0 rounded border border-gray-600 px-1 text-[10px] text-gray-300">{driver.source}</span>
             </label>
-            <p className="min-w-0 break-words text-[11px] text-gray-400">{current ? 'On this job' : availability.label}{driver.preference === 'day' || driver.preference === 'night' ? ` · Profile: ${driver.preference}` : ''}</p>
+            <div className="min-w-0 text-[11px] text-gray-400"><p className="break-words">{current ? 'On this job' : availability.label}</p>
+              {!!commitments.length && <div className="mt-1 flex flex-wrap gap-1">{commitments.map(item => <span key={item.id} title={item.title}
+                className={`rounded border px-1 py-0.5 ${item.status === 'in_progress' ? 'border-amber-600 text-amber-200' : 'border-blue-600 text-blue-200'}`}>
+                {item.status === 'in_progress' ? 'Working' : 'Assigned'} · {item.shift === 'day' ? 'Day' : item.shift === 'night' ? 'Night' : 'shift unset'}
+              </span>)}</div>}
+              {checked && <span className="mt-1 inline-block rounded border border-cyan-600 px-1 py-0.5 text-cyan-200">This job · {shiftFor(driver) === 'day' ? 'Day' : shiftFor(driver) === 'night' ? 'Night' : 'shift unset'}</span>}
+            </div>
             <select aria-label={`Shift for ${driver.name} on ${job.title}`} value={shiftFor(driver)} disabled={disabled || unavailable}
               onChange={event => onChange({ ...selected, [driver.key]: event.target.value as SelectedDriverShifts[string] })}
               className="rounded border border-gray-600 bg-gray-950 px-2 py-1 text-xs text-white">

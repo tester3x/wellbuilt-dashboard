@@ -8,10 +8,11 @@ fills it only from an explicit staffing request; tank count, volume, and a
 completion deadline do not imply a crew size. Dispatch reviews and may edit the
 count before saving. Job cards show assigned drivers against the requested count
 without blocking a partial crew or forcing one for a fill-by order.
-The board picker groups candidates by effective Day, Night, or unset shift. Each
-row shows the shift choice before selection and an Outside or WB badge. Changing
-that choice on an unselected row selects the driver; changing a selected row
-moves it between shift groups. Add/Assign saves the selected crew in one
+The board picker groups candidates by their saved Day, Night, Either, or unset
+profile preference. Each row shows the shift choice for this job and an Outside
+or WB badge. Changing that choice on an unselected row selects the driver; it
+never changes the driver's profile group. Assigned and in-progress jobs show
+separate badges with each driver's working shift. Add/Assign saves the selected crew in one
 transaction and one job revision;
 if any selection is unavailable, none of the checked drivers is added.
 Assigned crews appear in equal-width Day Shift and Night Shift list boxes on the
@@ -44,10 +45,13 @@ Driver profiles are under `/dispatch/independent/drivers/`, reached from the
 board toolbar. The same package and staff capabilities still guard the data.
 The board keeps the outside-driver roster controls.
 
-An assigned driver remains reserved for that one job until it starts. Once work
-is in progress, a later job may reserve the same driver only if a known finish
-shows the jobs do not overlap. Missing or passed finish times keep the driver
-unavailable until completion. A driver may stay on the same job alongside other
+An assigned driver on a finite job may be planned on another job before work
+starts. Known overlapping time windows still block double booking; unknown
+timing shows a review warning and the existing assignment badge. An ongoing
+assigned job remains reserved. Once work is in progress, a later job may reserve
+the same driver only if a known finish shows the jobs do not overlap. Missing or
+passed finish times keep an in-progress driver unavailable until completion.
+A driver may stay on the same job alongside other
 drivers. Adding another crew member checks the new member's availability without
 rejecting the add because an older member already has conflicting historical work.
 HOS is shown as unverified because this Dashboard has no trusted HOS eligibility
