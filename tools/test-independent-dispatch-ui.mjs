@@ -186,6 +186,8 @@ try {
   const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run water-hauling',exact:true})});
   await assignedCard.waitFor();
   await assignedCard.getByText('Drivers (2)').waitFor();
+  await assignedCard.getByText('Day (1)',{exact:true}).waitFor();
+  await assignedCard.getByText('Night (1)',{exact:true}).waitFor();
   assert.deepEqual(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers')?.drivers),
     [{key:'outside:driver-a',shift:'day'},{key:'outside:driver-b',shift:'night'}]);
   assert.equal(await assignedCard.getByText('Day shift · Ongoing work').count(),1);
@@ -195,12 +197,12 @@ try {
   assert.equal(await assignedCard.getByRole('link',{name:'Call job contact in Dialpad'}).getAttribute('href'),
     `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550123?confirmPhone=1&fromNumber=%2B17015550100&customData='));
-  await assignedCard.getByText('Driver B · Night').waitFor();
+  await assignedCard.getByTitle('Driver B').waitFor();
   await assignedCard.getByText('Choose drivers').click();
   await assignedCard.getByRole('checkbox',{name:'Choose Driver C for Pipe run water-hauling'}).check();
   await assignedCard.getByRole('combobox',{name:'Shift for Driver C on Pipe run water-hauling'}).selectOption('night');
   await assignedCard.getByRole('button',{name:'Swap'}).last().click();
-  await assignedCard.getByText('Driver C · Night').waitFor();
+  await assignedCard.getByTitle('Driver C').waitFor();
   await assignedCard.getByRole('button',{name:'Remove'}).last().click();
   await assignedCard.getByText('Drivers (1)').waitFor();
   await queue.getByRole('button',{name:/Needs a driver/}).click();
@@ -212,7 +214,7 @@ try {
   await linkedCard.getByRole('button',{name:'Assign selected drivers'}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
   const assignedLinkedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run ltl',exact:true})});
-  assert.equal(await assignedLinkedCard.getByText(/Nitto–Anthony.*WellBuilt/).count(),1);
+  assert.match(await assignedLinkedCard.getByTitle('Nitto–Anthony (Marcial Lebaron)').textContent(),/WB/);
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers'&&r.drivers.some(d=>d.key==='wellbuilt:wb-marcial'))?.drivers[0].key),'wellbuilt:wb-marcial');
   assert.equal(await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).count(),0);
   await queue.getByRole('button',{name:/Needs a driver/}).click();

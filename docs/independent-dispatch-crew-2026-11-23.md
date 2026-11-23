@@ -6,6 +6,9 @@ add a driver, remove one, or replace one while preserving the other crew members
 The board picker has checkboxes and an individual shift selector for each checked
 driver. Add/Assign saves the selected crew in one transaction and one job revision;
 if any selection is unavailable, none of the checked drivers is added.
+Assigned crews appear in equal-width Day and Night lists on the job card. Each
+list shows about three drivers before scrolling. Older assignments without a
+shift remain visible in a separate compact list until categorized.
 The job event records the before and after roster. Existing single-driver jobs
 are read as one-member crews and are upgraded when their roster changes.
 
