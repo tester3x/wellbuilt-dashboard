@@ -16,13 +16,13 @@ import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/ind
 import { openIndependentWhatsApp } from '@/lib/independentWhatsAppWindow';
 import { googleMapsDirectionsUrl, googleMapsSearchUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
 
-const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
+const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', additionalStops: [], cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
 const STATUS: Record<IndependentJobStatus, string> = { unassigned: 'Unassigned', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
 const FIELDS = [
   ['title', 'Job name', 180, true],
   ['reference', 'Customer reference / load number', 120, false],
-  ['pickup', 'Pickup address / location', 500, true], ['destination', 'Delivery address / location', 500, true],
+  ['pickup', 'Pickup address / location', 500, false], ['destination', 'Delivery address / location', 500, false],
   ['cargo', 'Cargo / equipment / quantity', 500, false], ['notes', 'Instructions', 4000, false],
 ] as const;
 const inputClass = 'w-full rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white';
@@ -167,7 +167,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     scrollBelowBoardToolbar('independent-job-form');
   }
   const visible = jobs.filter(job => (filter === 'all' || (filter === 'active' ? !['completed', 'cancelled'].includes(job.status) : filter === job.status))
-    && [job.title, job.customer, job.reference, job.pickup, job.destination, ...jobCrew(job).map(driver => driver.name), job.jobContactName].join(' ').toLowerCase().includes(search.toLowerCase()));
+    && [job.title, job.customer, job.reference, job.pickup, job.destination, ...(job.additionalStops || []), ...jobCrew(job).map(driver => driver.name), job.jobContactName].join(' ').toLowerCase().includes(search.toLowerCase()));
   const lanes = filter === 'active' ? ACTIVE_LANES : filter === 'all'
     ? [...ACTIVE_LANES, { status: 'completed' as const, label: 'Completed', hint: 'Finished work' }, { status: 'cancelled' as const, label: 'Cancelled', hint: 'Retained history' }]
     : [{ status: filter as IndependentJobStatus, label: STATUS[filter as IndependentJobStatus], hint: '' }];
@@ -301,9 +301,12 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} profiles={driverProfiles} />
       {canWrite && <IndependentWhatsAppLinks job={job} guides={directory?.routeGuides} />}
-      <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{(jobLocationMapUrl(job.pickup, directory?.routeGuides) || googleMapsSearchUrl(job.pickup))
-        ? <a href={(jobLocationMapUrl(job.pickup, directory?.routeGuides) || googleMapsSearchUrl(job.pickup))!} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline">{job.pickup}</a> : job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{(jobLocationMapUrl(job.destination, directory?.routeGuides) || googleMapsSearchUrl(job.destination))
-        ? <a href={(jobLocationMapUrl(job.destination, directory?.routeGuides) || googleMapsSearchUrl(job.destination))!} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline">{job.destination}</a> : job.destination}</dd></div></dl>
+      <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2">{[
+        ...(job.pickup ? [{ label: 'Pickup', location: job.pickup }] : []),
+        ...(job.additionalStops || []).map((location, index) => ({ label: `Stop ${index + 1}`, location })),
+        ...(job.destination ? [{ label: 'Delivery', location: job.destination }] : []),
+      ].map(({ label, location }) => <div key={`${label}:${location}`}><dt className="text-gray-400">{label}</dt><dd className="whitespace-pre-wrap break-words text-white">{(jobLocationMapUrl(location, directory?.routeGuides) || googleMapsSearchUrl(location))
+        ? <a href={(jobLocationMapUrl(location, directory?.routeGuides) || googleMapsSearchUrl(location))!} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline">{location}</a> : location}</dd></div>)}</dl>
       {!routeGuidesForJob(job, directory?.routeGuides).length && <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-sky-200">
         {!routeGuidesForJob(job, directory?.routeGuides).length && googleMapsDirectionsUrl(job.pickup, job.destination) &&
           <a href={googleMapsDirectionsUrl(job.pickup, job.destination)!} target="_blank" rel="noopener noreferrer" className="underline">Google Maps directions</a>}
@@ -409,7 +412,11 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     </section>}
     {canWrite && <form id="independent-job-form" className={`rounded p-4 ${editing ? 'border-2 border-amber-400 bg-amber-950/30 ring-2 ring-amber-500/30 shadow-xl shadow-amber-950/30' : 'border border-gray-700 bg-gray-800'}`} onSubmit={event => {
       event.preventDefault();
-      const job = { ...form, scheduledAt: scheduledLocal ? new Date(scheduledLocal).toISOString() : '',
+      if (!form.pickup.trim() && !form.destination.trim() && !(form.additionalStops || []).some(stop => stop.trim())) {
+        setError('Enter at least one job location.'); return;
+      }
+      const job = { ...form, additionalStops: (form.additionalStops || []).map(stop => stop.trim()).filter(Boolean),
+        scheduledAt: scheduledLocal ? new Date(scheduledLocal).toISOString() : '',
         estimatedEndAt: estimatedEndLocal ? new Date(estimatedEndLocal).toISOString() : '',
         ...(sector ? { ...(customerId ? { customerId } : {}), sector, sectorFields } : {}),
         ...(customerId ? { categoryId, asset: categoryId ? asset.trim() : '' } : {}) };
@@ -478,6 +485,10 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         <datalist id="independent-job-names">{selectedCustomer?.jobNames.map(value => <option key={value} value={value} />)}</datalist>
         <datalist id="independent-pickups">{selectedCustomer?.pickupLocations.map(value => <option key={value} value={value} />)}</datalist>
         <datalist id="independent-deliveries">{selectedCustomer?.deliveryLocations.map(value => <option key={value} value={value} />)}</datalist>
+        <div className="md:col-span-2"><div className="flex items-center justify-between gap-2"><p className="text-xs text-gray-300">Additional stops (in travel order)</p><button type="button" className="text-xs text-cyan-200 underline" disabled={(form.additionalStops || []).length >= 12} onClick={() => setForm(current => ({ ...current, additionalStops: [...(current.additionalStops || []), ''] }))}>Add stop</button></div>
+          {(form.additionalStops || []).map((stop, index) => <div key={index} className="mt-2 flex gap-2"><input aria-label={`Stop ${index + 1} location`} className={inputClass} maxLength={500} value={stop} onChange={event => setForm(current => ({ ...current, additionalStops: (current.additionalStops || []).map((value, position) => position === index ? event.target.value : value) }))} /><button type="button" className="text-xs text-red-200 underline" onClick={() => setForm(current => ({ ...current, additionalStops: (current.additionalStops || []).filter((_, position) => position !== index) }))}>Remove</button></div>)}
+          <p className="mt-1 text-xs text-gray-400">For one-site work, enter that site in Pickup or Delivery and leave the other blank. Every listed stop gets its own map link in the driver handoff.</p>
+        </div>
         {sector && <div className="rounded border border-cyan-700/50 bg-cyan-950/20 p-3 md:col-span-2">
           <h3 className="mb-2 text-sm font-semibold text-cyan-300">{sectorLabel(sector)} details</h3>
           <div className="grid gap-3 md:grid-cols-2">{SECTOR_FIELDS[sector].map(field => <label key={field.key} className="text-xs text-gray-300">

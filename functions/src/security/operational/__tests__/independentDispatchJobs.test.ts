@@ -15,7 +15,12 @@ describe('Independent Dispatch job validation and lifecycle', () => {
     }
   });
   it('requires actual locations and customer, limits notes, and validates UTC dates', () => {
-    expect(() => parseIndependentJob({ ...job, pickup: '  ' })).toThrow('required_pickup');
+    expect(parseIndependentJob({ ...job, pickup: '  ' }).pickup).toBe('');
+    expect(parseIndependentJob({ ...job, destination: '' }).pickup).toBe('Yard');
+    expect(() => parseIndependentJob({ ...job, pickup: '  ', destination: '' })).toThrow('required_location');
+    expect(parseIndependentJob({ ...job, pickup: '', destination: '', additionalStops: ['  Rig 5  '] }).additionalStops).toEqual(['Rig 5']);
+    expect(() => parseIndependentJob({ ...job, additionalStops: [''] })).toThrow('invalid_additionalStops');
+    expect(() => parseIndependentJob({ ...job, additionalStops: Array(13).fill('Site') })).toThrow('invalid_additionalStops');
     expect(() => parseIndependentJob({ ...job, notes: 'a'.repeat(4001) })).toThrow();
     expect(() => parseIndependentJob({ ...job, scheduledAt: '2026-02-30T12:00:00.000Z' })).toThrow();
     expect(parseIndependentJob({ ...job, scheduledAt: '2026-11-20T12:00:00.000Z' }).scheduledAt).toContain('2026-11-20');

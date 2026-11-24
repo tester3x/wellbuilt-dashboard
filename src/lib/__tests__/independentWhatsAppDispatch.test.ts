@@ -37,7 +37,7 @@ test('prepares main WhatsApp share without guessing pickup or sending', () => {
   assert.match(message, /\*DESCRIPTION \/ INSTRUCTIONS\*\nASAP\. Pickup location is driver choice\./);
   assert.match(message, /\n\n\*PICKUP \/ SOURCE\*\n/);
   assert.match(message, /\n\n\*DELIVERY \/ DESTINATION\*\n/);
-  assert.match(message, /\*DELIVERY \/ DESTINATION\*\nGBU Zeus 34X-8G\nDelivery map:\nhttps:\/\/www\.google\.com\/maps\/search\/\?api=1&query=GBU%20Zeus%2034X-8G/);
+  assert.match(message, /\*DELIVERY \/ DESTINATION\*\nGBU Zeus 34X-8G\nRoute to Delivery — confirm exact site:\nConfirm this is the exact site before driving; Google may choose a similar name\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?api=1&destination=GBU%20Zeus%2034X-8G&travelmode=driving/);
   assert.match(message, /react with a thumbs-up to this dispatch message/);
   assert.match(message, /reply ACK privately to dispatch/);
 });
@@ -112,7 +112,7 @@ test('includes one planned route only when the destination pad is identified', (
       { label: 'Barnstormer SWD', location: 'Barnstormer', matchTerms: ['Barnstormer SWD'], lat: 47.677885, lng: -103.400148, url: 'https://maps.app.goo.gl/two' },
     ] };
   const specific = buildIndependentWhatsAppText({ ...job, destination: 'Barnstormer 1' }, undefined, Date.now(), [guide]);
-  assert.match(specific, /\*DELIVERY \/ DESTINATION\*\nBarnstormer 1\nGPS pin: 47\.673974, -103\.410378\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.673974%2C-103\.410378\nRoute to Delivery:\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
+  assert.match(specific, /\*DELIVERY \/ DESTINATION\*\nBarnstormer 1\nGPS pin: 47\.673974° N, 103\.410378° W\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.673974%2C-103\.410378\nRoute to Delivery:\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
   assert.equal((specific.match(/waypoints=/g) || []).length, 1);
   assert.match(specific, /destination=47\.673974%2C-103\.410378/);
   const ambiguous = buildIndependentWhatsAppText({ ...job, destination: 'Barnstormer' }, undefined, Date.now(), [guide]);
@@ -132,17 +132,29 @@ test('shared Daredevil job uses the saved delivery pin instead of a Google name 
       url: 'https://maps.app.goo.gl/qAVybqs8LYATet1r8', lat: 47.673911, lng: -103.387325 }],
     routeWaypoints: [{ lat: 47.6912663, lng: -103.4562861 }, { lat: 47.689123, lng: -103.453253 }, { lat: 47.689152, lng: -103.440293 }] };
   const message = buildIndependentWhatsAppText({ ...job, pickup: 'County Road 30', destination: 'Daredevil 1' }, undefined, Date.now(), [guide]);
-  assert.match(message, /\*PICKUP \/ SOURCE\*\nCounty Road 30\nPickup map:\nhttps:\/\/www\.google\.com\/maps\/search\/\?api=1&query=County%20Road%2030/);
-  assert.match(message, /\*DELIVERY \/ DESTINATION\*\nDaredevil 1\nGPS pin: 47\.673911, -103\.387325\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.673911%2C-103\.387325\nRoute to Delivery:\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
+  assert.match(message, /\*PICKUP \/ SOURCE\*\nCounty Road 30\nRoute to Pickup — confirm exact site:\nConfirm this is the exact site before driving; Google may choose a similar name\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?api=1&destination=County%20Road%2030&travelmode=driving/);
+  assert.match(message, /\*DELIVERY \/ DESTINATION\*\nDaredevil 1\nGPS pin: 47\.673911° N, 103\.387325° W\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.673911%2C-103\.387325\nRoute to Delivery:\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
   assert.ok(message.indexOf('*ASSIGNED DRIVERS*') < message.indexOf('*DELIVERY / DESTINATION*'));
   assert.ok(message.indexOf('*DELIVERY / DESTINATION*') < message.indexOf('*ACCESS PHOTOS'));
   assert.doesNotMatch(message, /PAD LOCATION ONLY|qAVybqs8LYATet1r8/);
   assert.doesNotMatch(message, /query=Daredevil%201/);
   assert.match(message, /waypoints=47\.6912663/);
   const reverse = buildIndependentWhatsAppText({ ...job, pickup: 'Daredevil 1', destination: 'Sample disposal site' }, undefined, Date.now(), [guide]);
-  assert.match(reverse, /\*PICKUP \/ SOURCE\*\nDaredevil 1\nGPS pin: 47\.673911, -103\.387325\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.673911%2C-103\.387325\nRoute to Pickup:\nOpen this route first\./);
-  assert.match(reverse, /\*DELIVERY \/ DESTINATION\*\nSample disposal site\nDelivery map:\nhttps:\/\/www\.google\.com\/maps\/search\/\?api=1&query=Sample%20disposal%20site/);
+  assert.match(reverse, /\*PICKUP \/ SOURCE\*\nDaredevil 1\nGPS pin: 47\.673911° N, 103\.387325° W\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.673911%2C-103\.387325\nRoute to Pickup:\nOpen this route first\./);
+  assert.match(reverse, /\*DELIVERY \/ DESTINATION\*\nSample disposal site\nRoute to Delivery — confirm exact site:\nConfirm this is the exact site before driving; Google may choose a similar name\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?api=1&destination=Sample%20disposal%20site&travelmode=driving/);
   assert.equal((reverse.match(/waypoints=/g) || []).length, 1);
+});
+
+test('one-site service jobs omit empty legs and multi-stop jobs route each stop in order', () => {
+  const oneSite = buildIndependentWhatsAppText({ ...job, pickup: '', destination: 'Hot oiler well pad', additionalStops: [] });
+  assert.doesNotMatch(oneSite, /PICKUP \/ SOURCE|Not specified/);
+  assert.match(oneSite, /\*DELIVERY \/ DESTINATION\*\nHot oiler well pad\nRoute to Delivery — confirm exact site:/);
+  const stops = buildIndependentWhatsAppText({ ...job, pickup: 'Yard', additionalStops: ['47.5,-103.4', 'Transfer terminal'], destination: 'Well pad' });
+  assert.ok(stops.indexOf('*PICKUP / SOURCE*') < stops.indexOf('*STOP 1*'));
+  assert.ok(stops.indexOf('*STOP 1*') < stops.indexOf('*STOP 2*'));
+  assert.ok(stops.indexOf('*STOP 2*') < stops.indexOf('*DELIVERY / DESTINATION*'));
+  assert.match(stops, /\*STOP 1\*\n47\.5,-103\.4\nGPS pin: 47\.5° N, 103\.4° W\nPin drop: .*\nRoute to Stop 1:/);
+  assert.match(stops, /\*STOP 2\*\nTransfer terminal\nRoute to Stop 2 — confirm exact site:/);
 });
 
 test('special farmer handoff keeps each map with its own location and avoids duplicate pad links', () => {
@@ -157,8 +169,8 @@ test('special farmer handoff keeps each map with its own location and avoids dup
     routeWaypoints: [{ lat: 47.6912663, lng: -103.4562861 }, { lat: 47.689123, lng: -103.453253 }, { lat: 47.689152, lng: -103.440293 }] };
   const message = buildIndependentWhatsAppText({ ...job, pickup: 'Daredevil Fed. 2-2-14H',
     destination: 'Pad 390 (Phazor Fed. 3-1-13H)' }, undefined, Date.now(), [guide]);
-  assert.match(message, /\*PICKUP \/ SOURCE\*\nDaredevil Fed\. 2-2-14H\nGPS pin: 47\.673911, -103\.387325\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.673911%2C-103\.387325\nRoute to Pickup:\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
-  assert.match(message, /\*DELIVERY \/ DESTINATION\*\nPad 390 \(Phazor Fed\. 3-1-13H\)\nGPS pin: 47\.674216, -103\.365621\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.674216%2C-103\.365621\nRoute to Delivery:\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
+  assert.match(message, /\*PICKUP \/ SOURCE\*\nDaredevil Fed\. 2-2-14H\nGPS pin: 47\.673911° N, 103\.387325° W\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.673911%2C-103\.387325\nRoute to Pickup:\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
+  assert.match(message, /\*DELIVERY \/ DESTINATION\*\nPad 390 \(Phazor Fed\. 3-1-13H\)\nGPS pin: 47\.674216° N, 103\.365621° W\nPin drop: https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=47\.674216%2C-103\.365621\nRoute to Delivery:\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
   assert.equal((message.match(/waypoints=/g) || []).length, 2);
   assert.match(message, /destination=47\.673911%2C-103\.387325/);
   assert.match(message, /destination=47\.674216%2C-103\.365621/);

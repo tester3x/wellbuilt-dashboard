@@ -8,7 +8,7 @@ export type IndependentRouteGuide = {
   directionsUrl?: string;
 };
 
-type RouteJob = { pickup?: string; destination?: string; asset?: string };
+type RouteJob = { pickup?: string; destination?: string; asset?: string; additionalStops?: string[] };
 
 /** Operator request name for the saved Daredevil 1 pad pin. */
 function knownPadAlias(places: string, pin: NonNullable<IndependentRouteGuide['padPins']>[number]): boolean {
@@ -18,7 +18,7 @@ function knownPadAlias(places: string, pin: NonNullable<IndependentRouteGuide['p
 
 /** A guide applies when a named well appears at either end of the job. */
 export function routeGuidesForJob(job: RouteJob, guides: IndependentRouteGuide[] = []): IndependentRouteGuide[] {
-  const places = [job.pickup, job.destination, job.asset].filter(Boolean).join(' ');
+  const places = [job.pickup, job.destination, job.asset, ...(job.additionalStops || [])].filter(Boolean).join(' ');
   return guides.filter(guide => guide.locations.some(location => {
     const name = location.trim();
     return name.length > 1 && new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(places);
@@ -85,4 +85,11 @@ export function googleMapsDirectionsUrl(pickup: string | undefined, destination:
   const end = destination?.trim();
   if (!origin || !end || origin.length > 180 || end.length > 180 || /\s+or\s+/i.test(origin)) return null;
   return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(end)}&travelmode=driving`;
+}
+
+/** Route from the driver's current position; a named site still needs dispatch confirmation. */
+export function googleMapsRouteToUrl(location: string | undefined): string | null {
+  const destination = location?.trim();
+  if (!destination || destination.length > 180 || /\s+or\s+/i.test(destination)) return null;
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=driving`;
 }

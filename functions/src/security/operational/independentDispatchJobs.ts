@@ -10,6 +10,7 @@ export type IndependentJobDetails = {
   jobContactName?: string; jobContactRole?: string; jobContactPhoneE164?: string;
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
   categoryId?: string; asset?: string;
+  additionalStops?: string[];
 };
 const LIMITS: Record<'title' | 'customer' | 'reference' | 'pickup' | 'destination' | 'cargo' | 'scheduledAt' | 'estimatedEndAt' | 'notes'
   | 'jobContactName' | 'jobContactRole' | 'jobContactPhoneE164', number> = {
@@ -20,16 +21,23 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_job');
   const input = raw as Record<string, unknown>;
   if (Object.keys(input).some(key => !Object.prototype.hasOwnProperty.call(LIMITS, key)
-    && !['customerId', 'sector', 'sectorFields', 'categoryId', 'asset', 'shift', 'ongoing', 'requestedDriverCount'].includes(key))) throw Error('unexpected_job_field');
+    && !['customerId', 'sector', 'sectorFields', 'categoryId', 'asset', 'shift', 'ongoing', 'requestedDriverCount', 'additionalStops'].includes(key))) throw Error('unexpected_job_field');
   const job = {} as IndependentJobDetails;
   for (const key of Object.keys(LIMITS) as (keyof typeof LIMITS)[]) {
     const value = input[key] ?? '';
     if (typeof value !== 'string' || value.length > LIMITS[key]) throw Error(`invalid_${key}`);
     job[key] = value.trim();
   }
-  for (const key of ['title', 'customer', 'pickup', 'destination'] as const) {
+  for (const key of ['title', 'customer'] as const) {
     if (!job[key]) throw Error(`required_${key}`);
   }
+  if (input.additionalStops !== undefined) {
+    if (!Array.isArray(input.additionalStops) || input.additionalStops.length > 12
+      || input.additionalStops.some(stop => typeof stop !== 'string' || !stop.trim() || stop.length > 500))
+      throw Error('invalid_additionalStops');
+    job.additionalStops = input.additionalStops.map(stop => (stop as string).trim());
+  }
+  if (!job.pickup && !job.destination && !job.additionalStops?.length) throw Error('required_location');
   if (input.shift !== undefined && !['', 'day', 'night', 'both'].includes(input.shift as string)) throw Error('invalid_shift');
   if (input.ongoing !== undefined && typeof input.ongoing !== 'boolean') throw Error('invalid_ongoing');
   job.shift = (input.shift || '') as IndependentJobDetails['shift'];
