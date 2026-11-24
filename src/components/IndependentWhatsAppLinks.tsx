@@ -36,6 +36,7 @@ export function IndependentWhatsAppLinks({ job, guides = [] }: { job: Independen
       Multiple recipients may send from the chooser; one recipient may open a draft that still needs Send.
       To message one driver, use Prepare job message in their shift card below. Your browser may open another WhatsApp tab.
       Share again after changing the assigned drivers; messages already sent in WhatsApp do not update.
+      WhatsApp shows full web addresses in shared text. For special pad access, the driving route is listed first; photos and a pad-only pin follow.
       WhatsApp's share page may replace emoji. Copy the full message, then paste into WhatsApp, when the alert symbols matter.
     </p>
     <details className="mt-2 rounded border border-gray-700 bg-gray-900/70 p-2 text-xs">

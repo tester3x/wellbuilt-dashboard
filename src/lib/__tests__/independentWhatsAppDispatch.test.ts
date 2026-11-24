@@ -91,14 +91,14 @@ test('includes approved access maps on special well jobs and keeps emoji out of 
   const guides = [{ id: 'access', title: 'Barnstormer, Daredevil and Phazor', locations: ['Barnstormer', 'Daredevil', 'Phazor'],
     imageUrls: ['https://firebasestorage.googleapis.com/map-one', 'https://firebasestorage.googleapis.com/map-two'] }];
   const linked = decodeURIComponent(independentWhatsAppGroupShareUrl(special, guides).split('?text=')[1]);
-  assert.match(linked, /APPROVED ACCESS ROUTE/);
-  assert.match(linked, /Route map 1: https:\/\/firebasestorage.googleapis.com\/map-one/);
-  assert.match(linked, /Route map 2: https:\/\/firebasestorage.googleapis.com\/map-two/);
+  assert.match(linked, /ACCESS GUIDE/);
+  assert.match(linked, /Photo 1 — satellite overview: https:\/\/firebasestorage.googleapis.com\/map-one/);
+  assert.match(linked, /Photo 2 — marked safe turn \/ avoid farmer road: https:\/\/firebasestorage.googleapis.com\/map-two/);
   assert.doesNotMatch(linked, /Google Maps directions:/);
   assert.doesNotMatch(linked, /🚨/);
   const copy = buildIndependentWhatsAppText(special, undefined, Date.now(), guides, true);
   assert.match(copy, /^🚨🚨🚨🚨🚨👆🏽/);
-  assert.match(copy, /Pickup map: https:\/\/www.google.com\/maps\/search/);
+  assert.doesNotMatch(copy, /Pickup location \(pin only\):/);
 });
 
 test('includes one planned route only when the destination pad is identified', () => {
@@ -109,16 +109,16 @@ test('includes one planned route only when the destination pad is identified', (
       { label: 'Barnstormer SWD', location: 'Barnstormer', matchTerms: ['Barnstormer SWD'], lat: 47.677885, lng: -103.400148, url: 'https://maps.app.goo.gl/two' },
     ] };
   const specific = buildIndependentWhatsAppText({ ...job, destination: 'Barnstormer 1' }, undefined, Date.now(), [guide]);
-  assert.match(specific, /Google Maps route via approved turns 1, 2, 3/);
+  assert.match(specific, /DRIVE TO BARNSTORMER 1\/2 — APPROVED ROUTE/);
   assert.match(specific, /destination=47\.673974%2C-103\.410378/);
   const ambiguous = buildIndependentWhatsAppText({ ...job, destination: 'Barnstormer' }, undefined, Date.now(), [guide]);
-  assert.doesNotMatch(ambiguous, /Google Maps route via approved turns/);
+  assert.doesNotMatch(ambiguous, /DRIVE TO .* — APPROVED ROUTE/);
   assert.match(ambiguous, /Barnstormer SWD/);
   const otherDaredevil = buildIndependentWhatsAppText({ ...job, destination: 'Daredevil Fed. 2-2-14H' }, undefined, Date.now(), [{
     ...guide, locations: ['Daredevil'], padPins: [{ label: 'Daredevil 1', location: 'Daredevil',
       matchTerms: ['Daredevil 1'], url: 'https://maps.app.goo.gl/four', lat: 47.673911, lng: -103.387325 }],
   }]);
-  assert.doesNotMatch(otherDaredevil, /Google Maps route via approved turns/);
+  assert.doesNotMatch(otherDaredevil, /DRIVE TO .* — APPROVED ROUTE/);
 });
 
 test('shared Daredevil job uses the saved delivery pin instead of a Google name search', () => {
@@ -127,8 +127,13 @@ test('shared Daredevil job uses the saved delivery pin instead of a Google name 
       url: 'https://maps.app.goo.gl/qAVybqs8LYATet1r8', lat: 47.673911, lng: -103.387325 }],
     routeWaypoints: [{ lat: 47.6912663, lng: -103.4562861 }, { lat: 47.689123, lng: -103.453253 }, { lat: 47.689152, lng: -103.440293 }] };
   const message = buildIndependentWhatsAppText({ ...job, pickup: 'County Road 30', destination: 'Daredevil 1' }, undefined, Date.now(), [guide]);
-  assert.match(message, /Delivery map: https:\/\/maps\.app\.goo\.gl\/qAVybqs8LYATet1r8/);
-  assert.ok(message.indexOf('*ASSIGNED DRIVERS*') < message.indexOf('Delivery map:'));
+  assert.match(message, /\*DRIVE TO DAREDEVIL 1 — APPROVED ROUTE\*/);
+  assert.match(message, /Daredevil 1: https:\/\/maps\.app\.goo\.gl\/qAVybqs8LYATet1r8/);
+  assert.ok(message.indexOf('*ASSIGNED DRIVERS*') < message.indexOf('*DRIVE TO DAREDEVIL 1'));
+  assert.ok(message.indexOf('*DRIVE TO DAREDEVIL 1') < message.indexOf('*ACCESS PHOTOS*'));
+  assert.ok(message.indexOf('*ACCESS PHOTOS*') < message.indexOf('*PAD LOCATION ONLY'));
+  assert.doesNotMatch(message, /Pickup location \(pin only\):|Delivery location \(pin only\):/);
+  assert.equal((message.match(/qAVybqs8LYATet1r8/g) || []).length, 1, 'pad pin appears only once');
   assert.doesNotMatch(message, /query=Daredevil%201/);
-  assert.match(message, /Google Maps route via approved turns 1, 2, 3/);
+  assert.match(message, /waypoints=47\.6912663/);
 });
