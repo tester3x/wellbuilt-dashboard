@@ -85,6 +85,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [parseReport, setParseReport] = useState<ParsedJobRequest | null>(null);
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState('');
+  const [focusedWaitingJobId, setFocusedWaitingJobId] = useState('');
   const [appHeaderHeight, setAppHeaderHeight] = useState(0);
   const needsDriverDialog = useRef<HTMLDialogElement>(null);
   // Keep create identity through an ambiguous network failure, avoiding duplicate jobs.
@@ -287,7 +288,9 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {displayedLanes.map(lane => {
         const isWaitingQueue = filter === 'active' && lane.status === 'unassigned';
         const laneJobs = sortDispatchJobs(visible.filter(job => job.status === lane.status), ['completed', 'cancelled'].includes(lane.status));
-        const cards = <div className={isWaitingQueue || (filter === 'active' && workingLaneCount === 1) ? 'grid gap-3 lg:grid-cols-2 2xl:grid-cols-3' : 'space-y-3'}>{laneJobs.length === 0 ? <p className="rounded border border-dashed border-gray-700 p-4 text-sm text-gray-500">No jobs here.</p> : laneJobs.map(job => <article key={job.id} id={`independent-job-${job.id}`} tabIndex={0} aria-label={`${job.customer} · ${job.title}`}
+        const focusedWaitingJob = isWaitingQueue ? laneJobs.find(job => job.id === focusedWaitingJobId) : undefined;
+        const shownJobs = focusedWaitingJob ? [focusedWaitingJob] : laneJobs;
+        const cards = <div className={focusedWaitingJob ? 'mx-auto w-full max-w-3xl' : isWaitingQueue || (filter === 'active' && workingLaneCount === 1) ? 'grid gap-3 lg:grid-cols-2 2xl:grid-cols-3' : 'space-y-3'}>{shownJobs.length === 0 ? <p className="rounded border border-dashed border-gray-700 p-4 text-sm text-gray-500">No jobs here.</p> : shownJobs.map(job => <article key={job.id} id={`independent-job-${job.id}`} tabIndex={0} aria-label={`${job.customer} · ${job.title}`}
           onClickCapture={() => setSelectedJobId(job.id)} onFocusCapture={() => setSelectedJobId(job.id)}
           onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setSelectedJobId(job.id); } }}
           className={`min-w-0 rounded border p-4 transition-colors ${selectedJobId === job.id ? 'border-amber-400 bg-amber-950/30 ring-2 ring-amber-400/70 shadow-lg shadow-amber-950/30' : `bg-gray-800 ${job.status === 'unassigned' ? 'border-amber-700/70' : 'border-gray-700'}`}`}>
@@ -373,17 +376,17 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     </article>)}</div>;
         return <section key={lane.status} aria-label={`${lane.label} jobs`} className={`min-w-0 rounded-lg border ${isWaitingQueue ? 'border-amber-700/70 bg-amber-950/20' : 'border-gray-700 bg-gray-950/60'} p-3 ${filter === 'active' && (isWaitingQueue || workingLaneCount === 1) ? 'lg:col-span-2' : ''}`}>
           {isWaitingQueue ? <>
-            <button type="button" className="flex w-full items-center justify-between gap-3 text-left" onClick={() => needsDriverDialog.current?.showModal()}>
+            <button type="button" className="flex w-full items-center justify-between gap-3 text-left" onClick={() => { setFocusedWaitingJobId(''); needsDriverDialog.current?.showModal(); }}>
               <span className="flex items-center gap-2 font-semibold text-amber-100">Needs a driver <span className="rounded bg-amber-700 px-2 py-0.5 text-sm text-white">{laneJobs.length}</span></span>
               <span className="text-sm text-cyan-200">Review and assign →</span>
             </button>
-            <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">{laneJobs.slice(0, 3).map(job => <div key={job.id} className="min-w-0 rounded border border-amber-900/60 bg-gray-900/70 px-3 py-2">
+            <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">{laneJobs.slice(0, 3).map(job => <button type="button" key={job.id} className="min-w-0 rounded border border-amber-900/60 bg-gray-900/70 px-3 py-2 text-left hover:border-amber-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400" onClick={() => { setFocusedWaitingJobId(job.id); setSelectedJobId(job.id); needsDriverDialog.current?.showModal(); }}>
               <p className="truncate font-medium text-white">{job.customer} · {job.title}</p>
               <p className="truncate text-gray-300">Schedule {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : job.scheduleText || 'time not set'} · {job.pickup || job.destination || job.additionalStops?.[0] || ''}{job.requestedDriverCount ? ` · ${job.requestedDriverCount} drivers requested` : ''}</p>
-            </div>)}</div>
+            </button>)}</div>
             {laneJobs.length > 3 && <p className="mt-2 text-xs text-amber-200">+{laneJobs.length - 3} more waiting</p>}
-            <dialog ref={needsDriverDialog} aria-label="Jobs needing a driver" className="fixed inset-0 m-auto max-h-[90vh] w-[min(96vw,90rem)] max-w-none overflow-y-auto rounded-xl border border-amber-700 bg-gray-950 p-4 text-white shadow-2xl backdrop:bg-black/75">
-              <div className="mb-4 flex items-start justify-between gap-3"><div><h3 className="text-xl font-semibold">Needs a driver <span className="text-amber-300">{laneJobs.length}</span></h3><p className="text-sm text-gray-300">Review requests and assign drivers. Press Escape or Close to return to the board.</p></div><button type="button" className={buttonClass} onClick={() => needsDriverDialog.current?.close()}>Close</button></div>
+            <dialog ref={needsDriverDialog} aria-label="Jobs needing a driver" className={`fixed inset-0 m-auto max-h-[90vh] ${focusedWaitingJob ? 'w-[min(96vw,60rem)]' : 'w-[min(96vw,90rem)]'} max-w-none overflow-y-auto rounded-xl border border-amber-700 bg-gray-950 p-4 text-white shadow-2xl backdrop:bg-black/75`}>
+              <div className="mb-4 flex items-start justify-between gap-3"><div><h3 className="text-xl font-semibold">{focusedWaitingJob ? focusedWaitingJob.title : <>Needs a driver <span className="text-amber-300">{laneJobs.length}</span></>}</h3><p className="text-sm text-gray-300">Review requests and assign drivers. Press Escape or Close to return to the board.</p></div><div className="flex gap-2">{focusedWaitingJob && <button type="button" className={buttonClass} onClick={() => setFocusedWaitingJobId('')}>All waiting jobs</button>}<button type="button" className={buttonClass} onClick={() => needsDriverDialog.current?.close()}>Close</button></div></div>
               {cards}
             </dialog>
           </> : <>

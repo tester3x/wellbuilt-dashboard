@@ -154,6 +154,14 @@ try {
   await queue.getByRole('button',{name:/Needs a driver 7/}).waitFor();
   assert.equal(await queue.getByText('Customer A · Pipe run water-hauling',{exact:true}).isVisible(),true,'collapsed alert previews a waiting job');
   assert.equal(await page.getByRole('dialog',{name:'Jobs needing a driver'}).isVisible(),false,'waiting cards start collapsed');
+  await queue.getByRole('button',{name:/Customer A · Pipe run water-hauling/}).click();
+  const focusedDialog=page.getByRole('dialog',{name:'Jobs needing a driver'});
+  await page.waitForFunction(() => document.querySelector('dialog[open]')?.querySelectorAll('article').length === 1);
+  assert.equal(await focusedDialog.getByRole('article').count(),1,'clicking a waiting preview shows only its job');
+  await focusedDialog.getByRole('button',{name:'All waiting jobs'}).click();
+  await page.waitForFunction(() => document.querySelector('dialog[open]')?.querySelectorAll('article').length === 7);
+  assert.equal(await focusedDialog.getByRole('article').count(),7,'focused view can return to the full waiting queue');
+  await focusedDialog.getByRole('button',{name:'Close'}).click();
   await queue.getByRole('button',{name:/Needs a driver 7/}).click();
   const dialog=page.getByRole('dialog',{name:'Jobs needing a driver'});
   const card=dialog.getByRole('article').filter({hasText:'Pipe run water-hauling'});
