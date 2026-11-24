@@ -1,5 +1,5 @@
 import type { IndependentJob } from './independentDispatchJobs';
-import { googleMapsDirectionsUrl, googleMapsSearchUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob, type IndependentRouteGuide } from './independentRouteGuides';
+import { googleMapsSearchUrl, identifiedPadPin, jobLocationMapUrl, plannedGoogleRouteUrl, routeGuidesForJob, type IndependentRouteGuide } from './independentRouteGuides';
 
 type WhatsAppJob = Pick<IndependentJob,
   'title' | 'customer' | 'pickup' | 'destination' | 'cargo' | 'reference' | 'notes' |
@@ -42,11 +42,20 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     const route = identified ? plannedGoogleRouteUrl(identified.guide, identified.pin!) : null;
     const savedLocation = jobLocationMapUrl(location, guides);
     return { url: route || savedLocation || googleMapsSearchUrl(location),
-      label: route ? 'approved driving route' : matchingGuides.length && !identified ? 'search — confirm exact site' : 'location' };
+      kind: route ? 'route' : identified ? 'pin' : 'search', specialAccess: matchingGuides.length > 0 };
   };
   const pickupMap = mapFor(job.pickup);
   const deliveryMap = mapFor(job.destination);
-  const directions = accessGuides.length ? null : googleMapsDirectionsUrl(job.pickup, job.destination);
+  const locationSection = (heading: string, location: string | undefined, map: ReturnType<typeof mapFor>, leg: 'pickup' | 'delivery') => {
+    const mapLabel = map.kind === 'route' ? `Route to ${leg} (approved access)`
+      : map.specialAccess && map.kind === 'search' ? `${leg === 'pickup' ? 'Pickup' : 'Delivery'} map search — confirm exact site; not a driving route`
+        : map.kind === 'pin' ? `${leg === 'pickup' ? 'Pickup' : 'Delivery'} pin — confirm driving route`
+          : `${leg === 'pickup' ? 'Pickup' : 'Delivery'} map`;
+    const accessNote = map.specialAccess ? map.kind === 'route'
+      ? 'Open this route first. Verify turns 1, 2 and 3 before driving; Google may recalculate.'
+      : 'Confirm the exact pad with dispatch. Check the access photos and follow approved turns 1, 2 and 3; Google may recalculate.' : '';
+    return [`*${heading}*`, location || 'Not specified', map.url ? `${mapLabel}:` : '', accessNote, map.url || ''].filter(Boolean).join('\n');
+  };
   const driverBlock = `*ASSIGNED DRIVERS*\n${assigned || 'No driver assigned yet'}${job.requestedDriverCount ? `\nDrivers requested: ${job.requestedDriverCount}` : ''}`;
   const sections = [
     includeEmojiAlert && urgency === 'urgent' ? `🚨🚨🚨🚨🚨👆🏽\n${heading}` : heading,
@@ -55,21 +64,10 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
       recipientName ? `For: ${recipientName}` : ''].filter(Boolean).join('\n'),
     driverBlock,
     job.notes ? `*DESCRIPTION / INSTRUCTIONS*\n${job.notes}` : '',
-    `*PICKUP / SOURCE*\n${job.pickup || 'Not specified'}`,
-    `*DELIVERY / DESTINATION*\n${job.destination || 'Not specified'}`,
-    [pickupMap.url ? `Pickup map (${pickupMap.label}): ${pickupMap.url}` : '',
-    deliveryMap.url ? `Drop-off map (${deliveryMap.label}): ${deliveryMap.url}` : ''].filter(Boolean).join('\n'),
-    ...accessGuides.map(guide => {
-      const pins = padPinsForJob(job, guide);
-      const identified = identifiedPadPin(job, guide);
-      const planned = identified ? plannedGoogleRouteUrl(guide, identified) : null;
-      const route = planned ? `*DRIVE TO ${identified!.label.toUpperCase()} — APPROVED ROUTE*\nOpen this route first. Verify turns 1, 2 and 3 before driving; Google may recalculate.\n${planned}`
-        : `*ACCESS GUIDE: ${guide.title.toUpperCase()}*\nConfirm the exact pad with dispatch before driving.`;
-      const photos = guide.imageUrls.length ? `*ACCESS PHOTOS*\n${guide.imageUrls.map((url, index) => `${index === 0 ? 'Photo 1 — satellite overview' : index === 1 ? 'Photo 2 — marked safe turn / avoid farmer road' : `Photo ${index + 1} — access map`}: ${url}`).join('\n')}` : '';
-      const padLocations = pins.length ? `*PAD LOCATION ONLY — NOT A DRIVING ROUTE*\n${pins.map(pin => `${pin.label}: ${pin.url}`).join('\n')}` : '';
-      return [route, photos, padLocations].filter(Boolean).join('\n\n');
-    }),
-    directions ? `Google Maps directions: ${directions}` : '',
+    locationSection('PICKUP / SOURCE', job.pickup, pickupMap, 'pickup'),
+    locationSection('DELIVERY / DESTINATION', job.destination, deliveryMap, 'delivery'),
+    ...accessGuides.map(guide => guide.imageUrls.length
+      ? `*ACCESS PHOTOS — ${guide.title.toUpperCase()}*\n${guide.imageUrls.map((url, index) => `${index === 0 ? 'Photo 1 — satellite overview' : index === 1 ? 'Photo 2 — marked safe turn / avoid farmer road' : `Photo ${index + 1} — access map`}: ${url}`).join('\n')}` : ''),
     job.cargo ? `*CARGO / LOADS*\n${job.cargo}` : '',
     job.scheduledAt ? `*SCHEDULE*\nScheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
     [job.jobContactName ? `Job contact: ${job.jobContactName}` : '',

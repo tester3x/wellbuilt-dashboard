@@ -14,7 +14,7 @@ import { IndependentDriverPicker, type SelectedDriverShifts } from './Independen
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
 import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
 import { openIndependentWhatsApp } from '@/lib/independentWhatsAppWindow';
-import { googleMapsDirectionsUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
+import { googleMapsDirectionsUrl, googleMapsSearchUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
@@ -301,10 +301,10 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} profiles={driverProfiles} />
       {canWrite && <IndependentWhatsAppLinks job={job} guides={directory?.routeGuides} />}
-      <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
+      <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{(jobLocationMapUrl(job.pickup, directory?.routeGuides) || googleMapsSearchUrl(job.pickup))
+        ? <a href={(jobLocationMapUrl(job.pickup, directory?.routeGuides) || googleMapsSearchUrl(job.pickup))!} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline">{job.pickup}</a> : job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{(jobLocationMapUrl(job.destination, directory?.routeGuides) || googleMapsSearchUrl(job.destination))
+        ? <a href={(jobLocationMapUrl(job.destination, directory?.routeGuides) || googleMapsSearchUrl(job.destination))!} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline">{job.destination}</a> : job.destination}</dd></div></dl>
       {!routeGuidesForJob(job, directory?.routeGuides).length && <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-sky-200">
-        {jobLocationMapUrl(job.pickup, directory?.routeGuides) && <a href={jobLocationMapUrl(job.pickup, directory?.routeGuides)!} target="_blank" rel="noopener noreferrer" className="underline">Pickup on Google Maps</a>}
-        {jobLocationMapUrl(job.destination, directory?.routeGuides) && <a href={jobLocationMapUrl(job.destination, directory?.routeGuides)!} target="_blank" rel="noopener noreferrer" className="underline">Delivery on Google Maps</a>}
         {!routeGuidesForJob(job, directory?.routeGuides).length && googleMapsDirectionsUrl(job.pickup, job.destination) &&
           <a href={googleMapsDirectionsUrl(job.pickup, job.destination)!} target="_blank" rel="noopener noreferrer" className="underline">Google Maps directions</a>}
       </div>}

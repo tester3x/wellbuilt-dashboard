@@ -37,7 +37,7 @@ test('prepares main WhatsApp share without guessing pickup or sending', () => {
   assert.match(message, /\*DESCRIPTION \/ INSTRUCTIONS\*\nASAP\. Pickup location is driver choice\./);
   assert.match(message, /\n\n\*PICKUP \/ SOURCE\*\n/);
   assert.match(message, /\n\n\*DELIVERY \/ DESTINATION\*\n/);
-  assert.match(message, /Drop-off map \(location\): https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=GBU%20Zeus%2034X-8G/);
+  assert.match(message, /\*DELIVERY \/ DESTINATION\*\nGBU Zeus 34X-8G\nDelivery map:\nhttps:\/\/www\.google\.com\/maps\/search\/\?api=1&query=GBU%20Zeus%2034X-8G/);
   assert.match(message, /react with a thumbs-up to this dispatch message/);
   assert.match(message, /reply ACK privately to dispatch/);
 });
@@ -92,15 +92,15 @@ test('includes approved access maps on special well jobs and keeps emoji out of 
   const guides = [{ id: 'access', title: 'Barnstormer, Daredevil and Phazor', locations: ['Barnstormer', 'Daredevil', 'Phazor'],
     imageUrls: ['https://firebasestorage.googleapis.com/map-one', 'https://firebasestorage.googleapis.com/map-two'] }];
   const linked = decodeURIComponent(independentWhatsAppGroupShareUrl(special, guides).split('?text=')[1]);
-  assert.match(linked, /ACCESS GUIDE/);
+  assert.match(linked, /ACCESS PHOTOS/);
   assert.match(linked, /Photo 1 — satellite overview: https:\/\/firebasestorage.googleapis.com\/map-one/);
   assert.match(linked, /Photo 2 — marked safe turn \/ avoid farmer road: https:\/\/firebasestorage.googleapis.com\/map-two/);
-  assert.doesNotMatch(linked, /Google Maps directions:/);
+  assert.doesNotMatch(linked, /Google Maps directions:|PAD LOCATION ONLY|DRIVE TO PHAZOR/);
   assert.doesNotMatch(linked, /🚨/);
   const copy = buildIndependentWhatsAppText(special, undefined, Date.now(), guides, true);
   assert.match(copy, /^🚨🚨🚨🚨🚨👆🏽/);
-  assert.match(copy, /Pickup map \(search — confirm exact site\): https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=Daredevil/);
-  assert.match(copy, /Drop-off map \(search — confirm exact site\): https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=Pad%20390/);
+  assert.match(copy, /\*PICKUP \/ SOURCE\*\nDaredevil Fed\. 2-2-14H\nPickup map search — confirm exact site; not a driving route:\nConfirm the exact pad with dispatch\./);
+  assert.match(copy, /\*DELIVERY \/ DESTINATION\*\nPad 390 \(Phazor Fed\. 3-1-13H\)\nDelivery map search — confirm exact site; not a driving route:/);
 });
 
 test('includes one planned route only when the destination pad is identified', () => {
@@ -111,17 +111,18 @@ test('includes one planned route only when the destination pad is identified', (
       { label: 'Barnstormer SWD', location: 'Barnstormer', matchTerms: ['Barnstormer SWD'], lat: 47.677885, lng: -103.400148, url: 'https://maps.app.goo.gl/two' },
     ] };
   const specific = buildIndependentWhatsAppText({ ...job, destination: 'Barnstormer 1' }, undefined, Date.now(), [guide]);
-  assert.match(specific, /DRIVE TO BARNSTORMER 1\/2 — APPROVED ROUTE/);
-  assert.match(specific, /Drop-off map \(approved driving route\): https:\/\/www\.google\.com\/maps\/dir\/\?/);
+  assert.match(specific, /\*DELIVERY \/ DESTINATION\*\nBarnstormer 1\nRoute to delivery \(approved access\):\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
+  assert.equal((specific.match(/waypoints=/g) || []).length, 1);
   assert.match(specific, /destination=47\.673974%2C-103\.410378/);
   const ambiguous = buildIndependentWhatsAppText({ ...job, destination: 'Barnstormer' }, undefined, Date.now(), [guide]);
-  assert.doesNotMatch(ambiguous, /DRIVE TO .* — APPROVED ROUTE/);
-  assert.match(ambiguous, /Barnstormer SWD/);
+  assert.match(ambiguous, /Delivery map search — confirm exact site; not a driving route:/);
+  assert.doesNotMatch(ambiguous, /Barnstormer SWD|waypoints=/);
   const otherDaredevil = buildIndependentWhatsAppText({ ...job, destination: 'Daredevil Fed. 2-2-14H' }, undefined, Date.now(), [{
     ...guide, locations: ['Daredevil'], padPins: [{ label: 'Daredevil 1', location: 'Daredevil',
       matchTerms: ['Daredevil 1'], url: 'https://maps.app.goo.gl/four', lat: 47.673911, lng: -103.387325 }],
   }]);
-  assert.doesNotMatch(otherDaredevil, /DRIVE TO .* — APPROVED ROUTE/);
+  assert.match(otherDaredevil, /Delivery map search — confirm exact site; not a driving route:/);
+  assert.doesNotMatch(otherDaredevil, /waypoints=/);
 });
 
 test('shared Daredevil job uses the saved delivery pin instead of a Google name search', () => {
@@ -130,17 +131,30 @@ test('shared Daredevil job uses the saved delivery pin instead of a Google name 
       url: 'https://maps.app.goo.gl/qAVybqs8LYATet1r8', lat: 47.673911, lng: -103.387325 }],
     routeWaypoints: [{ lat: 47.6912663, lng: -103.4562861 }, { lat: 47.689123, lng: -103.453253 }, { lat: 47.689152, lng: -103.440293 }] };
   const message = buildIndependentWhatsAppText({ ...job, pickup: 'County Road 30', destination: 'Daredevil 1' }, undefined, Date.now(), [guide]);
-  assert.match(message, /\*DRIVE TO DAREDEVIL 1 — APPROVED ROUTE\*/);
-  assert.match(message, /Pickup map \(location\): https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=County%20Road%2030/);
-  assert.match(message, /Drop-off map \(approved driving route\): https:\/\/www\.google\.com\/maps\/dir\/\?/);
-  assert.match(message, /Daredevil 1: https:\/\/maps\.app\.goo\.gl\/qAVybqs8LYATet1r8/);
-  assert.ok(message.indexOf('*ASSIGNED DRIVERS*') < message.indexOf('*DRIVE TO DAREDEVIL 1'));
-  assert.ok(message.indexOf('*DRIVE TO DAREDEVIL 1') < message.indexOf('*ACCESS PHOTOS*'));
-  assert.ok(message.indexOf('*ACCESS PHOTOS*') < message.indexOf('*PAD LOCATION ONLY'));
-  assert.equal((message.match(/qAVybqs8LYATet1r8/g) || []).length, 1, 'pad pin appears only once');
+  assert.match(message, /\*PICKUP \/ SOURCE\*\nCounty Road 30\nPickup map:\nhttps:\/\/www\.google\.com\/maps\/search\/\?api=1&query=County%20Road%2030/);
+  assert.match(message, /\*DELIVERY \/ DESTINATION\*\nDaredevil 1\nRoute to delivery \(approved access\):\nOpen this route first\. Verify turns 1, 2 and 3 before driving; Google may recalculate\.\nhttps:\/\/www\.google\.com\/maps\/dir\/\?/);
+  assert.ok(message.indexOf('*ASSIGNED DRIVERS*') < message.indexOf('*DELIVERY / DESTINATION*'));
+  assert.ok(message.indexOf('*DELIVERY / DESTINATION*') < message.indexOf('*ACCESS PHOTOS'));
+  assert.doesNotMatch(message, /PAD LOCATION ONLY|qAVybqs8LYATet1r8/);
   assert.doesNotMatch(message, /query=Daredevil%201/);
   assert.match(message, /waypoints=47\.6912663/);
   const reverse = buildIndependentWhatsAppText({ ...job, pickup: 'Daredevil 1', destination: 'Sample disposal site' }, undefined, Date.now(), [guide]);
-  assert.match(reverse, /Pickup map \(approved driving route\): https:\/\/www\.google\.com\/maps\/dir\/\?/);
-  assert.match(reverse, /Drop-off map \(location\): https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=Sample%20disposal%20site/);
+  assert.match(reverse, /\*PICKUP \/ SOURCE\*\nDaredevil 1\nRoute to pickup \(approved access\):\nOpen this route first\./);
+  assert.match(reverse, /\*DELIVERY \/ DESTINATION\*\nSample disposal site\nDelivery map:\nhttps:\/\/www\.google\.com\/maps\/search\/\?api=1&query=Sample%20disposal%20site/);
+  assert.equal((reverse.match(/waypoints=/g) || []).length, 1);
+});
+
+test('special farmer handoff keeps each map with its own location and avoids duplicate pad links', () => {
+  const guide = { id: 'access', title: 'Barnstormer, Daredevil and Phazor', locations: ['Barnstormer', 'Daredevil', 'Phazor'],
+    imageUrls: ['https://example.com/satellite', 'https://example.com/safe-turn'],
+    padPins: [{ label: 'Phazor all', location: 'Phazor', coversFamily: true,
+      url: 'https://maps.app.goo.gl/HHcNVPWq6bvPT41x6', lat: 47.674216, lng: -103.365621 }],
+    routeWaypoints: [{ lat: 47.6912663, lng: -103.4562861 }, { lat: 47.689123, lng: -103.453253 }, { lat: 47.689152, lng: -103.440293 }] };
+  const message = buildIndependentWhatsAppText({ ...job, pickup: 'Daredevil Fed. 2-2-14H',
+    destination: 'Pad 390 (Phazor Fed. 3-1-13H)' }, undefined, Date.now(), [guide]);
+  assert.match(message, /\*PICKUP \/ SOURCE\*\nDaredevil Fed\. 2-2-14H\nPickup map search — confirm exact site; not a driving route:/);
+  assert.match(message, /\*DELIVERY \/ DESTINATION\*\nPad 390 \(Phazor Fed\. 3-1-13H\)\nRoute to delivery \(approved access\):\nOpen this route first\./);
+  assert.equal((message.match(/waypoints=/g) || []).length, 1);
+  assert.doesNotMatch(message, /PAD LOCATION ONLY|maps\.app\.goo\.gl\/HHcNVPWq6bvPT41x6/);
+  assert.ok(message.indexOf('*ACCESS PHOTOS') > message.indexOf('*DELIVERY / DESTINATION*'));
 });
