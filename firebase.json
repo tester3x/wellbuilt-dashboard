@@ -22,14 +22,17 @@
     ]
   },
   "database": {
-    "rules": "database.rules.json"
+    "rules": "database.rules.json",
+    "predeploy": ["node scripts/forbidDefaultRulesDeploy.cjs database"]
   },
   "firestore": {
     "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
+    "indexes": "firestore.indexes.json",
+    "predeploy": ["node scripts/forbidDefaultRulesDeploy.cjs firestore"]
   },
   "storage": {
-    "rules": "storage.rules"
+    "rules": "storage.rules",
+    "predeploy": ["node scripts/forbidDefaultRulesDeploy.cjs storage"]
   },
   "hosting": {
     "public": "out",
