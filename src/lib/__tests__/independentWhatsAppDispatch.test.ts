@@ -31,13 +31,24 @@ test('prepares main WhatsApp share without guessing pickup or sending', () => {
   assert.match(message, /White Owl Epping or White Owl Tioga/);
   assert.match(message, /2 loads of 10 PPG brine/);
   assert.match(message, /Scheduled pickup \(UTC\)/);
-  assert.match(message, /Assigned drivers:\nDemo driver/);
+  assert.match(message, /Assigned drivers:\nShift not set:\nDemo driver/);
   assert.match(message, /🚨🚨🚨🚨🚨/);
   assert.match(message, /\*DESCRIPTION \/ INSTRUCTIONS\*\nASAP\. Pickup location is driver choice\./);
   assert.match(message, /\n\n\*PICKUP \/ SOURCE\*\n/);
   assert.match(message, /\n\n\*DELIVERY \/ DESTINATION\*\n/);
   assert.match(message, /reply ACK privately to dispatch/);
   assert.match(message, /Do not reply in the group/);
+});
+test('groups assigned crew by job shift in shared and personal messages', () => {
+  const crew = [
+    { key: 'outside:d1', name: 'Day one', source: 'outside' as const, shift: 'day' as const, assignedAt: '' },
+    { key: 'outside:d2', name: 'Night one', source: 'outside' as const, shift: 'night' as const, assignedAt: '' },
+    { key: 'outside:d3', name: 'Day two', source: 'outside' as const, shift: 'day' as const, assignedAt: '' },
+  ];
+  const message = buildIndependentWhatsAppText({ ...job, drivers: crew });
+  assert.match(message, /Assigned drivers:\nDay Shift:\nDay one\nDay two\nNight Shift:\nNight one/);
+  assert.match(decodeURIComponent(independentWhatsAppDriverUrl({ ...job, drivers: crew }, 'Day one', '+17015550123')!.split('?text=')[1]),
+    /Day Shift:\nDay one\nDay two\nNight Shift:\nNight one/);
 });
 test('direct WhatsApp link uses exact verified international number and personalizes request', () => {
   const url = independentWhatsAppDriverUrl(job,'Demo driver','+17015550123');

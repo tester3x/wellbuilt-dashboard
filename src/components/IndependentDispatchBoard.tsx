@@ -69,6 +69,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, SelectedDriverShifts>>({});
+  const [pickerEpochs, setPickerEpochs] = useState<Record<string, number>>({});
   const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
   const [customerId, setCustomerId] = useState('');
   const [contactId, setContactId] = useState('');
@@ -285,7 +286,9 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {job.requestedDriverCount && <p className="text-sm text-amber-200">Drivers requested: {job.requestedDriverCount} · Assigned: {jobCrew(job).length}{jobCrew(job).length < job.requestedDriverCount ? ` · ${job.requestedDriverCount - jobCrew(job).length} still needed` : ''}</p>}
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} profiles={driverProfiles} />
-      {canWrite && <IndependentWhatsAppLinks job={job} drivers={drivers} profiles={driverProfiles} />}
+      {canWrite && <IndependentWhatsAppLinks job={job} drivers={drivers} profiles={driverProfiles} busy={busy}
+        onMarkSent={driverKey => void run({ op: 'markWhatsAppSent', jobId: job.id, driverKey,
+          expectedRevision: job.revision, requestId: crypto.randomUUID() })} />}
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
       {(job.cargo || job.notes || (job.sector && Object.values(job.sectorFields || {}).some(Boolean))) && <details className="mt-3 rounded border border-gray-700 bg-gray-900/60 p-2 text-sm"><summary className="cursor-pointer text-cyan-200">Details and instructions</summary>
         {job.cargo && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">Cargo: {job.cargo}</p>}
@@ -304,8 +307,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           {jobCrew(job).filter(driver => !crewShift(driver)).map(driver => crewRow(job, driver))}
         </div>}
       </> : 'Needs a driver'}</div>
-      {canWrite && canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <div className="mt-2">
-        <IndependentDriverPicker job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
+      {canWrite && canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <div className="mt-3 rounded border border-cyan-900/60 bg-cyan-950/10 p-2">
+        <IndependentDriverPicker key={`${job.id}-${pickerEpochs[job.id] || 0}`} job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
           now={availabilityNow} selected={assignments[job.id] || {}} disabled={busy}
           onChange={next => setAssignments(current => ({ ...current, [job.id]: next }))} />
         <div className="mt-2 flex justify-start">
@@ -313,12 +316,15 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
             const selected = Object.entries(assignments[job.id] || {}).map(([key, shift]) => ({ key, shift }));
             if (!selected.length) return;
             void run({ op: 'addDrivers', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), drivers: selected },
-              () => setAssignments(current => ({ ...current, [job.id]: {} })));
+              () => {
+                setAssignments(current => ({ ...current, [job.id]: {} }));
+                setPickerEpochs(current => ({ ...current, [job.id]: (current[job.id] || 0) + 1 }));
+              });
           }}>{jobCrew(job).length ? 'Add selected drivers' : 'Assign selected drivers'}</button>
         </div>
       </div>}
       {jobActionError?.jobId === job.id && <p role="alert" className="mt-2 text-sm text-red-300">Assignment was not saved: {jobActionError.message}</p>}
-      {canWrite && !['completed', 'cancelled'].includes(job.status) && <div className="mt-2 flex flex-wrap items-center gap-2">
+      {canWrite && !['completed', 'cancelled'].includes(job.status) && <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-gray-600/80 pt-3">
         {['unassigned', 'assigned'].includes(job.status) && <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>}
         {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
         <button disabled={busy} className="ml-auto rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>

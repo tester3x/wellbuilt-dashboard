@@ -31,7 +31,7 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !KEYS.has(k)))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_request');
     const op = raw.op;
-    if (!['list', 'create', 'update', 'assign', 'addDriver', 'addDrivers', 'replaceDriver', 'removeDriver', 'setDriverShift', 'status'].includes(op))
+    if (!['list', 'create', 'update', 'assign', 'addDriver', 'addDrivers', 'replaceDriver', 'removeDriver', 'setDriverShift', 'status', 'markWhatsAppSent'].includes(op))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_operation');
     if (raw.drivers !== undefined && op !== 'addDrivers')
       throw new httpsV2.HttpsError('invalid-argument', 'unexpected_drivers');
@@ -193,6 +193,9 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
         || typeof raw.driverKey !== 'string' || !assignedDriverKeys(previous!).includes(raw.driverKey)
         || !['day', 'night'].includes(raw.shift)))
         throw new httpsV2.HttpsError('failed-precondition', 'invalid_driver_shift_change');
+      if (op === 'markWhatsAppSent' && (!['assigned', 'in_progress'].includes(previous!.status)
+        || typeof raw.driverKey !== 'string' || !assignedDriverKeys(previous!).includes(raw.driverKey)))
+        throw new httpsV2.HttpsError('failed-precondition', 'driver_not_on_active_job');
       if (['assign', 'addDriver', 'replaceDriver'].includes(op)) {
         const wantsExternal = raw.externalDriverId !== undefined;
         const wantsWellBuilt = raw.wbDriverId !== undefined;
@@ -284,6 +287,11 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
         if (!independentJobTransition(previous!.status, raw.status as IndependentJobStatus))
           throw new httpsV2.HttpsError('failed-precondition', 'invalid_job_transition');
         patch = { status: raw.status, ...(raw.status === 'completed' ? { completedAt: now } : {}) };
+      }
+      if (op === 'markWhatsAppSent') {
+        const sent = Array.isArray(previous!.whatsappSent) ? previous!.whatsappSent.filter((entry: any) =>
+          typeof entry?.driverKey === 'string' && entry.driverKey !== raw.driverKey) : [];
+        patch = { whatsappSent: [...sent, { driverKey: raw.driverKey, sentAt: now, sentBy: authority.uid }] };
       }
       if (['assign', 'addDriver', 'addDrivers', 'replaceDriver', 'update'].includes(op)) {
         const candidate = { ...previous, ...patch, id: jobRef.id };

@@ -25,6 +25,7 @@ export async function independentDispatchJobs(data){
  }
  if(data.op==='removeDriver'){const next=job.drivers.filter(d=>d.key!==data.driverKey);Object.assign(job,{drivers:next,status:next.length?job.status:'unassigned',driverName:next[0]?.name||'',externalDriverId:next[0]?.source==='outside'?next[0].key.slice(8):'',wbDriverId:next[0]?.source==='wellbuilt'?next[0].key.slice(10):'',revision:job.revision+1});}
  if(data.op==='setDriverShift'){job.drivers=job.drivers.map(d=>d.key===data.driverKey?{...d,shift:data.shift}:d);job.revision+=1;}
+ if(data.op==='markWhatsAppSent'){job.whatsappSent=[...(job.whatsappSent||[]).filter(entry=>entry.driverKey!==data.driverKey),{driverKey:data.driverKey,sentAt:new Date().toISOString(),sentBy:'dispatcher'}];job.revision+=1;}
  if(data.op==='status')Object.assign(job,{status:data.status,revision:job.revision+1});
  return {ok:true,job};
 }`;
@@ -217,6 +218,8 @@ try {
   const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run water-hauling',exact:true})});
   await assignedCard.waitFor();
   await assignedCard.getByText('Drivers (2)').waitFor();
+  assert.equal(await assignedCard.locator('details').filter({hasText:'Choose drivers'}).evaluate(details => details.open), false,
+    'successful add closes the chooser');
   await assignedCard.getByText('Drivers requested: 3 · Assigned: 2 · 1 still needed').waitFor();
   await assignedCard.getByRole('region',{name:'Day Shift drivers'}).getByText('Day Shift',{exact:true}).waitFor();
   await assignedCard.getByRole('region',{name:'Night Shift drivers'}).getByText('Night Shift',{exact:true}).waitFor();
@@ -263,9 +266,12 @@ try {
   assert.equal(await assignedCard.getByRole('link',{name:'Call job contact in Dialpad'}).getAttribute('href'),
     `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550999?confirmPhone=1&fromNumber=%2B17015550100&customData='));
-  await assignedCard.getByText('WhatsApp: Outside A WA').waitFor();
+  await assignedCard.getByText('Saved WhatsApp name: Outside A WA').waitFor();
+  await assignedCard.getByRole('button',{name:'Mark sent'}).first().click();
+  await assignedCard.getByText('Marked sent').waitFor();
+  assert.equal(await assignedCard.getByRole('button',{name:'Mark sent'}).count(),0,'manual WhatsApp send confirmation persists on refresh');
   await assignedCard.getByText('+17015550999').waitFor();
-  assert.ok((await assignedCard.getByRole('link',{name:'Open driver chat'}).first().getAttribute('href'))?.startsWith('https://wa.me/17015550999?text='));
+  assert.ok((await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('href'))?.startsWith('https://wa.me/17015550999?text='));
   await assignedCard.getByTitle('Driver B').waitFor();
   assert.equal(await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).inputValue(),'night');
   await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('day');
@@ -273,7 +279,8 @@ try {
   await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('night');
   await assignedCard.getByLabel('1 night shift drivers').waitFor();
   await assignedCard.getByText('Choose drivers').click();
-  assert.ok(await assignedCard.locator('details').filter({hasText:'Choose drivers'}).evaluate(details => details.getBoundingClientRect().width >= details.parentElement.getBoundingClientRect().width - 1),
+  assert.ok(await assignedCard.locator('details').filter({hasText:'Choose drivers'}).evaluate(details =>
+    details.getBoundingClientRect().width >= details.closest('article').getBoundingClientRect().width * 0.84),
     'the driver picker spans the job card action area');
   assert.equal(await assignedCard.getByText('HOS unverified').count(), 0,
     'the board does not show an HOS label without a verified data source');
@@ -284,6 +291,12 @@ try {
   }), 'Add selected drivers sits directly below the picker, left aligned');
   assert.ok(await assignedCard.getByRole('button',{name:'Add selected drivers'}).evaluate(button => button.getBoundingClientRect().height < 60),
     'opening the picker must not stretch the assignment button to the picker height');
+  assert.ok(await assignedCard.getByRole('button',{name:'Mark started'}).evaluate(button => {
+    const actionRow = button.parentElement;
+    const assignmentPanel = actionRow?.previousElementSibling;
+    return assignmentPanel && getComputedStyle(actionRow).borderTopWidth !== '0px'
+      && actionRow.getBoundingClientRect().top - assignmentPanel.getBoundingClientRect().bottom >= 12;
+  }), 'job actions are separated from the add driver area');
   assert.ok(await assignedCard.getByRole('button',{name:'Mark started'}).evaluate(button => {
     const edit = button.parentElement.querySelector('button:first-child');
     const cancel = button.parentElement.querySelector('button:last-child');
@@ -319,7 +332,7 @@ try {
   assert.equal(await assignedLinkedCard.getByTitle('Nitto–Anthony (Marcial Lebaron)').textContent(),'Nitto–Anthony (Marcial Lebaron)');
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers'&&r.drivers.some(d=>d.key==='wellbuilt:wb-marcial'))?.drivers[0].key),'wellbuilt:wb-marcial');
   assert.ok((await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550888?confirmPhone=1&fromNumber=%2B17015550100&customData='));
-  await assignedLinkedCard.getByText('WhatsApp: Marcial WA').waitFor();
+  await assignedLinkedCard.getByText('Saved WhatsApp name: Marcial WA').waitFor();
   await assignedLinkedCard.getByText('+17015550888').waitFor();
   await queue.getByRole('button',{name:/Needs a driver/}).click();
   const planningCard = dialog.getByRole('article').first();

@@ -23,7 +23,15 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
   const heading = urgency === 'urgent' ? '🚨🚨🚨🚨🚨\n*URGENT DISPATCH*'
     : urgency === 'soon' ? '🟠🟠🟠🟠🟠\n*UPCOMING DISPATCH*'
       : '🟡🟡🟡🟡🟡\n*JOB DISPATCH*';
-  const assigned = job.drivers?.map(driver => driver.name).filter(Boolean).join('\n') || job.driverName || '';
+  const crew = job.drivers || [];
+  const shiftGroup = (shift: 'day' | 'night' | '') => crew.filter(driver => (driver.shift || '') === shift).map(driver => driver.name).filter(Boolean);
+  const day = shiftGroup('day');
+  const night = shiftGroup('night');
+  const unset = shiftGroup('');
+  const assigned = crew.length
+    ? [day.length ? `Day Shift:\n${day.join('\n')}` : '', night.length ? `Night Shift:\n${night.join('\n')}` : '',
+      unset.length ? `Shift not set:\n${unset.join('\n')}` : ''].filter(Boolean).join('\n')
+    : job.driverName || '';
   const sections = [
     heading,
     ['*JOB*', job.title, `Customer: ${job.customer}`,

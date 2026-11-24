@@ -108,6 +108,20 @@ describe('Independent Dispatch callable boundaries', () => {
     await expect(call({ op: 'removeDriver', jobId: 'job-a', requestId: 'remove-last', expectedRevision: 6, driverKey: 'outside:day-b' }))
       .rejects.toThrow('replace_last_active_driver');
   });
+  it('records a dispatcher-confirmed WhatsApp handoff only for a driver on an active job', async () => {
+    records.set('companies/company-a/external_drivers/driver-a', { companyId: 'company-a', active: true, displayName: 'Driver A' });
+    await call(create);
+    await expect(call({ op: 'markWhatsAppSent', jobId: 'job-a', requestId: 'early', expectedRevision: 1,
+      driverKey: 'outside:driver-a' })).rejects.toThrow('driver_not_on_active_job');
+    await call({ op: 'addDriver', jobId: 'job-a', requestId: 'assign-a', expectedRevision: 1, externalDriverId: 'driver-a' });
+    const mark = { op: 'markWhatsAppSent', jobId: 'job-a', requestId: 'sent-a', expectedRevision: 2,
+      driverKey: 'outside:driver-a' };
+    const result = await call(mark);
+    expect(result.job.whatsappSent).toEqual([{ driverKey: 'outside:driver-a', sentAt: expect.any(String), sentBy: 'dispatcher' }]);
+    await expect(call(mark)).resolves.toMatchObject({ idempotent: true });
+    await expect(call({ ...mark, requestId: 'wrong-driver', expectedRevision: 3, driverKey: 'outside:driver-b' }))
+      .rejects.toThrow('driver_not_on_active_job');
+  });
   it('adds a checked crew atomically with one revision and rejects a partly unavailable selection', async () => {
     for (const id of ['outside-a', 'outside-b', 'outside-c']) records.set(`companies/company-a/external_drivers/${id}`,
       { companyId: 'company-a', externalDriverId: id, active: true, displayName: id });
