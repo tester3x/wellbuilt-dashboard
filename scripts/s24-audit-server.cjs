@@ -40,7 +40,7 @@ async function seed(){
  }
  await db.doc('plans/native-audit').set({contractVersion:1,planId:'native-audit',displayName:'Synthetic emulator only',capabilities:['jsa'],status:'active',apps:{'wellbuilt-jsa':{included:true,requiresActiveShift:false}}});
  await db.doc('driver_shift_authority/'+identities.a.jsa.driverId).set({driverId:identities.a.jsa.driverId,companyId:identities.a.jsa.companyId,initialized:true,version:1,openPeriodId:null,originLocalDate:null});
- await db.doc('invoices/'+run+'-job').set({companyId:identities.a.jsa.companyId,driverId:identities.a.jsa.driverId,shiftId:run+'-shift',wellName:'AUDIT WELL ONLY',operator:'Synthetic Operator',jobType:'Production Water'});
+ await db.doc('invoices/'+run+'-job').set({companyId:identities.a.jsa.companyId,driverId:identities.a.jsa.driverId,shiftId:run+'-shift',wellName:'AUDIT WELL ONLY',operator:'Synthetic Operator',commodityType:'Production Water'});
 }
 const original=()=>({id:'legacy_'+requestId,companyId:identities.a.jsa.companyId,driverId:identities.a.jsa.driverId,driverHash:identities.a.jsa.driverId,timestamp:new Date(now).toISOString(),signature:'Synthetic signature only',shiftId:run+'-shift',legacyReceiptBinding:{requestId,companyId:identities.a.jsa.companyId,driverHash:identities.a.jsa.driverId,jobDocId:run+'-job',shiftId:run+'-shift',receiptVersion:1,receivedAt:new Date(now-1000).toISOString(),expiresAt:new Date(now+3600000).toISOString()}});
 function json(res,status,value){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
