@@ -32,6 +32,7 @@ test('prepares main WhatsApp share without guessing pickup or sending', () => {
   assert.match(message, /2 loads of 10 PPG brine/);
   assert.match(message, /Scheduled pickup \(UTC\)/);
   assert.match(message, /\*ASSIGNED DRIVERS\*\n\*SHIFT NOT SET\*\n- Demo driver/);
+  assert.ok(message.indexOf('*ASSIGNED DRIVERS*') < message.indexOf('*PICKUP / SOURCE*'));
   assert.match(message, /^\*URGENT DISPATCH\*/);
   assert.match(message, /\*DESCRIPTION \/ INSTRUCTIONS\*\nASAP\. Pickup location is driver choice\./);
   assert.match(message, /\n\n\*PICKUP \/ SOURCE\*\n/);
@@ -118,4 +119,16 @@ test('includes one planned route only when the destination pad is identified', (
       matchTerms: ['Daredevil 1'], url: 'https://maps.app.goo.gl/four', lat: 47.673911, lng: -103.387325 }],
   }]);
   assert.doesNotMatch(otherDaredevil, /Google Maps route via approved turns/);
+});
+
+test('shared Daredevil job uses the saved delivery pin instead of a Google name search', () => {
+  const guide = { id: 'access', title: 'Approved access', locations: ['Daredevil'], imageUrls: ['https://example.com/map'],
+    padPins: [{ label: 'Daredevil 1', location: 'Daredevil', matchTerms: ['Daredevil 1'],
+      url: 'https://maps.app.goo.gl/qAVybqs8LYATet1r8', lat: 47.673911, lng: -103.387325 }],
+    routeWaypoints: [{ lat: 47.6912663, lng: -103.4562861 }, { lat: 47.689123, lng: -103.453253 }, { lat: 47.689152, lng: -103.440293 }] };
+  const message = buildIndependentWhatsAppText({ ...job, pickup: 'County Road 30', destination: 'Daredevil 1' }, undefined, Date.now(), [guide]);
+  assert.match(message, /Delivery map: https:\/\/maps\.app\.goo\.gl\/qAVybqs8LYATet1r8/);
+  assert.ok(message.indexOf('*ASSIGNED DRIVERS*') < message.indexOf('Delivery map:'));
+  assert.doesNotMatch(message, /query=Daredevil%201/);
+  assert.match(message, /Google Maps route via approved turns 1, 2, 3/);
 });

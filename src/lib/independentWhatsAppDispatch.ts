@@ -1,5 +1,5 @@
 import type { IndependentJob } from './independentDispatchJobs';
-import { googleMapsDirectionsUrl, googleMapsSearchUrl, identifiedPadPin, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob, type IndependentRouteGuide } from './independentRouteGuides';
+import { googleMapsDirectionsUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob, type IndependentRouteGuide } from './independentRouteGuides';
 
 type WhatsAppJob = Pick<IndependentJob,
   'title' | 'customer' | 'pickup' | 'destination' | 'cargo' | 'reference' | 'notes' |
@@ -35,14 +35,16 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     ? [shiftBlock('DAY SHIFT', day), shiftBlock('NIGHT SHIFT', night), shiftBlock('SHIFT NOT SET', unset)].filter(Boolean).join('\n\n')
     : job.driverName ? `- ${job.driverName}` : '';
   const accessGuides = routeGuidesForJob(job, guides);
-  const pickupMap = googleMapsSearchUrl(job.pickup);
-  const deliveryMap = googleMapsSearchUrl(job.destination);
+  const pickupMap = jobLocationMapUrl(job.pickup, guides);
+  const deliveryMap = jobLocationMapUrl(job.destination, guides);
   const directions = accessGuides.length ? null : googleMapsDirectionsUrl(job.pickup, job.destination);
+  const driverBlock = `*ASSIGNED DRIVERS*\n${assigned || 'No driver assigned yet'}${job.requestedDriverCount ? `\nDrivers requested: ${job.requestedDriverCount}` : ''}`;
   const sections = [
     includeEmojiAlert && urgency === 'urgent' ? `🚨🚨🚨🚨🚨👆🏽\n${heading}` : heading,
     ['*JOB*', job.title, `Customer: ${job.customer}`,
       job.reference ? `Reference: ${job.reference}` : '',
       recipientName ? `For: ${recipientName}` : ''].filter(Boolean).join('\n'),
+    driverBlock,
     job.notes ? `*DESCRIPTION / INSTRUCTIONS*\n${job.notes}` : '',
     `*PICKUP / SOURCE*\n${job.pickup || 'Not specified'}`,
     `*DELIVERY / DESTINATION*\n${job.destination || 'Not specified'}`,
@@ -56,8 +58,6 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     directions ? `Google Maps directions: ${directions}` : '',
     job.cargo ? `*CARGO / LOADS*\n${job.cargo}` : '',
     job.scheduledAt ? `*SCHEDULE*\nScheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
-    [job.requestedDriverCount ? `Drivers requested: ${job.requestedDriverCount}` : '',
-      assigned ? `*ASSIGNED DRIVERS*\n${assigned}` : ''].filter(Boolean).join('\n\n'),
     [job.jobContactName ? `Job contact: ${job.jobContactName}` : '',
       job.jobContactPhoneE164 ? `Contact phone: ${job.jobContactPhoneE164}` : ''].filter(Boolean).join('\n'),
     '*ACKNOWLEDGMENT*\nDrivers: react with a thumbs-up to this dispatch message to confirm you saw it. If reactions are unavailable, reply ACK privately to dispatch.',

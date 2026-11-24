@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { IndependentJob } from '@/lib/independentDispatchJobs';
 import { buildIndependentWhatsAppText, independentWhatsAppGroupShareUrl } from '@/lib/independentWhatsAppDispatch';
 import type { IndependentRouteGuide } from '@/lib/independentRouteGuides';
+import { openIndependentWhatsApp } from '@/lib/independentWhatsAppWindow';
 
 export function IndependentWhatsAppLinks({ job, guides = [] }: { job: IndependentJob; guides?: IndependentRouteGuide[] }) {
   const [copyStatus, setCopyStatus] = useState('');
@@ -12,7 +13,11 @@ export function IndependentWhatsAppLinks({ job, guides = [] }: { job: Independen
   return <section className="mt-3 rounded border border-sky-900/70 bg-sky-950/20 px-3 py-2 text-sm">
     <p className="font-medium text-sky-200">WhatsApp dispatch handoff</p>
     <div className="mt-2 flex flex-wrap items-center gap-3">
-      <a href={independentWhatsAppGroupShareUrl(job, guides)}
+      <a href={independentWhatsAppGroupShareUrl(job, guides)} target="_blank" rel="noopener noreferrer"
+        onClick={event => {
+          event.preventDefault();
+          if (!openIndependentWhatsApp(event.currentTarget.href)) setCopyStatus('Your browser blocked the WhatsApp tab. Allow popups for WellBuilt and try again.');
+        }}
         data-testid="independent-whatsapp-share"
         className="rounded border border-sky-700 px-3 py-1.5 text-sky-200 hover:bg-sky-900/50">
         Share job to crew on WhatsApp
@@ -27,9 +32,10 @@ export function IndependentWhatsAppLinks({ job, guides = [] }: { job: Independen
     </div>
     {copyStatus && <p role="status" className="mt-2 text-xs text-amber-200">{copyStatus}</p>}
     <p className="mt-2 text-xs text-gray-400">
-      Share opens WhatsApp in this browser tab; use Back to return to WellBuilt. Choose recipients in WhatsApp.
+      Share opens WhatsApp in a separate tab and keeps Independent Dispatch open. Choose recipients in WhatsApp.
       Multiple recipients may send from the chooser; one recipient may open a draft that still needs Send.
-      To message one driver, use Prepare job message in their shift card below; it also opens in this tab.
+      To message one driver, use Prepare job message in their shift card below. Your browser may open another WhatsApp tab.
+      Share again after changing the assigned drivers; messages already sent in WhatsApp do not update.
       WhatsApp's share page may replace emoji. Copy the full message, then paste into WhatsApp, when the alert symbols matter.
     </p>
     <details className="mt-2 rounded border border-gray-700 bg-gray-900/70 p-2 text-xs">

@@ -274,8 +274,8 @@ try {
   assert.equal(await assignedCard.getByRole('button',{name:'Mark sent'}).count(),0,'manual WhatsApp send confirmation persists on refresh');
   assert.ok((await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('title'))?.includes('+17015550999'));
   assert.ok((await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('href'))?.startsWith('https://wa.me/17015550999?text='));
-  assert.equal(await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('target'), null,
-    'a direct driver message also stays in the current browser tab');
+  assert.equal(await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('target'), '_blank',
+    'a direct driver message preserves the dispatch tab');
   await assignedCard.getByTitle('Driver B').waitFor();
   assert.equal(await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).inputValue(),'night');
   await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('day');
@@ -388,11 +388,15 @@ try {
     await page.context().route('https://api.whatsapp.com/**', route => route.fulfill({ status: 200, contentType: 'text/html',
       headers: { 'cross-origin-opener-policy': 'same-origin-allow-popups' }, body: 'WhatsApp share handoff' }));
     await page.getByRole('combobox',{name:'Job status',exact:true}).selectOption('active');
+    const shareTabPromise = page.context().waitForEvent('page');
     await assignedLinkedCard.getByTestId('independent-whatsapp-share').click();
-    assert.ok(page.url().startsWith('https://api.whatsapp.com/send/'), 'share reaches the WhatsApp handoff');
-    assert.equal(page.context().pages().length, 1, 'share uses the current browser tab through the WhatsApp redirect');
-    await page.goBack();
-    await page.getByRole('heading',{name:'Dispatch board'}).waitFor();
+    const shareTab = await shareTabPromise;
+    await shareTab.waitForURL(url => url.href.startsWith('https://api.whatsapp.com/send/'), { waitUntil: 'commit' });
+    assert.ok(page.url().startsWith('http://127.0.0.1:') && await page.getByRole('heading',{name:'Dispatch board'}).isVisible(), 'share keeps the dispatch tab open');
+    assert.equal(page.context().pages().length, 2, 'share opens one companion WhatsApp tab');
+    await assignedLinkedCard.getByTestId('independent-whatsapp-share').click();
+    assert.ok(page.url().startsWith('http://127.0.0.1:') && await page.getByRole('heading',{name:'Dispatch board'}).isVisible(), 'another share also preserves the dispatch tab');
+    await shareTab.close();
   }
   await page.close();
  }

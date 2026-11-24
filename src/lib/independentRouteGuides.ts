@@ -63,6 +63,17 @@ export function googleMapsSearchUrl(location: string | undefined): string | null
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
 
+/** Use a saved pad pin for a named well; never send a driver to a Google text search for an ambiguous pad. */
+export function jobLocationMapUrl(location: string | undefined, guides: IndependentRouteGuide[] = []): string | null {
+  const matchingGuides = routeGuidesForJob({ destination: location }, guides);
+  for (const guide of matchingGuides) {
+    const pin = identifiedPadPin({ destination: location }, guide);
+    if (pin?.url) return pin.url;
+  }
+  if (matchingGuides.some(guide => padPinsForJob({ destination: location }, guide).length > 0)) return null;
+  return googleMapsSearchUrl(location);
+}
+
 export function googleMapsDirectionsUrl(pickup: string | undefined, destination: string | undefined): string | null {
   const origin = pickup?.trim();
   const end = destination?.trim();

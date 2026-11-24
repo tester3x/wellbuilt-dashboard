@@ -13,7 +13,8 @@ import { independentDriverContact } from '@/lib/independentDriverContact';
 import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
 import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
-import { googleMapsDirectionsUrl, googleMapsSearchUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
+import { openIndependentWhatsApp } from '@/lib/independentWhatsAppWindow';
+import { googleMapsDirectionsUrl, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
@@ -199,7 +200,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         </p>
         {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
         {canWrite && chatUrl && ['assigned', 'in_progress'].includes(job.status) && <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-          <a href={chatUrl} className="text-sky-200 underline"
+          <a href={chatUrl} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline"
+            onClick={event => { event.preventDefault(); if (!openIndependentWhatsApp(event.currentTarget.href)) window.alert('Your browser blocked the WhatsApp tab. Allow popups for WellBuilt and try again.'); }}
             title={`Open WhatsApp by ${contact.phoneE164}; saved name: ${contact.whatsappName}`}>Prepare job message</a>
           {sent ? <span className="rounded border border-emerald-700 px-1 text-emerald-200" title={`Marked by dispatch at ${sent.sentAt}`}>Marked sent</span>
             : <button type="button" disabled={busy} className="rounded border border-sky-700 px-1 text-sky-200 disabled:opacity-50"
@@ -301,8 +303,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {canWrite && <IndependentWhatsAppLinks job={job} guides={directory?.routeGuides} />}
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-sky-200">
-        {googleMapsSearchUrl(job.pickup) && <a href={googleMapsSearchUrl(job.pickup)!} target="_blank" rel="noopener noreferrer" className="underline">Pickup on Google Maps</a>}
-        {googleMapsSearchUrl(job.destination) && <a href={googleMapsSearchUrl(job.destination)!} target="_blank" rel="noopener noreferrer" className="underline">Delivery on Google Maps</a>}
+        {jobLocationMapUrl(job.pickup, directory?.routeGuides) && <a href={jobLocationMapUrl(job.pickup, directory?.routeGuides)!} target="_blank" rel="noopener noreferrer" className="underline">Pickup on Google Maps</a>}
+        {jobLocationMapUrl(job.destination, directory?.routeGuides) && <a href={jobLocationMapUrl(job.destination, directory?.routeGuides)!} target="_blank" rel="noopener noreferrer" className="underline">Delivery on Google Maps</a>}
         {!routeGuidesForJob(job, directory?.routeGuides).length && googleMapsDirectionsUrl(job.pickup, job.destination) &&
           <a href={googleMapsDirectionsUrl(job.pickup, job.destination)!} target="_blank" rel="noopener noreferrer" className="underline">Google Maps directions</a>}
       </div>
