@@ -2,6 +2,8 @@
 
 Status: source implementation and synthetic validation only. No deployment, APK, installation, customer record mutation or signed-record migration performed. See security-audit-verification-2026-11-24.md for the live/source findings and earlier containment.
 
+Follow-up: [S24 local-emulator check](s24-audit-emulator-check-2026-11-24.md) passed on-device browser logic/transport checks. Native app acceptance is still outstanding; installed apps and production work were preserved.
+
 ## Changes
 
 - New authenticated `jsaLegacyEvidence` bridge uses verified JSA driver claims plus current active company membership. Historical evidence is create-only, byte-bounded, hashed and replayed identically. A conflicting signed original is never updated or deleted. Ownership-unknown records stay on the phone for recovery.
