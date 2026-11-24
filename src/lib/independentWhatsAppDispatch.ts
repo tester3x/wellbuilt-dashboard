@@ -1,5 +1,5 @@
 import type { IndependentJob } from './independentDispatchJobs';
-import { googleMapsDirectionsUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob, type IndependentRouteGuide } from './independentRouteGuides';
+import { googleMapsDirectionsUrl, googleMapsSearchUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob, type IndependentRouteGuide } from './independentRouteGuides';
 
 type WhatsAppJob = Pick<IndependentJob,
   'title' | 'customer' | 'pickup' | 'destination' | 'cargo' | 'reference' | 'notes' |
@@ -35,8 +35,17 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     ? [shiftBlock('DAY SHIFT', day), shiftBlock('NIGHT SHIFT', night), shiftBlock('SHIFT NOT SET', unset)].filter(Boolean).join('\n\n')
     : job.driverName ? `- ${job.driverName}` : '';
   const accessGuides = routeGuidesForJob(job, guides);
-  const pickupMap = accessGuides.length ? null : jobLocationMapUrl(job.pickup, guides);
-  const deliveryMap = accessGuides.length ? null : jobLocationMapUrl(job.destination, guides);
+  const mapFor = (location: string | undefined) => {
+    const matchingGuides = routeGuidesForJob({ destination: location }, guides);
+    const identified = matchingGuides.map(guide => ({ guide, pin: identifiedPadPin({ destination: location }, guide) }))
+      .find(({ pin }) => pin);
+    const route = identified ? plannedGoogleRouteUrl(identified.guide, identified.pin!) : null;
+    const savedLocation = jobLocationMapUrl(location, guides);
+    return { url: route || savedLocation || googleMapsSearchUrl(location),
+      label: route ? 'approved driving route' : matchingGuides.length && !identified ? 'search — confirm exact site' : 'location' };
+  };
+  const pickupMap = mapFor(job.pickup);
+  const deliveryMap = mapFor(job.destination);
   const directions = accessGuides.length ? null : googleMapsDirectionsUrl(job.pickup, job.destination);
   const driverBlock = `*ASSIGNED DRIVERS*\n${assigned || 'No driver assigned yet'}${job.requestedDriverCount ? `\nDrivers requested: ${job.requestedDriverCount}` : ''}`;
   const sections = [
@@ -48,7 +57,8 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     job.notes ? `*DESCRIPTION / INSTRUCTIONS*\n${job.notes}` : '',
     `*PICKUP / SOURCE*\n${job.pickup || 'Not specified'}`,
     `*DELIVERY / DESTINATION*\n${job.destination || 'Not specified'}`,
-    [pickupMap ? `Pickup location (pin only): ${pickupMap}` : '', deliveryMap ? `Delivery location (pin only): ${deliveryMap}` : ''].filter(Boolean).join('\n'),
+    [pickupMap.url ? `Pickup map (${pickupMap.label}): ${pickupMap.url}` : '',
+    deliveryMap.url ? `Drop-off map (${deliveryMap.label}): ${deliveryMap.url}` : ''].filter(Boolean).join('\n'),
     ...accessGuides.map(guide => {
       const pins = padPinsForJob(job, guide);
       const identified = identifiedPadPin(job, guide);
