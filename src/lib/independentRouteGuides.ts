@@ -3,6 +3,7 @@ export type IndependentRouteGuide = {
   title: string;
   locations: string[];
   imageUrls: string[];
+  padPins?: { label: string; location: string; url: string }[];
   directionsUrl?: string;
 };
 
@@ -15,6 +16,15 @@ export function routeGuidesForJob(job: RouteJob, guides: IndependentRouteGuide[]
     const name = location.trim();
     return name.length > 1 && new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(places);
   }));
+}
+
+/** Show all saved pins for a named well family; dispatch chooses the exact pad. */
+export function padPinsForJob(job: RouteJob, guide: IndependentRouteGuide) {
+  const places = [job.pickup, job.destination, job.asset].filter(Boolean).join(' ');
+  return (guide.padPins || []).filter(pin => {
+    const name = pin.location.trim();
+    return name.length > 1 && new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(places);
+  });
 }
 
 /** Search shows a location without silently treating Google's route as approved access. */

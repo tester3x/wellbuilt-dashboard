@@ -87,11 +87,16 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
           && Array.isArray(guide.imageUrls) && guide.imageUrls.length > 0 && guide.imageUrls.length <= 4
           && guide.imageUrls.every((url: unknown) => typeof url === 'string' && url.length <= 600
             && url.startsWith('https://firebasestorage.googleapis.com/v0/b/wellbuilt-sync.firebasestorage.app/o/'))
+          && (!guide.padPins || (Array.isArray(guide.padPins) && guide.padPins.length <= 30
+            && guide.padPins.every((pin: any) => pin && typeof pin.label === 'string' && pin.label.length <= 100
+              && typeof pin.location === 'string' && pin.location.length <= 100
+              && typeof pin.url === 'string' && pin.url.startsWith('https://maps.app.goo.gl/') && pin.url.length <= 200)))
           && (!guide.directionsUrl || (typeof guide.directionsUrl === 'string' && guide.directionsUrl.length <= 2048
             && guide.directionsUrl.startsWith('https://www.google.com/maps/dir/?api=1'))))
         .slice(0, 20)
         .map((guide: any) => ({ id: guide.id, title: guide.title, locations: guide.locations,
-          imageUrls: guide.imageUrls, ...(guide.directionsUrl ? { directionsUrl: guide.directionsUrl } : {}) }));
+          imageUrls: guide.imageUrls, ...(guide.padPins ? { padPins: guide.padPins } : {}),
+          ...(guide.directionsUrl ? { directionsUrl: guide.directionsUrl } : {}) }));
       return { ok: true, companyId: authority.companyId, sectors, communicationChannels, dispatchPhoneE164,
         routeGuides,
         customers: customers.docs.map(doc => ({ ...doc.data(), id: doc.id })).filter((row: any) => row.active !== false)

@@ -13,7 +13,7 @@ import { independentDriverContact } from '@/lib/independentDriverContact';
 import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
 import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
-import { googleMapsDirectionsUrl, googleMapsSearchUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
+import { googleMapsDirectionsUrl, googleMapsSearchUrl, padPinsForJob, routeGuidesForJob } from '@/lib/independentRouteGuides';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
@@ -312,6 +312,9 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         <div className="mt-2 flex flex-wrap gap-3">{guide.imageUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="underline">Open route map {index + 1}</a>)}
           {guide.directionsUrl && <a href={guide.directionsUrl} target="_blank" rel="noopener noreferrer" className="underline">Google Maps planned route (verify)</a>}
         </div>
+        {padPinsForJob(job, guide).length > 0 && <div className="mt-2 text-xs"><p className="font-semibold">Pad pins — confirm the correct pad:</p>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{padPinsForJob(job, guide).map(pin => <a key={pin.url} href={pin.url} target="_blank" rel="noopener noreferrer" className="underline">{pin.label}</a>)}</div>
+        </div>}
         <details className="mt-2"><summary className="cursor-pointer text-xs underline">Preview approved route maps</summary>
           <div className="mt-2 flex flex-wrap gap-2">{guide.imageUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener noreferrer">
             <img src={url} alt={`${guide.title} route map ${index + 1}`} loading="lazy" className="h-36 w-64 rounded border border-amber-700 object-cover object-center" />

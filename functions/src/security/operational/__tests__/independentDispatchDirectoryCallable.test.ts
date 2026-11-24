@@ -55,11 +55,12 @@ describe('Independent Dispatch directory', () => {
     records.set('companies/company-a/independent_dispatch_config/settings', { sectors: ['water-hauling'], routeGuides: [{
       id: 'access', title: 'Approved route', locations: ['Barnstormer'],
       imageUrls: ['https://firebasestorage.googleapis.com/v0/b/wellbuilt-sync.firebasestorage.app/o/map?alt=media&token=x'],
+      padPins: [{ label: 'Barnstormer 1/2', location: 'Barnstormer', url: 'https://maps.app.goo.gl/nByM7Fpw6F6npf1s5' }],
     }] });
     records.set('companies/company-b/independent_dispatch_config/settings', { routeGuides: [{
       id: 'other', title: 'Other company', locations: ['Secret'], imageUrls: [],
     }] });
-    await expect(call({ op: 'list' })).resolves.toMatchObject({ routeGuides: [{ id: 'access' }] });
+    await expect(call({ op: 'list' })).resolves.toMatchObject({ routeGuides: [{ id: 'access', padPins: [{ label: 'Barnstormer 1/2' }] }] });
   });
   it('rejects users without the package and invalid customer payloads', async () => {
     records.set('companies/company-a', { activePackages: ['water-hauling'] });
