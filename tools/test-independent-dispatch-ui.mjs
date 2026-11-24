@@ -112,7 +112,7 @@ try {
       if (['Water type *','Trailer type *','Urgency *','Material *'].includes(label)) await field.selectOption({label:value});
       else await field.fill(value);
     }
-    for (const [label,value] of [['Job name',`Pipe run ${sector}`],['Pickup address / location','Yard A'],['Delivery address / location','Site B']]) await page.getByLabel(label + ' *',{exact:true}).fill(value);
+    for (const [label,value] of [['Job name *',`Pipe run ${sector}`],['Pickup address / location','Yard A'],['Delivery address / location','Site B']]) await page.getByLabel(label,{exact:true}).fill(value);
     if (sector === 'water-hauling') {
       await page.getByLabel('Scheduled pickup (your local time)').fill('2099-11-23T08:00');
       await page.getByLabel('Estimated finish (your local time)').fill('2099-11-23T20:00');
@@ -133,8 +133,8 @@ try {
   await page.getByLabel('Freight description').fill('Parts');
   await page.getByLabel('Pieces').fill('2');
   await page.getByLabel('Job name *').fill('One-time job');
-  await page.getByLabel('Pickup address / location *').fill('Yard');
-  await page.getByLabel('Delivery address / location *').fill('Site');
+  await page.getByLabel('Pickup address / location').fill('Yard');
+  await page.getByLabel('Delivery address / location').fill('Site');
   await page.getByRole('button',{name:'Create job',exact:true}).click();
   await page.waitForFunction(() => window.requests.some(request => request.op === 'create' && request.job.title === 'One-time job'));
   assert.deepEqual(await page.evaluate(()=>{const r=window.requests.find(r=>r.op==='create'&&r.job.title==='One-time job');return {customer:r.job.customer,customerId:r.job.customerId,saveCustomer:r.saveCustomer}}),
@@ -146,8 +146,8 @@ try {
   await page.getByLabel('Freight description').fill('Parts');
   await page.getByLabel('Pieces').fill('3');
   await page.getByLabel('Job name *').fill('First repeat job');
-  await page.getByLabel('Pickup address / location *').fill('Yard');
-  await page.getByLabel('Delivery address / location *').fill('Site');
+  await page.getByLabel('Pickup address / location').fill('Yard');
+  await page.getByLabel('Delivery address / location').fill('Site');
   await page.getByRole('button',{name:'Create job',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='create'&&r.job.title==='First repeat job')?.saveCustomer),true);
   const queue=page.getByRole('region',{name:'Needs a driver jobs'});
