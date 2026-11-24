@@ -1,0 +1,65 @@
+{
+  "project": "wellbuilt-sync",
+  "function": "jsaOfflineShift",
+  "sourceCommit": "d5f169064dc94aa330286ecebe72a50136f7d783",
+  "state": "ACTIVE",
+  "updateTime": "2026-11-24T11:33:55.189301895Z",
+  "sourceGeneration": "1795519984383898",
+  "sourceHash": "7b73babfe46f5ed26b972321a604dff62ee479b2",
+  "verification": [
+    {
+      "path": "src/jsaReceipt/jsaOfflineCallable.ts",
+      "sha256": "b9f73f96f9cb9d0170828cde7fa6b53c2d22937e9f38bbae61d483cbcf39e7d4",
+      "matches": true
+    },
+    {
+      "path": "lib/jsaReceipt/jsaOfflineCallable.js",
+      "sha256": "fe504b55cd3247b0ea6671a5c7d53539014e4c08d9200b9bf24ce020b35416f2",
+      "matches": true
+    },
+    {
+      "path": "src/jsaReceipt/jsaOfflineCore.ts",
+      "sha256": "2b9d0eb06870da1c499dc9968d5ef495808756befef0b012ef5cd7b930f10b1a",
+      "matches": true
+    },
+    {
+      "path": "lib/jsaReceipt/jsaOfflineCore.js",
+      "sha256": "c2a3324a5704c508da2cfbfe73945a2be50e7acf187a2433837f330a385b4669",
+      "matches": true
+    },
+    {
+      "path": "src/jsaReceipt/jsaWorkPeriod.ts",
+      "sha256": "20519894dd21ee995705f1191e6fa2b5494a2304f6e99b2ecffe3dbb6bd4b8a1",
+      "matches": true
+    },
+    {
+      "path": "lib/jsaReceipt/jsaWorkPeriod.js",
+      "sha256": "9a70d936330bfa1a0f1c99828abe155a370a6b9938172e8e36990ef80b509dd7",
+      "matches": true
+    },
+    {
+      "path": "src/jsaReceipt/jsaWorkPeriodStore.ts",
+      "sha256": "1dc75645345fa71eb9e869deef820d988f25323c63a78e06d49dba5a50ee6f30",
+      "matches": true
+    },
+    {
+      "path": "lib/jsaReceipt/jsaWorkPeriodStore.js",
+      "sha256": "099cceff40c8432218507929e049998c87979ddb8eb450d63c7901a9bfdcec1f",
+      "matches": true
+    },
+    {
+      "path": "src/jsaReceipt/jsaReceiptCallables.ts",
+      "sha256": "ace0a193b2bc4e2f2d28d22ccf98413966dcc31979299aaa818f930f1200bcb9",
+      "matches": true
+    },
+    {
+      "path": "lib/jsaReceipt/jsaReceiptCallables.js",
+      "sha256": "f585376f93ab4c3d0726426f2ba22b42773d39c64b57ada4ab73675d775e1067",
+      "matches": true
+    }
+  ],
+  "tests": "57 offline evidence/execution/shift-boundary regressions and Functions TypeScript build passed",
+  "scope": "Only jsaOfflineShift deployed; no Hosting/rules/old-period migration/signed snapshot changes; Fold untouched",
+  "deviceAcceptance": "S24458 fresh pre-trip confirmed. Test found old endpoint reused a prior off-shift read; no acknowledgment or Start was submitted. Network restored. Waiting for user to end that test shift normally, then start a clean shift with pre-trip and a fresh JSA. Full offline Start and once-only reconnect remain pending.",
+  "recordedAt": "2026-11-24T11:36:10.274Z"
+}
