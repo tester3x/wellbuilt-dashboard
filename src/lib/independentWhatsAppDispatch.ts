@@ -72,6 +72,7 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     ['*JOB*', job.title, `Customer: ${job.customer}`,
       job.reference ? `Reference: ${job.reference}` : '',
       recipientName ? `For: ${recipientName}` : ''].filter(Boolean).join('\n'),
+    job.scheduledAt ? `*SCHEDULE*\nScheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
     driverBlock,
     job.notes ? `*DESCRIPTION / INSTRUCTIONS*\n${job.notes}` : '',
     job.pickup?.trim() ? locationSection('PICKUP / SOURCE', job.pickup, 'Pickup') : '',
@@ -80,7 +81,6 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     ...accessGuides.map(guide => guide.imageUrls.length
       ? `*ACCESS PHOTOS — ${guide.title.toUpperCase()}*\n${guide.imageUrls.map((url, index) => `${index === 0 ? 'Photo 1 — satellite overview' : index === 1 ? 'Photo 2 — marked safe turn / avoid farmer road' : `Photo ${index + 1} — access map`}: ${url}`).join('\n')}` : ''),
     job.cargo ? `*CARGO / LOADS*\n${job.cargo}` : '',
-    job.scheduledAt ? `*SCHEDULE*\nScheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
     [job.jobContactName ? `Job contact: ${job.jobContactName}` : '',
       job.jobContactPhoneE164 ? `Contact phone: ${job.jobContactPhoneE164}` : ''].filter(Boolean).join('\n'),
     '*ACKNOWLEDGMENT*\nDrivers: react with a thumbs-up to this dispatch message to confirm you saw it. If reactions are unavailable, reply ACK privately to dispatch.',

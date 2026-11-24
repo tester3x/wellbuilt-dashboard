@@ -31,6 +31,8 @@ test('prepares main WhatsApp share without guessing pickup or sending', () => {
   assert.match(message, /White Owl Epping or White Owl Tioga/);
   assert.match(message, /2 loads of 10 PPG brine/);
   assert.match(message, /Scheduled pickup \(UTC\)/);
+  assert.ok(message.indexOf('*JOB*') < message.indexOf('*SCHEDULE*'));
+  assert.ok(message.indexOf('*SCHEDULE*') < message.indexOf('*ASSIGNED DRIVERS*'));
   assert.match(message, /\*ASSIGNED DRIVERS\*\n\*SHIFT NOT SET\*\n- Demo driver/);
   assert.ok(message.indexOf('*ASSIGNED DRIVERS*') < message.indexOf('*PICKUP / SOURCE*'));
   assert.match(message, /^\*URGENT DISPATCH\*/);
