@@ -257,6 +257,19 @@ describe('Independent Dispatch callable boundaries', () => {
     await expect(call({ ...create, jobId: 'job-c', requestId: 'request-c', job: { ...oneOff, customer: "Bob's Hot Shot LLC" }, saveCustomer: true }))
       .rejects.toThrow('customer_name_conflict');
   });
+  it('saves opted-in job locations in the same transaction as the job', async () => {
+    records.set('companies/company-a/independent_dispatch_config/settings', { sectors: ['ltl'] });
+    const path = 'companies/company-a/independent_dispatch_customers/customer-a';
+    records.set(path, { companyId: 'company-a', name: 'Customer A', active: true, sectors: ['ltl'],
+      pickupLocations: ['Old Yard'], deliveryLocations: [] });
+    const job = { ...details, customerId: 'customer-a', sector: 'ltl', sectorFields: { freightDescription: 'Pallets', pieces: '4' } };
+    await call({ ...create, job, saveLocations: { pickup: true, destination: false } });
+    expect(records.get(path)).toMatchObject({ pickupLocations: ['Old Yard', 'Yard'], deliveryLocations: [] });
+    await expect(call({ ...create, job, saveLocations: { pickup: true, destination: false } })).resolves.toMatchObject({ idempotent: true });
+    expect(records.get(path).pickupLocations).toEqual(['Old Yard', 'Yard']);
+    await expect(call({ ...create, jobId: 'job-b', requestId: 'request-b', job,
+      saveLocations: { pickup: true, destination: 'yes' } })).rejects.toThrow('invalid_save_locations');
+  });
   it('binds a job category to its customer and sector', async () => {
     const category = { id: 'rig-work', name: 'Rig Work', sector: 'water-hauling',
       sourceChannels: ['ExxonMobil - RIG WORK'], assets: ['H&P Rig 429', 'H&P Rig 640'] };

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { independentDispatchDirectory, type IndependentCustomer, type IndependentCustomerCategory, type IndependentCustomerContact, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
 import { INDEPENDENT_SECTORS, type IndependentSector } from '@/lib/independentDispatchSectors';
+import { loadOperators, type NdicOperator } from '@/lib/firestoreWells';
 
 const lines = (value: string) => [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
 const join = (value: string[] | undefined) => (value || []).join('\n');
@@ -12,6 +13,9 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
   const [sectors, setSectors] = useState<IndependentSector[]>([]);
   const [communicationChannels, setCommunicationChannels] = useState<('sms' | 'whatsapp')[]>([]);
   const [dispatchPhoneE164, setDispatchPhoneE164] = useState('');
+  const [catalogOperators, setCatalogOperators] = useState<string[]>([]);
+  const [availableOperators, setAvailableOperators] = useState<NdicOperator[]>([]);
+  const [operatorSearch, setOperatorSearch] = useState('');
   const [editingId, setEditingId] = useState('');
   const [name, setName] = useState('');
   const [alternateNames, setAlternateNames] = useState('');
@@ -29,8 +33,10 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
     if (result.companyId !== companyId) throw Error('Company scope changed.');
     setDirectory(result); setSectors(result.sectors); setCommunicationChannels(result.communicationChannels || []);
     setDispatchPhoneE164(result.dispatchPhoneE164 || '');
+    setCatalogOperators(result.catalogOperators || []);
   }
   useEffect(() => { void refresh().catch(error => setMessage(error instanceof Error ? error.message : 'Unable to load setup.')); }, [companyId]);
+  useEffect(() => { void loadOperators().then(setAvailableOperators).catch(() => setMessage('Well catalog unavailable; saved customer locations remain usable.')); }, []);
   async function run(action: () => Promise<unknown>, success: string): Promise<boolean> {
     setBusy(true); setMessage('');
     try { await action(); await refresh(); setMessage(success); return true; }
@@ -72,6 +78,22 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
         </label>)}</div>
         <button type="button" disabled={!sectors.length || busy} className="mt-2 rounded bg-cyan-700 px-3 py-1.5 text-sm disabled:opacity-40"
           onClick={() => void run(() => independentDispatchDirectory({ op: 'setSectors', sectors }), 'Sectors saved.')}>Save sectors</button>
+      </fieldset>
+      <fieldset disabled={!canEdit || busy} className="mt-6 border-t border-gray-700 pt-4">
+        <legend className="text-sm font-medium">Well catalog operators</legend>
+        <p className="mt-1 text-xs text-gray-400">Select the operators this dispatch company works with. An empty list shows the full NDIC operator catalog in new jobs. This is separate from each customer’s saved pickup and delivery locations below.</p>
+        <input aria-label="Find catalog operator" value={operatorSearch} onChange={event => setOperatorSearch(event.target.value)} placeholder="Find XTO, ExxonMobil…"
+          className="mt-2 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" />
+        <div className="mt-2 max-h-56 space-y-1 overflow-y-auto rounded border border-gray-700 p-2">
+          {availableOperators.filter(operator => operator.name.toLowerCase().includes(operatorSearch.trim().toLowerCase()))
+            .map(operator => <label key={operator.name} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={catalogOperators.includes(operator.name)} onChange={event => setCatalogOperators(current => event.target.checked
+                ? [...current, operator.name] : current.filter(name => name !== operator.name))} />{operator.name}
+            </label>)}
+        </div>
+        <p className="mt-1 text-xs text-gray-400">{catalogOperators.length ? `${catalogOperators.length} selected` : 'All operators available'}</p>
+        <button type="button" disabled={busy || catalogOperators.length > 50 || !availableOperators.length} className="mt-2 rounded bg-cyan-700 px-3 py-1.5 text-sm disabled:opacity-40"
+          onClick={() => void run(() => independentDispatchDirectory({ op: 'setCatalogOperators', catalogOperators }), 'Operator list saved.')}>Save operator list</button>
       </fieldset>
       <fieldset disabled={!canEdit || busy} className="mt-6 border-t border-gray-700 pt-4">
         <legend className="text-sm font-medium">Dispatch communications</legend>

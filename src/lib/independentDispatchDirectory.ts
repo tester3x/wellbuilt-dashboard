@@ -16,6 +16,7 @@ export type IndependentCustomerCategory = {
 export type IndependentDirectory = {
   ok: true; companyId: string; sectors: IndependentSector[]; communicationChannels: ('sms' | 'whatsapp')[];
   dispatchPhoneE164: string;
+  catalogOperators?: string[];
   routeGuides?: IndependentRouteGuide[];
   customers: IndependentCustomer[];
 };

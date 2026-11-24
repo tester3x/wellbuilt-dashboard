@@ -14,6 +14,11 @@ import { IndependentDriverPicker, type SelectedDriverShifts } from './Independen
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
 import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
 import { openIndependentWhatsApp } from '@/lib/independentWhatsAppWindow';
+import { loadOperators, loadWellsForOperator, loadDisposals, searchDisposals, type NdicOperator, type NdicWell } from '@/lib/firestoreWells';
+import { combinedLocationResults } from '@/lib/builderWellSearch';
+import { matchIndependentOperator } from '@/lib/independentOperatorMatch';
+import { BuilderAutocomplete } from './BuilderAutocomplete';
+import { LocationSearchResult } from './LocationSearchResult';
 import { googleMapsDirectionsUrl, googleMapsSearchUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', additionalStops: [], cargo: '', scheduledAt: '', scheduleText: '', notes: '',
@@ -73,10 +78,17 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const [assignments, setAssignments] = useState<Record<string, SelectedDriverShifts>>({});
   const [pickerEpochs, setPickerEpochs] = useState<Record<string, number>>({});
   const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
+  const [catalogOperators, setCatalogOperators] = useState<NdicOperator[]>([]);
+  const [catalogWells, setCatalogWells] = useState<NdicWell[]>([]);
+  const [catalogDisposals, setCatalogDisposals] = useState<NdicWell[]>([]);
+  const [operatorOverride, setOperatorOverride] = useState<string | null>(null);
+  const [catalogError, setCatalogError] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [contactId, setContactId] = useState('');
   const [newCustomer, setNewCustomer] = useState(false);
   const [saveCustomer, setSaveCustomer] = useState(false);
+  const [savePickup, setSavePickup] = useState(false);
+  const [saveDestination, setSaveDestination] = useState(false);
   const [sector, setSector] = useState<IndependentSector | ''>('');
   const [sectorFields, setSectorFields] = useState<Record<string, string>>({});
   const [categoryId, setCategoryId] = useState('');
@@ -111,6 +123,11 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     setLoaded(true);
   }, [companyId, canManageDrivers]);
   useEffect(() => { void refresh().catch(e => setError(e.message)); }, [refresh]);
+  useEffect(() => {
+    void Promise.all([loadOperators(), loadDisposals()]).then(([operators, disposals]) => {
+      setCatalogOperators(operators); setCatalogDisposals(disposals);
+    }).catch(() => setCatalogError('Well catalog unavailable. You can enter locations manually.'));
+  }, []);
   useEffect(() => { if (canManageDrivers) void listIndependentDriverProfiles().then(setDriverProfiles).catch(() => setDriverProfiles([])); }, [canManageDrivers, companyId]);
   useEffect(() => { const timer = window.setInterval(() => setAvailabilityNow(Date.now()), 60_000); return () => window.clearInterval(timer); }, []);
   async function run(payload: Record<string, unknown>, after?: () => void) {
@@ -129,6 +146,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   }
   function resetForm() {
     setForm(EMPTY); setEditing(null); setScheduledLocal(''); setEstimatedEndLocal(''); setCustomerId(''); setContactId(''); setNewCustomer(false); setSaveCustomer(false); setSector(''); setSectorFields({}); setCategoryId(''); setAsset('');
+    setOperatorOverride(null);
+    setSavePickup(false); setSaveDestination(false);
     setPastedRequest(''); setParseReport(null);
     creation.current = { jobId: crypto.randomUUID(), requestId: crypto.randomUUID() };
   }
@@ -151,6 +170,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     if (job) returnToBoardJob(job);
   }
   function edit(job: IndependentJob) {
+    setOperatorOverride(null);
+    setSavePickup(false); setSaveDestination(false);
     setSelectedJobId(job.id);
     setIntakeOpen(true);
     setEditing(job);
@@ -175,6 +196,27 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const displayedLanes = filter === 'active' ? lanes.filter(lane => visible.some(job => job.status === lane.status)) : lanes;
   const workingLaneCount = displayedLanes.filter(lane => lane.status === 'assigned' || lane.status === 'in_progress').length;
   const selectedCustomer = directory?.customers.find(customer => customer.id === customerId);
+  const allowedOperators = directory?.catalogOperators?.length
+    ? catalogOperators.filter(operator => directory.catalogOperators?.includes(operator.name)) : catalogOperators;
+  const matchedOperator = matchIndependentOperator([selectedCustomer?.name || form.customer, ...(selectedCustomer?.alternateNames || [])], allowedOperators);
+  const operatorName = operatorOverride ?? matchedOperator;
+  useEffect(() => {
+    if (!operatorName) { setCatalogWells([]); return; }
+    let active = true;
+    setCatalogWells([]);
+    void loadWellsForOperator(operatorName).then(wells => { if (active) { setCatalogWells(wells); setCatalogError(''); } })
+      .catch(() => { if (active) setCatalogError('Well catalog unavailable. You can enter locations manually.'); });
+    return () => { active = false; };
+  }, [operatorName]);
+  const locationResults = (key: 'pickup' | 'destination') => {
+    const query = form[key];
+    const saved = key === 'pickup' ? selectedCustomer?.pickupLocations || [] : selectedCustomer?.deliveryLocations || [];
+    return combinedLocationResults(query, {
+      wells: [], operatorWells: catalogWells,
+      disposalMatches: searchDisposals(query, catalogDisposals, 15),
+      customLocations: saved.map(locationName => ({ locationName, company: selectedCustomer?.name || form.customer })),
+    });
+  };
   const availableCategories = (selectedCustomer?.workCategories || []).filter(category => category.sector === sector);
   const selectedCategory = availableCategories.find(category => category.id === categoryId);
   const availableSectors = newCustomer ? directory?.sectors || [] : (selectedCustomer?.sectors || []).filter(id => directory?.sectors.includes(id));
@@ -241,6 +283,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     return preference === 'day' || preference === 'night' ? preference : '';
   }
   function chooseSavedCustomer(id: string) {
+    setOperatorOverride(null);
+    setSavePickup(false); setSaveDestination(false);
     const next = directory?.customers.find(customer => customer.id === id);
     const retainParsed = !!parseReport && !customerId;
     setNewCustomer(false); setSaveCustomer(false); setCustomerId(next?.id || ''); setContactId('');
@@ -427,7 +471,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       void run({ op: editing ? 'update' : 'create', jobId: editing?.id || creation.current.jobId,
         requestId: editing ? crypto.randomUUID() : creation.current.requestId,
         ...(editing ? { expectedRevision: editing.revision } : {}),
-        ...(!editing && newCustomer && saveCustomer ? { saveCustomer: true } : {}), job }, () => {
+        ...(!editing && newCustomer && saveCustomer ? { saveCustomer: true } : {}),
+        ...(savePickup || saveDestination ? { saveLocations: { pickup: savePickup, destination: saveDestination } } : {}), job }, () => {
           const editedJob = editing;
           resetForm();
           if (editedJob) returnToBoardJob(editedJob);
@@ -438,7 +483,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       <fieldset disabled={busy || !loaded} className="grid gap-3 md:grid-cols-2">
         {(!editing || editing.sector) ? <>
           <div className="text-xs text-gray-300">Customer *<select aria-label="Customer" required value={newCustomer ? '__new__' : customerId} className={inputClass} onChange={event => {
-            if (event.target.value === '__new__') { setNewCustomer(true); setSaveCustomer(false); setCustomerId(''); setContactId('');
+            if (event.target.value === '__new__') { setOperatorOverride(null); setNewCustomer(true); setSaveCustomer(false); setSavePickup(false); setSaveDestination(false); setCustomerId(''); setContactId('');
               setForm(current => ({ ...current, customer: parseReport?.customerLabel || '',
                 ...(parseReport ? {} : { jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' }) }));
               setSector(parseReport?.sector || ''); setSectorFields(parseReport?.sectorFields || {}); setCategoryId(''); setAsset(''); return; }
@@ -447,7 +492,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
             {newCustomer && <div className="mt-2 space-y-2"><label className="block">NEW customer · enter the official company name
               <input aria-label="New customer's official company name" required maxLength={180} value={form.customer}
                 onChange={event => setForm(current => ({ ...current, customer: event.target.value }))} className={inputClass} />
-            </label>{!editing && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={saveCustomer} onChange={event => setSaveCustomer(event.target.checked)} />Save this customer for future jobs</label>}</div>}
+            </label>{!editing && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={saveCustomer} onChange={event => { setSaveCustomer(event.target.checked); if (!event.target.checked) { setSavePickup(false); setSaveDestination(false); } }} />Save this customer for future jobs</label>}</div>}
             {!!parseReport?.customerSuggestions.length && !customerId && <div className="mt-2 text-amber-200">Possible saved customers — confirm the company: {parseReport.customerSuggestions.map(suggestion => <button key={suggestion.id} type="button" className="mr-2 underline" onClick={() => chooseSavedCustomer(suggestion.id)}>{suggestion.name}{suggestion.sectorMatch ? ' · matches job sector' : ''}</button>)}</div>}
           </div>
           <label className="text-xs text-gray-300">Transportation sector *<select aria-label="Transportation sector" required value={sector} className={inputClass} onChange={event => { setSector(event.target.value as IndependentSector); setSectorFields({}); setCategoryId(''); setAsset(''); }}>
@@ -480,15 +525,43 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
             <label className="text-xs text-gray-300">Contact phone (+country code)<input type="tel" pattern="\+[1-9][0-9]{7,14}" value={form.jobContactPhoneE164 || ''} onChange={event => { setContactId(''); setForm(current => ({ ...current, jobContactPhoneE164: event.target.value })); }} placeholder="+17015550123" className={inputClass} /></label>
           </div>
         </div>
-        {FIELDS.map(([key, label, max, required]) => <label key={key} className={`text-xs text-gray-300 ${key === 'notes' ? 'md:col-span-2' : ''}`}>
+        <div className="text-xs text-gray-300 md:col-span-2">
+          <label htmlFor="independent-well-operator">Well catalog operator</label>
+          <select id="independent-well-operator" aria-label="Well catalog operator" className={inputClass} value={operatorName}
+            onChange={event => setOperatorOverride(event.target.value)}>
+            <option value="">No operator selected — saved locations and manual entry</option>
+            {operatorName && !allowedOperators.some(operator => operator.name === operatorName) && <option value={operatorName}>{operatorName}</option>}
+            {allowedOperators.map(operator => <option key={operator.name} value={operator.name}>{operator.name}{operator.well_count != null ? ` · ${operator.well_count} wells` : ''}</option>)}
+          </select>
+          <p className="mt-1 text-gray-400">The customer’s matching operator is selected automatically. Choose another catalog operator if needed; suggestions are limited to its wells. Saved customer locations and disposal sites remain available.</p>
+          {catalogError && <p className="mt-1 text-amber-200">{catalogError}</p>}
+        </div>
+        {FIELDS.map(([key, label, max, required]) => key === 'pickup' || key === 'destination' ? <div key={key} className="relative text-xs text-gray-300">
+          <label htmlFor={`independent-${key}`}>{label}</label>
+          <BuilderAutocomplete value={form[key]} onValueChange={value => { setForm(current => ({ ...current, [key]: value }));
+            if (!value.trim()) { if (key === 'pickup') setSavePickup(false); else setSaveDestination(false); } }}
+            items={locationResults(key)} onSelect={item => { setForm(current => ({ ...current, [key]: item.value }));
+              if (key === 'pickup') setSavePickup(false); else setSaveDestination(false); }}
+            renderItem={item => <LocationSearchResult item={item} />} getItemKey={(item, index) => `${item.kind}:${item.value}:${index}`}
+            inputId={`independent-${key}`} ariaLabel={label} minChars={2} inputClassName={inputClass}
+            listClassName="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded border border-cyan-700 bg-gray-950 shadow-xl"
+            optionClassName="wb-option-row block w-full border-b border-gray-800 px-2 text-left last:border-0" />
+          {form[key].trim() && (selectedCustomer || (newCustomer && saveCustomer))
+            && !(key === 'pickup' ? selectedCustomer?.pickupLocations : selectedCustomer?.deliveryLocations)
+              ?.some(value => value.trim().toLowerCase() === form[key].trim().toLowerCase())
+            && <label className="mt-1 flex items-center gap-1 text-xs text-cyan-200">
+              <input type="checkbox" checked={key === 'pickup' ? savePickup : saveDestination}
+                disabled={form[key].trim().length > 180}
+                onChange={event => key === 'pickup' ? setSavePickup(event.target.checked) : setSaveDestination(event.target.checked)} />
+              Save this {key === 'pickup' ? 'pickup' : 'delivery'} location to {selectedCustomer?.name || form.customer}’s list
+            </label>}
+        </div> : <label key={key} className={`text-xs text-gray-300 ${key === 'notes' ? 'md:col-span-2' : ''}`}>
           {label}{required ? ' *' : ''}
           {key === 'notes' ? <textarea className={inputClass} rows={3} maxLength={max} value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} />
-            : <input list={key === 'title' ? 'independent-job-names' : key === 'pickup' ? 'independent-pickups' : key === 'destination' ? 'independent-deliveries' : undefined}
+            : <input list={key === 'title' ? 'independent-job-names' : undefined}
               className={inputClass} required={required} maxLength={max} value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} />}
         </label>)}
         <datalist id="independent-job-names">{selectedCustomer?.jobNames.map(value => <option key={value} value={value} />)}</datalist>
-        <datalist id="independent-pickups">{selectedCustomer?.pickupLocations.map(value => <option key={value} value={value} />)}</datalist>
-        <datalist id="independent-deliveries">{selectedCustomer?.deliveryLocations.map(value => <option key={value} value={value} />)}</datalist>
         <div className="md:col-span-2"><div className="flex items-center justify-between gap-2"><p className="text-xs text-gray-300">Additional stops (in travel order)</p><button type="button" className="text-xs text-cyan-200 underline" disabled={(form.additionalStops || []).length >= 12} onClick={() => setForm(current => ({ ...current, additionalStops: [...(current.additionalStops || []), ''] }))}>Add stop</button></div>
           {(form.additionalStops || []).map((stop, index) => <div key={index} className="mt-2 flex gap-2"><input aria-label={`Stop ${index + 1} location`} className={inputClass} maxLength={500} value={stop} onChange={event => setForm(current => ({ ...current, additionalStops: (current.additionalStops || []).map((value, position) => position === index ? event.target.value : value) }))} /><button type="button" className="text-xs text-red-200 underline" onClick={() => setForm(current => ({ ...current, additionalStops: (current.additionalStops || []).filter((_, position) => position !== index) }))}>Remove</button></div>)}
           <p className="mt-1 text-xs text-gray-400">For one-site work, enter that site in Pickup or Delivery and leave the other blank. Every listed stop gets its own map link in the driver handoff.</p>

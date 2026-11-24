@@ -83,8 +83,8 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
   async request => {
     const data = request.data;
     if (!data || typeof data !== 'object' || Array.isArray(data)
-      || Object.keys(data).some(key => !['op', 'sectors', 'customer', 'communicationChannels', 'dispatchPhoneE164'].includes(key))
-      || !['list', 'setSectors', 'setCommunications', 'saveCustomer'].includes(data.op))
+      || Object.keys(data).some(key => !['op', 'sectors', 'customer', 'communicationChannels', 'dispatchPhoneE164', 'catalogOperators'].includes(key))
+      || !['list', 'setSectors', 'setCommunications', 'setCatalogOperators', 'saveCustomer'].includes(data.op))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_directory_request');
     const authority = data.op === 'list'
       ? await requireIndependentDispatchAuthority(request.auth?.uid, 'viewDispatch')
@@ -110,7 +110,9 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
           imageUrls: guide.imageUrls, ...(guide.routeWaypoints ? { routeWaypoints: guide.routeWaypoints } : {}),
           ...(guide.padPins ? { padPins: guide.padPins } : {}),
           ...(guide.directionsUrl ? { directionsUrl: guide.directionsUrl } : {}) }));
-      return { ok: true, companyId: authority.companyId, sectors, communicationChannels, dispatchPhoneE164,
+      const catalogOperators = Array.isArray(config.data()?.catalogOperators) ? config.data()!.catalogOperators
+        .filter((value: unknown) => typeof value === 'string' && !!value.trim() && value.length <= 180).slice(0, 50) : [];
+      return { ok: true, companyId: authority.companyId, sectors, communicationChannels, dispatchPhoneE164, catalogOperators,
         routeGuides,
         customers: customers.docs.map(doc => ({ ...doc.data(), id: doc.id })).filter((row: any) => row.active !== false)
           .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name))) };
@@ -122,6 +124,12 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
       catch { throw new httpsV2.HttpsError('invalid-argument', 'invalid_sectors'); }
       await configRef.set({ sectors, updatedAt: admin.firestore.FieldValue.serverTimestamp(), updatedBy: authority.uid }, { merge: true });
       return { ok: true, sectors };
+    }
+    if (data.op === 'setCatalogOperators') {
+      if (Object.keys(data).length !== 2) throw new httpsV2.HttpsError('invalid-argument', 'unexpected_directory_fields');
+      const catalogOperators = names(data.catalogOperators, 'catalog_operators', 50);
+      await configRef.set({ catalogOperators, updatedAt: admin.firestore.FieldValue.serverTimestamp(), updatedBy: authority.uid }, { merge: true });
+      return { ok: true, catalogOperators };
     }
     if (data.op === 'setCommunications') {
       if (Object.keys(data).length !== 3 || !Array.isArray(data.communicationChannels)

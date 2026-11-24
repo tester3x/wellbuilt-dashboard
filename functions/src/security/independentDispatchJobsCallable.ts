@@ -12,7 +12,7 @@ const COLLECTION = 'independent_dispatch_jobs';
 const WB_DRIVER_LINKS = 'independent_dispatch_wb_drivers';
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const normalizeCustomerName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-const KEYS = new Set(['op', 'jobId', 'job', 'expectedRevision', 'externalDriverId', 'wbDriverId', 'driverKey', 'drivers', 'shift', 'status', 'requestId', 'saveCustomer']);
+const KEYS = new Set(['op', 'jobId', 'job', 'expectedRevision', 'externalDriverId', 'wbDriverId', 'driverKey', 'drivers', 'shift', 'status', 'requestId', 'saveCustomer', 'saveLocations']);
 type JobDriver = { key: string; name: string; source: 'outside' | 'wellbuilt'; companyId?: string; shift: '' | 'day' | 'night'; assignedAt: string };
 type DriverSelection = { key: string; shift: '' | 'day' | 'night' };
 function jobDrivers(job: Record<string, any> | undefined): JobDriver[] {
@@ -62,6 +62,17 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
     catch (error) { throw new httpsV2.HttpsError('invalid-argument', (error as Error).message); }
     if (raw.saveCustomer !== undefined && (raw.saveCustomer !== true || op !== 'create' || !details?.sector || details.customerId))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_save_customer');
+    if (raw.saveLocations !== undefined && (!['create', 'update'].includes(op) || !details
+      || !raw.saveLocations || typeof raw.saveLocations !== 'object' || Array.isArray(raw.saveLocations)
+      || Object.keys(raw.saveLocations).some(key => !['pickup', 'destination'].includes(key))
+      || Object.values(raw.saveLocations).some(value => value !== true && value !== false)
+      || (!details.customerId && raw.saveCustomer !== true)))
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_save_locations');
+    const savePickup = raw.saveLocations?.pickup === true;
+    const saveDestination = raw.saveLocations?.destination === true;
+    if ((savePickup && (!details?.pickup?.trim() || details.pickup.trim().length > 180))
+      || (saveDestination && (!details?.destination?.trim() || details.destination.trim().length > 180)))
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_saved_location');
     let selectedDrivers: DriverSelection[] = [];
     if (op === 'addDrivers') {
       if (raw.externalDriverId !== undefined || raw.wbDriverId !== undefined || raw.driverKey !== undefined || raw.shift !== undefined
@@ -145,7 +156,8 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
       const payload = JSON.stringify({ op, job: details ?? null, expectedRevision: raw.expectedRevision ?? null,
         externalDriverId: raw.externalDriverId ?? null, wbDriverId: raw.wbDriverId ?? null,
         driverKey: raw.driverKey ?? null, ...(op === 'addDrivers' ? { drivers: selectedDrivers } : {}),
-        shift: raw.shift ?? null, status: raw.status ?? null });
+        shift: raw.shift ?? null, status: raw.status ?? null,
+        ...(raw.saveLocations !== undefined ? { saveLocations: { pickup: savePickup, destination: saveDestination } } : {}) });
       if (eventSnap.exists) {
         if (eventSnap.data()?.companyId !== authority.companyId || eventSnap.data()?.payload !== payload)
           throw new httpsV2.HttpsError('already-exists', 'request_conflict');
@@ -169,10 +181,24 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
           phoneE164: '', sectors: [details.sector],
           contacts: details.jobContactName ? [{ id: `contact_${raw.jobId}`.slice(0, 100), name: details.jobContactName,
             role: details.jobContactRole || '', phoneE164: details.jobContactPhoneE164 || '' }] : [],
-          jobNames: [], pickupLocations: [], deliveryLocations: [],
+          jobNames: [], pickupLocations: savePickup ? [details.pickup.trim()] : [],
+          deliveryLocations: saveDestination ? [details.destination.trim()] : [],
           workCategories: [],
           active: true, updatedAt: now, updatedBy: authority.uid });
         patch.customerId = newCustomerRef.id;
+      }
+      if (customerRef && customer?.exists && (savePickup || saveDestination)) {
+        const append = (field: 'pickupLocations' | 'deliveryLocations', value: string, selected: boolean) => {
+          const existing = Array.isArray(customer.data()?.[field]) ? customer.data()![field] as string[] : [];
+          if (!selected || existing.some(name => name.trim().toLowerCase() === value.trim().toLowerCase())) return existing;
+          if (existing.length >= 50) throw new httpsV2.HttpsError('failed-precondition', `${field}_full`);
+          return [...existing, value.trim()];
+        };
+        tx.update(customerRef, {
+          pickupLocations: append('pickupLocations', details!.pickup, savePickup),
+          deliveryLocations: append('deliveryLocations', details!.destination, saveDestination),
+          updatedAt: now, updatedBy: authority.uid,
+        });
       }
       if (op === 'update' || op === 'assign') {
         try { assertIndependentJobMutable(previous!.status); }
