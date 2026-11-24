@@ -7,6 +7,7 @@ import type { NdicOperator, NdicWell } from './firestoreWells';
 export type IndependentCustomer = {
   id: string; name: string; phoneE164?: string; sectors: IndependentSector[]; jobNames: string[];
   alternateNames?: string[]; contacts?: IndependentCustomerContact[];
+  wellCatalogOperators?: string[];
   workCategories?: IndependentCustomerCategory[];
   pickupLocations: string[]; deliveryLocations: string[]; active: true;
 };

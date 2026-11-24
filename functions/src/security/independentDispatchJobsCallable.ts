@@ -181,7 +181,7 @@ export const staffIndependentDispatchJobs = httpsV2.onCall(
           phoneE164: '', sectors: [details.sector],
           contacts: details.jobContactName ? [{ id: `contact_${raw.jobId}`.slice(0, 100), name: details.jobContactName,
             role: details.jobContactRole || '', phoneE164: details.jobContactPhoneE164 || '' }] : [],
-          jobNames: [], pickupLocations: savePickup ? [details.pickup.trim()] : [],
+          jobNames: [], wellCatalogOperators: [], pickupLocations: savePickup ? [details.pickup.trim()] : [],
           deliveryLocations: saveDestination ? [details.destination.trim()] : [],
           workCategories: [],
           active: true, updatedAt: now, updatedBy: authority.uid });

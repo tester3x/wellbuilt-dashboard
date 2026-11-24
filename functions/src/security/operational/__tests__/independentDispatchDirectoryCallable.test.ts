@@ -57,16 +57,29 @@ describe('Independent Dispatch directory', () => {
       sectors: ['ltl'], alternateNames: ['CA', 'Cust A'], contacts: [
         { id: 'contact-john', name: 'John Wick', role: 'Company man', phoneE164: '+17015550112' },
         { id: 'contact-jane', name: 'Jane Doe', role: 'Lead', phoneE164: '+17015550113' },
-      ], phoneE164: '+17015550111', jobNames: ['Pallet delivery'], pickupLocations: ['Yard A'], deliveryLocations: ['Site B'] } });
+      ], phoneE164: '+17015550111', wellCatalogOperators: ['XTO ENERGY INC'],
+      jobNames: ['Pallet delivery'], pickupLocations: ['Yard A'], deliveryLocations: ['Site B'] } });
     await expect(call({ op: 'list' })).resolves.toMatchObject({ sectors: ['ltl', 'otr'], customers: [{ id: 'customer-a', name: 'Customer A', alternateNames: ['CA', 'Cust A'],
       contacts: [{ name: 'John Wick', phoneE164: '+17015550112' }, { name: 'Jane Doe', phoneE164: '+17015550113' }],
-      phoneE164: '+17015550111', pickupLocations: ['Yard A'] }] });
+      phoneE164: '+17015550111', wellCatalogOperators: ['XTO ENERGY INC'], pickupLocations: ['Yard A'] }] });
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-b', name: 'Customer B', active: true,
       sectors: ['ltl'], alternateNames: ['CA'], jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('customer_name_conflict');
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-b', name: 'CA', active: true,
       sectors: ['ltl'], alternateNames: [], jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('customer_name_conflict');
     expect(requireTrustedCompanyCapability).toHaveBeenCalledWith('staff', 'manageCompany');
     expect(records.get('companies/company-a/independent_dispatch_customers/customer-a').companyId).toBe('company-a');
+  });
+  it('keeps the paying customer distinct from the well catalog operator', async () => {
+    await call({ op: 'saveCustomer', customer: { id: 'tallgrass', name: 'Tallgrass', active: true,
+      sectors: ['water-hauling'], wellCatalogOperators: ['XTO ENERGY INC'],
+      jobNames: [], pickupLocations: ['Dwyer'], deliveryLocations: [] } });
+    await call({ op: 'saveCustomer', customer: { id: 'custom-only', name: 'Custom Customer', active: true,
+      sectors: ['water-hauling'], wellCatalogOperators: [],
+      jobNames: [], pickupLocations: ['Private yard'], deliveryLocations: [] } });
+    await expect(call({ op: 'list' })).resolves.toMatchObject({ customers: expect.arrayContaining([
+      expect.objectContaining({ name: 'Tallgrass', wellCatalogOperators: ['XTO ENERGY INC'], pickupLocations: ['Dwyer'] }),
+      expect.objectContaining({ name: 'Custom Customer', wellCatalogOperators: [], pickupLocations: ['Private yard'] }),
+    ]) });
   });
   it('returns only the current company approved route guides', async () => {
     records.set('companies/company-a/independent_dispatch_config/settings', { sectors: ['water-hauling'], routeGuides: [{
@@ -92,6 +105,8 @@ describe('Independent Dispatch directory', () => {
     await expect(call({ op: 'setCommunications', communicationChannels: ['email'], dispatchPhoneE164: '' })).rejects.toThrow('invalid_communications');
     await expect(call({ op: 'setCommunications', communicationChannels: [], dispatchPhoneE164: '555-0100' })).rejects.toThrow('invalid_communications');
     await expect(call({ op: 'setCatalogOperators', catalogOperators: ['XTO', 'xto'] })).rejects.toThrow('invalid_catalog_operators');
+    await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'A', active: true,
+      sectors: ['ltl'], wellCatalogOperators: ['XTO', 'xto'], jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('invalid_well_catalog_operators');
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'A', active: true,
       sectors: ['ltl'], phoneE164: '555-1111', jobNames: [], pickupLocations: [], deliveryLocations: [] } })).rejects.toThrow('invalid_customer_phone');
     await expect(call({ op: 'saveCustomer', customer: { id: 'customer-a', name: 'A', active: true,

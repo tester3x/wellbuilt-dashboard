@@ -7,6 +7,14 @@ import type { NdicOperator } from '@/lib/firestoreWells';
 const lines = (value: string) => [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
 const join = (value: string[] | undefined) => (value || []).join('\n');
 const normalizeName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const catalogSearchMatches = (name: string, query: string) => {
+  const term = query.trim().toLowerCase();
+  if (!term) return true;
+  if (name.toLowerCase().includes(term)) return true;
+  const legalName = name.toUpperCase();
+  return (/^(chord|chorde|cord)( energy)?$/.test(term) && /OASIS|WHITING|ENERPLUS/.test(legalName))
+    || (/^exxon(mobil)?$/.test(term) && legalName.includes('XTO'));
+};
 
 export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId: string; canEdit: boolean }) {
   const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
@@ -26,6 +34,8 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
   const [jobNames, setJobNames] = useState('');
   const [pickups, setPickups] = useState('');
   const [deliveries, setDeliveries] = useState('');
+  const [customerCatalogOperators, setCustomerCatalogOperators] = useState<string[]>([]);
+  const [customerCatalogSearch, setCustomerCatalogSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   async function refresh() {
@@ -52,6 +62,7 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
     setWorkCategories(customer?.workCategories || []);
     setCustomerSectors(customer?.sectors || []); setJobNames(join(customer?.jobNames));
     setPickups(join(customer?.pickupLocations)); setDeliveries(join(customer?.deliveryLocations));
+    setCustomerCatalogOperators(customer?.wellCatalogOperators || []); setCustomerCatalogSearch('');
   }
   const enteredAliases = lines(alternateNames);
   const enteredIdentifiers = [name, ...enteredAliases].map(normalizeName).filter(Boolean);
@@ -81,20 +92,20 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
           onClick={() => void run(() => independentDispatchDirectory({ op: 'setSectors', sectors }), 'Sectors saved.')}>Save sectors</button>
       </fieldset>
       <fieldset disabled={!canEdit || busy} className="mt-6 border-t border-gray-700 pt-4">
-        <legend className="text-sm font-medium">Well catalog operators</legend>
-        <p className="mt-1 text-xs text-gray-400">Select the operators this dispatch company works with. An empty list shows the full NDIC operator catalog in new jobs. This is separate from each customer’s saved pickup and delivery locations below.</p>
-        <input aria-label="Find catalog operator" value={operatorSearch} onChange={event => setOperatorSearch(event.target.value)} placeholder="Find XTO, ExxonMobil…"
+        <legend className="text-sm font-medium">NDIC well data sources</legend>
+        <p className="mt-1 text-xs text-gray-400">These are registered well operators, not your dispatch customers. Search Chord to find its Oasis, Whiting, and Enerplus records, or ExxonMobil to find XTO. An empty list makes all sources available. Manage paying customers below.</p>
+        <input aria-label="Find NDIC operator" value={operatorSearch} onChange={event => setOperatorSearch(event.target.value)} placeholder="Find NDIC operator, e.g. XTO"
           className="mt-2 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" />
         <div className="mt-2 max-h-56 space-y-1 overflow-y-auto rounded border border-gray-700 p-2">
-          {availableOperators.filter(operator => operator.name.toLowerCase().includes(operatorSearch.trim().toLowerCase()))
+          {availableOperators.filter(operator => catalogSearchMatches(operator.name, operatorSearch))
             .map(operator => <label key={operator.name} className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={catalogOperators.includes(operator.name)} onChange={event => setCatalogOperators(current => event.target.checked
-                ? [...current, operator.name] : current.filter(name => name !== operator.name))} />{operator.name}
+                ? [...current, operator.name] : current.filter(name => name !== operator.name))} />{operator.name}{operator.state ? ` (${operator.state})` : ''}
             </label>)}
         </div>
-        <p className="mt-1 text-xs text-gray-400">{catalogOperators.length ? `${catalogOperators.length} selected` : 'All operators available'}</p>
+        <p className="mt-1 text-xs text-gray-400">{catalogOperators.length ? `${catalogOperators.length} NDIC sources selected` : 'All NDIC sources available'}</p>
         <button type="button" disabled={busy || catalogOperators.length > 50 || !availableOperators.length} className="mt-2 rounded bg-cyan-700 px-3 py-1.5 text-sm disabled:opacity-40"
-          onClick={() => void run(() => independentDispatchDirectory({ op: 'setCatalogOperators', catalogOperators }), 'Operator list saved.')}>Save operator list</button>
+          onClick={() => void run(() => independentDispatchDirectory({ op: 'setCatalogOperators', catalogOperators }), 'NDIC source list saved.')}>Save NDIC source list</button>
       </fieldset>
       <fieldset disabled={!canEdit || busy} className="mt-6 border-t border-gray-700 pt-4">
         <legend className="text-sm font-medium">Dispatch communications</legend>
@@ -122,6 +133,7 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
           const id = editingId || crypto.randomUUID();
           void run(() => independentDispatchDirectory({ op: 'saveCustomer', customer: {
             id, name, alternateNames: lines(alternateNames), phoneE164: phoneE164.trim(), contacts, sectors: customerSectors,
+            wellCatalogOperators: customerCatalogOperators,
             workCategories: workCategories.map(category => ({ ...category, sourceChannels: lines(join(category.sourceChannels)), assets: lines(join(category.assets)) })),
             jobNames: lines(jobNames), pickupLocations: lines(pickups),
             deliveryLocations: lines(deliveries), active: true,
@@ -137,6 +149,20 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
             {!!conflictingCustomers.length && <span className="mt-1 block text-amber-200">Name already used by {conflictingCustomers.map(customer => customer.name).join(', ')}. Keep it on only one customer.</span>}
           </label>
           <label className="text-xs text-gray-300">Customer phone for Dialpad (optional, +country code)<input type="tel" pattern="\\+[1-9][0-9]{7,14}" value={phoneE164} onChange={e => setPhoneE164(e.target.value)} placeholder="+15551234567" className="mt-1 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" /></label>
+          <fieldset className="rounded border border-gray-700 p-3"><legend className="px-1 text-sm font-medium">Well data for this customer (optional)</legend>
+            <p className="mb-2 text-xs text-gray-400">The customer is who requests and pays for the work. Add the NDIC operator whose wells they use: Tallgrass can use XTO wells while the job still names Tallgrass. Leave this empty for customers using only saved custom locations.</p>
+            <div className="flex flex-wrap gap-2">{customerCatalogOperators.map(operator => <span key={operator} className="rounded border border-cyan-700 px-2 py-1 text-xs text-cyan-200">
+              {operator} <button type="button" className="ml-2 text-red-200 underline" onClick={() => setCustomerCatalogOperators(current => current.filter(name => name !== operator))}>Remove</button>
+            </span>)}</div>
+            <input aria-label="Find NDIC wells for this customer" value={customerCatalogSearch} onChange={event => setCustomerCatalogSearch(event.target.value)} placeholder="Search NDIC operator, e.g. XTO"
+              className="mt-2 w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-white" />
+            {customerCatalogSearch.trim() && <div className="mt-1 max-h-36 overflow-y-auto rounded border border-gray-700 p-1">
+              {availableOperators.filter(operator => catalogSearchMatches(operator.name, customerCatalogSearch)
+                && !customerCatalogOperators.includes(operator.name)).slice(0, 20).map(operator => <button key={operator.name} type="button"
+                  disabled={customerCatalogOperators.length >= 10} onClick={() => { setCustomerCatalogOperators(current => [...current, operator.name]); setCustomerCatalogSearch(''); }}
+                  className="block w-full p-1 text-left text-xs text-cyan-200 hover:bg-gray-700 disabled:opacity-40">Add {operator.name}{operator.state ? ` (${operator.state})` : ''}</button>)}
+            </div>}
+          </fieldset>
           <fieldset className="rounded border border-gray-700 p-3"><legend className="px-1 text-sm font-medium">Company men / job contacts</legend>
             <p className="mb-2 text-xs text-gray-400">Save everyone this customer may assign to a job. Choose the right person separately on each dispatch.</p>
             <div className="space-y-3">{contacts.map((contact, index) => <div key={contact.id} className="grid gap-2 rounded border border-gray-700 p-2 sm:grid-cols-3">

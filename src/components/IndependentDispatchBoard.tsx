@@ -196,18 +196,22 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   const displayedLanes = filter === 'active' ? lanes.filter(lane => visible.some(job => job.status === lane.status)) : lanes;
   const workingLaneCount = displayedLanes.filter(lane => lane.status === 'assigned' || lane.status === 'in_progress').length;
   const selectedCustomer = directory?.customers.find(customer => customer.id === customerId);
+  const mappedOperators = (selectedCustomer?.wellCatalogOperators || [])
+    .filter(name => catalogOperators.some(operator => operator.name === name));
   const allowedOperators = directory?.catalogOperators?.length
-    ? catalogOperators.filter(operator => directory.catalogOperators?.includes(operator.name)) : catalogOperators;
+    ? catalogOperators.filter(operator => directory.catalogOperators?.includes(operator.name) || mappedOperators.includes(operator.name)) : catalogOperators;
   const matchedOperator = matchIndependentOperator([selectedCustomer?.name || form.customer, ...(selectedCustomer?.alternateNames || [])], allowedOperators);
-  const operatorName = operatorOverride ?? matchedOperator;
+  const operatorName = operatorOverride ?? (mappedOperators.length > 1 ? '__customer__' : mappedOperators[0] || matchedOperator);
+  const operatorNamesKey = JSON.stringify(operatorName === '__customer__' ? mappedOperators : operatorName ? [operatorName] : []);
   useEffect(() => {
-    if (!operatorName) { setCatalogWells([]); return; }
+    const operatorNames = JSON.parse(operatorNamesKey) as string[];
+    if (!operatorNames.length) { setCatalogWells([]); return; }
     let active = true;
     setCatalogWells([]);
-    void independentOperatorWells(operatorName).then(wells => { if (active) { setCatalogWells(wells); setCatalogError(''); } })
+    void Promise.all(operatorNames.map(independentOperatorWells)).then(groups => { if (active) { setCatalogWells(groups.flat()); setCatalogError(''); } })
       .catch(() => { if (active) setCatalogError('Well catalog unavailable. You can enter locations manually.'); });
     return () => { active = false; };
-  }, [operatorName]);
+  }, [operatorNamesKey]);
   const locationResults = (key: 'pickup' | 'destination') => {
     const query = form[key];
     const saved = key === 'pickup' ? selectedCustomer?.pickupLocations || [] : selectedCustomer?.deliveryLocations || [];
@@ -526,14 +530,15 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           </div>
         </div>
         <div className="text-xs text-gray-300 md:col-span-2">
-          <label htmlFor="independent-well-operator">Well catalog operator</label>
+          <label htmlFor="independent-well-operator">NDIC well data source</label>
           <select id="independent-well-operator" aria-label="Well catalog operator" className={inputClass} value={operatorName}
             onChange={event => setOperatorOverride(event.target.value)}>
-            <option value="">No operator selected — saved locations and manual entry</option>
-            {operatorName && !allowedOperators.some(operator => operator.name === operatorName) && <option value={operatorName}>{operatorName}</option>}
+            <option value="">No NDIC wells — saved locations and manual entry</option>
+            {mappedOperators.length > 1 && <option value="__customer__">All {mappedOperators.length} sources saved for {selectedCustomer?.name}</option>}
+            {operatorName && operatorName !== '__customer__' && !allowedOperators.some(operator => operator.name === operatorName) && <option value={operatorName}>{operatorName}</option>}
             {allowedOperators.map(operator => <option key={operator.name} value={operator.name}>{operator.name}{operator.well_count != null ? ` · ${operator.well_count} wells` : ''}</option>)}
           </select>
-          <p className="mt-1 text-gray-400">The customer’s matching operator is selected automatically. Choose another catalog operator if needed; suggestions are limited to its wells. Saved customer locations and disposal sites remain available.</p>
+          <p className="mt-1 text-gray-400">The paying customer stays {selectedCustomer?.name || form.customer || 'the chosen customer'}. This source controls which NDIC wells appear. Set its usual sources in that customer’s profile; saved locations and disposal sites remain available.</p>
           {catalogError && <p className="mt-1 text-amber-200">{catalogError}</p>}
         </div>
         {FIELDS.map(([key, label, max, required]) => key === 'pickup' || key === 'destination' ? <div key={key} className="relative text-xs text-gray-300">

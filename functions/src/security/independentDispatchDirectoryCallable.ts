@@ -164,7 +164,7 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
     if (Object.keys(data).length !== 2 || !data.customer || typeof data.customer !== 'object' || Array.isArray(data.customer))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_customer');
     const raw = data.customer as Record<string, unknown>;
-    if (Object.keys(raw).some(key => !['id', 'name', 'alternateNames', 'contacts', 'phoneE164', 'sectors', 'jobNames', 'pickupLocations', 'deliveryLocations', 'workCategories', 'active'].includes(key))
+    if (Object.keys(raw).some(key => !['id', 'name', 'alternateNames', 'contacts', 'phoneE164', 'sectors', 'jobNames', 'pickupLocations', 'deliveryLocations', 'wellCatalogOperators', 'workCategories', 'active'].includes(key))
       || typeof raw.id !== 'string' || !ID.test(raw.id) || typeof raw.name !== 'string'
       || !raw.name.trim() || raw.name.length > 180 || raw.active !== true)
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_customer');
@@ -193,6 +193,7 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
       contacts: customerContacts(raw.contacts ?? []),
       workCategories: workCategories(raw.workCategories ?? [], sectors),
       jobNames: names(raw.jobNames, 'job_names', 30),
+      wellCatalogOperators: names(raw.wellCatalogOperators ?? [], 'well_catalog_operators', 10),
       pickupLocations: names(raw.pickupLocations, 'pickup_locations', 50),
       deliveryLocations: names(raw.deliveryLocations, 'delivery_locations', 50),
       active: true, updatedAt: admin.firestore.FieldValue.serverTimestamp(), updatedBy: authority.uid };
