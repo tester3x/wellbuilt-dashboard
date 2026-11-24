@@ -220,22 +220,33 @@ try {
   await assignedCard.getByText('Drivers requested: 3 · Assigned: 2 · 1 still needed').waitFor();
   await assignedCard.getByRole('region',{name:'Day Shift drivers'}).getByText('Day Shift',{exact:true}).waitFor();
   await assignedCard.getByRole('region',{name:'Night Shift drivers'}).getByText('Night Shift',{exact:true}).waitFor();
-  // Each shift list must show three padded two-line rows, without clipping driver names.
+  // A shift list starts at one row, grows through three, then scrolls.
   for (const shift of ['Day', 'Night']) {
     const metrics = await assignedCard.getByRole('region',{name:`${shift} Shift drivers`}).evaluate(panel => {
       const list = panel.querySelector('.overflow-y-auto');
       const row = list?.querySelector('div[class*="min-h-"]');
       const name = row?.querySelector('[title]');
       const controls = row?.querySelector('select')?.parentElement;
-      return { width: panel.getBoundingClientRect().width, listHeight: list?.getBoundingClientRect().height || 0,
+      const heights = [list?.getBoundingClientRect().height || 0];
+      const copies = [];
+      for (let index = 0; index < 3 && list && row; index++) {
+        const copy = row.cloneNode(true);
+        list.append(copy); copies.push(copy); heights.push(list.getBoundingClientRect().height);
+      }
+      const scrollsAtFour = !!list && list.scrollHeight > list.clientHeight;
+      copies.forEach(copy => copy.remove());
+      return { width: panel.getBoundingClientRect().width, heights, scrollsAtFour,
         rowMinHeight: row ? parseFloat(getComputedStyle(row).minHeight) : 0,
         whiteSpace: name ? getComputedStyle(name).whiteSpace : '', textOverflow: name ? getComputedStyle(name).textOverflow : '',
         rowRight: row?.getBoundingClientRect().right || 0, controlsRight: controls?.getBoundingClientRect().right || 0,
         nameRight: name?.getBoundingClientRect().right || 0, controlsLeft: controls?.getBoundingClientRect().left || 0 };
     });
     assert.ok(metrics.width >= 240, `${shift} shift panel should be wide enough for wrapped names at ${width}px`);
-    assert.ok(metrics.listHeight >= metrics.rowMinHeight * 3 && metrics.rowMinHeight >= 70,
-      `${shift} shift list must fit three two-line driver rows at ${width}px`);
+    assert.ok(metrics.rowMinHeight >= 70 && metrics.heights[0] >= metrics.rowMinHeight && metrics.heights[0] < metrics.rowMinHeight * 1.5,
+      `${shift} shift list starts at one row at ${width}px`);
+    assert.ok(metrics.heights[1] > metrics.heights[0] && metrics.heights[2] > metrics.heights[1]
+      && metrics.heights[3] <= metrics.heights[2] + 1 && metrics.scrollsAtFour,
+      `${shift} shift list grows to three rows and scrolls on the fourth at ${width}px`);
     assert.equal(metrics.whiteSpace, 'normal', `${shift} shift names should wrap`);
     assert.notEqual(metrics.textOverflow, 'ellipsis', `${shift} shift names must not truncate`);
     assert.ok(metrics.rowRight - metrics.controlsRight < 12 && metrics.nameRight <= metrics.controlsLeft,
@@ -266,13 +277,22 @@ try {
     'the driver picker spans the job card action area');
   assert.equal(await assignedCard.getByText('HOS unverified').count(), 0,
     'the board does not show an HOS label without a verified data source');
-  assert.ok(await assignedCard.getByRole('button',{name:'Add selected drivers'}).evaluate(button =>
-    button.getBoundingClientRect().top >= button.parentElement.previousElementSibling.getBoundingClientRect().bottom),
-    'action buttons sit below the open picker');
+  assert.ok(await assignedCard.getByRole('button',{name:'Add selected drivers'}).evaluate(button => {
+    const picker = button.parentElement.previousElementSibling;
+    return button.getBoundingClientRect().top >= picker.getBoundingClientRect().bottom
+      && Math.abs(button.getBoundingClientRect().left - picker.getBoundingClientRect().left) < 6;
+  }), 'Add selected drivers sits directly below the picker, left aligned');
   assert.ok(await assignedCard.getByRole('button',{name:'Add selected drivers'}).evaluate(button => button.getBoundingClientRect().height < 60),
     'opening the picker must not stretch the assignment button to the picker height');
-  assert.ok(await assignedCard.getByRole('button',{name:'Mark started'}).evaluate(button => button.getBoundingClientRect().height < 60),
-    'status controls remain compact beside an open picker');
+  assert.ok(await assignedCard.getByRole('button',{name:'Mark started'}).evaluate(button => {
+    const edit = button.parentElement.querySelector('button:first-child');
+    const cancel = button.parentElement.querySelector('button:last-child');
+    return button.getBoundingClientRect().height < 60
+      && Math.abs(edit.getBoundingClientRect().top - button.getBoundingClientRect().top) < 2
+      && Math.abs(cancel.getBoundingClientRect().top - button.getBoundingClientRect().top) < 2
+      && edit.getBoundingClientRect().left < button.getBoundingClientRect().left
+      && button.getBoundingClientRect().right < cancel.getBoundingClientRect().left;
+  }), 'Edit and Mark started share the bottom action row, left of Cancel job');
   assert.ok(await assignedCard.getByRole('button',{name:'Cancel job'}).evaluate(button => {
     const card = button.closest('article');
     const actions = card?.querySelector('button:not([disabled])');

@@ -296,7 +296,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         <div className="mt-2 grid w-full grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-3">
           {(['day', 'night'] as const).map(shift => <div key={shift} role="region" aria-label={`${shift === 'day' ? 'Day' : 'Night'} Shift drivers`} className="min-w-0 rounded border border-gray-700 bg-gray-900/70 px-3 py-2">
             <div className="flex items-center justify-between gap-2 border-b border-gray-700 pb-1 text-xs font-semibold text-cyan-200"><span>{shift === 'day' ? 'Day Shift' : 'Night Shift'}</span><span aria-label={`${jobCrew(job).filter(driver => crewShift(driver) === shift).length} ${shift} shift drivers`}>{jobCrew(job).filter(driver => crewShift(driver) === shift).length}</span></div>
-            <div className="h-[15rem] overflow-y-auto">{jobCrew(job).filter(driver => crewShift(driver) === shift).map(driver => crewRow(job, driver))}</div>
+            <div className="min-h-[4.75rem] max-h-[14.25rem] overflow-y-auto">{jobCrew(job).filter(driver => crewShift(driver) === shift).map(driver => crewRow(job, driver))}</div>
           </div>)}
         </div>
         {jobCrew(job).some(driver => !crewShift(driver)) && <div className="mx-auto mt-2 w-full max-w-2xl text-xs text-gray-300">
@@ -304,28 +304,26 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           {jobCrew(job).filter(driver => !crewShift(driver)).map(driver => crewRow(job, driver))}
         </div>}
       </> : 'Needs a driver'}</div>
-      {canWrite && <div className="mt-2">
-        {canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <IndependentDriverPicker job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
+      {canWrite && canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <div className="mt-2">
+        <IndependentDriverPicker job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
           now={availabilityNow} selected={assignments[job.id] || {}} disabled={busy}
-          onChange={next => setAssignments(current => ({ ...current, [job.id]: next }))} />}
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-        {['unassigned', 'assigned', 'in_progress'].includes(job.status) && <>
-          {['unassigned', 'assigned'].includes(job.status) && <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>}
-          {canManageDrivers && <button disabled={busy || !canAddSelection(job)} className={buttonClass} onClick={() => {
+          onChange={next => setAssignments(current => ({ ...current, [job.id]: next }))} />
+        <div className="mt-2 flex justify-start">
+          <button disabled={busy || !canAddSelection(job)} className={buttonClass} onClick={() => {
             const selected = Object.entries(assignments[job.id] || {}).map(([key, shift]) => ({ key, shift }));
             if (!selected.length) return;
             void run({ op: 'addDrivers', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), drivers: selected },
               () => setAssignments(current => ({ ...current, [job.id]: {} })));
-          }}>{jobCrew(job).length ? 'Add selected drivers' : 'Assign selected drivers'}</button>}
-        </>}
-        {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
+          }}>{jobCrew(job).length ? 'Add selected drivers' : 'Assign selected drivers'}</button>
         </div>
       </div>}
       {jobActionError?.jobId === job.id && <p role="alert" className="mt-2 text-sm text-red-300">Assignment was not saved: {jobActionError.message}</p>}
-      <div className="mt-2 flex flex-wrap items-end justify-between gap-2">
-        <p className="text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
-        {canWrite && !['completed', 'cancelled'].includes(job.status) && <button disabled={busy} className="ml-auto rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>}
-      </div>
+      {canWrite && !['completed', 'cancelled'].includes(job.status) && <div className="mt-2 flex flex-wrap items-center gap-2">
+        {['unassigned', 'assigned'].includes(job.status) && <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>}
+        {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
+        <button disabled={busy} className="ml-auto rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>
+      </div>}
+      <p className="mt-2 text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
     </article>)}</div>;
         return <section key={lane.status} aria-label={`${lane.label} jobs`} className={`min-w-0 rounded-lg border ${isWaitingQueue ? 'border-amber-700/70 bg-amber-950/20' : 'border-gray-700 bg-gray-950/60'} p-3 ${filter === 'active' && (isWaitingQueue || workingLaneCount === 1) ? 'lg:col-span-2' : ''}`}>
           {isWaitingQueue ? <>
