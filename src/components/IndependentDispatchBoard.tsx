@@ -12,7 +12,7 @@ import { listIndependentDriverProfiles, type IndependentDriverProfile } from '@/
 import { independentDriverContact } from '@/lib/independentDriverContact';
 import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
-import { normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
+import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
@@ -186,7 +186,10 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     });
   }
   function crewRow(job: IndependentJob, driver: ReturnType<typeof jobCrew>[number]) {
-    const missingPhone = !normalizeWhatsAppNumber(independentDriverContact(driver, driverProfiles, drivers).phoneE164);
+    const contact = independentDriverContact(driver, driverProfiles, drivers);
+    const missingPhone = !normalizeWhatsAppNumber(contact.phoneE164);
+    const chatUrl = independentWhatsAppDriverUrl(job, contact.whatsappName, contact.phoneE164);
+    const sent = job.whatsappSent?.find(entry => entry.driverKey === driver.key && entry.sentAt >= ('assignedAt' in driver ? driver.assignedAt : ''));
     return <div key={driver.key} className="grid min-h-[4.75rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 border-t border-gray-700/70 px-2 py-2 first:border-t-0">
       <div className="min-w-0">
         <p className={`flex flex-wrap items-center gap-1 text-xs ${missingPhone ? 'text-red-300' : 'text-white'}`}>
@@ -194,6 +197,14 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
           {missingPhone && <span className="rounded border border-red-600 bg-red-950/80 px-1 py-0.5 text-[10px] font-semibold text-red-200">No Contact Info</span>}
         </p>
         {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
+        {canWrite && chatUrl && ['assigned', 'in_progress'].includes(job.status) && <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+          <a href={chatUrl} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline"
+            title={`Open WhatsApp by ${contact.phoneE164}; saved name: ${contact.whatsappName}`}>Prepare job message</a>
+          {sent ? <span className="rounded border border-emerald-700 px-1 text-emerald-200" title={`Marked by dispatch at ${sent.sentAt}`}>Marked sent</span>
+            : <button type="button" disabled={busy} className="rounded border border-sky-700 px-1 text-sky-200 disabled:opacity-50"
+              onClick={() => void run({ op: 'markWhatsAppSent', jobId: job.id, driverKey: driver.key,
+                expectedRevision: job.revision, requestId: crypto.randomUUID() })}>Mark sent</button>}
+        </div>}
       </div>
       {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <div className="flex flex-col items-end gap-1 text-xs">
         <select aria-label={`Assignment shift for ${driver.name} on ${job.title}`} value={crewShift(driver)} disabled={busy}
@@ -286,9 +297,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {job.requestedDriverCount && <p className="text-sm text-amber-200">Drivers requested: {job.requestedDriverCount} · Assigned: {jobCrew(job).length}{jobCrew(job).length < job.requestedDriverCount ? ` · ${job.requestedDriverCount - jobCrew(job).length} still needed` : ''}</p>}
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} profiles={driverProfiles} />
-      {canWrite && <IndependentWhatsAppLinks job={job} drivers={drivers} profiles={driverProfiles} busy={busy}
-        onMarkSent={driverKey => void run({ op: 'markWhatsAppSent', jobId: job.id, driverKey,
-          expectedRevision: job.revision, requestId: crypto.randomUUID() })} />}
+      {canWrite && <IndependentWhatsAppLinks job={job} />}
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
       {(job.cargo || job.notes || (job.sector && Object.values(job.sectorFields || {}).some(Boolean))) && <details className="mt-3 rounded border border-gray-700 bg-gray-900/60 p-2 text-sm"><summary className="cursor-pointer text-cyan-200">Details and instructions</summary>
         {job.cargo && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">Cargo: {job.cargo}</p>}

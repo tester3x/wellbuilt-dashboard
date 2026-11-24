@@ -266,11 +266,13 @@ try {
   assert.equal(await assignedCard.getByRole('link',{name:'Call job contact in Dialpad'}).getAttribute('href'),
     `dialpad://+17015550199?confirmPhone=1&fromNumber=%2B17015550100&customData=wellbuilt-independent%3A${firstJobId}`);
   assert.ok((await assignedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550999?confirmPhone=1&fromNumber=%2B17015550100&customData='));
-  await assignedCard.getByText('Saved WhatsApp name: Outside A WA').waitFor();
+  assert.equal(await assignedCard.locator('section').filter({hasText:'WhatsApp dispatch handoff'}).getByText('Outside Driver',{exact:true}).count(),0,
+    'the WhatsApp handoff does not repeat the driver roster');
+  assert.ok((await assignedCard.getByRole('region',{name:'Day Shift drivers'}).getByRole('link',{name:'Prepare job message'}).getAttribute('title'))?.includes('Outside A WA'));
   await assignedCard.getByRole('button',{name:'Mark sent'}).first().click();
   await assignedCard.getByText('Marked sent').waitFor();
   assert.equal(await assignedCard.getByRole('button',{name:'Mark sent'}).count(),0,'manual WhatsApp send confirmation persists on refresh');
-  await assignedCard.getByText('+17015550999').waitFor();
+  assert.ok((await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('title'))?.includes('+17015550999'));
   assert.ok((await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('href'))?.startsWith('https://wa.me/17015550999?text='));
   await assignedCard.getByTitle('Driver B').waitFor();
   assert.equal(await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).inputValue(),'night');
@@ -332,8 +334,8 @@ try {
   assert.equal(await assignedLinkedCard.getByTitle('Nitto–Anthony (Marcial Lebaron)').textContent(),'Nitto–Anthony (Marcial Lebaron)');
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers'&&r.drivers.some(d=>d.key==='wellbuilt:wb-marcial'))?.drivers[0].key),'wellbuilt:wb-marcial');
   assert.ok((await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550888?confirmPhone=1&fromNumber=%2B17015550100&customData='));
-  await assignedLinkedCard.getByText('Saved WhatsApp name: Marcial WA').waitFor();
-  await assignedLinkedCard.getByText('+17015550888').waitFor();
+  assert.ok((await assignedLinkedCard.getByRole('link',{name:'Prepare job message'}).getAttribute('title'))?.includes('Marcial WA'));
+  assert.ok((await assignedLinkedCard.getByRole('link',{name:'Prepare job message'}).getAttribute('title'))?.includes('+17015550888'));
   await queue.getByRole('button',{name:/Needs a driver/}).click();
   const planningCard = dialog.getByRole('article').first();
   await planningCard.getByText('Choose drivers').click();
