@@ -14,6 +14,25 @@ function database():any {
  }};
 }
 const call=(extra:any={})=>resolveBuilderCancellation(database(),driver,{dispatchId:'job',action:'cancel_job',invoiceDocId:'inv',reason:'',...extra});
+function pendingBirth() {
+ Object.assign(rows.get('dispatches/job'), { status:'pending', invoiceDocId:undefined });
+ rows.set('driver_dispatch_births/job', {dispatchId:'job',companyId:'company',driverId:'driver',assignedAt:1000});
+ return {invoiceDocId:undefined,pendingCreate:true,requestedAtMs:500};
+}
+test('offline cancellation uses immutable creation time even when upload happened after the tap',async()=>{
+ const request=pendingBirth();
+ const result=await call(request);
+ expect(result).toMatchObject({result:'cancelled',expectedAssignedAtMs:1000,requestedAtMs:500});
+ written=[];expect(await call(request)).toEqual(result);expect(written).toEqual([]);
+});
+test.each(['missing','owner','reassigned','started'])('queued cancellation refuses %s birth/assignment without changing any record',async mode=>{
+ const request=pendingBirth();
+ if(mode==='missing')rows.delete('driver_dispatch_births/job');
+ if(mode==='owner')rows.get('driver_dispatch_births/job').driverId='another';
+ if(mode==='reassigned')rows.get('dispatches/job').assignedAt=2000;
+ if(mode==='started')Object.assign(rows.get('dispatches/job'),{status:'in_progress',invoiceDocId:'inv'});
+ await expect(call(request)).rejects.toThrow();expect(written).toEqual([]);
+});
 beforeEach(()=>{written=[];rows=new Map([
  ['dispatches/job',{companyId:'company',driverId:'driver',status:'in_progress',invoiceDocId:'inv',assignedAt:1000,source:'driver',assignedBy:'driver'}],
  ['invoices/inv',{companyId:'company',driverId:'driver',dispatchId:'job',status:'open',totalBBL:0,tickets:[]}],

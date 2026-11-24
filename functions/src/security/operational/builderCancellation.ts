@@ -35,11 +35,14 @@ const terminal = new Set(['completed','cancelled','canceled','declined','dismiss
 const fail = (message: string): never => {throw new https.HttpsError('failed-precondition', message);};
 export async function resolveBuilderCancellation(db: Firestore,
   driver: {driverId: string; companyId?: string; displayName?: string}, data: Record<string, any>) {
-  const {dispatchId, invoiceDocId, reason = '', requestedAtMs, expectedAssignedAtMs} = data;
+  const {dispatchId, invoiceDocId, reason = '', requestedAtMs, pendingCreate} = data;
+  let expectedAssignedAtMs = data.expectedAssignedAtMs;
   const id = (v: any) => typeof v === 'string' && v.length > 0 && v.length <= 500 && !v.includes('/');
   if (!id(dispatchId) || typeof reason !== 'string' || reason.length > 2000
       || (invoiceDocId !== undefined && !id(invoiceDocId))
-      || (!invoiceDocId && (!Number.isSafeInteger(requestedAtMs) || requestedAtMs <= 0 || !Number.isFinite(expectedAssignedAtMs)))) {
+      || (pendingCreate !== undefined && pendingCreate !== true)
+      || (pendingCreate === true && invoiceDocId !== undefined)
+      || (!invoiceDocId && (!Number.isSafeInteger(requestedAtMs) || requestedAtMs <= 0 || (pendingCreate !== true && !Number.isFinite(expectedAssignedAtMs))))) {
     throw new https.HttpsError('invalid-argument','Invalid builder cancellation request');
   }
   return db.runTransaction(async tx => {
@@ -53,6 +56,14 @@ export async function resolveBuilderCancellation(db: Firestore,
     };
     owned(job);
     const assignedAtMs = assignmentTimeMs(job.assignedAt);
+    if (pendingCreate === true) {
+      const birth = (await tx.get(db.collection('driver_dispatch_births').doc(dispatchId))).data();
+      if (!birth || birth.dispatchId !== dispatchId) return fail('Original job creation is unconfirmed');
+      owned(birth);
+      expectedAssignedAtMs = assignmentTimeMs(birth.assignedAt);
+      if (expectedAssignedAtMs === null || originalBuilder(job).kind !== 'driver'
+          || originalBuilder(job).actorId !== driver.driverId || job.splitGroupId) fail('Original job creation is unconfirmed');
+    }
     if (!invoiceDocId && (assignedAtMs === null || assignedAtMs !== expectedAssignedAtMs)) fail('Assignment changed; reopen the current job');
     if (invoiceDocId && job.invoiceDocId !== invoiceDocId) fail('Cancellation belongs to an earlier invoice');
     const old = job.driverCancellation;
@@ -65,6 +76,7 @@ export async function resolveBuilderCancellation(db: Firestore,
       return {ok:true,cancellationPolicy:'builder-v1',result:job.status === 'canceled' ? 'cancelled' : job.status,affectedDispatchIds:[dispatchId]};
     }
     if (!['pending','accepted','in_progress','paused'].includes(job.status)) fail('Job is not cancellable');
+    if (pendingCreate === true && (job.status !== 'pending' || job.invoiceDocId)) fail('Job has already started; reopen the current job');
     const builder = originalBuilder(job);
     let family = [{id:dispatchId,ref,data:job}];
     let ledgerRef: ReturnType<ReturnType<Firestore['collection']>['doc']> | undefined;

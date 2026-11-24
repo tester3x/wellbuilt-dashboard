@@ -73,6 +73,12 @@ export const createDriverDispatchIfAbsent = httpsV2.onCall(
       tx.create(ref, {
         ...decided.fields,
         assignedAt: FieldValue.serverTimestamp(),
+        driverCreateAssignedAt: FieldValue.serverTimestamp(),
+      });
+      // Immutable birth evidence; never backfill from a mutable assignment on replay.
+      tx.create(fs.collection('driver_dispatch_births').doc(dispatchId), {
+        dispatchId, companyId: driver.companyId, driverId: driver.driverId,
+        assignedAt: FieldValue.serverTimestamp(),
       });
       return { result: 'created' as const, dispatchId };
     });
