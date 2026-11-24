@@ -41,20 +41,26 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
       .find(({ pin }) => pin);
     const route = identified ? plannedGoogleRouteUrl(identified.guide, identified.pin!) : null;
     const savedLocation = jobLocationMapUrl(location, guides);
-    return { url: route || savedLocation || googleMapsSearchUrl(location),
+    const pin = identified?.pin;
+    const gps = pin && Number.isFinite(pin.lat) && Number.isFinite(pin.lng) ? `${pin.lat}, ${pin.lng}` : null;
+    const pinUrl = gps ? googleMapsSearchUrl(`${pin!.lat},${pin!.lng}`) : pin?.url || null;
+    return { url: route || (!matchingGuides.length ? savedLocation || googleMapsSearchUrl(location) : null), pinUrl, gps,
       kind: route ? 'route' : identified ? 'pin' : 'search', specialAccess: matchingGuides.length > 0 };
   };
   const pickupMap = mapFor(job.pickup);
   const deliveryMap = mapFor(job.destination);
   const locationSection = (heading: string, location: string | undefined, map: ReturnType<typeof mapFor>, leg: 'pickup' | 'delivery') => {
-    const mapLabel = map.kind === 'route' ? `Route to ${leg} (approved access)`
-      : map.specialAccess && map.kind === 'search' ? `${leg === 'pickup' ? 'Pickup' : 'Delivery'} map search — confirm exact site; not a driving route`
+    const legLabel = leg === 'pickup' ? 'Pickup' : 'Delivery';
+    const mapLabel = map.kind === 'route' ? `Route to ${legLabel}`
+      : map.specialAccess && map.kind === 'search' ? `Route to ${legLabel} — confirm exact site with dispatch`
         : map.kind === 'pin' ? `${leg === 'pickup' ? 'Pickup' : 'Delivery'} pin — confirm driving route`
           : `${leg === 'pickup' ? 'Pickup' : 'Delivery'} map`;
     const accessNote = map.specialAccess ? map.kind === 'route'
       ? 'Open this route first. Verify turns 1, 2 and 3 before driving; Google may recalculate.'
       : 'Confirm the exact pad with dispatch. Check the access photos and follow approved turns 1, 2 and 3; Google may recalculate.' : '';
-    return [`*${heading}*`, location || 'Not specified', map.url ? `${mapLabel}:` : '', accessNote, map.url || ''].filter(Boolean).join('\n');
+    return [`*${heading}*`, location || 'Not specified', map.gps ? `GPS pin: ${map.gps}` : '',
+      map.pinUrl ? `Pin drop: ${map.pinUrl}` : '',
+      map.url || map.specialAccess ? `${mapLabel}:` : '', accessNote, map.url || ''].filter(Boolean).join('\n');
   };
   const driverBlock = `*ASSIGNED DRIVERS*\n${assigned || 'No driver assigned yet'}${job.requestedDriverCount ? `\nDrivers requested: ${job.requestedDriverCount}` : ''}`;
   const sections = [

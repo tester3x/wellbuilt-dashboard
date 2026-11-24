@@ -31,7 +31,7 @@ test('shows exact pad pin choices for only the named well family', () => {
   assert.equal(identifiedPadPin({ destination: 'Phazor Fed. 3-1-13H' }, withPins), null);
   assert.equal(identifiedPadPin({ destination: 'Daredevil Fed. 2-2-14H' }, { ...guide, padPins: [
     { label: 'Daredevil 1', location: 'Daredevil', matchTerms: ['Daredevil 1'], url: 'https://maps.app.goo.gl/four' },
-  ] }), null);
+  ] })?.label, 'Daredevil 1');
   assert.deepEqual(padPinsForJob({ pickup: 'Daredevil 1', destination: 'Pad 390 (Phazor Fed.)' }, withPins).map(pin => pin.label), ['Phazor all']);
 });
 
@@ -55,7 +55,7 @@ test('delivery map opens the exact saved Daredevil pin instead of an unrecognize
     { label: 'Barnstormer 1/2', location: 'Barnstormer', matchTerms: ['Barnstormer 1'], url: 'https://maps.app.goo.gl/nByM7Fpw6F6npf1s5' },
   ] };
   assert.equal(jobLocationMapUrl('Daredevil 1', [withPins]), 'https://maps.app.goo.gl/qAVybqs8LYATet1r8');
-  assert.equal(jobLocationMapUrl('Daredevil Fed. 2-2-14H', [withPins]), null);
+  assert.equal(jobLocationMapUrl('Daredevil Fed. 2-2-14H', [withPins]), 'https://maps.app.goo.gl/qAVybqs8LYATet1r8');
   assert.equal(jobLocationMapUrl('Daredevil 10', [withPins]), null);
   assert.equal(jobLocationMapUrl('Sample disposal site', [withPins]), googleMapsSearchUrl('Sample disposal site'));
 });

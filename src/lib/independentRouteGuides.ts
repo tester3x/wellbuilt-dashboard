@@ -10,6 +10,12 @@ export type IndependentRouteGuide = {
 
 type RouteJob = { pickup?: string; destination?: string; asset?: string };
 
+/** Operator request name for the saved Daredevil 1 pad pin. */
+function knownPadAlias(places: string, pin: NonNullable<IndependentRouteGuide['padPins']>[number]): boolean {
+  return /^Daredevil 1$/i.test(pin.label.trim()) && /^Daredevil$/i.test(pin.location.trim())
+    && /\bDaredevil\s+Fed\.?\s*2-2-14H\b/i.test(places);
+}
+
 /** A guide applies when a named well appears at either end of the job. */
 export function routeGuidesForJob(job: RouteJob, guides: IndependentRouteGuide[] = []): IndependentRouteGuide[] {
   const places = [job.pickup, job.destination, job.asset].filter(Boolean).join(' ');
@@ -29,7 +35,7 @@ export function padPinsForJob(job: RouteJob, guide: IndependentRouteGuide) {
   const family = matchingFamily(destination);
   const places = family.length ? destination : job.pickup || '';
   const candidates = family.length ? family : matchingFamily(places);
-  const exact = candidates.filter(pin => (pin.matchTerms || []).some(term =>
+  const exact = candidates.filter(pin => knownPadAlias(places, pin) || (pin.matchTerms || []).some(term =>
     new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(places)));
   return exact.length ? exact : candidates;
 }
@@ -42,7 +48,7 @@ export function identifiedPadPin(job: RouteJob, guide: IndependentRouteGuide) {
   const family = new RegExp(`\\b${pin.location.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
   const places = family.test(destination) ? destination : job.pickup || '';
   if (pin.coversFamily) return pin;
-  return (pin.matchTerms || []).some(term =>
+  return knownPadAlias(places, pin) || (pin.matchTerms || []).some(term =>
     new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(places)) ? pin : null;
 }
 
