@@ -18,7 +18,6 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
   const [profiles, setProfiles] = useState<IndependentDriverProfile[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedKey, setSelectedKey] = useState('');
-  const [newWellBuiltAccount, setNewWellBuiltAccount] = useState(false);
   const [outsideDraft, setOutsideDraft] = useState({ name: '', active: true, shiftPreference: 'unset' as ExternalDriver['shiftPreference'] });
   const [form, setForm] = useState<IndependentDriverProfileInput | null>(null);
   const [addCustomerId, setAddCustomerId] = useState('');
@@ -47,9 +46,8 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
       standingWork: saved.standingWork, sideJobs: saved.sideJobs, shiftPreference: outside?.shiftPreference || saved.shiftPreference || 'unset', operatorNotes: saved.operatorNotes }
       : { driverKey: key, phoneE164: rosterDriver?.phoneE164 || '', whatsappName: '', primaryCustomerId: '', standingWork: '', sideJobs: 'ask', shiftPreference: outside?.shiftPreference || 'unset', operatorNotes: [] });
   }
-  function addOutsideDriver() {
+  function addDriver() {
     const key = `outside:${crypto.randomUUID()}`;
-    setNewWellBuiltAccount(false);
     chooseDriver(key);
   }
   return <section className="rounded-lg border border-cyan-800 bg-gray-800 p-4">
@@ -65,10 +63,10 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
       <div className="flex flex-wrap items-end gap-2"><label className="min-w-52 flex-1 text-xs text-gray-300">Driver
         <select aria-label="Driver profile" className={inputClass} disabled={!loaded} value={selectedKey} onChange={event => chooseDriver(event.target.value)}>
           <option value="">Choose driver…</option>
-          {roster.map(driver => <option key={driver.key} value={driver.key}>{driver.name} · {driver.key.startsWith('wellbuilt:') ? 'WellBuilt' : 'Independent'}{driver.active ? '' : ' · inactive'}</option>)}
-          {isNewOutside && <option value={selectedKey}>{outsideDraft.name || 'New driver'} · Independent</option>}
+          {roster.map(driver => <option key={driver.key} value={driver.key}>{driver.name}{driver.active ? '' : ' · inactive'}</option>)}
+          {isNewOutside && <option value={selectedKey}>{outsideDraft.name || 'New driver'}</option>}
         </select>
-      </label><button type="button" disabled={!loaded} className="rounded bg-amber-700 px-3 py-2 text-sm text-white disabled:opacity-40" onClick={addOutsideDriver}>Add driver</button></div>
+      </label><button type="button" disabled={!loaded} className="rounded bg-amber-700 px-3 py-2 text-sm text-white disabled:opacity-40" onClick={addDriver}>Add driver</button></div>
       {form && (selected || isNewOutside) && <form className="space-y-3 rounded border border-gray-700 p-3" onSubmit={event => {
         event.preventDefault(); setBusy(true); setMessage('');
         void (async () => {
@@ -84,23 +82,11 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
           }
           const saved = await saveIndependentDriverProfile(form, savedProfile?.revision || 0);
           setProfiles(current => [...current.filter(profile => profile.driverKey !== saved.driverKey), saved]);
-          setMessage('Driver profile saved. Operator review notes remain nonbinding.');
+          setMessage(isNewOutside ? 'Driver saved.' : 'Driver profile saved. Operator review notes remain nonbinding.');
         })().catch(error => setMessage(error instanceof Error ? error.message : 'Unable to save driver profile.'))
           .finally(() => setBusy(false));
       }}>
-        <div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-white">{selected?.name || 'New driver'}</h3>
-          <span className="rounded border border-gray-600 px-2 py-0.5 text-xs text-gray-300">{isNewOutside && newWellBuiltAccount ? 'Choose linked account' : selectedKey.startsWith('wellbuilt:') ? 'Linked WellBuilt account' : 'Independent driver'}</span>
-        </div>
-        <label className="flex items-center gap-2 text-sm text-gray-200"><input type="checkbox" checked={isNewOutside ? newWellBuiltAccount : selectedKey.startsWith('wellbuilt:')}
-          disabled={!isNewOutside || busy} onChange={event => setNewWellBuiltAccount(event.target.checked)} />Has a WellBuilt account</label>
-        {isNewOutside && newWellBuiltAccount && <label className="block text-xs text-gray-300">Linked WellBuilt driver
-          <select aria-label="Linked WellBuilt driver" className={inputClass} value="" onChange={event => { if (event.target.value) chooseDriver(event.target.value); }}>
-            <option value="">Choose a linked driver…</option>
-            {wbDrivers.map(driver => <option key={driver.driverId} value={`wellbuilt:${driver.driverId}`}>{driver.displayName}{driver.active ? '' : ' · inactive'}</option>)}
-          </select>
-          {wbDrivers.length === 0 && <span className="mt-1 block text-amber-200">No WellBuilt accounts are linked to this dispatch company yet.</span>}
-        </label>}
-        <fieldset disabled={isNewOutside && newWellBuiltAccount} className={isNewOutside && newWellBuiltAccount ? 'hidden' : 'space-y-3'}>
+        <h3 className="font-medium text-white">{selected?.name || 'New driver'}</h3>
         {selectedKey.startsWith('outside:') && <div className="grid gap-3 md:grid-cols-3">
           <label className="text-xs text-gray-300">Driver name<input aria-label="Driver name" required maxLength={120} className={inputClass} value={outsideDraft.name}
             onChange={event => setOutsideDraft({ ...outsideDraft, name: event.target.value })} /></label>
@@ -172,8 +158,7 @@ export function IndependentDriverProfilesPanel({ drivers, wbDrivers, customers, 
               setAddCustomerId('');
             }}>Add note</button></div>
         </div>
-        <button disabled={busy} className="rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-40">{busy ? 'Saving…' : 'Save driver profile'}</button>
-        </fieldset>
+        <button disabled={busy} className="rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-40">{busy ? 'Saving…' : isNewOutside ? 'Save driver' : 'Save driver profile'}</button>
       </form>}
     </div>}
   </section>;

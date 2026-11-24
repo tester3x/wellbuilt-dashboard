@@ -189,7 +189,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     return <div key={driver.key} className="grid min-h-[4.75rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 border-t border-gray-700/70 px-2 py-2 first:border-t-0">
       <div className="min-w-0">
         <p className={`flex flex-wrap items-center gap-1 text-xs ${missingPhone ? 'text-red-300' : 'text-white'}`}>
-          <span className="min-w-0 break-words whitespace-normal" title={driver.name}>{driver.name}{driver.source === 'wellbuilt' ? ' · WB' : ''}</span>
+          <span className="min-w-0 break-words whitespace-normal" title={driver.name}>{driver.name}</span>
           {missingPhone && <span className="rounded border border-red-600 bg-red-950/80 px-1 py-0.5 text-[10px] font-semibold text-red-200">No Contact Info</span>}
         </p>
         {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
@@ -258,7 +258,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     {notice && <p role="status" className="text-green-300">{notice}</p>}
     <section aria-labelledby="dispatch-board-title" className="space-y-4">
     <div data-testid="independent-board-toolbar" className="sticky z-30 space-y-3 rounded-lg border border-gray-700 bg-gray-900/95 p-3 shadow-lg backdrop-blur" style={{ top: appHeaderHeight }}>
-      <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="dispatch-board-title" className="text-lg font-semibold text-white">Dispatch board</h2><p className="text-sm text-gray-400">Save requests now. Assign a driver when one is available. Assigned WellBuilt drivers do not receive these jobs in their phone app yet.</p></div>
+      <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="dispatch-board-title" className="text-lg font-semibold text-white">Dispatch board</h2><p className="text-sm text-gray-400">Save requests now. Assign a driver when one is available. Driver phone app delivery is not connected yet.</p></div>
         <div className="flex flex-wrap items-center gap-3">{canManageDrivers && <a href="/dispatch/independent/drivers/" className="text-sm text-cyan-300 underline">Driver profiles</a>}{canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); scrollBelowBoardToolbar('independent-intake'); }}>New job / paste request</button>}</div>
         <div className="flex flex-wrap gap-2 text-xs"><span className="rounded bg-amber-900/40 px-2 py-1 text-amber-200">{jobs.filter(job => job.status === 'unassigned').length} need drivers</span><span className="rounded bg-blue-900/40 px-2 py-1 text-blue-200">{jobs.filter(job => job.status === 'assigned').length} assigned</span><span className="rounded bg-emerald-900/40 px-2 py-1 text-emerald-200">{jobs.filter(job => job.status === 'in_progress').length} in progress</span></div>
       </div>

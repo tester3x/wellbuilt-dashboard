@@ -19,9 +19,9 @@ export function IndependentDriverPicker({ job, jobs, outside, linked, profiles, 
       : job.wbDriverId ? [[`wellbuilt:${job.wbDriverId}`, defaultShift]] : []);
   const rows = [
     ...outside.map(driver => ({ key: `outside:${driver.externalDriverId}`, name: driver.displayName,
-      active: driver.active, source: 'Outside', preference: driver.shiftPreference || 'unset' })),
+      active: driver.active, preference: driver.shiftPreference || 'unset' })),
     ...linked.map(driver => ({ key: `wellbuilt:${driver.driverId}`, name: driver.displayName,
-      active: driver.active, source: 'WB', preference: profiles.find(profile => profile.driverKey === `wellbuilt:${driver.driverId}`)?.shiftPreference || 'unset' })),
+      active: driver.active, preference: profiles.find(profile => profile.driverKey === `wellbuilt:${driver.driverId}`)?.shiftPreference || 'unset' })),
   ];
   function shiftFor(driver: typeof rows[number]): '' | 'day' | 'night' {
     if (Object.prototype.hasOwnProperty.call(selected, driver.key)) return selected[driver.key];
@@ -61,7 +61,6 @@ export function IndependentDriverPicker({ job, jobs, outside, linked, profiles, 
                   onChange(next);
                 }} />
               <span className="truncate">{driver.name}</span>
-              <span className="shrink-0 rounded border border-gray-600 px-1 text-[10px] text-gray-300">{driver.source}</span>
             </label>
             <div className="min-w-0 text-[11px] text-gray-400"><p className="break-words">{current ? 'On this job' : availability.label}</p>
               {!!commitments.length && <div className="mt-1 flex flex-wrap gap-1">{commitments.map(item => <span key={item.id} title={item.title}

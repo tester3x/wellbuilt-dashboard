@@ -198,7 +198,7 @@ try {
   if (!await waitingPicker.evaluate(details => details.open)) await waitingPicker.locator('summary').click();
   assert.equal(await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).inputValue(),'night');
   await card.getByRole('group',{name:'Prefers night shift candidates'}).getByText('Driver B').waitFor();
-  await card.getByRole('checkbox',{name:'Choose Nitto–Anthony (Marcial Lebaron) for Pipe run water-hauling'}).locator('..').getByText('WB',{exact:true}).waitFor();
+  await card.getByRole('checkbox',{name:'Choose Nitto–Anthony (Marcial Lebaron) for Pipe run water-hauling'}).waitFor();
   await card.getByRole('checkbox',{name:'Choose Outside Driver for Pipe run water-hauling'}).check();
   await card.getByRole('checkbox',{name:'Choose Driver B for Pipe run water-hauling'}).check();
   await card.getByRole('combobox',{name:'Shift for Driver B on Pipe run water-hauling'}).selectOption('day');
@@ -296,7 +296,7 @@ try {
   await linkedCard.getByRole('button',{name:'Assign selected drivers'}).click();
   await dialog.getByRole('button',{name:'Close'}).click();
   const assignedLinkedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run ltl',exact:true})});
-  assert.match(await assignedLinkedCard.getByTitle('Nitto–Anthony (Marcial Lebaron)').textContent(),/WB/);
+  assert.equal(await assignedLinkedCard.getByTitle('Nitto–Anthony (Marcial Lebaron)').textContent(),'Nitto–Anthony (Marcial Lebaron)');
   assert.equal(await page.evaluate(()=>window.requests.find(r=>r.op==='addDrivers'&&r.drivers.some(d=>d.key==='wellbuilt:wb-marcial'))?.drivers[0].key),'wellbuilt:wb-marcial');
   assert.ok((await assignedLinkedCard.getByRole('link',{name:'Call driver in Dialpad'}).getAttribute('href'))?.startsWith('dialpad://+17015550888?confirmPhone=1&fromNumber=%2B17015550100&customData='));
   await assignedLinkedCard.getByText('WhatsApp: Marcial WA').waitFor();
