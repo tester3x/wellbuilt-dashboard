@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { independentDispatchDirectory, type IndependentCustomer, type IndependentCustomerCategory, type IndependentCustomerContact, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
+import { independentDispatchCatalog, independentDispatchDirectory, type IndependentCustomer, type IndependentCustomerCategory, type IndependentCustomerContact, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
 import { INDEPENDENT_SECTORS, type IndependentSector } from '@/lib/independentDispatchSectors';
-import { loadOperators, type NdicOperator } from '@/lib/firestoreWells';
+import type { NdicOperator } from '@/lib/firestoreWells';
 
 const lines = (value: string) => [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
 const join = (value: string[] | undefined) => (value || []).join('\n');
@@ -36,7 +36,8 @@ export function IndependentDispatchSetupCard({ companyId, canEdit }: { companyId
     setCatalogOperators(result.catalogOperators || []);
   }
   useEffect(() => { void refresh().catch(error => setMessage(error instanceof Error ? error.message : 'Unable to load setup.')); }, [companyId]);
-  useEffect(() => { void loadOperators().then(setAvailableOperators).catch(() => setMessage('Well catalog unavailable; saved customer locations remain usable.')); }, []);
+  useEffect(() => { void independentDispatchCatalog().then(result => setAvailableOperators(result.operators))
+    .catch(() => setMessage('Well catalog unavailable; saved customer locations remain usable.')); }, []);
   async function run(action: () => Promise<unknown>, success: string): Promise<boolean> {
     setBusy(true); setMessage('');
     try { await action(); await refresh(); setMessage(success); return true; }

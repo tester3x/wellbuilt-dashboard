@@ -83,10 +83,10 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
   async request => {
     const data = request.data;
     if (!data || typeof data !== 'object' || Array.isArray(data)
-      || Object.keys(data).some(key => !['op', 'sectors', 'customer', 'communicationChannels', 'dispatchPhoneE164', 'catalogOperators'].includes(key))
-      || !['list', 'setSectors', 'setCommunications', 'setCatalogOperators', 'saveCustomer'].includes(data.op))
+      || Object.keys(data).some(key => !['op', 'sectors', 'customer', 'communicationChannels', 'dispatchPhoneE164', 'catalogOperators', 'operator'].includes(key))
+      || !['list', 'catalog', 'operatorWells', 'setSectors', 'setCommunications', 'setCatalogOperators', 'saveCustomer'].includes(data.op))
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_directory_request');
-    const authority = data.op === 'list'
+    const authority = ['list', 'catalog', 'operatorWells'].includes(data.op)
       ? await requireIndependentDispatchAuthority(request.auth?.uid, 'viewDispatch')
       : await requireTrustedCompanyCapability(request.auth?.uid, 'manageCompany');
     const db = admin.firestore();
@@ -96,6 +96,23 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
     const company = await companyRef.get();
     if (!hasIndependentDispatchPackage(company.data()))
       throw new httpsV2.HttpsError('permission-denied', 'independent_dispatch_package_inactive');
+    if (data.op === 'catalog') {
+      if (Object.keys(data).length !== 1) throw new httpsV2.HttpsError('invalid-argument', 'unexpected_directory_fields');
+      const [operators, disposals] = await Promise.all([
+        db.collection('operators').limit(1000).get(), db.collection('disposals').limit(3000).get(),
+      ]);
+      return { ok: true, companyId: authority.companyId,
+        operators: operators.docs.map(doc => doc.data()).filter(row => typeof row.name === 'string')
+          .sort((a, b) => a.name.localeCompare(b.name)),
+        disposals: disposals.docs.map(doc => doc.data()).filter(row => typeof row.well_name === 'string') };
+    }
+    if (data.op === 'operatorWells') {
+      if (Object.keys(data).length !== 2 || typeof data.operator !== 'string' || !data.operator.trim()
+        || data.operator.length > 180) throw new httpsV2.HttpsError('invalid-argument', 'invalid_catalog_operator');
+      const wells = await db.collection('wells').where('operator', '==', data.operator).limit(5000).get();
+      return { ok: true, companyId: authority.companyId, operator: data.operator,
+        wells: wells.docs.map(doc => doc.data()).filter(row => typeof row.well_name === 'string') };
+    }
     if (data.op === 'list') {
       if (Object.keys(data).length !== 1) throw new httpsV2.HttpsError('invalid-argument', 'unexpected_directory_fields');
       const [config, customers] = await Promise.all([configRef.get(), customersRef.limit(500).get()]);

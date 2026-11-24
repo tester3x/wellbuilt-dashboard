@@ -14,6 +14,9 @@ const ref = (path: string): any => ({
 });
 const collection = (path: string): any => ({
   doc: (id: string) => ref(`${path}/${id}`),
+  where: (field: string, _operator: string, value: string) => ({ limit: (_n: number) => ({ get: async () => ({ docs: [...records.keys()]
+    .filter(key => key.startsWith(`${path}/`) && key.split('/').length === path.split('/').length + 1
+      && records.get(key)?.[field] === value).map(key => snapshot(key)) }) }) }),
   limit: (_n: number) => ({ get: async () => ({ docs: [...records.keys()].filter(key => key.startsWith(`${path}/`) && key.split('/').length === path.split('/').length + 1)
     .map(key => snapshot(key)) }) }),
 });
@@ -29,6 +32,18 @@ beforeEach(() => {
   records.set('companies/company-a', { activePackages: ['independent-dispatch'] });
 });
 describe('Independent Dispatch directory', () => {
+  it('serves the operator and well catalog to an installed independent-only company', async () => {
+    records.set('operators/xto', { name: 'XTO ENERGY INC' });
+    records.set('wells/xto-one', { well_name: 'XTO 1', operator: 'XTO ENERGY INC' });
+    records.set('wells/exmo-one', { well_name: 'EXMO 1', operator: 'EXXONMOBIL OIL CORPORATION' });
+    records.set('disposals/swd-one', { well_name: 'SWD 1', operator: 'Disposal Co.' });
+    await expect(call({ op: 'catalog' })).resolves.toMatchObject({ companyId: 'company-a',
+      operators: [{ name: 'XTO ENERGY INC' }], disposals: [{ well_name: 'SWD 1' }] });
+    await expect(call({ op: 'operatorWells', operator: 'XTO ENERGY INC' })).resolves.toMatchObject({
+      companyId: 'company-a', wells: [{ well_name: 'XTO 1' }],
+    });
+    await expect(call({ op: 'operatorWells', operator: '' })).rejects.toThrow('invalid_catalog_operator');
+  });
   it('defaults to five sectors and stores a company-scoped customer directory', async () => {
     await expect(call({ op: 'list' })).resolves.toMatchObject({ companyId: 'company-a', sectors: ['water-hauling', 'ltl', 'otr', 'hot-shot', 'aggregate'], communicationChannels: [], dispatchPhoneE164: '', customers: [] });
     await call({ op: 'setCommunications', communicationChannels: ['sms', 'whatsapp'], dispatchPhoneE164: '+17015550100' });

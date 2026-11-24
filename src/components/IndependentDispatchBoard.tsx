@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { independentDispatchJobs, type IndependentJob, type IndependentJobDetails, type IndependentJobStatus, type LinkedWellBuiltDriver } from '@/lib/independentDispatchJobs';
 import { listExternalDrivers, type ExternalDriver } from '@/lib/externalAssignmentDelivery';
-import { independentDispatchDirectory, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
+import { independentDispatchCatalog, independentDispatchDirectory, independentOperatorWells, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
 import { SECTOR_FIELDS, sectorLabel, type IndependentSector } from '@/lib/independentDispatchSectors';
 import { dialpadCallHref } from '@/lib/dialpad';
 import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentRequestParser';
@@ -14,7 +14,7 @@ import { IndependentDriverPicker, type SelectedDriverShifts } from './Independen
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
 import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
 import { openIndependentWhatsApp } from '@/lib/independentWhatsAppWindow';
-import { loadOperators, loadWellsForOperator, loadDisposals, searchDisposals, type NdicOperator, type NdicWell } from '@/lib/firestoreWells';
+import { searchDisposals, type NdicOperator, type NdicWell } from '@/lib/firestoreWells';
 import { combinedLocationResults } from '@/lib/builderWellSearch';
 import { matchIndependentOperator } from '@/lib/independentOperatorMatch';
 import { BuilderAutocomplete } from './BuilderAutocomplete';
@@ -124,7 +124,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   }, [companyId, canManageDrivers]);
   useEffect(() => { void refresh().catch(e => setError(e.message)); }, [refresh]);
   useEffect(() => {
-    void Promise.all([loadOperators(), loadDisposals()]).then(([operators, disposals]) => {
+    void independentDispatchCatalog().then(({ operators, disposals }) => {
       setCatalogOperators(operators); setCatalogDisposals(disposals);
     }).catch(() => setCatalogError('Well catalog unavailable. You can enter locations manually.'));
   }, []);
@@ -204,7 +204,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
     if (!operatorName) { setCatalogWells([]); return; }
     let active = true;
     setCatalogWells([]);
-    void loadWellsForOperator(operatorName).then(wells => { if (active) { setCatalogWells(wells); setCatalogError(''); } })
+    void independentOperatorWells(operatorName).then(wells => { if (active) { setCatalogWells(wells); setCatalogError(''); } })
       .catch(() => { if (active) setCatalogError('Well catalog unavailable. You can enter locations manually.'); });
     return () => { active = false; };
   }, [operatorName]);

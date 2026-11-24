@@ -2,6 +2,7 @@ import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from './firebase';
 import type { IndependentSector } from './independentDispatchSectors';
 import type { IndependentRouteGuide } from './independentRouteGuides';
+import type { NdicOperator, NdicWell } from './firestoreWells';
 
 export type IndependentCustomer = {
   id: string; name: string; phoneE164?: string; sectors: IndependentSector[]; jobNames: string[];
@@ -24,4 +25,16 @@ export async function independentDispatchDirectory(payload: Record<string, unkno
   const response = await httpsCallable<Record<string, unknown>, IndependentDirectory>(
     getFirebaseFunctions(), 'staffIndependentDispatchDirectory')(payload);
   return response.data;
+}
+
+export async function independentDispatchCatalog(): Promise<{ operators: NdicOperator[]; disposals: NdicWell[] }> {
+  const response = await httpsCallable<{ op: string }, { operators: NdicOperator[]; disposals: NdicWell[] }>(
+    getFirebaseFunctions(), 'staffIndependentDispatchDirectory')({ op: 'catalog' });
+  return response.data;
+}
+
+export async function independentOperatorWells(operator: string): Promise<NdicWell[]> {
+  const response = await httpsCallable<{ op: string; operator: string }, { wells: NdicWell[] }>(
+    getFirebaseFunctions(), 'staffIndependentDispatchDirectory')({ op: 'operatorWells', operator });
+  return response.data.wells;
 }
