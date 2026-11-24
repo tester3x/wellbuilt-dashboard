@@ -18,7 +18,7 @@ async function rpc(name,data,identity=owner){
  return result;
 }
 function load(code,ports){const m={exports:{}};new Function('module','exports','require',code)(m,m.exports,n=>{if(!(n in ports))throw Error('Unexpected dependency '+n);return ports[n];});return m.exports;}
-const evidence=load(boot.sources.evidence.code,{'./sso/jsaGovernedAuthLive':{loadUsableGovernedSession:async()=>({...owner})},'./firebase':{app:{}},'firebase/functions':{getFunctions:()=>({}),httpsCallable:(_f,n)=>async data=>rpc(n,data)}});
+const evidence=load(boot.sources.evidence.code,{'./legacyEvidenceCore':load(boot.sources.evidenceCore.code,{}),'./sso/jsaGovernedAuthLive':{loadUsableGovernedSession:async()=>({...owner})},'./firebase':{app:{}},'firebase/functions':{getFunctions:()=>({}),httpsCallable:(_f,n)=>async data=>rpc(n,data)}});
 const invoice=load(boot.sources.invoice.code,{'@react-native-async-storage/async-storage':{default:storage},'expo-crypto':{randomUUID:()=>crypto.randomUUID()}}).createInvoiceAllocation({read:storage.getItem,write:storage.setItem,remove:storage.removeItem,owner:async c=>{if(c&&c!==owner.companyId)throw Error('owner_changed');return {uid:owner.uid,driverId:owner.driverId,companyId:owner.companyId};},mint:()=>crypto.randomUUID(),call:async(o,requestId)=>(await rpc('assignInvoiceBlock',{companyId:o.companyId,requestId})).data});
 async function rejects(fn,label){let refused=false;try{await fn();}catch{refused=true;}check(refused,label);}
 async function finish(fn){try{await fn();}catch(e){log('FAIL '+e.message);await fetch('/result',{method:'POST',body:JSON.stringify({status:'failed',lines})});}}

@@ -17,7 +17,7 @@ const adapter=index.slice(index.indexOf('export const assignInvoiceBlock ='),ind
 if(!adapter||!adapter.includes('allocateInvoiceBlock'))throw Error('Allocation adapter boundary changed');
 const m={exports:{}};
 new Function('module','exports','functionsV1','allocateInvoiceBlock','InvoiceAllocationError','db','process',ts.transpileModule(adapter,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(m,m.exports,{https:{onCall:f=>f,HttpsError:class extends Error{constructor(code,msg){super(msg);this.code=code;}}}},allocation.allocateInvoiceBlock,allocation.InvoiceAllocationError,db,{env:{FUNCTIONS_EMULATOR:'true'}});
-const modules={evidence:path.join(jsa,'services/legacyEvidence.ts'),invoice:path.join(tickets,'utils/invoiceAllocation.ts')};
+const modules={evidence:path.join(jsa,'services/legacyEvidence.ts'),evidenceCore:path.join(jsa,'services/legacyEvidenceCore.ts'),invoice:path.join(tickets,'utils/invoiceAllocation.ts')};
 const sources=Object.fromEntries(Object.entries(modules).map(([k,file])=>[k,{sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),code:ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText}]));
 const run='s24-'+crypto.randomBytes(8).toString('hex'),now=Date.now(),requestId=crypto.randomBytes(32).toString('base64url');
 const identities={},counts={rpc:0,failures:0,receiptDropped:0};let seeded=false;
@@ -35,7 +35,7 @@ async function seed(){
    const custom=await admin.auth().createCustomToken(uid,claims);
    const result=await fetch(`http://127.0.0.1:9299/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=synthetic`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:custom,returnSecureToken:true})}).then(r=>r.json());
    if(!result.idToken)throw Error('Synthetic auth failed');
-   identities[company][app]={uid,companyId,driverId,generation:1,token:result.idToken};
+   identities[company][app]={uid,companyId,driverId,generation:1,token:result.idToken,customToken:custom};
   }
  }
  await db.doc('invoices/'+run+'-job').set({companyId:identities.a.jsa.companyId,driverId:identities.a.jsa.driverId,shiftId:run+'-shift'});
@@ -49,7 +49,7 @@ const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1:8789');
   if(req.method==='GET'&&url.pathname==='/'){res.writeHead(200,{'Content-Type':'text/html','Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'"});return res.end(fs.readFileSync(path.join(__dirname,'s24-audit.html')));}
   if(req.method==='GET'&&url.pathname==='/client.js'){res.writeHead(200,{'Content-Type':'text/javascript','Cache-Control':'no-store'});return res.end(fs.readFileSync(path.join(__dirname,'s24-audit-client.js')));}
-  if(req.method==='GET'&&url.pathname==='/bootstrap'){await seed();return json(res,200,{run,identities,record:original(),sources});}
+  if(req.method==='GET'&&url.pathname==='/bootstrap'){await seed();return json(res,200,{projectId,run,identities,record:original(),sources});}
   if(req.method==='POST'&&url.pathname.startsWith('/rpc/')){
    const token=(req.headers.authorization||'').replace(/^Bearer /,'');
    const decoded=await admin.auth().verifyIdToken(token);if(!decoded.uid.startsWith(run+'-'))throw Error('synthetic_only');

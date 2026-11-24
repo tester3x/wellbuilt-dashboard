@@ -1,0 +1,17 @@
+{
+  "functions": {
+    "source": "functions/native-audit",
+    "codebase": "native-jsa-audit",
+    "predeploy": ["node -e \"throw new Error('Native audit fixture is emulator-only; deployment refused')\""]
+  },
+  "firestore": { "rules": "security/jsa-evidence/firestore.rules", "predeploy": ["node -e \"throw new Error('Native audit fixture is emulator-only; deployment refused')\""] },
+  "database": { "rules": "security/native-audit-database.rules.json", "predeploy": ["node -e \"throw new Error('Native audit fixture is emulator-only; deployment refused')\""] },
+  "emulators": {
+    "auth": { "host": "127.0.0.1", "port": 9299 },
+    "functions": { "host": "127.0.0.1", "port": 5001 },
+    "firestore": { "host": "127.0.0.1", "port": 8183 },
+    "database": { "host": "127.0.0.1", "port": 9190 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}

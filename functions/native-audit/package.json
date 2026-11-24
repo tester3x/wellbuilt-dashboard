@@ -1,0 +1,6 @@
+{
+  "name": "local-native-jsa-audit-fixture",
+  "private": true,
+  "main": "index.cjs",
+  "engines": { "node": "22" }
+}
