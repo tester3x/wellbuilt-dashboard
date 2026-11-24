@@ -28,10 +28,11 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
   const day = shiftGroup('day');
   const night = shiftGroup('night');
   const unset = shiftGroup('');
+  const shiftBlock = (label: string, names: string[]) => names.length
+    ? `*${label}*\n${names.map(name => `- ${name}`).join('\n')}` : '';
   const assigned = crew.length
-    ? [day.length ? `Day Shift:\n${day.join('\n')}` : '', night.length ? `Night Shift:\n${night.join('\n')}` : '',
-      unset.length ? `Shift not set:\n${unset.join('\n')}` : ''].filter(Boolean).join('\n')
-    : job.driverName || '';
+    ? [shiftBlock('DAY SHIFT', day), shiftBlock('NIGHT SHIFT', night), shiftBlock('SHIFT NOT SET', unset)].filter(Boolean).join('\n\n')
+    : job.driverName ? `- ${job.driverName}` : '';
   const sections = [
     heading,
     ['*JOB*', job.title, `Customer: ${job.customer}`,
@@ -43,7 +44,7 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     job.cargo ? `*CARGO / LOADS*\n${job.cargo}` : '',
     job.scheduledAt ? `*SCHEDULE*\nScheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
     [job.requestedDriverCount ? `Drivers requested: ${job.requestedDriverCount}` : '',
-      assigned ? `Assigned drivers:\n${assigned}` : ''].filter(Boolean).join('\n'),
+      assigned ? `*ASSIGNED DRIVERS*\n${assigned}` : ''].filter(Boolean).join('\n\n'),
     [job.jobContactName ? `Job contact: ${job.jobContactName}` : '',
       job.jobContactPhoneE164 ? `Contact phone: ${job.jobContactPhoneE164}` : ''].filter(Boolean).join('\n'),
     '*ACKNOWLEDGMENT*\nDrivers: reply ACK privately to dispatch in WhatsApp to confirm this assignment. Do not reply in the group.',
