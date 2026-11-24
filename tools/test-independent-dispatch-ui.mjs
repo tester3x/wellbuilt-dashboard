@@ -218,6 +218,16 @@ try {
   const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run water-hauling',exact:true})});
   await assignedCard.waitFor();
   await assignedCard.getByText('Drivers (2)').waitFor();
+  if (width === 2560) {
+    await page.context().route('https://wa.me/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: 'WhatsApp share handoff' }));
+    const [sharePage] = await Promise.all([page.waitForEvent('popup'), assignedCard.getByTestId('independent-whatsapp-share').click()]);
+    await sharePage.waitForLoadState();
+    const tabs = page.context().pages().length;
+    await assignedCard.getByTestId('independent-whatsapp-share').click();
+    assert.equal(page.context().pages().length, tabs, 'subsequent shares reuse the same browser tab');
+    await assignedCard.getByRole('button',{name:'Close WhatsApp share page'}).click();
+    assert.equal(sharePage.isClosed(), true, 'the dashboard closes only its script-opened share page');
+  }
   assert.equal(await assignedCard.locator('details').filter({hasText:'Choose drivers'}).evaluate(details => details.open), false,
     'successful add closes the chooser');
   await assignedCard.getByText('Drivers requested: 3 · Assigned: 2 · 1 still needed').waitFor();

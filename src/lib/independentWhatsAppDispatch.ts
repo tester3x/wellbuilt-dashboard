@@ -47,7 +47,7 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
       assigned ? `*ASSIGNED DRIVERS*\n${assigned}` : ''].filter(Boolean).join('\n\n'),
     [job.jobContactName ? `Job contact: ${job.jobContactName}` : '',
       job.jobContactPhoneE164 ? `Contact phone: ${job.jobContactPhoneE164}` : ''].filter(Boolean).join('\n'),
-    '*ACKNOWLEDGMENT*\nDrivers: reply ACK privately to dispatch in WhatsApp to confirm this assignment. Do not reply in the group.',
+    '*ACKNOWLEDGMENT*\nDrivers: react with a thumbs-up to this dispatch message to confirm you saw it. If reactions are unavailable, reply ACK privately to dispatch.',
   ];
   return sections.filter(Boolean).join('\n\n');
 }

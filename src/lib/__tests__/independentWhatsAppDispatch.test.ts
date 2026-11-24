@@ -36,8 +36,8 @@ test('prepares main WhatsApp share without guessing pickup or sending', () => {
   assert.match(message, /\*DESCRIPTION \/ INSTRUCTIONS\*\nASAP\. Pickup location is driver choice\./);
   assert.match(message, /\n\n\*PICKUP \/ SOURCE\*\n/);
   assert.match(message, /\n\n\*DELIVERY \/ DESTINATION\*\n/);
+  assert.match(message, /react with a thumbs-up to this dispatch message/);
   assert.match(message, /reply ACK privately to dispatch/);
-  assert.match(message, /Do not reply in the group/);
 });
 test('groups assigned crew by job shift in shared and personal messages', () => {
   const crew = [
