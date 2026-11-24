@@ -13,7 +13,7 @@ import { independentDriverContact } from '@/lib/independentDriverContact';
 import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
 import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
-import { googleMapsDirectionsUrl, googleMapsSearchUrl, padPinsForJob, routeGuidesForJob } from '@/lib/independentRouteGuides';
+import { googleMapsDirectionsUrl, googleMapsSearchUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
@@ -308,12 +308,15 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       </div>
       {routeGuidesForJob(job, directory?.routeGuides).map(guide => <aside key={guide.id} className="mt-3 rounded border border-amber-600 bg-amber-950/40 p-3 text-sm text-amber-100">
         <p className="font-semibold">Approved access: {guide.title}</p>
-        <p className="mt-1">Follow the blue route in these maps. Avoid the marked roads near the farmer’s home. Google Maps can recalculate; use the approved access maps for the final approach.</p>
+        <p className="mt-1">Follow the blue route in these maps. Avoid the marked roads near the farmer’s home. Check that Google shows turns 1, 2 and 3 before driving; it can recalculate or ignore a stop. Use the approved access maps for the final approach.</p>
         <div className="mt-2 flex flex-wrap gap-3">{guide.imageUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="underline">Open route map {index + 1}</a>)}
           {guide.directionsUrl && <a href={guide.directionsUrl} target="_blank" rel="noopener noreferrer" className="underline">Google Maps planned route (verify)</a>}
         </div>
         {padPinsForJob(job, guide).length > 0 && <div className="mt-2 text-xs"><p className="font-semibold">Pad pins — confirm the correct pad:</p>
-          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{padPinsForJob(job, guide).map(pin => <a key={pin.url} href={pin.url} target="_blank" rel="noopener noreferrer" className="underline">{pin.label}</a>)}</div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{padPinsForJob(job, guide).map(pin => <span key={pin.url} className="flex flex-wrap gap-1">
+            <a href={pin.url} target="_blank" rel="noopener noreferrer" className="underline">{pin.label} pin</a>
+            {plannedGoogleRouteUrl(guide, pin) && <a href={plannedGoogleRouteUrl(guide, pin)!} target="_blank" rel="noopener noreferrer" className="underline">· route via turns 1–3</a>}
+          </span>)}</div>
         </div>}
         <details className="mt-2"><summary className="cursor-pointer text-xs underline">Preview approved route maps</summary>
           <div className="mt-2 flex flex-wrap gap-2">{guide.imageUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener noreferrer">

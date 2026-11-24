@@ -8,6 +8,30 @@ import { INDEPENDENT_SECTORS, parseIndependentSectors } from './operational/inde
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const DEFAULT_SECTORS = [...INDEPENDENT_SECTORS];
 const normalizeCustomerName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+function validRouteGuide(guide: any): boolean {
+  if (!guide || typeof guide.id !== 'string' || !ID.test(guide.id)
+    || typeof guide.title !== 'string' || guide.title.length > 140) return false;
+  if (!Array.isArray(guide.locations) || guide.locations.length < 1 || guide.locations.length > 20
+    || guide.locations.some((name: unknown) => typeof name !== 'string' || name.length > 100)) return false;
+  if (!Array.isArray(guide.imageUrls) || guide.imageUrls.length < 1 || guide.imageUrls.length > 4
+    || guide.imageUrls.some((url: unknown) => typeof url !== 'string' || url.length > 600
+      || !url.startsWith('https://firebasestorage.googleapis.com/v0/b/wellbuilt-sync.firebasestorage.app/o/'))) return false;
+  if (guide.routeWaypoints && (!Array.isArray(guide.routeWaypoints) || guide.routeWaypoints.length !== 3
+    || guide.routeWaypoints.some((point: any) => !point || typeof point.lat !== 'number' || !Number.isFinite(point.lat)
+      || typeof point.lng !== 'number' || !Number.isFinite(point.lng)
+      || Math.abs(point.lat) > 90 || Math.abs(point.lng) > 180))) return false;
+  if (guide.padPins && (!Array.isArray(guide.padPins) || guide.padPins.length > 30
+    || guide.padPins.some((pin: any) => !pin || typeof pin.label !== 'string' || pin.label.length > 100
+      || typeof pin.location !== 'string' || pin.location.length > 100
+      || typeof pin.url !== 'string' || !pin.url.startsWith('https://maps.app.goo.gl/') || pin.url.length > 200
+      || (pin.lat !== undefined && (typeof pin.lat !== 'number' || !Number.isFinite(pin.lat) || Math.abs(pin.lat) > 90))
+      || (pin.lng !== undefined && (typeof pin.lng !== 'number' || !Number.isFinite(pin.lng) || Math.abs(pin.lng) > 180))
+      || (pin.matchTerms && (!Array.isArray(pin.matchTerms) || pin.matchTerms.length > 10
+        || pin.matchTerms.some((term: unknown) => typeof term !== 'string' || term.length > 100)))
+      || (pin.coversFamily !== undefined && typeof pin.coversFamily !== 'boolean')))) return false;
+  return !guide.directionsUrl || (typeof guide.directionsUrl === 'string' && guide.directionsUrl.length <= 2048
+    && guide.directionsUrl.startsWith('https://www.google.com/maps/dir/?api=1'));
+}
 function names(value: unknown, field: string, max: number): string[] {
   if (!Array.isArray(value) || value.length > max || value.some(item => typeof item !== 'string'
     || !item.trim() || item.length > 180) || new Set(value.map((item: string) => item.trim().toLowerCase())).size !== value.length)
@@ -80,22 +104,11 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
         ? config.data()!.communicationChannels : []).filter((value: unknown) => value === 'sms' || value === 'whatsapp');
       const dispatchPhoneE164 = typeof config.data()?.dispatchPhoneE164 === 'string' ? config.data()!.dispatchPhoneE164 : '';
       const routeGuides = (Array.isArray(config.data()?.routeGuides) ? config.data()!.routeGuides : [])
-        .filter((guide: any) => guide && typeof guide.id === 'string' && ID.test(guide.id)
-          && typeof guide.title === 'string' && guide.title.length <= 140
-          && Array.isArray(guide.locations) && guide.locations.length > 0 && guide.locations.length <= 20
-          && guide.locations.every((name: unknown) => typeof name === 'string' && name.length <= 100)
-          && Array.isArray(guide.imageUrls) && guide.imageUrls.length > 0 && guide.imageUrls.length <= 4
-          && guide.imageUrls.every((url: unknown) => typeof url === 'string' && url.length <= 600
-            && url.startsWith('https://firebasestorage.googleapis.com/v0/b/wellbuilt-sync.firebasestorage.app/o/'))
-          && (!guide.padPins || (Array.isArray(guide.padPins) && guide.padPins.length <= 30
-            && guide.padPins.every((pin: any) => pin && typeof pin.label === 'string' && pin.label.length <= 100
-              && typeof pin.location === 'string' && pin.location.length <= 100
-              && typeof pin.url === 'string' && pin.url.startsWith('https://maps.app.goo.gl/') && pin.url.length <= 200)))
-          && (!guide.directionsUrl || (typeof guide.directionsUrl === 'string' && guide.directionsUrl.length <= 2048
-            && guide.directionsUrl.startsWith('https://www.google.com/maps/dir/?api=1'))))
+        .filter(validRouteGuide)
         .slice(0, 20)
         .map((guide: any) => ({ id: guide.id, title: guide.title, locations: guide.locations,
-          imageUrls: guide.imageUrls, ...(guide.padPins ? { padPins: guide.padPins } : {}),
+          imageUrls: guide.imageUrls, ...(guide.routeWaypoints ? { routeWaypoints: guide.routeWaypoints } : {}),
+          ...(guide.padPins ? { padPins: guide.padPins } : {}),
           ...(guide.directionsUrl ? { directionsUrl: guide.directionsUrl } : {}) }));
       return { ok: true, companyId: authority.companyId, sectors, communicationChannels, dispatchPhoneE164,
         routeGuides,

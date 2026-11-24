@@ -55,7 +55,9 @@ describe('Independent Dispatch directory', () => {
     records.set('companies/company-a/independent_dispatch_config/settings', { sectors: ['water-hauling'], routeGuides: [{
       id: 'access', title: 'Approved route', locations: ['Barnstormer'],
       imageUrls: ['https://firebasestorage.googleapis.com/v0/b/wellbuilt-sync.firebasestorage.app/o/map?alt=media&token=x'],
-      padPins: [{ label: 'Barnstormer 1/2', location: 'Barnstormer', url: 'https://maps.app.goo.gl/nByM7Fpw6F6npf1s5' }],
+      routeWaypoints: [{ lat: 47.6912663, lng: -103.4562861 }, { lat: 47.689123, lng: -103.453253 }, { lat: 47.689152, lng: -103.440293 }],
+      padPins: [{ label: 'Barnstormer 1/2', location: 'Barnstormer', url: 'https://maps.app.goo.gl/nByM7Fpw6F6npf1s5',
+        lat: 47.673974, lng: -103.410378, matchTerms: ['Barnstormer 1', 'Barnstormer 2'] }],
     }] });
     records.set('companies/company-b/independent_dispatch_config/settings', { routeGuides: [{
       id: 'other', title: 'Other company', locations: ['Secret'], imageUrls: [],

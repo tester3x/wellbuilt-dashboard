@@ -99,3 +99,23 @@ test('includes approved access maps on special well jobs and keeps emoji out of 
   assert.match(copy, /^🚨🚨🚨🚨🚨👆🏽/);
   assert.match(copy, /Pickup map: https:\/\/www.google.com\/maps\/search/);
 });
+
+test('includes one planned route only when the destination pad is identified', () => {
+  const guide = { id: 'access', title: 'Approved access', locations: ['Barnstormer'], imageUrls: ['https://example.com/map'],
+    routeWaypoints: [{ lat: 47.6912663, lng: -103.4562861 }, { lat: 47.689123, lng: -103.453253 }, { lat: 47.689152, lng: -103.440293 }],
+    padPins: [
+      { label: 'Barnstormer 1/2', location: 'Barnstormer', matchTerms: ['Barnstormer 1', 'Barnstormer 2'], lat: 47.673974, lng: -103.410378, url: 'https://maps.app.goo.gl/one' },
+      { label: 'Barnstormer SWD', location: 'Barnstormer', matchTerms: ['Barnstormer SWD'], lat: 47.677885, lng: -103.400148, url: 'https://maps.app.goo.gl/two' },
+    ] };
+  const specific = buildIndependentWhatsAppText({ ...job, destination: 'Barnstormer 1' }, undefined, Date.now(), [guide]);
+  assert.match(specific, /Google Maps route via approved turns 1, 2, 3/);
+  assert.match(specific, /destination=47\.673974%2C-103\.410378/);
+  const ambiguous = buildIndependentWhatsAppText({ ...job, destination: 'Barnstormer' }, undefined, Date.now(), [guide]);
+  assert.doesNotMatch(ambiguous, /Google Maps route via approved turns/);
+  assert.match(ambiguous, /Barnstormer SWD/);
+  const otherDaredevil = buildIndependentWhatsAppText({ ...job, destination: 'Daredevil Fed. 2-2-14H' }, undefined, Date.now(), [{
+    ...guide, locations: ['Daredevil'], padPins: [{ label: 'Daredevil 1', location: 'Daredevil',
+      matchTerms: ['Daredevil 1'], url: 'https://maps.app.goo.gl/four', lat: 47.673911, lng: -103.387325 }],
+  }]);
+  assert.doesNotMatch(otherDaredevil, /Google Maps route via approved turns/);
+});

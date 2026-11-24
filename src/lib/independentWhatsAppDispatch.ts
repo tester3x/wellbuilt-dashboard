@@ -1,5 +1,5 @@
 import type { IndependentJob } from './independentDispatchJobs';
-import { googleMapsDirectionsUrl, googleMapsSearchUrl, padPinsForJob, routeGuidesForJob, type IndependentRouteGuide } from './independentRouteGuides';
+import { googleMapsDirectionsUrl, googleMapsSearchUrl, identifiedPadPin, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob, type IndependentRouteGuide } from './independentRouteGuides';
 
 type WhatsAppJob = Pick<IndependentJob,
   'title' | 'customer' | 'pickup' | 'destination' | 'cargo' | 'reference' | 'notes' |
@@ -47,7 +47,12 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     `*PICKUP / SOURCE*\n${job.pickup || 'Not specified'}`,
     `*DELIVERY / DESTINATION*\n${job.destination || 'Not specified'}`,
     [pickupMap ? `Pickup map: ${pickupMap}` : '', deliveryMap ? `Delivery map: ${deliveryMap}` : ''].filter(Boolean).join('\n'),
-    ...accessGuides.map(guide => `*APPROVED ACCESS ROUTE: ${guide.title.toUpperCase()}*\nFollow the blue route in these maps. Avoid the marked roads near the farmer's home. Google Maps may suggest a different road; the approved access maps take priority.\n${guide.imageUrls.map((url, index) => `Route map ${index + 1}: ${url}`).join('\n')}${padPinsForJob(job, guide).length ? `\n*PAD PINS — CONFIRM THE CORRECT PAD*\n${padPinsForJob(job, guide).map(pin => `${pin.label}: ${pin.url}`).join('\n')}` : ''}${guide.directionsUrl ? `\nGoogle Maps planned route (verify against the access maps): ${guide.directionsUrl}` : ''}`),
+    ...accessGuides.map(guide => {
+      const pins = padPinsForJob(job, guide);
+      const identified = identifiedPadPin(job, guide);
+      const planned = identified ? plannedGoogleRouteUrl(guide, identified) : null;
+      return `*APPROVED ACCESS ROUTE: ${guide.title.toUpperCase()}*\nFollow the blue route in these maps. Avoid the marked roads near the farmer's home. Google Maps may recalculate; the approved access maps take priority.\n${guide.imageUrls.map((url, index) => `Route map ${index + 1}: ${url}`).join('\n')}${pins.length ? `\n*PAD PINS — CONFIRM THE CORRECT PAD*\n${pins.map(pin => `${pin.label}: ${pin.url}`).join('\n')}` : ''}${planned ? `\nGoogle Maps route via approved turns 1, 2, 3 (verify before driving): ${planned}` : ''}`;
+    }),
     directions ? `Google Maps directions: ${directions}` : '',
     job.cargo ? `*CARGO / LOADS*\n${job.cargo}` : '',
     job.scheduledAt ? `*SCHEDULE*\nScheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
