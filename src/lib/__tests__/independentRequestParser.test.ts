@@ -59,7 +59,7 @@ test('unknown customer and unclear fields stay unselected and require review', (
   const parsed = parsePastedJobRequest('Customer: Unknown Carrier\nSector: LTL\nPickup: Fargo\nPieces: 10', directory);
   assert.equal(parsed.customerId, '');
   assert.ok(parsed.missing.includes('Customer'));
-  assert.ok(parsed.missing.includes('Delivery location'));
+  assert.ok(!parsed.missing.includes('Delivery location'));
   assert.ok(parsed.missing.includes('Job name'));
   assert.ok(parsed.warnings.some(message => message.includes('not in your customer list')));
   assert.equal(parsed.customerLabel, 'Unknown Carrier');
@@ -151,9 +151,24 @@ test('real one-line fresh-water request fills only stated facts and flags missin
   assert.equal(parsed.sectorFields.waterType, 'Fresh water');
   assert.equal(parsed.sectorFields.volumeBbl, '100');
   assert.equal(parsed.scheduledLocal, '');
-  assert.ok(parsed.missing.includes('Pickup location'));
-  assert.ok(parsed.warnings.some(warning => warning.includes('no date')));
+  assert.ok(!parsed.missing.includes('Pickup location'));
+  assert.equal(parsed.fields.scheduleText, 'Requested time: 6 am');
+  assert.ok(parsed.warnings.some(warning => warning.includes('confirm the date')));
   assert.ok(parsed.fields.notes?.includes('Fresh water ticket'));
+});
+
+test('keeps arrival and start instructions in Schedule without inventing a date', () => {
+  const parsed = parsePastedJobRequest('Customer: Liquid Gold\nSector: Hot shot\nJob: Hot oiler support\nDelivery: Thor 3\nBe there by 6 AM; job starts at 7 AM', directory);
+  assert.equal(parsed.fields.scheduleText, 'Be there by 6 AM; job starts at 7 AM');
+  assert.equal(parsed.scheduledLocal, '');
+  assert.ok(parsed.warnings.some(warning => warning.includes('confirm the date')));
+  assert.ok(!parsed.missing.includes('Job location'));
+});
+
+test('extracts a dated arrival time while preserving its meaning', () => {
+  const parsed = parsePastedJobRequest('Customer: Liquid Gold\nSector: Hot shot\nJob: Hot oiler support\nDelivery: Thor 3\nBe there by: 11/25/2026 6 AM', directory);
+  assert.equal(parsed.fields.scheduleText, 'Be there by: 11/25/2026 6 AM');
+  assert.equal(parsed.scheduledLocal, '2026-11-25T06:00');
 });
 
 test('two company men and one phone remain unpaired for dispatcher review', () => {

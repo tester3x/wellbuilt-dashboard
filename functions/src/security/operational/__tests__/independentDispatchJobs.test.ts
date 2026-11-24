@@ -21,6 +21,8 @@ describe('Independent Dispatch job validation and lifecycle', () => {
     expect(parseIndependentJob({ ...job, pickup: '', destination: '', additionalStops: ['  Rig 5  '] }).additionalStops).toEqual(['Rig 5']);
     expect(() => parseIndependentJob({ ...job, additionalStops: [''] })).toThrow('invalid_additionalStops');
     expect(() => parseIndependentJob({ ...job, additionalStops: Array(13).fill('Site') })).toThrow('invalid_additionalStops');
+    expect(parseIndependentJob({ ...job, scheduleText: 'Be there by 6 AM' }).scheduleText).toBe('Be there by 6 AM');
+    expect(() => parseIndependentJob({ ...job, scheduleText: 'a'.repeat(501) })).toThrow('invalid_scheduleText');
     expect(() => parseIndependentJob({ ...job, notes: 'a'.repeat(4001) })).toThrow();
     expect(() => parseIndependentJob({ ...job, scheduledAt: '2026-02-30T12:00:00.000Z' })).toThrow();
     expect(parseIndependentJob({ ...job, scheduledAt: '2026-11-20T12:00:00.000Z' }).scheduledAt).toContain('2026-11-20');

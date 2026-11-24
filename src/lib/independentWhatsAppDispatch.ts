@@ -3,7 +3,7 @@ import { googleMapsRouteToUrl, googleMapsSearchUrl, identifiedPadPin, plannedGoo
 
 type WhatsAppJob = Pick<IndependentJob,
   'title' | 'customer' | 'pickup' | 'destination' | 'additionalStops' | 'cargo' | 'reference' | 'notes' |
-  'scheduledAt' | 'requestedDriverCount' | 'jobContactName' | 'jobContactPhoneE164' | 'drivers' | 'driverName'
+  'scheduledAt' | 'scheduleText' | 'requestedDriverCount' | 'jobContactName' | 'jobContactPhoneE164' | 'drivers' | 'driverName'
 >;
 
 export type IndependentDispatchUrgency = 'urgent' | 'soon' | 'routine';
@@ -72,7 +72,8 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
     ['*JOB*', job.title, `Customer: ${job.customer}`,
       job.reference ? `Reference: ${job.reference}` : '',
       recipientName ? `For: ${recipientName}` : ''].filter(Boolean).join('\n'),
-    job.scheduledAt ? `*SCHEDULE*\nScheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
+    job.scheduleText || job.scheduledAt ? ['*SCHEDULE*', job.scheduleText,
+      job.scheduledAt ? `Scheduled time (UTC): ${new Date(job.scheduledAt).toISOString()}` : ''].filter(Boolean).join('\n') : '',
     driverBlock,
     job.notes ? `*DESCRIPTION / INSTRUCTIONS*\n${job.notes}` : '',
     job.pickup?.trim() ? locationSection('PICKUP / SOURCE', job.pickup, 'Pickup') : '',

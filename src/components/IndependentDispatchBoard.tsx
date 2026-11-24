@@ -16,7 +16,7 @@ import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/ind
 import { openIndependentWhatsApp } from '@/lib/independentWhatsAppWindow';
 import { googleMapsDirectionsUrl, googleMapsSearchUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
 
-const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', additionalStops: [], cargo: '', scheduledAt: '', notes: '',
+const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', additionalStops: [], cargo: '', scheduledAt: '', scheduleText: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
 const STATUS: Record<IndependentJobStatus, string> = { unassigned: 'Unassigned', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
 const FIELDS = [
@@ -294,7 +294,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold text-white">{job.title}</h2><span className="text-cyan-300">{STATUS[job.status]}</span></div>
       <p className="text-sm text-gray-300">{job.customer}{job.sector ? ` · ${sectorLabel(job.sector)}` : ''}{job.reference ? ` · ${job.reference}` : ''}</p>
       {(job.categoryId || job.asset) && <p className="text-sm text-cyan-200">{directory?.customers.find(customer => customer.id === job.customerId)?.workCategories?.find(category => category.id === job.categoryId)?.name || (job.categoryId ? 'Archived category' : '')}{job.asset ? ` · ${job.asset}` : ''}</p>}
-      <p className={`mt-2 text-sm font-medium ${pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? 'text-red-300' : pickupTiming(job) === 'soon' ? 'text-amber-200' : 'text-gray-300'}`}>Pickup: {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : 'Time not set'}{pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? ' · Past requested time' : ''}</p>
+      <p className={`mt-2 text-sm font-medium ${pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? 'text-red-300' : pickupTiming(job) === 'soon' ? 'text-amber-200' : 'text-gray-300'}`}>Schedule: {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : job.scheduleText || 'Time not set'}{pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? ' · Past requested time' : ''}</p>
+      {job.scheduledAt && job.scheduleText && <p className="text-sm text-gray-300">Requested timing: {job.scheduleText}</p>}
       {job.estimatedEndAt && <p className="text-sm text-gray-300">Estimated finish: {new Date(job.estimatedEndAt).toLocaleString()}</p>}
       {(job.shift || job.ongoing) && <p className="text-sm text-cyan-200">{job.shift === 'day' ? 'Day shift' : job.shift === 'night' ? 'Night shift' : job.shift === 'both' ? 'Day and night shifts' : 'Any shift'}{job.ongoing ? ' · Ongoing work' : ''}</p>}
       {job.requestedDriverCount && <p className="text-sm text-amber-200">Drivers requested: {job.requestedDriverCount} · Assigned: {jobCrew(job).length}{jobCrew(job).length < job.requestedDriverCount ? ` · ${job.requestedDriverCount - jobCrew(job).length} still needed` : ''}</p>}
@@ -378,7 +379,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
             </button>
             <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">{laneJobs.slice(0, 3).map(job => <div key={job.id} className="min-w-0 rounded border border-amber-900/60 bg-gray-900/70 px-3 py-2">
               <p className="truncate font-medium text-white">{job.customer} · {job.title}</p>
-              <p className="truncate text-gray-300">Pickup {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : 'time not set'} · {job.pickup}{job.requestedDriverCount ? ` · ${job.requestedDriverCount} drivers requested` : ''}</p>
+              <p className="truncate text-gray-300">Schedule {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : job.scheduleText || 'time not set'} · {job.pickup || job.destination || job.additionalStops?.[0] || ''}{job.requestedDriverCount ? ` · ${job.requestedDriverCount} drivers requested` : ''}</p>
             </div>)}</div>
             {laneJobs.length > 3 && <p className="mt-2 text-xs text-amber-200">+{laneJobs.length - 3} more waiting</p>}
             <dialog ref={needsDriverDialog} aria-label="Jobs needing a driver" className="fixed inset-0 m-auto max-h-[90vh] w-[min(96vw,90rem)] max-w-none overflow-y-auto rounded-xl border border-amber-700 bg-gray-950 p-4 text-white shadow-2xl backdrop:bg-black/75">
@@ -501,7 +502,8 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
               onChange={event => setSectorFields(current => ({ ...current, [field.key]: event.target.value }))} className={inputClass} />}
           </label>)}</div>
         </div>}
-        <label className="text-xs text-gray-300">Scheduled pickup (your local time)<input type="datetime-local" className={inputClass} value={scheduledLocal} onChange={e => setScheduledLocal(e.target.value)} /></label>
+        <label className="text-xs text-gray-300">Scheduled time (your local time)<input type="datetime-local" className={inputClass} value={scheduledLocal} onChange={e => setScheduledLocal(e.target.value)} /></label>
+        <label className="text-xs text-gray-300 md:col-span-2">Schedule details from request<input maxLength={500} className={inputClass} value={form.scheduleText || ''} onChange={e => setForm(current => ({ ...current, scheduleText: e.target.value }))} placeholder="Be there by 6 AM; job starts at 7 AM" /></label>
         <label className="text-xs text-gray-300">Estimated finish (your local time)<input type="datetime-local" className={inputClass} value={estimatedEndLocal} min={scheduledLocal || undefined} onChange={e => setEstimatedEndLocal(e.target.value)} /></label>
         <label className="text-xs text-gray-300">Shift<select aria-label="Job shift" className={inputClass} value={form.shift || ''} onChange={e => setForm(current => ({ ...current, shift: e.target.value as IndependentJobDetails['shift'] }))}><option value="">Not specified</option><option value="day">Day shift</option><option value="night">Night shift</option><option value="both">Day and night shifts</option></select></label>
         <label className="text-xs text-gray-300">Drivers requested<input aria-label="Drivers requested" type="number" min={1} max={30} step={1} className={inputClass} value={form.requestedDriverCount ?? ''} onChange={e => setForm(current => ({ ...current, requestedDriverCount: e.target.value ? Number(e.target.value) : null }))} /></label>

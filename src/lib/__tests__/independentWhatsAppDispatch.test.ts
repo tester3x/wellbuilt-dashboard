@@ -30,7 +30,7 @@ test('prepares main WhatsApp share without guessing pickup or sending', () => {
   const message = decodeURIComponent(url.split('?text=')[1]);
   assert.match(message, /White Owl Epping or White Owl Tioga/);
   assert.match(message, /2 loads of 10 PPG brine/);
-  assert.match(message, /Scheduled pickup \(UTC\)/);
+  assert.match(message, /Scheduled time \(UTC\)/);
   assert.ok(message.indexOf('*JOB*') < message.indexOf('*SCHEDULE*'));
   assert.ok(message.indexOf('*SCHEDULE*') < message.indexOf('*ASSIGNED DRIVERS*'));
   assert.match(message, /\*ASSIGNED DRIVERS\*\n\*SHIFT NOT SET\*\n- Demo driver/);
@@ -157,6 +157,12 @@ test('one-site service jobs omit empty legs and multi-stop jobs route each stop 
   assert.ok(stops.indexOf('*STOP 2*') < stops.indexOf('*DELIVERY / DESTINATION*'));
   assert.match(stops, /\*STOP 1\*\n47\.5,-103\.4\nGPS pin: 47\.5° N, 103\.4° W\nPin drop: .*\nRoute to Stop 1:/);
   assert.match(stops, /\*STOP 2\*\nTransfer terminal\nRoute to Stop 2 — confirm exact site:/);
+});
+
+test('arrival or start instructions appear in Schedule directly below the job', () => {
+  const message = buildIndependentWhatsAppText({ ...job, scheduledAt: '', scheduleText: 'Be there by 6 AM; job starts at 7 AM' });
+  assert.match(message, /\*JOB\*[\s\S]*?\*SCHEDULE\*\nBe there by 6 AM; job starts at 7 AM\n\n\*ASSIGNED DRIVERS\*/);
+  assert.doesNotMatch(message, /Scheduled time \(UTC\)/);
 });
 
 test('special farmer handoff keeps each map with its own location and avoids duplicate pad links', () => {

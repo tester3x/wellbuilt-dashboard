@@ -27,7 +27,7 @@ const ALIASES: Record<string, string[]> = {
   cargo: ['cargo', 'equipment', 'freight', 'load description'],
   notes: ['notes', 'instructions', 'special instructions'],
   requestedDriverCount: ['requested drivers', 'drivers requested', 'driver count', 'number of drivers', 'drivers', 'trucks requested', 'truck count', 'trucks'],
-  scheduledLocal: ['pickup time', 'pickup date/time', 'scheduled pickup', 'pickup appointment'],
+  scheduledLocal: ['pickup time', 'pickup date/time', 'scheduled pickup', 'pickup appointment', 'schedule', 'arrival time', 'be there by', 'job starts at', 'job begins at', 'start time', 'report by', 'on site by', 'onsite by', 'on location by', 'ready by'],
   waterType: ['water type'], volumeBbl: ['estimated barrels', 'barrels', 'bbl', 'volume'],
   sourceReference: ['well', 'source reference'], disposalReference: ['disposal', 'disposal reference'],
   freightDescription: ['freight description'], pieces: ['pieces', 'piece count'], pallets: ['pallets'],
@@ -102,11 +102,11 @@ function inferSector(text: string): IndependentSector | '' {
 
 function localDateTime(raw: string): string {
   const iso = raw.match(/\b(20\d\d)-(\d\d)-(\d\d)[ T](\d\d):(\d\d)\b/);
-  const us = raw.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d\d)\s+(\d{1,2}):(\d\d)\s*(AM|PM)?\b/i);
+  const us = raw.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d\d)\s+(\d{1,2})(?::(\d\d))?\s*(AM|PM)?\b/i);
   if (!iso && !us) return '';
   const year = Number(iso?.[1] || us?.[3]), month = Number(iso?.[2] || us?.[1]), day = Number(iso?.[3] || us?.[2]);
   let hour = Number(iso?.[4] || us?.[4]);
-  const minute = Number(iso?.[5] || us?.[5]);
+  const minute = Number(iso?.[5] || us?.[5] || '0');
   if (us?.[6]) hour = hour % 12 + (us[6].toUpperCase() === 'PM' ? 12 : 0);
   const date = new Date(year, month - 1, day, hour, minute);
   if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day
@@ -206,7 +206,6 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
     const water = /\b(fresh water|production water|flowback|frac water)\b/i.exec(service)?.[1];
     if (destination && (water || /^\s*\d+\s+loads?\b/i.test(serviceBody))) fields.title ||= `${water || 'Load'} to ${destination}`.slice(0, 180);
     fields.notes ||= `Original request: ${text.trim()}`.slice(0, 4000);
-    if (serviceTime) warnings.push(`Request says ${serviceTime} but gives no date; confirm the date before scheduling.`);
     if (pickup && /^[-–—?]+$/.test(pickup)) warnings.push('Pickup was left blank in the request; confirm the source location.');
   }
   if (contactNames.length > 1) {
@@ -229,9 +228,19 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
       fields.destination ||= fromTo[2].trim();
     }
   }
-  const timeRaw = labeled(lines, ALIASES.scheduledLocal);
-  const scheduledLocal = timeRaw ? localDateTime(timeRaw) : '';
-  if (timeRaw && !scheduledLocal) warnings.push('Pickup time needs review; use a full date and time.');
+  const scheduleLines = lines.flatMap(line => {
+    const label = line.match(/^(.{1,45}?)\s*(?::|\s+-\s+)\s*(.+)$/);
+    if (label && ALIASES.scheduledLocal.map(normalize).includes(normalize(label[1]))) return [`${label[1].trim()}: ${label[2].trim()}`];
+    return line.split(/;|[.!?](?:\s|$)/).map(part => part.trim()).filter(part =>
+      /\b(?:be there|be on\s*(?:site|location)|arrive|arrival|report|on\s*(?:site|location)|show up|check in|ready)\s+(?:by|at)\b|\b(?:job|work|shift)\s+(?:starts?|begins?)\s+at\b|\b(?:start|begin)\s+(?:at|by)\b/i.test(part));
+  });
+  if (serviceTime && !scheduleLines.some(line => line.toLowerCase().includes(serviceTime.toLowerCase())))
+    scheduleLines.push(`Requested time: ${serviceTime}`);
+  if (scheduleLines.length) fields.scheduleText = [...new Set(scheduleLines)].join('; ').slice(0, 500);
+  const exactTimes = [...new Set(scheduleLines.map(localDateTime).filter(Boolean))];
+  const scheduledLocal = exactTimes.length === 1 ? exactTimes[0] : '';
+  if (exactTimes.length > 1) warnings.push('Multiple dated times were found; confirm which one belongs in the scheduled time field.');
+  else if (scheduleLines.length && !scheduledLocal) warnings.push('Request timing needs review; confirm the date and scheduled time before dispatching.');
   const sectorFields: Record<string, string> = {};
   if (sector) for (const field of SECTOR_FIELDS[sector]) {
     let raw = labeled(lines, [field.label, ...(ALIASES[field.key] || [])]);
@@ -248,7 +257,7 @@ export function parsePastedJobRequest(text: string, directory: IndependentDirect
     else warnings.push(`${field.label} could not be read; check it in the form.`);
   }
   const missing = [!customer && 'Customer', !sector && 'Transportation sector', !fields.title && 'Job name',
-    !fields.pickup && 'Pickup location', !fields.destination && 'Delivery location',
+    !fields.pickup && !fields.destination && 'Job location',
     ...(sector ? SECTOR_FIELDS[sector].filter(field => field.required && !sectorFields[field.key]).map(field => field.label) : [])]
     .filter((value): value is string => !!value);
   return { customerId: customer?.id || '', customerLabel, customerSuggestions, sector, fields, sectorFields, scheduledLocal, missing, warnings };

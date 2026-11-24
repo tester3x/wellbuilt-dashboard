@@ -114,7 +114,7 @@ try {
     }
     for (const [label,value] of [['Job name *',`Pipe run ${sector}`],['Pickup address / location','Yard A'],['Delivery address / location','Site B']]) await page.getByLabel(label,{exact:true}).fill(value);
     if (sector === 'water-hauling') {
-      await page.getByLabel('Scheduled pickup (your local time)').fill('2099-11-23T08:00');
+      await page.getByLabel('Scheduled time (your local time)').fill('2099-11-23T08:00');
       await page.getByLabel('Estimated finish (your local time)').fill('2099-11-23T20:00');
       await page.getByLabel('Job shift').selectOption('day');
       await page.getByRole('checkbox',{name:'Ongoing / recurring work'}).check();

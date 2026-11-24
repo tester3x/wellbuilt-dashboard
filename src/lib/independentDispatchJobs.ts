@@ -10,6 +10,7 @@ export type IndependentJobDetails = {
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
   categoryId?: string; asset?: string;
   additionalStops?: string[];
+  scheduleText?: string;
 };
 export type IndependentJobStatus = 'unassigned' | 'assigned' | 'in_progress' | 'completed' | 'cancelled';
 export type IndependentJob = IndependentJobDetails & {

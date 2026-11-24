@@ -11,6 +11,7 @@ export type IndependentJobDetails = {
   customerId?: string; sector?: string; sectorFields?: Record<string, string>;
   categoryId?: string; asset?: string;
   additionalStops?: string[];
+  scheduleText?: string;
 };
 const LIMITS: Record<'title' | 'customer' | 'reference' | 'pickup' | 'destination' | 'cargo' | 'scheduledAt' | 'estimatedEndAt' | 'notes'
   | 'jobContactName' | 'jobContactRole' | 'jobContactPhoneE164', number> = {
@@ -21,7 +22,7 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_job');
   const input = raw as Record<string, unknown>;
   if (Object.keys(input).some(key => !Object.prototype.hasOwnProperty.call(LIMITS, key)
-    && !['customerId', 'sector', 'sectorFields', 'categoryId', 'asset', 'shift', 'ongoing', 'requestedDriverCount', 'additionalStops'].includes(key))) throw Error('unexpected_job_field');
+    && !['customerId', 'sector', 'sectorFields', 'categoryId', 'asset', 'shift', 'ongoing', 'requestedDriverCount', 'additionalStops', 'scheduleText'].includes(key))) throw Error('unexpected_job_field');
   const job = {} as IndependentJobDetails;
   for (const key of Object.keys(LIMITS) as (keyof typeof LIMITS)[]) {
     const value = input[key] ?? '';
@@ -38,6 +39,10 @@ export function parseIndependentJob(raw: unknown): IndependentJobDetails {
     job.additionalStops = input.additionalStops.map(stop => (stop as string).trim());
   }
   if (!job.pickup && !job.destination && !job.additionalStops?.length) throw Error('required_location');
+  if (input.scheduleText !== undefined) {
+    if (typeof input.scheduleText !== 'string' || input.scheduleText.length > 500) throw Error('invalid_scheduleText');
+    job.scheduleText = input.scheduleText.trim();
+  }
   if (input.shift !== undefined && !['', 'day', 'night', 'both'].includes(input.shift as string)) throw Error('invalid_shift');
   if (input.ongoing !== undefined && typeof input.ongoing !== 'boolean') throw Error('invalid_ongoing');
   job.shift = (input.shift || '') as IndependentJobDetails['shift'];
