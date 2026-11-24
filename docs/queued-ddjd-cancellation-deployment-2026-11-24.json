@@ -1,0 +1,86 @@
+{
+  "project": "wellbuilt-sync",
+  "sourceCommit": "464d9ebddcd3014d5bc1ee177ad1a8cffe786152",
+  "recordedAt": "2026-11-24T10:57:52.925Z",
+  "scope": "Only the two named dashboard Functions; no Hosting, rules, migrations or resends",
+  "functions": [
+    {
+      "name": "createDriverDispatchIfAbsent",
+      "state": "ACTIVE",
+      "updateTime": "2026-11-24T10:56:36.167698404Z",
+      "buildId": "projects/559487114498/locations/us-central1/builds/60129bf1-5cd2-4afe-9742-06af6218a8a9",
+      "sourceGeneration": "1795517780975782",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "61e365a92c1da9630d2224d69262859d5b08616f"
+      }
+    },
+    {
+      "name": "resolveDriverJobCancellation",
+      "state": "ACTIVE",
+      "updateTime": "2026-11-24T10:56:31.039536147Z",
+      "buildId": "projects/559487114498/locations/us-central1/builds/60129bf1-5cd2-4afe-9742-06af6218a8a9",
+      "sourceGeneration": "1795517732666631",
+      "labels": {
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "61e365a92c1da9630d2224d69262859d5b08616f",
+        "deployment-tool": "cli-firebase"
+      }
+    }
+  ],
+  "verification": [
+    {
+      "function": "createDriverDispatchIfAbsent",
+      "path": "src/security/createDriverDispatchCallable.ts",
+      "sha256": "c3bd2935b350cd8bceccffb049070fbe093ae95bcba761be473724362b754d60",
+      "matches": true
+    },
+    {
+      "function": "createDriverDispatchIfAbsent",
+      "path": "src/security/operational/builderCancellation.ts",
+      "sha256": "e4d913bcbecdac325ed38c5e8fbb20931710e11de96ec3cc85063059a7bd22c5",
+      "matches": true
+    },
+    {
+      "function": "createDriverDispatchIfAbsent",
+      "path": "lib/security/createDriverDispatchCallable.js",
+      "sha256": "3d42aeead0ecf0c9ba8f51d63c551a326ec752c202decd723c7a6aa74e090843",
+      "matches": true
+    },
+    {
+      "function": "createDriverDispatchIfAbsent",
+      "path": "lib/security/operational/builderCancellation.js",
+      "sha256": "bf695e811e83770699070a7b51d7f0863ed1f0044b42f52986f368334e577ec6",
+      "matches": true
+    },
+    {
+      "function": "resolveDriverJobCancellation",
+      "path": "src/security/createDriverDispatchCallable.ts",
+      "sha256": "c3bd2935b350cd8bceccffb049070fbe093ae95bcba761be473724362b754d60",
+      "matches": true
+    },
+    {
+      "function": "resolveDriverJobCancellation",
+      "path": "src/security/operational/builderCancellation.ts",
+      "sha256": "e4d913bcbecdac325ed38c5e8fbb20931710e11de96ec3cc85063059a7bd22c5",
+      "matches": true
+    },
+    {
+      "function": "resolveDriverJobCancellation",
+      "path": "lib/security/createDriverDispatchCallable.js",
+      "sha256": "3d42aeead0ecf0c9ba8f51d63c551a326ec752c202decd723c7a6aa74e090843",
+      "matches": true
+    },
+    {
+      "function": "resolveDriverJobCancellation",
+      "path": "lib/security/operational/builderCancellation.js",
+      "sha256": "bf695e811e83770699070a7b51d7f0863ed1f0044b42f52986f368334e577ec6",
+      "matches": true
+    }
+  ],
+  "tests": "55 transaction/cancellation/create regressions passed; Functions TypeScript build passed",
+  "liveData": "No production record modified by deployment verification; phone acceptance remains separate"
+}
