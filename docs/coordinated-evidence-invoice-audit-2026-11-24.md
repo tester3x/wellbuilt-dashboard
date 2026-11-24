@@ -4,6 +4,8 @@ Status: source implementation and synthetic validation only. No deployment, APK,
 
 Follow-up: [S24 local-emulator check](s24-audit-emulator-check-2026-11-24.md) passed on-device browser logic/transport checks. Native app acceptance is still outstanding; installed apps and production work were preserved.
 
+Later follow-up: [native S24 component/transport acceptance](native-jsa-s24-acceptance-2026-11-24.md) passed with Hermes, native AsyncStorage, persisted Auth and actual Functions emulator calls. Full normal app handoff/workflow and rollout acceptance remain outstanding. Production Tickets460/JSA122 were retained.
+
 ## Changes
 
 - New authenticated `jsaLegacyEvidence` bridge uses verified JSA driver claims plus current active company membership. Historical evidence is create-only, byte-bounded, hashed and replayed identically. A conflicting signed original is never updated or deleted. Ownership-unknown records stay on the phone for recovery.
