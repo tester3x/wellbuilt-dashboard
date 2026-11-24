@@ -25,7 +25,7 @@ async function seed(){
  if(seeded)return;seeded=true;
  for(const company of ['a','b']){
   const companyId=run+'-'+company,driverId=companyId+'-driver';
-  await db.doc('companies/'+companyId).set({active:true,invoicePrefix:company.toUpperCase(),invoiceStartNumber:1000});
+  await db.doc('companies/'+companyId).set({active:true,invoicePrefix:company.toUpperCase(),invoiceStartNumber:1000,jsaMode:'per_job',jsaJobPolicy:'read_and_acknowledge',wellbuiltContract:{contractVersion:1,configurationVersion:1,planId:'native-audit',entitlementOverrides:[],contractEnforced:true}});
   await db.doc('driver_credentials/'+driverId).set({active:true});
   await admin.database().ref('drivers/profiles/'+driverId).set({active:true,companyId,displayName:'Synthetic Test Driver'});
   identities[company]={};
@@ -38,7 +38,9 @@ async function seed(){
    identities[company][app]={uid,companyId,driverId,generation:1,token:result.idToken,customToken:custom};
   }
  }
- await db.doc('invoices/'+run+'-job').set({companyId:identities.a.jsa.companyId,driverId:identities.a.jsa.driverId,shiftId:run+'-shift'});
+ await db.doc('plans/native-audit').set({contractVersion:1,planId:'native-audit',displayName:'Synthetic emulator only',capabilities:['jsa'],status:'active',apps:{'wellbuilt-jsa':{included:true,requiresActiveShift:false}}});
+ await db.doc('driver_shift_authority/'+identities.a.jsa.driverId).set({driverId:identities.a.jsa.driverId,companyId:identities.a.jsa.companyId,initialized:true,version:1,openPeriodId:null,originLocalDate:null});
+ await db.doc('invoices/'+run+'-job').set({companyId:identities.a.jsa.companyId,driverId:identities.a.jsa.driverId,shiftId:run+'-shift',wellName:'AUDIT WELL ONLY',operator:'Synthetic Operator',jobType:'Production Water'});
 }
 const original=()=>({id:'legacy_'+requestId,companyId:identities.a.jsa.companyId,driverId:identities.a.jsa.driverId,driverHash:identities.a.jsa.driverId,timestamp:new Date(now).toISOString(),signature:'Synthetic signature only',shiftId:run+'-shift',legacyReceiptBinding:{requestId,companyId:identities.a.jsa.companyId,driverHash:identities.a.jsa.driverId,jobDocId:run+'-job',shiftId:run+'-shift',receiptVersion:1,receivedAt:new Date(now-1000).toISOString(),expiresAt:new Date(now+3600000).toISOString()}});
 function json(res,status,value){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
@@ -50,6 +52,11 @@ const server=http.createServer(async(req,res)=>{
   if(req.method==='GET'&&url.pathname==='/'){res.writeHead(200,{'Content-Type':'text/html','Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'"});return res.end(fs.readFileSync(path.join(__dirname,'s24-audit.html')));}
   if(req.method==='GET'&&url.pathname==='/client.js'){res.writeHead(200,{'Content-Type':'text/javascript','Cache-Control':'no-store'});return res.end(fs.readFileSync(path.join(__dirname,'s24-audit-client.js')));}
   if(req.method==='GET'&&url.pathname==='/bootstrap'){await seed();return json(res,200,{projectId,run,identities,record:original(),sources});}
+  if(req.method==='GET'&&url.pathname==='/guided-proof'){
+   await seed();const rows=await db.collection('jsa_governed_requests').where('companyId','==',identities.a.jsa.companyId).get();
+   const artifacts=await db.collection('jsa_governed_artifacts').where('companyId','==',identities.a.jsa.companyId).get();
+   return json(res,200,{requests:rows.docs.map(d=>({id:d.id,...d.data()})),artifactCount:artifacts.size,artifactHashes:artifacts.docs.map(d=>d.data().snapshotHash)});
+  }
   if(req.method==='POST'&&url.pathname.startsWith('/rpc/')){
    const token=(req.headers.authorization||'').replace(/^Bearer /,'');
    const decoded=await admin.auth().verifyIdToken(token);if(!decoded.uid.startsWith(run+'-'))throw Error('synthetic_only');
