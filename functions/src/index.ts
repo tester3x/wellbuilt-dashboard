@@ -3792,3 +3792,4 @@ export {jsaGetShiftPreview} from './jsaReceipt/jsaShiftPreviewCallable';
 export { driverArrivalLocations, reviewArrivalLocations } from './security/arrivalLocations';
 export { driverJobExceptions, reviewJobExceptions } from './security/jobExceptions';
 export { jsaOffShiftPeriod } from './jsaReceipt/jsaOffShiftPeriod';
+export { jsaOfflineShift } from './jsaReceipt/jsaOfflineCallable';
