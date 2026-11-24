@@ -20,9 +20,9 @@ export function independentDispatchUrgency(job: WhatsAppJob, nowMs = Date.now())
 
 export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: string, nowMs = Date.now()): string {
   const urgency = independentDispatchUrgency(job, nowMs);
-  const heading = urgency === 'urgent' ? '🚨🚨🚨🚨🚨\n*URGENT DISPATCH*'
-    : urgency === 'soon' ? '🟠🟠🟠🟠🟠\n*UPCOMING DISPATCH*'
-      : '🟡🟡🟡🟡🟡\n*JOB DISPATCH*';
+  const heading = urgency === 'urgent' ? '*URGENT DISPATCH*'
+    : urgency === 'soon' ? '*UPCOMING DISPATCH*'
+      : '*JOB DISPATCH*';
   const crew = job.drivers || [];
   const shiftGroup = (shift: 'day' | 'night' | '') => crew.filter(driver => (driver.shift || '') === shift).map(driver => driver.name).filter(Boolean);
   const day = shiftGroup('day');

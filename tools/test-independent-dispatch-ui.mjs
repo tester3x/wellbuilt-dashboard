@@ -218,16 +218,6 @@ try {
   const assignedCard=page.getByRole('region',{name:'Assigned jobs'}).getByRole('article').filter({has:page.getByRole('heading',{name:'Pipe run water-hauling',exact:true})});
   await assignedCard.waitFor();
   await assignedCard.getByText('Drivers (2)').waitFor();
-  if (width === 2560) {
-    await page.context().route('https://wa.me/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: 'WhatsApp share handoff' }));
-    const [sharePage] = await Promise.all([page.waitForEvent('popup'), assignedCard.getByTestId('independent-whatsapp-share').click()]);
-    await sharePage.waitForLoadState();
-    const tabs = page.context().pages().length;
-    await assignedCard.getByTestId('independent-whatsapp-share').click();
-    assert.equal(page.context().pages().length, tabs, 'subsequent shares reuse the same browser tab');
-    await assignedCard.getByRole('button',{name:'Close WhatsApp share page'}).click();
-    assert.equal(sharePage.isClosed(), true, 'the dashboard closes only its script-opened share page');
-  }
   assert.equal(await assignedCard.locator('details').filter({hasText:'Choose drivers'}).evaluate(details => details.open), false,
     'successful add closes the chooser');
   await assignedCard.getByText('Drivers requested: 3 · Assigned: 2 · 1 still needed').waitFor();
@@ -284,6 +274,8 @@ try {
   assert.equal(await assignedCard.getByRole('button',{name:'Mark sent'}).count(),0,'manual WhatsApp send confirmation persists on refresh');
   assert.ok((await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('title'))?.includes('+17015550999'));
   assert.ok((await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('href'))?.startsWith('https://wa.me/17015550999?text='));
+  assert.equal(await assignedCard.getByRole('link',{name:'Prepare job message'}).first().getAttribute('target'), null,
+    'a direct driver message also stays in the current browser tab');
   await assignedCard.getByTitle('Driver B').waitFor();
   assert.equal(await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).inputValue(),'night');
   await assignedCard.getByRole('combobox',{name:'Assignment shift for Driver B on Pipe run water-hauling'}).selectOption('day');
@@ -390,6 +382,18 @@ try {
   assert.deepEqual(await page.evaluate(()=>window.requests.filter(r=>r.op==='create'&&r.job.title.startsWith('Pipe run ')).map(r=>r.job.sector)),sectors.map(([sector])=>sector));
   assert.deepEqual(errors,[]);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');
+  if (width === 2560) {
+    await page.context().route('https://wa.me/**', route => route.fulfill({ status: 302,
+      headers: { location: 'https://api.whatsapp.com/send/?text=Mock' }, body: '' }));
+    await page.context().route('https://api.whatsapp.com/**', route => route.fulfill({ status: 200, contentType: 'text/html',
+      headers: { 'cross-origin-opener-policy': 'same-origin-allow-popups' }, body: 'WhatsApp share handoff' }));
+    await page.getByRole('combobox',{name:'Job status',exact:true}).selectOption('active');
+    await assignedLinkedCard.getByTestId('independent-whatsapp-share').click();
+    assert.ok(page.url().startsWith('https://api.whatsapp.com/send/'), 'share reaches the WhatsApp handoff');
+    assert.equal(page.context().pages().length, 1, 'share uses the current browser tab through the WhatsApp redirect');
+    await page.goBack();
+    await page.getByRole('heading',{name:'Dispatch board'}).waitFor();
+  }
   await page.close();
  }
  console.log('Independent Dispatch actual UI: five sector forms, compact waiting alert/modal, checkbox crew batch and swap, adaptive work lanes, assign/start/complete, filters, terminal lock; desktop/mobile; no messaging.');

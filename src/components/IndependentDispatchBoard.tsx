@@ -198,7 +198,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
         </p>
         {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
         {canWrite && chatUrl && ['assigned', 'in_progress'].includes(job.status) && <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-          <a href={chatUrl} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline"
+          <a href={chatUrl} className="text-sky-200 underline"
             title={`Open WhatsApp by ${contact.phoneE164}; saved name: ${contact.whatsappName}`}>Prepare job message</a>
           {sent ? <span className="rounded border border-emerald-700 px-1 text-emerald-200" title={`Marked by dispatch at ${sent.sentAt}`}>Marked sent</span>
             : <button type="button" disabled={busy} className="rounded border border-sky-700 px-1 text-sky-200 disabled:opacity-50"
