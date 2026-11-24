@@ -3720,6 +3720,7 @@ export {
   jsaAcknowledgeJob,
 } from './jsaReceipt/jsaReceiptCallables';
 export { jsaStandalone } from './jsaReceipt/jsaStandaloneCallable';
+export { jsaLegacyEvidence } from './jsaReceipt/jsaLegacyEvidenceCallable';
 export { jsaWeeklyForms } from './jsaReceipt/jsaWeeklyFormsCallable';
 export { jsaShiftSummary } from './jsaReceipt/jsaShiftSummaryCallable';
 export { jsaHomeState } from './jsaReceipt/jsaHomeStateCallable';

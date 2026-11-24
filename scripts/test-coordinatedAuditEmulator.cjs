@@ -1,0 +1,32 @@
+// Synthetic cross-repository server integration. No deployment or production DB.
+process.env.FIRESTORE_EMULATOR_HOST='127.0.0.1:8183';
+const assert=require('node:assert/strict'),path=require('node:path');
+const admin=require('../functions/node_modules/firebase-admin');
+const {handleLegacyEvidence}=require('../functions/lib/jsaReceipt/jsaLegacyEvidence');
+if(!process.argv[2])throw Error('Pass the registered Tickets functions/lib/invoiceAllocation.js path');
+const {allocateInvoiceBlock}=require(path.resolve(process.argv[2]));
+const app=admin.initializeApp({projectId:'demo-jsa-audit'},'coordinated-audit'),db=app.firestore();
+const suite='synthetic-'+Date.now(),companyId=suite+'-company',driverId=suite+'-driver',uid=suite+'-user';
+const auth={uid,claims:{kind:'driver',app:'jsa',companyId,driverId}},now=Date.parse('2026-11-24T12:00:00Z'),requestId=require('node:crypto').randomBytes(32).toString('base64url'),id=suite+'-record',jobId=suite+'-job';
+const store={transaction:fn=>db.runTransaction(tx=>fn({get:async p=>{const s=await tx.get(db.doc(p));return s.exists?s.data():null;},create:(p,r)=>tx.create(db.doc(p),r)})),list:async(c,d)=>(await db.collection('jsas').where('companyId','==',c).where('driverId','==',d).get()).docs.map(x=>x.data())};
+const record={id,companyId,driverId,driverHash:driverId,timestamp:new Date(now).toISOString(),signature:'Synthetic signed evidence',shiftId:'synthetic-shift',legacyReceiptBinding:{requestId,jobDocId:jobId,companyId,driverHash:driverId,shiftId:'synthetic-shift',receiptVersion:1,receivedAt:new Date(now-1000).toISOString(),expiresAt:new Date(now+1000).toISOString()}};
+(async()=>{
+ await db.doc('invoices/'+jobId).set({companyId,driverId,shiftId:'synthetic-shift'});
+ const call=b=>handleLegacyEvidence(store,auth,b,async()=>true,now+60000);
+ await call({operation:'store',record});const before=(await db.doc('jsas/'+id).get()).data();
+ await Promise.all([call({operation:'store',record}),call({operation:'store',record})]);
+ assert.deepEqual((await db.doc('jsas/'+id).get()).data(),before);
+ await assert.rejects(call({operation:'store',record:{...record,signature:'changed'}}),/immutable/);
+ const [a,b]=await Promise.all([call({operation:'receipt',recordId:id,requestId}),call({operation:'receipt',recordId:id,requestId})]);assert.deepEqual(a.receipt,b.receipt);assert.equal(a.receipt.completedAt,record.timestamp);
+ const invoiceAuth={uid,token:{kind:'driver',app:'wbt',companyId,driverId}};
+ await db.doc('companies/'+companyId).set({invoicePrefix:'SYN',invoiceStartNumber:1000});
+ const transaction=fn=>db.runTransaction(tx=>fn({prior:async k=>{const d=await tx.get(db.doc('invoiceBlockRequests/'+k));return d.exists?d.data():null;},company:async c=>(await tx.get(db.doc('companies/'+c))).data()||null,latestEnd:async c=>{const q=await tx.get(db.collection('invoiceBlocks').where('companyId','==',c).orderBy('end','desc').limit(1));return q.empty?null:q.docs[0].data().end;},createBlock:r=>{const ref=db.collection('invoiceBlocks').doc();tx.create(ref,r);return ref.id;},remember:(k,r)=>tx.create(db.doc('invoiceBlockRequests/'+k),r)}));
+ const allocate=requestId=>allocateInvoiceBlock(invoiceAuth,{companyId,requestId},transaction,now);
+ const [x,y]=await Promise.all([allocate('synthetic-reservation-1'),allocate('synthetic-reservation-1')]);assert.deepEqual(x,y);assert.equal((await db.collection('invoiceBlocks').where('companyId','==',companyId).get()).size,1);
+ const z=await allocate('synthetic-reservation-2');assert.equal(z.start,x.end+1);
+ await assert.rejects(allocateInvoiceBlock(invoiceAuth,{companyId:'foreign',requestId:'synthetic-reservation-3'},transaction,now),/company_mismatch/);
+ assert.equal((await db.collection('invoiceBlocks').where('companyId','==',companyId).get()).size,2);
+ assert.deepEqual((await db.doc('jsas/'+id).get()).data(),before);
+ console.log('PASS coordinated Firestore-emulator transactions: immutable JSA archive, concurrent receipt replay, original signature/time preservation, one invoice block after lost-ack/concurrent replay, next nonoverlapping range, foreign-company denial.');
+ await app.delete();
+})().catch(async e=>{console.error(e.message);await app.delete();process.exitCode=1;});
