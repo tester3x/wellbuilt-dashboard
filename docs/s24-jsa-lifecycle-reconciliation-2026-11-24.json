@@ -1,0 +1,44 @@
+{
+  "recordedAt": "2026-11-24T11:47:11.212Z",
+  "authorization": "User requested correction of the off-shift JSA incorrectly attached to the S24 test shift; defer further testing until field work.",
+  "scope": "Lifecycle metadata reconciliation only, one S24 test context. No Fold operations, signed-content edits, job-history rewrites or new signed JSA.",
+  "verified": {
+    "testShiftClosed": true,
+    "oldOffShiftPeriod": {
+      "state": "finalized",
+      "shiftId": null,
+      "reason": "shift_started",
+      "effectiveClosure": "Canonical server clock-in event"
+    },
+    "separateShiftPeriod": {
+      "state": "finalized",
+      "reason": "shift_ended",
+      "bookends": "Canonical server clock-in and logout events",
+      "freshSignedReadCreated": false
+    },
+    "activePointer": "Finalized separate shift period; cannot resume the old off-shift JSA",
+    "protectedDocumentFieldHashesMatched": 4,
+    "protectedTypes": [
+      "Original governed signed read",
+      "Original signed artifact",
+      "Completed test invoice",
+      "Pre/post-trip completion ledger"
+    ],
+    "jobAcknowledgment": "One existing historical acknowledgment retained; it is not reclassified as a fresh shift read."
+  },
+  "mutation": {
+    "atomicWrites": 4,
+    "collections": [
+      "jsa_work_periods",
+      "jsa_active_work_periods",
+      "jsa_lifecycle_corrections"
+    ],
+    "idempotency": "Repeated apply found the correction receipt and performed no writes",
+    "privateEvidence": "C:/dev/release-artifacts/jsa-period-reconcile-20261124/verified.json"
+  },
+  "forwardFix": {
+    "sourceCommit": "d5f169064dc94aa330286ecebe72a50136f7d783",
+    "deploymentReceipt": "docs/offline-jsa-shift-boundary-deployment-2026-11-24.json"
+  },
+  "pending": "Full offline Start under a clean fresh shift and driver-reviewed JSA, then once-only reconnect verification. Testing parked at user request; no pass claimed."
+}
