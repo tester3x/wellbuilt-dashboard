@@ -51,6 +51,16 @@ describe('Independent Dispatch directory', () => {
     expect(requireTrustedCompanyCapability).toHaveBeenCalledWith('staff', 'manageCompany');
     expect(records.get('companies/company-a/independent_dispatch_customers/customer-a').companyId).toBe('company-a');
   });
+  it('returns only the current company approved route guides', async () => {
+    records.set('companies/company-a/independent_dispatch_config/settings', { sectors: ['water-hauling'], routeGuides: [{
+      id: 'access', title: 'Approved route', locations: ['Barnstormer'],
+      imageUrls: ['https://firebasestorage.googleapis.com/v0/b/wellbuilt-sync.firebasestorage.app/o/map?alt=media&token=x'],
+    }] });
+    records.set('companies/company-b/independent_dispatch_config/settings', { routeGuides: [{
+      id: 'other', title: 'Other company', locations: ['Secret'], imageUrls: [],
+    }] });
+    await expect(call({ op: 'list' })).resolves.toMatchObject({ routeGuides: [{ id: 'access' }] });
+  });
   it('rejects users without the package and invalid customer payloads', async () => {
     records.set('companies/company-a', { activePackages: ['water-hauling'] });
     await expect(call({ op: 'list' })).rejects.toThrow('package_inactive');

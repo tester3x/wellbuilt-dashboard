@@ -84,3 +84,18 @@ test('retains exact operator work description and separate dispatch-selected pic
   assert.ok(message.includes('Delivery / Destination') === false);
   assert.match(message, /\*DELIVERY \/ DESTINATION\*/);
 });
+
+test('includes approved access maps on special well jobs and keeps emoji out of WhatsApp links', () => {
+  const special = { ...job, pickup: 'Daredevil Fed. 2-2-14H', destination: 'Pad 390 (Phazor Fed. 3-1-13H)' };
+  const guides = [{ id: 'access', title: 'Barnstormer, Daredevil and Phazor', locations: ['Barnstormer', 'Daredevil', 'Phazor'],
+    imageUrls: ['https://firebasestorage.googleapis.com/map-one', 'https://firebasestorage.googleapis.com/map-two'] }];
+  const linked = decodeURIComponent(independentWhatsAppGroupShareUrl(special, guides).split('?text=')[1]);
+  assert.match(linked, /APPROVED ACCESS ROUTE/);
+  assert.match(linked, /Route map 1: https:\/\/firebasestorage.googleapis.com\/map-one/);
+  assert.match(linked, /Route map 2: https:\/\/firebasestorage.googleapis.com\/map-two/);
+  assert.doesNotMatch(linked, /Google Maps directions:/);
+  assert.doesNotMatch(linked, /🚨/);
+  const copy = buildIndependentWhatsAppText(special, undefined, Date.now(), guides, true);
+  assert.match(copy, /^🚨🚨🚨🚨🚨👆🏽/);
+  assert.match(copy, /Pickup map: https:\/\/www.google.com\/maps\/search/);
+});

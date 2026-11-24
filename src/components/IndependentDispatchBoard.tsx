@@ -13,6 +13,7 @@ import { independentDriverContact } from '@/lib/independentDriverContact';
 import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
 import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
 import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
+import { googleMapsDirectionsUrl, googleMapsSearchUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
 
 const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', cargo: '', scheduledAt: '', notes: '',
   jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
@@ -188,7 +189,7 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
   function crewRow(job: IndependentJob, driver: ReturnType<typeof jobCrew>[number]) {
     const contact = independentDriverContact(driver, driverProfiles, drivers);
     const missingPhone = !normalizeWhatsAppNumber(contact.phoneE164);
-    const chatUrl = independentWhatsAppDriverUrl(job, contact.whatsappName, contact.phoneE164);
+    const chatUrl = independentWhatsAppDriverUrl(job, contact.whatsappName, contact.phoneE164, directory?.routeGuides);
     const sent = job.whatsappSent?.find(entry => entry.driverKey === driver.key && entry.sentAt >= ('assignedAt' in driver ? driver.assignedAt : ''));
     return <div key={driver.key} className="grid min-h-[4.75rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 border-t border-gray-700/70 px-2 py-2 first:border-t-0">
       <div className="min-w-0">
@@ -297,8 +298,26 @@ export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers
       {job.requestedDriverCount && <p className="text-sm text-amber-200">Drivers requested: {job.requestedDriverCount} · Assigned: {jobCrew(job).length}{jobCrew(job).length < job.requestedDriverCount ? ` · ${job.requestedDriverCount - jobCrew(job).length} still needed` : ''}</p>}
       {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
       <JobDialpadLinks job={job} directory={directory} drivers={drivers} profiles={driverProfiles} />
-      {canWrite && <IndependentWhatsAppLinks job={job} />}
+      {canWrite && <IndependentWhatsAppLinks job={job} guides={directory?.routeGuides} />}
       <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2"><div><dt className="text-gray-400">Pickup</dt><dd className="whitespace-pre-wrap break-words text-white">{job.pickup}</dd></div><div><dt className="text-gray-400">Delivery</dt><dd className="whitespace-pre-wrap break-words text-white">{job.destination}</dd></div></dl>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-sky-200">
+        {googleMapsSearchUrl(job.pickup) && <a href={googleMapsSearchUrl(job.pickup)!} target="_blank" rel="noopener noreferrer" className="underline">Pickup on Google Maps</a>}
+        {googleMapsSearchUrl(job.destination) && <a href={googleMapsSearchUrl(job.destination)!} target="_blank" rel="noopener noreferrer" className="underline">Delivery on Google Maps</a>}
+        {!routeGuidesForJob(job, directory?.routeGuides).length && googleMapsDirectionsUrl(job.pickup, job.destination) &&
+          <a href={googleMapsDirectionsUrl(job.pickup, job.destination)!} target="_blank" rel="noopener noreferrer" className="underline">Google Maps directions</a>}
+      </div>
+      {routeGuidesForJob(job, directory?.routeGuides).map(guide => <aside key={guide.id} className="mt-3 rounded border border-amber-600 bg-amber-950/40 p-3 text-sm text-amber-100">
+        <p className="font-semibold">Approved access: {guide.title}</p>
+        <p className="mt-1">Follow the blue route in these maps. Avoid the marked roads near the farmer’s home. Google Maps can recalculate; use the approved access maps for the final approach.</p>
+        <div className="mt-2 flex flex-wrap gap-3">{guide.imageUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="underline">Open route map {index + 1}</a>)}
+          {guide.directionsUrl && <a href={guide.directionsUrl} target="_blank" rel="noopener noreferrer" className="underline">Google Maps planned route (verify)</a>}
+        </div>
+        <details className="mt-2"><summary className="cursor-pointer text-xs underline">Preview approved route maps</summary>
+          <div className="mt-2 flex flex-wrap gap-2">{guide.imageUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener noreferrer">
+            <img src={url} alt={`${guide.title} route map ${index + 1}`} loading="lazy" className="h-36 w-64 rounded border border-amber-700 object-cover object-center" />
+          </a>)}</div>
+        </details>
+      </aside>)}
       {(job.cargo || job.notes || (job.sector && Object.values(job.sectorFields || {}).some(Boolean))) && <details className="mt-3 rounded border border-gray-700 bg-gray-900/60 p-2 text-sm"><summary className="cursor-pointer text-cyan-200">Details and instructions</summary>
         {job.cargo && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">Cargo: {job.cargo}</p>}
         {job.sector && job.sectorFields && <dl className="mt-2 grid gap-1 text-xs text-gray-300">{SECTOR_FIELDS[job.sector as IndependentSector]?.map(field => job.sectorFields?.[field.key] ? <div key={field.key}><dt className="inline text-gray-400">{field.label}: </dt><dd className="inline">{job.sectorFields[field.key]}</dd></div> : null)}</dl>}

@@ -1,4 +1,5 @@
 import type { IndependentJob } from './independentDispatchJobs';
+import { googleMapsDirectionsUrl, googleMapsSearchUrl, routeGuidesForJob, type IndependentRouteGuide } from './independentRouteGuides';
 
 type WhatsAppJob = Pick<IndependentJob,
   'title' | 'customer' | 'pickup' | 'destination' | 'cargo' | 'reference' | 'notes' |
@@ -18,7 +19,7 @@ export function independentDispatchUrgency(job: WhatsAppJob, nowMs = Date.now())
   return 'routine';
 }
 
-export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: string, nowMs = Date.now()): string {
+export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: string, nowMs = Date.now(), guides: IndependentRouteGuide[] = [], includeEmojiAlert = false): string {
   const urgency = independentDispatchUrgency(job, nowMs);
   const heading = urgency === 'urgent' ? '*URGENT DISPATCH*'
     : urgency === 'soon' ? '*UPCOMING DISPATCH*'
@@ -33,14 +34,21 @@ export function buildIndependentWhatsAppText(job: WhatsAppJob, recipientName?: s
   const assigned = crew.length
     ? [shiftBlock('DAY SHIFT', day), shiftBlock('NIGHT SHIFT', night), shiftBlock('SHIFT NOT SET', unset)].filter(Boolean).join('\n\n')
     : job.driverName ? `- ${job.driverName}` : '';
+  const accessGuides = routeGuidesForJob(job, guides);
+  const pickupMap = googleMapsSearchUrl(job.pickup);
+  const deliveryMap = googleMapsSearchUrl(job.destination);
+  const directions = accessGuides.length ? null : googleMapsDirectionsUrl(job.pickup, job.destination);
   const sections = [
-    heading,
+    includeEmojiAlert && urgency === 'urgent' ? `🚨🚨🚨🚨🚨👆🏽\n${heading}` : heading,
     ['*JOB*', job.title, `Customer: ${job.customer}`,
       job.reference ? `Reference: ${job.reference}` : '',
       recipientName ? `For: ${recipientName}` : ''].filter(Boolean).join('\n'),
     job.notes ? `*DESCRIPTION / INSTRUCTIONS*\n${job.notes}` : '',
     `*PICKUP / SOURCE*\n${job.pickup || 'Not specified'}`,
     `*DELIVERY / DESTINATION*\n${job.destination || 'Not specified'}`,
+    [pickupMap ? `Pickup map: ${pickupMap}` : '', deliveryMap ? `Delivery map: ${deliveryMap}` : ''].filter(Boolean).join('\n'),
+    ...accessGuides.map(guide => `*APPROVED ACCESS ROUTE: ${guide.title.toUpperCase()}*\nFollow the blue route in these maps. Avoid the marked roads near the farmer's home. Google Maps may suggest a different road; the approved access maps take priority.\n${guide.imageUrls.map((url, index) => `Route map ${index + 1}: ${url}`).join('\n')}${guide.directionsUrl ? `\nGoogle Maps planned route (verify against the access maps): ${guide.directionsUrl}` : ''}`),
+    directions ? `Google Maps directions: ${directions}` : '',
     job.cargo ? `*CARGO / LOADS*\n${job.cargo}` : '',
     job.scheduledAt ? `*SCHEDULE*\nScheduled pickup (UTC): ${new Date(job.scheduledAt).toISOString()}` : '',
     [job.requestedDriverCount ? `Drivers requested: ${job.requestedDriverCount}` : '',
@@ -57,11 +65,11 @@ export function normalizeWhatsAppNumber(phone: string | undefined): string | nul
   return /^\+[1-9]\d{7,14}$/.test(trimmed) ? trimmed.slice(1) : null;
 }
 
-export function independentWhatsAppGroupShareUrl(job: WhatsAppJob): string {
-  return 'https://wa.me/?text=' + encodeURIComponent(buildIndependentWhatsAppText(job));
+export function independentWhatsAppGroupShareUrl(job: WhatsAppJob, guides: IndependentRouteGuide[] = []): string {
+  return 'https://wa.me/?text=' + encodeURIComponent(buildIndependentWhatsAppText(job, undefined, Date.now(), guides));
 }
 
-export function independentWhatsAppDriverUrl(job: WhatsAppJob, name: string, phone: string | undefined): string | null {
+export function independentWhatsAppDriverUrl(job: WhatsAppJob, name: string, phone: string | undefined, guides: IndependentRouteGuide[] = []): string | null {
   const digits = normalizeWhatsAppNumber(phone);
-  return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(buildIndependentWhatsAppText(job, name))}` : null;
+  return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(buildIndependentWhatsAppText(job, name, Date.now(), guides))}` : null;
 }

@@ -79,7 +79,21 @@ export const staffIndependentDispatchDirectory = httpsV2.onCall(
       const communicationChannels = (Array.isArray(config.data()?.communicationChannels)
         ? config.data()!.communicationChannels : []).filter((value: unknown) => value === 'sms' || value === 'whatsapp');
       const dispatchPhoneE164 = typeof config.data()?.dispatchPhoneE164 === 'string' ? config.data()!.dispatchPhoneE164 : '';
+      const routeGuides = (Array.isArray(config.data()?.routeGuides) ? config.data()!.routeGuides : [])
+        .filter((guide: any) => guide && typeof guide.id === 'string' && ID.test(guide.id)
+          && typeof guide.title === 'string' && guide.title.length <= 140
+          && Array.isArray(guide.locations) && guide.locations.length > 0 && guide.locations.length <= 20
+          && guide.locations.every((name: unknown) => typeof name === 'string' && name.length <= 100)
+          && Array.isArray(guide.imageUrls) && guide.imageUrls.length > 0 && guide.imageUrls.length <= 4
+          && guide.imageUrls.every((url: unknown) => typeof url === 'string' && url.length <= 600
+            && url.startsWith('https://firebasestorage.googleapis.com/v0/b/wellbuilt-sync.firebasestorage.app/o/'))
+          && (!guide.directionsUrl || (typeof guide.directionsUrl === 'string' && guide.directionsUrl.length <= 2048
+            && guide.directionsUrl.startsWith('https://www.google.com/maps/dir/?api=1'))))
+        .slice(0, 20)
+        .map((guide: any) => ({ id: guide.id, title: guide.title, locations: guide.locations,
+          imageUrls: guide.imageUrls, ...(guide.directionsUrl ? { directionsUrl: guide.directionsUrl } : {}) }));
       return { ok: true, companyId: authority.companyId, sectors, communicationChannels, dispatchPhoneE164,
+        routeGuides,
         customers: customers.docs.map(doc => ({ ...doc.data(), id: doc.id })).filter((row: any) => row.active !== false)
           .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name))) };
     }
