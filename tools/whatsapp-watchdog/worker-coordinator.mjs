@@ -16,10 +16,11 @@ export function loadWorkerConfig(directory) {
 // Roles, grace periods, claims and actual receipt verification live in Firebase.
 // The existing intake message reservation remains the final duplicate barrier.
 export class WorkerCoordinator {
-  constructor(queue, config, request) {
+  constructor(queue, config, request, monitoring = null) {
     this.queue = queue;
     this.config = config;
     this.request = request;
+    this.monitoring = monitoring;
     this.error = '';
     this.verified = new Map();
     this.busy = false;
@@ -76,8 +77,9 @@ export class WorkerCoordinator {
       const rows = Object.values(this.queue.data.messages || {}).filter(post => !post.deleted)
         .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt)).slice(0, 100)
         .flatMap(post => (post.rows || []).map((row, rowIndex) => ({post, row, rowIndex})))
-        .filter(({row}) => this.queue.data.deliveries?.[row.id]?.status === 'complete');
-      if (this.lastAuditAt && now-this.lastAuditAt<600000) {this.error='';return;}
+        .filter(({row}) => !this.monitoring?.isPaused(row.wellName) && this.queue.data.deliveries?.[row.id]?.status === 'complete');
+      const auditInterval=this.monitoring?.interval(600000,3600000)||600000;
+      if (this.lastAuditAt && now-this.lastAuditAt<auditInterval) {this.error='';return;}
       this.lastAuditAt=now;
       const audits=this.queue.data.workerReceiptAudits??={};
       let checked=0;

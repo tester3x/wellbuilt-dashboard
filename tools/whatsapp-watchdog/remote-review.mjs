@@ -4,11 +4,11 @@ export class RemoteReviews{
  async tick(channels){if(this.busy||this.transport.busy||!this.transport.secret)return;this.busy=true;try{
   this.queue.data.remoteReviews??={};const ledger=this.queue.data.remoteReviews;
   const entries=Object.values(this.queue.data.messages).filter(post=>!post.photoOnly).flatMap(post=>post.rows.filter(row=>this.queue.data.deliveries?.[row.id]?.status==='review'||this.queue.data.deliveries?.[row.id]?.needsReview||ledger[row.id]).map(row=>({post,row})));
-  for(const {post,row} of entries){if(this.transport.busy)break;const delivery=this.queue.data.deliveries?.[row.id];if(!delivery)continue;
+  for(const {post,row} of entries){if(this.transport.busy)break;if(this.transport.monitoring?.isPaused(row.wellName))continue;const delivery=this.queue.data.deliveries?.[row.id];if(!delivery)continue;
    const revision=hash(post.digest+'\0'+JSON.stringify([row,delivery.status,delivery.issues||[],delivery.needsReview,delivery.correctionPending,delivery.measurements]));const prior=ledger[row.id];if(delivery.status!=='review'&&!delivery.needsReview&&prior?.syncedRevision===revision&&!prior.result)continue;
    // Changed/new reviews and command acknowledgments go immediately. An
    // unchanged hold only needs an office-command check every five minutes.
-   if(prior?.syncedRevision===revision&&!prior.result&&Date.now()-(prior.checkedAt||0)<300000)continue;
+   if(prior?.syncedRevision===revision&&!prior.result&&Date.now()-(prior.checkedAt||0)<(this.transport.monitoring?.reviewInterval(post.channel)||300000))continue;
    const payload={rowId:row.id,revision,channel:post.channel,groupName:channels.find(c=>c.id===post.channel)?.name||'',body:post.body||post.chat,author:post.author||'',postedAt:post.postedAt||post.updatedAt,row:{...row,...delivery.measurements},status:delivery.needsReview?'review':delivery.status,issues:delivery.issues||row.issues||[],editable:canReviewPost(post,this.queue.data.deliveries,row.id),...(prior?.result?{result:prior.result}:{})};
    const response=await this.transport.request('syncWatchdogReviewV2',payload);if(response.receipt){const receipt=response.receipt;if(receipt.identity!==delivery.identity||receipt.packetId!==delivery.packetId||!['complete','excluded'].includes(receipt.status))throw Error('Invalid reconciliation receipt');this.queue.data.deliveries[row.id]=receipt;this.queue.save();}ledger[row.id]={...prior,syncedRevision:revision,checkedAt:Date.now()};if(prior?.result)delete ledger[row.id].result;this.queue.save();
    const command=response.command;if(!command)continue;

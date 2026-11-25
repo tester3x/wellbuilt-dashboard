@@ -44,9 +44,10 @@ export class PhotoInbox {
           // Successful local reads already send structured intake/receipt
           // metadata. Only unresolved photos need the private image upload.
           const unresolved=post.rows.some(row=>{
+            if(this.transport.monitoring?.isPaused(row.wellName))return false;
             const delivery=this.queue.data.deliveries?.[row.id];
             return row.photo && !row.photo.autoSend &&
-              !['complete','duplicate','excluded','archived','before_activation','ignored'].includes(delivery?.status);
+              !['complete','duplicate','excluded','archived','before_activation','ignored','monitoring_paused'].includes(delivery?.status);
           });
           if(!unresolved)continue;
           const key = createHash('sha256').update(post.channel + ':' + post.id).digest('hex');
