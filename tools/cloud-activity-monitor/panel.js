@@ -1,8 +1,19 @@
 const refs=Object.fromEntries(['panel','health','cause','photo','reads','writes','fresh','details','detailsButton','sound','float','hint','demo'].map(id=>[id,document.getElementById(id)]));
-let audio=null,sound=false,previous='',lastAlarm=0;
+let audio=null,sound=false,previous='',lastAlarm=0,testUntil=0;
 const count=value=>value?Math.round(value.count).toLocaleString()+'/min':'No recent data';
 refs.detailsButton.onclick=()=>{refs.details.hidden=!refs.details.hidden;refs.detailsButton.textContent=refs.details.hidden?'Details':'Less';};
 refs.sound.onclick=async()=>{try{audio=audio||new AudioContext();await audio.resume();sound=!sound;refs.sound.textContent=sound?'Sound on':'Sound off';}catch{refs.sound.textContent='Sound unavailable';}};
+document.getElementById('testAlert').onclick=async()=>{
+ try{audio=audio||new AudioContext();await audio.resume();sound=true;refs.sound.textContent='Sound on';}
+ catch{refs.sound.textContent='Sound unavailable';}
+ testUntil=Date.now()+10000;showTest();beep();
+ setTimeout(()=>{testUntil=0;refresh();},10000);
+};
+function showTest(){
+ refs.panel.style.setProperty('--status','#ff6262');refs.health.textContent='TEST: ACTIVITY SPIKE';
+ refs.demo.textContent='· FAKE SPIKE';refs.cause.textContent='Simulated 1,275 calls/min. No cloud requests or resends. Returns to live in 10 seconds.';
+ refs.photo.textContent='1,275/min (fake)';refs.reads.textContent='Test only';refs.writes.textContent='Test only';refs.fresh.textContent='Local alert test — live collector unchanged';
+}
 if(!('documentPictureInPicture'in window)){refs.float.disabled=true;refs.hint.textContent='Floating view requires a supported Chrome or Edge browser. This tab still shows the live metrics.';}
 refs.float.onclick=async()=>{try{
  const pip=await documentPictureInPicture.requestWindow({width:380,height:320});pip.document.title='WB Cloud Watch';
@@ -11,6 +22,7 @@ refs.float.onclick=async()=>{try{
 }catch{refs.hint.textContent='The browser could not open the floating view. The main panel remains available.';}};
 function beep(){if(!audio||!sound)return;const oscillator=audio.createOscillator(),gain=audio.createGain();oscillator.connect(gain);gain.connect(audio.destination);oscillator.frequency.value=740;gain.gain.value=.07;oscillator.start();oscillator.stop(audio.currentTime+.25);}
 async function refresh(){try{
+ if(Date.now()<testUntil){showTest();return;}
  const response=await fetch('/status',{cache:'no-store'});if(!response.ok)throw Error('offline');const s=await response.json(),age=Date.now()-s.collectedAt;
  const status=age>150000?'STALE':s.status;
  refs.panel.style.setProperty('--status',({NORMAL:'#52c788',WARNING:'#f0be46',CRITICAL:'#ff6262'})[status]||'#a7aeb8');
