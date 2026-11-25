@@ -55,3 +55,9 @@ Relative read/write bursts are marked in history; live alert thresholds remain
 separate. Fake test alerts are renderer-only and never enter measured history.
 Keep the local monitor running; closed/sleeping periods are gaps, not invented
 zero-traffic hours. Every PC keeps its own local history and own CLI sign-in.
+
+## History window behavior
+
+History opens one reusable embedded view in the existing monitor tab. It does not navigate the page owning the floating window or create a new tab for each click. Back to monitor controls hides History without closing the floater. All metrics overlays gold document reads, blue document writes and purple function calls on one per-minute scale. The matching total cards and legend use the same colors.
+
+Verified on the laptop in Chrome November 24, 2026: History and All metrics visible with the floating monitor still open and Sound on. Twelve local tests passed, including repeated History reuse and read-only loopback security. No extra Firebase requests were introduced.
