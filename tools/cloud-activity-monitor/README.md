@@ -1,37 +1,46 @@
-# WB Cloud Watch — local, read-only
+# WB Cloud Watch - local, read-only
 
-Small pinnable Windows window backed by Google Cloud Monitoring, not a new
-Firebase function. Node polls native platform metrics once per minute; the UI
-only reads the private local snapshot. It never invokes a deployed function,
-writes Firestore, sends messages or stops production. Closing it stops only its
-own collector process. No auto-start task is installed.
+An always-on-top Chrome/Edge Document Picture-in-Picture panel backed by Google
+Cloud Monitoring. Start `start-monitor.ps1`, then click **Float monitor** in the
+opened browser page. If another browser is the default, open the printed local
+address in Chrome or Edge. Leave that parent tab open. Closing the floating
+window returns the panel to the tab. Closing the tab stops local polling; after
+ten minutes without a viewer, the server stops its own collector. No startup
+task is installed. Restart the launcher after reboot or idle shutdown.
 
-Build exact clean pushed source with `build-monitor.ps1 -OutputDirectory ABSOLUTE_NEW_PATH`.
-This uses Windows' existing .NET Framework compiler and creates the native
-`WBCloudWatch.exe` plus its runtime collector files outside Git. Launch with
-`start-monitor.ps1 -AppDirectory ABSOLUTE_PACKAGE_PATH`. The launcher starts
-the app without a terminal window. A private `current.json` can later select
-the installed package; no startup task is added.
+Node polls native platform metrics once per minute; the browser polls only its
+private local aggregate snapshot every five seconds. Neither invokes a deployed
+function, writes Firestore, sends messages or stops production. The server binds
+only to 127.0.0.1, rejects writes and cross-origin reads, and exposes no credentials.
+
 Needs Node and that Windows user's existing Firebase CLI sign-in. No service
 account/key is exported, copied or embedded. Another PC must sign in independently.
 The Firebase Tools library defaults to its standard per-user npm installation;
 `WB_FIREBASE_TOOLS_LIB` supports a separately installed existing location.
 
-Snapshot/logs stay under `%LOCALAPPDATA%/WellBuilt/CloudActivityMonitor`.
-Keep them and any auth files outside Git. The collector uses only Monitoring
-GET requests, four metric types per minute (pagination only when needed):
-Cloud Run requests, legacy function executions, Firestore reads and writes.
-Metrics can be delayed; the displayed sample time is distinct from refresh time.
-Missing, failed, truncated or stale data never becomes a green status.
+Snapshot/logs default to `%LOCALAPPDATA%/WellBuilt/CloudActivityMonitor`; the
+launcher accepts `-DataDir ABSOLUTE_PATH`. Keep these and auth files outside Git.
+The collector uses only Monitoring GET requests, four metric types per minute
+(pagination only when needed): Cloud Run requests, legacy function executions,
+Firestore reads and writes. Metrics can be delayed; sample time is distinct from
+refresh time. Missing, failed, truncated or stale data never becomes green.
 
 Initial local thresholds, per minute: each function warning 120 / critical 600;
 Firestore reads 3,000 / 10,000; writes 1,000 / 5,000. Ten server errors per function
-also warn. Thresholds are initial diagnostic settings, not service quotas or
-spend caps. Optional private `thresholds.json` overrides matching keys from
-`metrics.cjs`. This monitor cannot change billing, budgets or quotas.
+also warn. These are diagnostic settings, not service quotas or spend caps.
+Optional private `thresholds.json` overrides matching keys from `metrics.cjs`.
+This monitor cannot change billing, budgets or quotas.
 
-Persistent provider-side alert policies and notification channels are a separate
-step. Local sound is not an alert when this computer is asleep or closed.
-The launcher supports `-Demo -DataDir ABSOLUTE_PATH` to inspect clearly marked synthetic
-data without starting a collector or playing sounds. Do not pass demo data as
-production evidence.
+Sound is opt-in. Persistent provider-side alert policies and notification channels
+remain a separate step. A local monitor cannot alert while its computer is asleep,
+offline or closed. This is an activity monitor, not an invoice/cost meter.
+
+Validation: `node --test tools/cloud-activity-monitor/*.test.cjs`. A synthetic
+display can be served with `node web-monitor.cjs --demo --data ABSOLUTE_PATH
+--port 8794`; supply a synthetic status.json there. It starts no collector and is
+clearly marked DEMO. Never use demo data as production evidence.
+
+The earlier `CloudWatch.cs` / `build-monitor.ps1` native prototype compiles, but
+Windows Application Control blocked its executable on the laptop. It is not the
+supported launcher. No policy, whitelist or trust setting was changed. The
+browser panel uses the installed browser's normal Picture-in-Picture feature.
