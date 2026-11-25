@@ -64,10 +64,14 @@ was interrupted; a subsequent wrong working-directory invocation found no
 tests. Neither is claimed as a pass. The successful final run used explicit
 absolute test paths from the Functions directory.
 
-The source repair is prepared, not deployed. Do not blindly recreate the
+At the incident checkpoint the source repair was prepared, not deployed. Do not blindly recreate the
 deleted function while another operator/AI's containment action is unresolved.
 Keep fallback disabled. Before recreation, reconcile the deleted live source
 archive and coordinate the other actor. Deploy only this repaired function,
 validate a synthetic audit transition without load delivery, and observe flat
 request counts before controlled reactivation. Preserve the message-ID barrier.
 The separate signed-JSA/receipt audit deployment remains unauthorized.
+
+Mike subsequently confirmed the deletion and explicitly authorized a scoped
+delivery-off canary and conditional activation. See
+[the verified redeployment record](watchdog-photo-fallback-redeployment-2026-11-24.md).
