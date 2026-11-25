@@ -1,0 +1,86 @@
+{
+  "recordedAtUtc": "2026-11-25T17:10:32.563815+00:00",
+  "status": "local backend acceptance passed; NO DEPLOY; held JSA123 not installed",
+  "backendSourceCommit": "fee3e2df43b14da6682784a42f7ca8b74f99e86a",
+  "backendWrapperSourceSha256": "224d149973be50ef670d35ac97509d07a6c429a8e49e4f3385961026ac5d3c8e",
+  "compiledSourceProof": {
+    "project": "demo-wb-audit-s24",
+    "wrapper": "d1735967831409fdc9e1e74d43e43fcfb1378a21372df1f4856914388c025418",
+    "core": "c30de6416a7c73975f1d2225efe315502326b266c26d81c902940da8c525fa19",
+    "compatibility": "0be69ca209e7b0dbea8ffc9df1d966cee4559abe70fa61a4d860b172444c9c7c"
+  },
+  "jsaBuild": {
+    "sourceCommit": "92d12c8",
+    "featureCommit": "c5005dd",
+    "versionCode": 123,
+    "apkSha256": "bd64baa5811010c553fc17b56d64b0be7fbf1898f06fc7971b256dc6f4244ff5",
+    "installed": false,
+    "clientSourceIdentity": "git diff92d12c8..current services/app empty; exact legacyEvidenceCore SHA in acceptance proof",
+    "clientHashes": {
+      "legacyEvidenceCore.ts": "806fad9ad99181ea36c95bf8623123265a04044796b66b3c1dd0b0cee0c0a806"
+    }
+  },
+  "project": "demo-wb-audit-s24",
+  "checks": {
+    "realCallableAcceptanceGroups": [
+      "Functions emulator worker matches exact compiled backend",
+      "actual HTTP callable rejects anonymous/wrong audience/write audience",
+      "archive boundary rejects expired Auth token even when emulator middleware accepts it",
+      "receipt cannot precede archived evidence",
+      "concurrent archive retries preserve exact signed payload and reject edits",
+      "old submit callable cannot overwrite signed originals, use anonymous hash auth or write day-status projections",
+      "concurrent receipt retries produce one original-time receipt; only owner Tickets can read",
+      "canonical disabled credential/profile and moved-company sessions refused immediately",
+      "foreign ownership, governed fallbacks and signed-delete operation refused",
+      "legacy driverHash-only history remains visible without modifying original",
+      "two owner-field queries paginate across50 without duplicate, missing or foreign records",
+      "held client module: offline original, lost receipt acknowledgement, identical retry and account-switch fencing",
+      "closed off-shift period accepts original signed time; another period refused",
+      "signature outside frozen request expiry cannot mint receipt",
+      "old receipt without authenticated proof is not accepted"
+    ],
+    "candidateFirestoreRulesAssertions": 33,
+    "immutableBridgeUnitCases": 8,
+    "retainedBackendCases": 44,
+    "standaloneServerCases": 46,
+    "standaloneEmulatorFlowCases": 14,
+    "heldClientBoundaryCases": 6,
+    "signedEvidenceRetentionCases": 3,
+    "preparedOriginalFlowCases": 6,
+    "governedFieldCases": 50,
+    "catalogEntry": "zero catalog reads for handoff/home; standalone explicit search retained",
+    "guidedBackendReplay": "same terminal result twice, one unchanged prior human-authored isolated artifact; foreign and forged-identity refusals; no phone UI/signature",
+    "typescript": "Dashboard Functions build and JSA noEmit passed",
+    "coordinatedTransactionReplay": "JSA archive/receipt concurrency plus unrelated invoice allocation replay passed on rerun"
+  },
+  "fixes": [
+    "Owner history now queries company+driverId and company+driverHash, deduplicates and paginates by Firestore document order; original signed rows untouched. Cursor mismatch fails closed.",
+    "Archive boundary explicitly refuses expired authenticated tokens; local Auth emulator otherwise accepts expired unsigned test JWTs.",
+    "submitJsaRecord compatibility entry now delegates to immutable authenticated bridge; no anonymous/hash fallback, signed-field normalization/overwrite, or day-status projection writes. Stable record ID and matching optionaljsaId required."
+  ],
+  "futureScope": {
+    "functions": [
+      "jsaLegacyEvidence",
+      "submitJsaRecord"
+    ],
+    "indexes": "security/jsa-evidence/firestore.indexes.json: companyId/driverId/name and companyId/driverHash/name; provision/verify before client canary",
+    "candidateRules": "security/jsa-evidence/firestore.rules remains emulator-only, not wired for deployment. Strict rules last after coordinated migrated-client acceptance.",
+    "excluded": [
+      "all other Functions",
+      "default root rules",
+      "Hosting",
+      "Watchdog",
+      "invoice allocation deployment",
+      "signed-record migration or mutation"
+    ]
+  },
+  "limitations": [
+    "No deployment authorized or performed. Candidate indexes have not been provisioned/verified live; emulator does not establish production composite-index readiness.",
+    "Production SSO/AccountGate/router and production client/backend canary remain post-staging acceptance. Isolated guided component/backend pass is not a full production package pass.",
+    "Older clients using mutable/anonymous submit or day-status projections require migration; these calls deliberately refuse rather than weaken signed evidence.",
+    "Existing legacy signatures/ownership conflicts remain held; no reassignment, normalization, re-signing or production probes.",
+    "An extra coordinated invoice transaction test initially hit known emulator INVALID_ARGUMENT transaction closed; fresh isolated rerun passed. Initial nonexistent standalone Jest path was corrected to the actual standalone suites; not counted as a business-code failure.",
+    "Initial green attempt ran a stale warmed Functions worker; fixture now hashes loaded compiled source. Only final exact-source run is acceptance evidence."
+  ],
+  "preservation": "No production request, deployment, record/queue/signature mutation, phone install/navigation or Fold job action in this task."
+}

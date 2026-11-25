@@ -34,3 +34,25 @@ All input records are synthetic. No production record probes or writes were used
 5. Ownerless, transport-different and unproven historical records remain held, not reassigned, normalized, deleted or re-signed. Legacy ancillary PDF/day-status REST projections were removed from signoff; local signed reports remain and projections are not proof of completion. Any needed historical projection/recovery needs a separately governed design before release. Driver display-name lookup is not authorization.
 
 Do not roll back by restoring permissive rules or discarding pending signed work. Broader audit findings (staff tenant exceptions, credential inventory/rotation, full live path matrix and device failure matrix) remain separate outstanding work. Private raw evidence and logs stay outside Git.
+
+## November25 backend acceptance for held JSA123 — no deploy
+
+See [exact acceptance receipt](jsa-backend-acceptance-2026-11-25.json). The real
+Auth/Functions/Firestore/RTDB emulator callable and exact held client passed15
+acceptance groups. Candidate rules passed33 assertions. Retained backend,
+standalone, prepared-original and governed-field checks passed. Backend replay
+of the previously human-completed guided request returned identical terminal
+results and retained one unchanged artifact, without phone actions.
+
+Found and fixed two release blockers: history omitted known driverHash-only
+originals; the older submitJsaRecord Admin writer could overwrite signed evidence.
+The compatibility endpoint now uses the same immutable bridge, with no anonymous
+hash or mutable/day-status projection fallback. Expired tokens are explicitly
+refused at the archive boundary. No signed source record is normalized or edited.
+
+Future staging must target only jsaLegacyEvidence and the hardened submitJsaRecord,
+and provision/verify the two owner-history indexes in
+security/jsa-evidence/firestore.indexes.json. Do not include invoice allocation,
+other Functions, default rules, Hosting or Watchdog. Strict evidence rules remain
+last, after migrated-client acceptance. Production SSO/router acceptance remains
+a client canary step; this emulator result does not authorize deployment.
