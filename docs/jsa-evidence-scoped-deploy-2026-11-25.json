@@ -121,9 +121,11 @@
     ]
   },
   "fold": {
-    "installed": false,
-    "versionRemaining": 122,
-    "reason": "ADB disconnected before install began; reconnect requested. No Fold app/job navigation or operation."
+    "installed": true,
+    "versionCodeBefore": 122,
+    "versionCodeAfter": 123,
+    "verifiedAtUtc": "2026-11-25T18:26:44.759672+00:00",
+    "method": "Approved SHA verified, adb install-r Success, native version123 readback. No app launch or Fold job/shift action."
   },
   "exclusions": [
     "strict rules",
