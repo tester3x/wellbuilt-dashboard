@@ -2,7 +2,12 @@ const refs=Object.fromEntries(['panel','health','cause','photo','reads','writes'
 let audio=null,sound=false,previous='',lastAlarm=0,testUntil=0;
 const count=value=>value?Math.round(value.count).toLocaleString()+'/min':'No recent data';
 refs.detailsButton.onclick=()=>{refs.details.hidden=!refs.details.hidden;refs.detailsButton.textContent=refs.details.hidden?'Details':'Less';};
-document.getElementById('historyButton').onclick=()=>window.open(location.origin+'/history-view','wb-cloud-history');
+document.getElementById('historyButton').onclick=()=>{
+ const view=document.getElementById('historyView');
+ if(!view.src)view.src=location.origin+'/history-view';
+ document.getElementById('historyHost').hidden=false;window.focus();
+};
+document.getElementById('closeHistory').onclick=()=>{document.getElementById('historyHost').hidden=true;};
 refs.sound.onclick=async()=>{try{audio=audio||new AudioContext();await audio.resume();sound=!sound;refs.sound.textContent=sound?'Sound on':'Sound off';}catch{refs.sound.textContent='Sound unavailable';}};
 document.getElementById('testAlert').onclick=async()=>{
  try{audio=audio||new AudioContext();await audio.resume();sound=true;refs.sound.textContent='Sound on';}

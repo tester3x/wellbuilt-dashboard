@@ -10,7 +10,7 @@ const server=http.createServer((req,res)=>{
  if(req.headers.origin&&![origin,origin.replace('127.0.0.1','localhost')].includes(req.headers.origin))return res.writeHead(403).end();
  const pathname=new URL(req.url,origin).pathname;
  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
- res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");
+ res.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors ${pathname==='/history-view'?"'self'":"'none'"}; base-uri 'none'`);
  res.setHeader('Permissions-Policy','picture-in-picture=(self)');
  if(pathname==='/status'){
   lastView=Date.now();res.setHeader('Content-Type','application/json');
