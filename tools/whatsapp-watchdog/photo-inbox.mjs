@@ -53,11 +53,12 @@ export class PhotoInbox {
           const previous = this.queue.data.photoInbox[key];
           const revision = createHash('sha256').update(JSON.stringify([post.digest, post.rows, post.body, post.chat])).digest('hex');
           if (previous?.complete && previous.revision === revision) {
-            if(!previous.cloudSettled&&Date.now()-(previous.receiptCheckedAt||0)>=60000){
+            const delay=Math.min(900000,60000*2**Math.min(previous.receiptPolls||0,4));
+            if(!previous.cloudSettled&&Date.now()-(previous.receiptCheckedAt||0)>=delay){
               previous.receiptCheckedAt=Date.now();this.queue.save();
               const receipt=await this.transport.request('syncWatchdogPhotoInboxV2',{...previous.snapshot,complete:true});
               if(receipt.messageHash!==key)throw Error('Photo inbox message mismatch');
-              previous.cloudSettled=this.settle(post,receipt);this.queue.save();
+              previous.cloudSettled=this.settle(post,receipt);previous.receiptPolls=(previous.receiptPolls||0)+1;this.queue.save();
             }
             continue;
           }

@@ -109,7 +109,9 @@ test('remote review keeps checking sent estimates for later commands',async()=>{
  const dir=mkdtempSync(path.join(os.tmpdir(),'wb-provisional-remote-'));try{
  const q=new Queue(dir);q.ingest({id:'estimate',channel:'g',chat:header(Date.now(),'Driver','Kahuna 5\nTop 12\nBottom 10')});const row=Object.values(q.data.messages)[0].rows[0];q.data.deliveries={[row.id]:{status:'complete',needsReview:true,identity:'original'}};
  let polls=0,reviews=0;const t={secret:'synthetic',busy:false,request:async(_endpoint,payload)=>{assert.equal(payload.status,'review');return ++polls===2?{command:{id:'later',decision:'exclude',reason:'Verified estimate'}}:{};},review:async()=>{reviews++;}};
- const r=new RemoteReviews(q,t);await r.tick([]);await r.tick([]);assert.equal(polls,2);assert.equal(reviews,1);
+ const r=new RemoteReviews(q,t);await r.tick([]);await r.tick([]);assert.equal(polls,1);
+ q.data.remoteReviews[row.id].checkedAt-=300000;
+ await r.tick([]);assert.equal(polls,2);assert.equal(reviews,1);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
