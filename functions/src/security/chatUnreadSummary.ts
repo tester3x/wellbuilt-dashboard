@@ -1,6 +1,10 @@
 import * as admin from 'firebase-admin';
 import {createHash} from 'crypto';
 
+const stable = (value:any):any => value?.toMillis instanceof Function ? value.toMillis()
+ : Array.isArray(value) ? value.map(stable) : value && typeof value==='object'
+ ? Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])) : value;
+
 const millis = (value: any): number => value?.toMillis?.() || (typeof value === 'string' ? Date.parse(value) : 0) || 0;
 
 /** Count messages, not people or threads. Own automatic reports are outgoing. */
@@ -27,7 +31,7 @@ export function summarizeUnreadMessages(messages: any[], thread: any, participan
 export function unreadSummaryStamp(thread:any,participant:string,aliases:string[]=[]):string {
  const own=[...new Set([participant,...aliases])].sort();
  return createHash('sha256').update(JSON.stringify([1,own,own.map(id=>millis(thread.lastRead?.[id])),
-  thread.lastMessage||null,millis(thread.updatedAt),thread.communicationRevision||0,thread.historyMigrationVersion||0,thread.unreadHistoryVersion||0])).digest('hex');
+  stable(thread.lastMessage||null),millis(thread.updatedAt),thread.communicationRevision||0,thread.historyMigrationVersion||0,thread.unreadHistoryVersion||0])).digest('hex');
 }
 export async function readUnreadSummary(ref: admin.firestore.DocumentReference, thread: any, participant: string, aliases: string[] = []) {
  const readAt = Math.max(0, ...[participant, ...aliases].map(id => millis(thread.lastRead?.[id])));
