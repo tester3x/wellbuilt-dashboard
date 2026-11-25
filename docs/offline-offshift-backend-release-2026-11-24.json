@@ -1,0 +1,16 @@
+{
+  "project": "wellbuilt-sync",
+  "functions": [
+    "jsaOfflineShift"
+  ],
+  "sourceCommit": "522074a6837ed6b22c3ce0d7bf123a2bdc30bb61",
+  "state": "ACTIVE",
+  "revision": "jsaofflineshift-00008-vah",
+  "updatedAtUtc": "2026-11-25T05:11:51.939962557Z",
+  "sourceHash": "d85f08c29c2525b155da01dd3dbdec385aca34a5",
+  "verifiedCompiledModules": 34,
+  "mismatches": [],
+  "checks": "70 tests across8 suites; TypeScript; 34 transitive compiled modules byte-match downloaded live function source; unsigned request401/403.",
+  "scope": "Only dashboard:jsaOfflineShift deployed. No rules, other JSA receipt/auth audit endpoints, Watchdog functions, Hosting or signed records changed.",
+  "nativeAcceptance": "S24 Tickets463 building; cold offline new JSA/manual signature and exactly-once reconnect still pending; Fold untouched."
+}
