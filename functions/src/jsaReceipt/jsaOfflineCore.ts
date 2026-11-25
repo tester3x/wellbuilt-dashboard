@@ -13,7 +13,7 @@ export function preparedShiftRead(rows:any[],context:{id:string;shiftId:string|n
 }
 export type OfflineAssessment={name:string;steps:any[];ppeItems:any[];preparedItems:any[];contentHash:string;packageId:string|null;tasks:string[]};
 export type OfflineGrant={version:1;id:string;companyId:string;driverId:string;issuedAtMs:number;expiresAtMs:number;
- shiftId:string|null;offShiftPreparation?:{validUntilMs:number;windowMs:number};offShiftPeriod?:{rootGrantId:string;periodId:string;startedAtMs:number};binding:any;requirementKey:string;policyDay:string;mode:'off'|'per_job'|'per_shift';allowAcknowledge:boolean;
+ shiftId:string|null;offShiftPeriodEndsAtMs?:number;offShiftPreparation?:{validUntilMs:number;windowMs:number};offShiftPeriod?:{rootGrantId:string;periodId:string;startedAtMs:number};binding:any;requirementKey:string;policyDay:string;mode:'off'|'per_job'|'per_shift';allowAcknowledge:boolean;
  jobSettings?:Record<string,unknown>;photoRequirements?:Record<string,any>;executionProfiles?:unknown[];operators:string[];assessments:OfflineAssessment[];fullReadId:string|null};
 export type OfflineEvent={version:1;id:string;grantId:string;jobRef:string;operator:string;occurredAtMs:number;
  kind:'read'|'acknowledged'|'scope_read'|'off';fullReadId?:string;assessmentHash?:string;snapshot?:unknown};
@@ -24,7 +24,7 @@ export function validateOfflineEvent(g:OfflineGrant,e:OfflineEvent,job:any,perio
  if(!e||Object.keys(e).some(k=>!['version','id','grantId','jobRef','operator','occurredAtMs','kind','fullReadId','assessmentHash','snapshot'].includes(k))
   ||e.version!==1||!/^[A-Za-z0-9_-]{43}$/.test(e.id)||e.grantId!==g.id||!/^[A-Za-z0-9._-]{1,128}$/.test(e.jobRef)
   ||!['read','acknowledged','scope_read','off'].includes(e.kind))throw Error('malformed_event');
- if(!Number.isSafeInteger(e.occurredAtMs)||e.occurredAtMs<g.issuedAtMs-120000||e.occurredAtMs>g.expiresAtMs||e.occurredAtMs>now+120000)throw Error('event_time');
+ if(!Number.isSafeInteger(e.occurredAtMs)||e.occurredAtMs<g.issuedAtMs-120000||e.occurredAtMs>g.expiresAtMs||g.shiftId===null&&Number.isFinite(g.offShiftPeriodEndsAtMs)&&e.occurredAtMs>=g.offShiftPeriodEndsAtMs!||e.occurredAtMs>now+120000)throw Error('event_time');
  if(!job||job.companyId!==g.companyId||(job.driverId||job.driverHash)!==g.driverId)throw Error('job_owner');
  if(typeof e.operator!=='string'||typeof job.operator!=='string'||operatorKey(e.operator)!==operatorKey(job.operator)
   ||!g.operators.some(o=>operatorKey(o)===operatorKey(e.operator)))throw Error('operator_scope');
@@ -64,7 +64,7 @@ export function deriveOffShiftGrant(root:OfflineGrant, period:any):OfflineGrant 
   ||period.startedAtMs>=root.offShiftPreparation.validUntilMs)throw Error('off_shift_preparation');
  const id=offlineHash(['off-shift',root.id,period.periodId,period.startedAtMs]);
  const binding={...root.binding,jsaPeriodId:period.periodId};delete binding.associatedPeriodId;
- return {...root,id,issuedAtMs:period.startedAtMs,expiresAtMs:Math.min(period.startedAtMs+windowMs,root.offShiftPreparation.validUntilMs),
+ return {...root,id,issuedAtMs:period.startedAtMs,expiresAtMs:root.offShiftPreparation.validUntilMs,offShiftPeriodEndsAtMs:Math.min(period.startedAtMs+windowMs,root.offShiftPreparation.validUntilMs),
   shiftId:null,offShiftPeriod:period,binding,
   requirementKey:'jsa:'+period.periodId,fullReadId:null};
 }

@@ -63,7 +63,8 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
   const executionProfiles=await readPreparedExecutionProfiles(db,p.companyId);
   const id=randomBytes(32).toString('hex'),issuedAtMs=Date.now();
   const first=preparedShiftRead(scope?.rows||[],context);
-  const grant:OfflineGrant={version:1,id,companyId:p.companyId,driverId:p.driverId,issuedAtMs,expiresAtMs:context.shiftId===null?Math.min(issuedAtMs+72*3600000,context.createdAtMs+14*3600000):issuedAtMs+72*3600000,
+  const grant:OfflineGrant={version:1,id,companyId:p.companyId,driverId:p.driverId,issuedAtMs,expiresAtMs:issuedAtMs+72*3600000,
+   ...(context.shiftId===null?{offShiftPeriodEndsAtMs:context.createdAtMs+14*3600000}:{}),
    offShiftPreparation:{validUntilMs:issuedAtMs+72*3600000,windowMs:14*3600000},
    shiftId:context.shiftId,binding:scope?.binding||{shiftState:'independent',jsaPeriodId:context.id,associatedPeriodId:context.shiftId,policyDay:context.originDate,jsaEnabled:false,requiresActiveShift:false},
    requirementKey:scope?.requirementKey||'jsa:'+context.id,policyDay:context.originDate,mode:(scope?.mode||'off') as OfflineGrant['mode'],
