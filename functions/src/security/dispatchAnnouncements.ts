@@ -25,6 +25,7 @@ async function rowsFor(actor: Actor) {
     : await ref.collection('messages').where('recipientIds', 'array-contains', actor.id).get();
   const receipts = actor.staff ? await ref.collection('receipts').get()
     : await ref.collection('receipts').where('driverId', '==', actor.id).get();
+  console.info('WB_READ_COST',{operation:'chat.announcements',documents:Math.max(1,messages.size??messages.docs.length)+Math.max(1,receipts.size??receipts.docs.length)});
   const received = new Map(receipts.docs.map(doc => [doc.id, doc.data()]));
   return messages.docs.map(doc => {
     const row = doc.data();

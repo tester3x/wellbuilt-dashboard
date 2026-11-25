@@ -55,6 +55,10 @@ export async function consolidateDispatchHistory(company: string, driver: string
   const target = db.collection(CONVERSATIONS).doc(id);
   const ms = (value: any): number => value?.toMillis?.() || (typeof value === 'string' ? Date.parse(value) : 0) || 0;
   for (const source of sources.values()) {
+    // A private/direct thread without a shift marker is not migration input.
+    // Check the indexed marker before reading any of its message history.
+    const marker=await source.collection('messages').where('systemType','==','shift_started').limit(1).get();
+    if(marker.empty)continue;
     let more = true;
     while (more) more = await db.runTransaction(async tx => {
     const [legacy, current, messages, copiedMessages] = await Promise.all([tx.get(source), tx.get(target),
