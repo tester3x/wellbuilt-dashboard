@@ -3,7 +3,7 @@ import {onDocumentWritten} from 'firebase-functions/v2/firestore';
 import {GoogleAuth} from 'google-auth-library';
 import {createHash,createHmac,randomBytes} from 'crypto';
 import {matchingPhotoReceipts} from './photoInbox';
-import {runPhotoFallback,photoAiCacheKey,gaugePrompt,gaugeSchema,fallbackAuditChanged,DWYER_AI_MODEL,DWYER_AI_VERSION,type GaugeRead,type PhotoItem} from './photoFallbackCore';
+import {runPhotoFallback,photoAiCacheKey,gaugePrompt,gaugeSchema,fallbackAuditChanged,photoFallbackSourceChanged,DWYER_AI_MODEL,DWYER_AI_VERSION,type GaugeRead,type PhotoItem} from './photoFallbackCore';
 
 const auth=new GoogleAuth({scopes:['https://www.googleapis.com/auth/cloud-platform']});
 export async function readCloudDwyerGauge(bytes:Buffer,mimeType:string,pass:number):Promise<GaugeRead>{
@@ -29,10 +29,11 @@ async function signedIntake(endpoint:string,body:any){
 export const processWatchdogPhotoFallback=onDocumentWritten({document:'watchdog_photo_inbox/{companyId}/items/{messageHash}',region:'us-central1',timeoutSeconds:180,memory:'512MiB',maxInstances:1,concurrency:2,retry:false,secrets:['WATCHDOG_HMAC_KEY_V1']},async event=>{
  if(event.params.companyId!=='liquid-gold'||!event.data?.after.exists)return;
  const item=event.data.after.data() as PhotoItem;
+ if(!photoFallbackSourceChanged(event.data.before.exists?event.data.before.data() as PhotoItem:undefined,item))return;
  const key=createHash('sha256').update(item.channel+':'+item.messageId).digest('hex');
  if(key!==event.params.messageHash||item.messageHash!==key)return;
  const db=admin.firestore(),config=(await db.doc('watchdog_v2_config/laptop').get()).data();
- if(!config?.enabled||!config.channels?.[item.channel]?.wells?.includes('Dwyer'))return;
+ if(!config?.enabled||config.cloudPhotoFallback?.enabled!==true||!config.channels?.[item.channel]?.wells?.includes('Dwyer'))return;
  const job=db.doc('watchdog_photo_fallback/liquid-gold/items/'+key);
  const imageCache=db.doc('watchdog_photo_ai_reads/'+photoAiCacheKey(item.imageDigest));
  const result=await runPhotoFallback(item,config.cloudPhotoFallback,{
@@ -71,5 +72,7 @@ export const processWatchdogPhotoFallback=onDocumentWritten({document:'watchdog_
  // Small audit summary only; the original photo, local OCR and signed packets
  // are immutable. Updating this field cannot spend another model call.
  const changed=fallbackAuditChanged(item.cloudFallback,result);
- if(changed&&!['skipped','busy','finished'].includes(result.state))await event.data.after.ref.set({cloudFallback:{...result,model:DWYER_AI_MODEL,checkedAt:Date.now()}},{merge:true});
+ // Replace the audit map atomically: merge would retain omitted old result
+ // fields (e.g. bottomFeet), making the comparison differ indefinitely.
+ if(changed&&!['skipped','busy','finished'].includes(result.state))await event.data.after.ref.update({cloudFallback:{...result,model:DWYER_AI_MODEL,checkedAt:Date.now()}});
 });

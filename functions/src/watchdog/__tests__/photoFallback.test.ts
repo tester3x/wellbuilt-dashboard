@@ -1,5 +1,5 @@
 import {createHash} from 'crypto';
-import {acceptedGaugeRead,agreeGaugeReads,fallbackEligibility,runPhotoFallback,photoAiCacheKey,fallbackAuditChanged,type FallbackDeps} from '../photoFallbackCore';
+import {acceptedGaugeRead,agreeGaugeReads,fallbackEligibility,runPhotoFallback,photoAiCacheKey,fallbackAuditChanged,photoFallbackSourceChanged,type FallbackDeps} from '../photoFallbackCore';
 const image=Buffer.from('synthetic image fixture');
 const item={photoReady:true,channel:'group',messageId:'message',postedAt:'2026-11-20T14:21:57.000Z',caption:'[11/20/2026, 08:21:57] Driver: ',mimeType:'image/jpeg',bytes:image.length,imageDigest:createHash('sha256').update(image).digest('hex'),rows:[{wellName:'Dwyer',bottomLevelFeet:null,photo:{tagVerified:true,observedBottom:null,autoSend:false,canSend:true}}]};
 const policy={enabled:true,allowDelivery:true,enabledAfterMs:Date.parse('2026-11-20T00:00:00Z')};
@@ -85,4 +85,23 @@ test('channel default never overrides other pads, conflicting barrels, duplicate
 test('unidentified photo with an existing receipt performs no model call or send',async()=>{
  const f=fixture({receipts:async()=>({recordedCount:1,receipts:[{packetId:'original'}],status:'recorded_once'})});
  expect((await runPhotoFallback(unidentified,defaultPolicy,f.deps)).state).toBe('already_recorded');expect(f.counts()).toEqual({reads:0,sends:0});
+});
+
+test('merged stale audit values cannot retrigger model/receipt work',()=>{
+ const prior={...item,cloudFallback:{state:'delivery_submitted',bottomFeet:7.6,delivery:{packetId:'original'},checkedAt:1}};
+ const result={state:'already_recorded'};
+ // Reproduce Firestore set(...,{merge:true}) retaining the omitted fields.
+ const merged={...prior,cloudFallback:{...prior.cloudFallback,...result,checkedAt:2}};
+ expect(fallbackAuditChanged(merged.cloudFallback,result)).toBe(true);
+ expect(photoFallbackSourceChanged(prior,merged)).toBe(false);
+ const replaced={...prior,cloudFallback:{...result,checkedAt:2}};
+ expect(fallbackAuditChanged(replaced.cloudFallback,result)).toBe(false);
+ expect(photoFallbackSourceChanged(prior,replaced)).toBe(false);
+});
+test('unchanged mirror heartbeats stop before cloud reads, but real source changes proceed',()=>{
+ expect(photoFallbackSourceChanged(item,{...item,updatedAt:999,cloudFallback:{state:'review'}})).toBe(false);
+ expect(photoFallbackSourceChanged(undefined,item)).toBe(true);
+ for(const patch of [{photoReady:false},{sourceEdited:true},{caption:'edited'},{imageDigest:'b'.repeat(64)},
+  {rows:[{...item.rows[0],bottomLevelFeet:8.6}]}])expect(photoFallbackSourceChanged(item,{...item,...patch})).toBe(true);
+ expect(photoFallbackSourceChanged(item,JSON.parse(JSON.stringify(item)))).toBe(false);
 });

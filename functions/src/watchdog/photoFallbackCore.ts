@@ -54,6 +54,18 @@ export function fallbackAuditChanged(previous:any,result:any){
  return previous?.state!==result.state||previous?.reason!==result.reason||previous?.bottomFeet!==result.bottomFeet||previous?.delivery?.packetId!==result.delivery?.packetId;
 }
 
+// The trigger writes its audit result to the source document. Neither that
+// write nor a worker's unchanged updatedAt heartbeat is a new photo input.
+// Compare only authored inputs, including readiness and edits, before any I/O.
+export function photoFallbackSourceChanged(before:PhotoItem|undefined,after:PhotoItem){
+ if(!before)return true;
+ const fields=['companyId','messageHash','channel','messageId','imageDigest','mimeType','bytes','objectPath',
+  'caption','chat','postedAt','rows','senderId','sourceEdited','photoReady','photoGeneration'];
+ const stable=(value:any):any=>Array.isArray(value)?value.map(stable):value&&typeof value==='object'
+  ?Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
+ return fields.some(field=>JSON.stringify(stable(before[field]))!==JSON.stringify(stable(after[field])));
+}
+
 export interface FallbackDeps{
  receipts():Promise<{recordedCount:number;receipts:any[];status:string}>;
  claim():Promise<'claimed'|'finished'|'busy'|'budget'>;
