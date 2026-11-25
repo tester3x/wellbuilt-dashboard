@@ -3,14 +3,18 @@ const time=(at,full=false)=>new Intl.DateTimeFormat('en-US',{timeZone:'America/C
 let data=null,loading=false;
 function node(tag,text,parent){const el=document.createElement(tag);el.textContent=text;if(parent)parent.append(el);return el;}
 function svgNode(tag,attrs,text){const el=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const[k,v]of Object.entries(attrs||{}))el.setAttribute(k,String(v));if(text!==undefined)el.textContent=text;return el;}
+const metrics={reads:{label:'Document reads',color:'#f0c34e'},writes:{label:'Document writes',color:'#60c8ff'},calls:{label:'Function calls',color:'#ce9bff'}};
 function chart(){
- const key=$('metric').value,now=Date.now(),start=now-24*hour,rows=(data?.points||[]).filter(p=>p.at>=start&&Number.isFinite(p[key])),max=Math.max(1,...rows.map(p=>p[key])),svg=$('chart');svg.replaceChildren();
+ const selected=$('metric').value,keys=selected==='all'?Object.keys(metrics):[selected],now=Date.now(),start=now-24*hour,points=(data?.points||[]).filter(p=>p.at>=start),max=Math.max(1,...points.flatMap(p=>keys.map(key=>Number.isFinite(p[key])?p[key]:0))),svg=$('chart');svg.replaceChildren();
  const x=at=>50+(at-start)/(24*hour)*890,y=n=>170-n/max*150;
  for(const fraction of [0,.5,1]){svg.append(svgNode('line',{x1:50,y1:y(max*fraction),x2:940,y2:y(max*fraction),class:'grid'}));svg.append(svgNode('text',{x:0,y:y(max*fraction)+4},number(Math.round(max*fraction))));}
  svg.append(svgNode('text',{x:50,y:196},time(start,true)),svgNode('text',{x:940,y:196,'text-anchor':'end'},time(now,true)));
- let path='',last=null;for(const p of rows){path+=(last&&p.at-last<=90000?'L':'M')+x(p.at).toFixed(2)+','+y(p[key]).toFixed(2);last=p.at;const dot=svgNode('circle',{cx:x(p.at),cy:y(p[key]),r:5});dot.append(svgNode('title',{},time(p.at,true)+' · '+number(p[key])+' '+key+'/min'));svg.append(dot);}svg.prepend(svgNode('path',{d:path}));
- $('chartNote').textContent=rows.length?rows.length+' recorded minute samples · peak '+number(Math.max(...rows.map(p=>p[key])))+'/min. Hover a point for its time.':'No recorded minutes for this metric yet.';
+ const legend=$('legend');legend.replaceChildren();let samples=0;
+ for(const key of keys){const metric=metrics[key],rows=points.filter(p=>Number.isFinite(p[key]));samples+=rows.length;const item=node('span',metric.label,legend);item.style.color=metric.color;
+ let path='',last=null;const group=svgNode('g',{'data-metric':key});for(const p of rows){path+=(last&&p.at-last<=90000?'L':'M')+x(p.at).toFixed(2)+','+y(p[key]).toFixed(2);last=p.at;const dot=svgNode('circle',{cx:x(p.at),cy:y(p[key]),r:5,fill:metric.color});dot.append(svgNode('title',{},time(p.at,true)+' � '+number(p[key])+' '+metric.label.toLowerCase()+'/min'));group.append(dot);}group.prepend(svgNode('path',{d:path,stroke:metric.color}));svg.append(group);}
+ $('chartNote').textContent=samples?(selected==='all'?'All three metrics share the same per-minute scale. ': '')+'Hover a point for its value and time. Missing minutes remain gaps.':'No recorded minutes for these metrics yet.';
 }
+
 function render(){if(!data)return;const count=Number($('period').value),earliest=Math.floor(Date.now()/hour)*hour-(count-1)*hour,hours=(data.hours||[]).filter(h=>h.at>=earliest);
  for(const key of ['reads','writes','calls'])$(''+key).textContent=hours.some(h=>h.coverage[key]>0)?number(hours.reduce((sum,h)=>sum+h[key],0)):'No samples';
  $('fresh').textContent=(data.minutes?data.minutes+' saved minute records · ':'')+(data.lastAt?'latest '+time(data.lastAt,true):'No history recorded yet')+' · local file refreshed '+new Date().toLocaleTimeString();
