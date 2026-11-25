@@ -8,10 +8,11 @@ import {jobDayDeps} from './jsaReceiptCallables';
 import {resolveJsaWorkPeriod} from './jsaWorkPeriodStore';
 import {readJsaTaskCatalog} from './jsaTaskCatalog';
 import {offlineDefaultAssessment} from './jsaOfflineDefault';
-import {offlineHash,validateOfflineEvent,preparedShiftRead,type OfflineGrant,type OfflineEvent,type OfflineAssessment} from './jsaOfflineCore';
+import {offlineHash,validateOfflineEvent,preparedShiftRead,deriveOffShiftGrant,type OfflineGrant,type OfflineEvent,type OfflineAssessment} from './jsaOfflineCore';
 import {jsaNumber,signedReadJsaNumber} from './jsaNumber';
 import {checkRateLimit} from '../security/rateLimit';
 import {projectOfflineLocations} from './jsaOfflineLocations';
+import {decideResolve,shiftAuthorityPath,type ShiftAuthorityRecord} from '../security/operational/shiftAuthority';
 import {readPreparedExecutionProfiles} from './preparedExecutionProfiles';
 
 /** New endpoint: does not replace or repackage the live composed Start callable. */
@@ -28,7 +29,11 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
   const cfg=(await db.doc('companies/'+p.companyId).get()).data()||{};
   const day=companyJsaDay(Date.now(),String(cfg.timeZone||cfg.timezone||'America/Chicago'));
   const context=await resolveJsaWorkPeriod(p.companyId,p.driverId,day);
-  if(!context.shiftId||context.state!=='open')throw new https.HttpsError('failed-precondition','start_shift_before_preparing');
+  if(context.state!=='open')throw new https.HttpsError('failed-precondition','work_period_unavailable');
+  if(context.shiftId===null){
+   const authority=(await db.doc(shiftAuthorityPath(p.driverId)).get()).data() as ShiftAuthorityRecord;
+   if(decideResolve(authority||null,p).state!=='none')throw new https.HttpsError('failed-precondition','shift_state_unverified');
+  }
   const scope=cfg.jsaMode==='off'||cfg.jsaMode===undefined?null:await resolveJobDayPolicy(jobDayDeps(),p);
   if(scope&&scope.binding.jsaPeriodId!==context.id)throw new https.HttpsError('failed-precondition','shift_changed');
   const profile=(await admin.database().ref('drivers/profiles/'+p.driverId).once('value')).val()||{};
@@ -58,7 +63,8 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
   const executionProfiles=await readPreparedExecutionProfiles(db,p.companyId);
   const id=randomBytes(32).toString('hex'),issuedAtMs=Date.now();
   const first=preparedShiftRead(scope?.rows||[],context);
-  const grant:OfflineGrant={version:1,id,companyId:p.companyId,driverId:p.driverId,issuedAtMs,expiresAtMs:issuedAtMs+72*3600000,
+  const grant:OfflineGrant={version:1,id,companyId:p.companyId,driverId:p.driverId,issuedAtMs,expiresAtMs:context.shiftId===null?Math.min(issuedAtMs+72*3600000,context.createdAtMs+14*3600000):issuedAtMs+72*3600000,
+   offShiftPreparation:{validUntilMs:issuedAtMs+72*3600000,windowMs:14*3600000},
    shiftId:context.shiftId,binding:scope?.binding||{shiftState:'independent',jsaPeriodId:context.id,associatedPeriodId:context.shiftId,policyDay:context.originDate,jsaEnabled:false,requiresActiveShift:false},
    requirementKey:scope?.requirementKey||'jsa:'+context.id,policyDay:context.originDate,mode:(scope?.mode||'off') as OfflineGrant['mode'],
    allowAcknowledge:scope?.style==='acknowledge'&&cfg.jsaAllowAcknowledge!==false,jobSettings,photoRequirements,executionProfiles,operators,assessments,fullReadId:first?.requestId||null};
@@ -66,7 +72,7 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
   await db.doc('jsa_offline_grants/'+id).create(grant);
   return {version:1,grant};
  }
- if(Object.keys(b).some(k=>!['version','operation','event'].includes(k))||!b.event||typeof b.event.grantId!=='string'||!/^[a-f0-9]{64}$/.test(b.event.grantId)||!/^[A-Za-z0-9_-]{43}$/.test(b.event.id))throw new https.HttpsError('invalid-argument','invalid_commit');
+ if(Object.keys(b).some(k=>!['version','operation','event','offShiftPeriod'].includes(k))||!b.event||typeof b.event.grantId!=='string'||!/^[a-f0-9]{64}$/.test(b.event.grantId)||!/^[A-Za-z0-9_-]{43}$/.test(b.event.id))throw new https.HttpsError('invalid-argument','invalid_commit');
  const e=b.event as OfflineEvent;
  if(b.operation==='project_locations'){
   if(typeof e.jobRef!=='string'||!/^[A-Za-z0-9._-]{1,128}$/.test(e.jobRef))throw new https.HttpsError('invalid-argument','invalid_job_ref');
@@ -76,7 +82,21 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
   }
  }
  try{return await db.runTransaction(async tx=>{
-  const grant=(await tx.get(db.doc('jsa_offline_grants/'+e.grantId))).data() as OfflineGrant|undefined;
+  const grantRef=db.doc('jsa_offline_grants/'+e.grantId);
+  let grant=(await tx.get(grantRef)).data() as OfflineGrant|undefined;
+  let derived=false;
+  if(!grant&&b.offShiftPeriod){
+   const rootId=b.offShiftPeriod.rootGrantId;
+   if(typeof rootId!=='string'||!/^[a-f0-9]{64}$/.test(rootId))throw Error('off_shift_preparation');
+   const root=(await tx.get(db.doc('jsa_offline_grants/'+rootId))).data() as OfflineGrant;
+   if(!root||root.companyId!==p.companyId||root.driverId!==p.driverId)throw Error('grant_owner');
+   if(root.shiftId!==null){
+    const rootPeriod=(await tx.get(db.doc('jsa_work_periods/'+root.binding.jsaPeriodId))).data();
+    if(rootPeriod?.state!=='finalized'||!Number.isFinite(rootPeriod.finalizedAtMs)||rootPeriod.finalizedAtMs>b.offShiftPeriod.startedAtMs)throw Error('off_shift_period_conflict');
+   }
+   grant=deriveOffShiftGrant(root,b.offShiftPeriod);derived=true;
+   if(grant.id!==e.grantId)throw Error('grant_identity');
+  }
   if(!grant||grant.companyId!==p.companyId||grant.driverId!==p.driverId)throw new https.HttpsError('permission-denied','grant_owner');
   const receipt=db.doc('jsa_offline_receipts/'+e.id),prior=(await tx.get(receipt)).data();
   const eventHash=offlineHash(e);
@@ -85,7 +105,25 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
    tx.get(db.doc('invoices/'+e.jobRef)),tx.get(db.doc('jsa_work_periods/'+grant.binding.jsaPeriodId)),
    e.fullReadId&&/^[A-Za-z0-9_-]{43}$/.test(e.fullReadId)?tx.get(db.doc('jsa_governed_requests/'+e.fullReadId)):Promise.resolve(null),
   ]);
-  const job=jobSnap.data(),checked=validateOfflineEvent(grant,e,job,periodSnap.data(),readSnap?.data(),Date.now());
+  let period=periodSnap.data();
+  let priorPeriod:any=null,activeRef:admin.firestore.DocumentReference|null=null,activate=false;
+  if(derived&&!period){
+   activeRef=db.doc('jsa_active_work_periods/'+createHash('sha256').update(JSON.stringify([p.companyId,p.driverId])).digest('hex'));
+   priorPeriod=(await tx.get(activeRef)).data();
+   const currentAuthority=(await tx.get(db.doc(shiftAuthorityPath(p.driverId)))).data() as ShiftAuthorityRecord;
+   const shift=decideResolve(currentAuthority||null,p);
+   if(shift.state==='unverifiable'||(shift.state==='open'&&!(priorPeriod?.shiftId===shift.periodId&&e.occurredAtMs<priorPeriod.createdAtMs)))throw Error('off_shift_period_conflict');
+   const start=grant.issuedAtMs;
+   if(priorPeriod?.state==='open'&&priorPeriod.createdAtMs<=start){
+    if(priorPeriod.shiftId!==null||start-priorPeriod.createdAtMs<14*3600000)throw Error('off_shift_period_conflict');
+   }
+   if(priorPeriod?.state==='finalized'&&Number.isFinite(priorPeriod.finalizedAtMs)&&start<priorPeriod.finalizedAtMs)throw Error('off_shift_period_conflict');
+   activate=!priorPeriod||priorPeriod.createdAtMs<=start;
+   period={id:grant.binding.jsaPeriodId,companyId:p.companyId,driverId:p.driverId,shiftId:null,
+    originDate:grant.policyDay,createdAtMs:start,state:activate?'open':'finalized',
+    ...(!activate?{finalizedAtMs:priorPeriod.createdAtMs,finalizationReason:'later_work_period'}:{})};
+  }
+  const job=jobSnap.data(),checked=validateOfflineEvent(grant,e,job,period,readSnap?.data(),Date.now());
   const stop={wellName:String(job?.wellName||''),operator:String(job?.operator||''),jobType:String(job?.commodityType||job?.jobType||''),dropOff:String(job?.hauledTo||job?.disposalName||job?.dropOff||'')};
   let recordId=e.id;
   const readRef=db.doc('jsa_governed_requests/'+e.id),artifactRef=db.doc('jsa_governed_artifacts/'+e.id);
@@ -110,6 +148,16 @@ export const jsaOfflineShift=https.onCall({timeoutSeconds:60,memory:'256MiB',enf
    if(!old)tx.create(ref,{schemaVersion:1,job:stop,companyId:p.companyId,driverId:p.driverId,jobRef:e.jobRef,method:checked.method,fullReadId:e.fullReadId,
     requirementKey:grant.requirementKey,policyDay:grant.policyDay,periodId:grant.shiftId,jsaPeriodId:grant.binding.jsaPeriodId,recordedAtMs:e.occurredAtMs,offlineGrantId:grant.id,
     jsaNumber:signedReadJsaNumber(readSnap!.data()!)});
+  }
+  if(derived){
+   tx.create(grantRef,grant);
+   if(!periodSnap.exists){
+    tx.create(db.doc('jsa_work_periods/'+grant.binding.jsaPeriodId),period!);
+    if(activate&&activeRef){
+     if(priorPeriod?.state==='open')tx.set(db.doc('jsa_work_periods/'+priorPeriod.id),{...priorPeriod,state:'finalized',finalizedAtMs:grant.issuedAtMs,finalizationReason:'off_shift_window_expired'});
+     tx.set(activeRef,period!);
+    }
+   }
   }
   tx.create(receipt,{version:1,companyId:p.companyId,driverId:p.driverId,eventId:e.id,eventHash,recordId,confirmedAtMs:Date.now()});
   return {version:1,state:'confirmed',eventId:e.id,eventHash,recordId};

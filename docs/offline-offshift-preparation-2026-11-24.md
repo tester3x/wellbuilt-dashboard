@@ -1,0 +1,7 @@
+# Offline off-shift JSA preparation
+
+Scope: the existing jsaOfflineShift callable only. Account membership and selected company remain server-verified. Preparation may now be issued for a verified no-open-shift context. Templates, operator scope, photo requirements and execution profiles are frozen in a server-owned root valid for 72 hours. The current off-shift period remains fourteen elapsed hours; calendar midnight does not roll it.
+
+A protected native client can derive a fresh period from that root after expiration or a recorded closure. Each derived period clears the qualifying read, retains the immutable policy, and has its own deterministic grant identity. Replay validates the root, exact event, operator, owned invoice, period conflicts, known shift authority and original shift closure before atomically recording grant/period/receipt. Retries do not duplicate receipts. Signed snapshots are never rewritten; closure is lifecycle metadata only. An active real shift cannot become off-shift through expiry.
+
+Validation: 70 tests across eight backend suites, including the actual callable transaction adapter, plus Functions TypeScript build. The deployed baseline source of the callable/core/locations/work-period/policy matched the current branch before this isolated repair. No rules, receipt-auth audit endpoint, Watchdog function or unrelated export is selected for deployment. Native cold-start/offline/read/reconnect testing remains required on S24; Fold is excluded.

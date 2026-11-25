@@ -7,13 +7,13 @@ export const operatorKey=(v:string)=>v.trim().toUpperCase().replace(/[^A-Z0-9]/g
 /** Never import a previous shift's read into newly prepared local authority. */
 export function preparedShiftRead(rows:any[],context:{id:string;shiftId:string|null;companyId:string;driverId:string}) {
  return rows.filter(r=>r.companyId===context.companyId&&r.driverId===context.driverId
-  &&r.binding?.jsaPeriodId===context.id&&r.binding?.associatedPeriodId===context.shiftId
+  &&r.binding?.jsaPeriodId===context.id&&(r.binding?.associatedPeriodId||null)===context.shiftId
   &&r.state==='completed'&&r.action==='read_and_acknowledged'&&Number.isFinite(r.completedAtMs))
   .sort((a,b)=>a.completedAtMs-b.completedAtMs)[0]||null;
 }
 export type OfflineAssessment={name:string;steps:any[];ppeItems:any[];preparedItems:any[];contentHash:string;packageId:string|null;tasks:string[]};
 export type OfflineGrant={version:1;id:string;companyId:string;driverId:string;issuedAtMs:number;expiresAtMs:number;
- shiftId:string;binding:any;requirementKey:string;policyDay:string;mode:'off'|'per_job'|'per_shift';allowAcknowledge:boolean;
+ shiftId:string|null;offShiftPreparation?:{validUntilMs:number;windowMs:number};offShiftPeriod?:{rootGrantId:string;periodId:string;startedAtMs:number};binding:any;requirementKey:string;policyDay:string;mode:'off'|'per_job'|'per_shift';allowAcknowledge:boolean;
  jobSettings?:Record<string,unknown>;photoRequirements?:Record<string,any>;executionProfiles?:unknown[];operators:string[];assessments:OfflineAssessment[];fullReadId:string|null};
 export type OfflineEvent={version:1;id:string;grantId:string;jobRef:string;operator:string;occurredAtMs:number;
  kind:'read'|'acknowledged'|'scope_read'|'off';fullReadId?:string;assessmentHash?:string;snapshot?:unknown};
@@ -50,4 +50,21 @@ export function validateOfflineEvent(g:OfflineGrant,e:OfflineEvent,job:any,perio
   ||read.binding?.jsaPeriodId!==g.binding.jsaPeriodId||read.state!=='completed'||read.action!=='read_and_acknowledged'
   ||!Number.isFinite(read.completedAtMs)||read.completedAtMs>e.occurredAtMs)throw Error('qualifying_read');
  return {method:e.kind,snapshot:null};
+}
+
+/** The server-issued root freezes membership, operator scope, assessments and execution profiles.
+ * Local periods may rotate, but may not expand any permission in that root. */
+export function deriveOffShiftGrant(root:OfflineGrant, period:any):OfflineGrant {
+ const windowMs=14*3600000;
+ if(root.offShiftPeriod||root.offShiftPreparation?.windowMs!==windowMs
+  ||!Number.isSafeInteger(root.offShiftPreparation.validUntilMs)||!period
+  ||Object.keys(period).some(k=>!['rootGrantId','periodId','startedAtMs'].includes(k))
+  ||period.rootGrantId!==root.id||!/^[a-f0-9]{48}$/.test(period.periodId)
+  ||!Number.isSafeInteger(period.startedAtMs)||period.startedAtMs<root.issuedAtMs-120000
+  ||period.startedAtMs>=root.offShiftPreparation.validUntilMs)throw Error('off_shift_preparation');
+ const id=offlineHash(['off-shift',root.id,period.periodId,period.startedAtMs]);
+ const binding={...root.binding,jsaPeriodId:period.periodId};delete binding.associatedPeriodId;
+ return {...root,id,issuedAtMs:period.startedAtMs,expiresAtMs:Math.min(period.startedAtMs+windowMs,root.offShiftPreparation.validUntilMs),
+  shiftId:null,offShiftPeriod:period,binding,
+  requirementKey:'jsa:'+period.periodId,fullReadId:null};
 }

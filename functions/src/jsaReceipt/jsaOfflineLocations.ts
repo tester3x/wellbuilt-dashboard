@@ -7,7 +7,7 @@ export function offlineLocationProjection(owner:{driverId:string;companyId:strin
   ||receipt?.driverId!==owner.driverId||receipt.companyId!==owner.companyId
   ||receipt.eventId!==event.id||receipt.eventHash!==offlineHash(event)
   ||job?.companyId!==owner.companyId||(job.driverId||job.driverHash)!==owner.driverId
-  ||!grant.shiftId)throw Error('location_projection_identity');
+  ||!(grant.shiftId||grant.binding?.jsaPeriodId))throw Error('location_projection_identity');
  if(existing&&(existing.companyId!==owner.companyId||(existing.driverId||existing.driverHash)!==owner.driverId))throw Error('location_projection_owner');
  const wells:any[]=[],seen=new Set<string>();
  for(const value of [...(Array.isArray(existing?.wells)?existing.wells:[]),...(Array.isArray(existing?.locations)?existing.locations:[])]) {
@@ -31,8 +31,8 @@ export async function projectOfflineLocations(db:admin.firestore.Firestore,owner
    tx.get(db.doc('jsa_offline_grants/'+event.grantId)),tx.get(db.doc('jsa_offline_receipts/'+event.id)),tx.get(db.doc('invoices/'+event.jobRef)),
   ]);
   const grant=grantSnap.data() as OfflineGrant|undefined;
-  if(!grant?.shiftId||grant.driverId!==owner.driverId||grant.companyId!==owner.companyId)throw Error('location_projection_identity');
-  const ref=db.doc('jsa_day_status/'+owner.driverId+'_'+grant.shiftId),prior=await tx.get(ref);
+  if(!grant?.binding?.jsaPeriodId||grant.driverId!==owner.driverId||grant.companyId!==owner.companyId)throw Error('location_projection_identity');
+  const ref=db.doc('jsa_day_status/'+owner.driverId+'_'+(grant.shiftId||grant.binding.jsaPeriodId)),prior=await tx.get(ref);
   const patch=offlineLocationProjection(owner,event,grant,receiptSnap.data(),jobSnap.data(),prior.exists?prior.data():null);
   if(grant.mode!=='off')tx.set(ref,{...patch,updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
   return {version:1,state:'confirmed',eventId:event.id,jobRef:event.jobRef};
