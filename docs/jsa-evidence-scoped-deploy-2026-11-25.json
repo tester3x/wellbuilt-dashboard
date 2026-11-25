@@ -1,0 +1,136 @@
+{
+  "recordedAtUtc": "2026-11-25T17:55:13.284252+00:00",
+  "project": "wellbuilt-sync",
+  "sourceCommit": "4710bb02b02a46c783f9366cd5892b9248cae23e",
+  "testedFeatureCommit": "fee3e2df43b14da6682784a42f7ca8b74f99e86a",
+  "authorization": "Mike explicitly authorized only jsaLegacyEvidence, submitJsaRecord and required indexes; S24 JSA123 first then both phones; Fold job open; strict rules held.",
+  "functions": [
+    {
+      "name": "projects/wellbuilt-sync/locations/us-central1/functions/submitJsaRecord",
+      "state": "ACTIVE",
+      "updateTime": "2026-11-25T17:42:36.239035033Z",
+      "environment": "GEN_2",
+      "buildId": "projects/559487114498/locations/us-central1/builds/0e42d3c3-9762-4afa-9432-892fabc55e16",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "submitJsaRecord/function-source.zip",
+          "generation": "1795628543953976"
+        }
+      },
+      "revision": "submitjsarecord-00003-hef"
+    },
+    {
+      "name": "projects/wellbuilt-sync/locations/us-central1/functions/jsaLegacyEvidence",
+      "state": "ACTIVE",
+      "updateTime": "2026-11-25T17:42:30.937451103Z",
+      "environment": "GEN_2",
+      "buildId": "projects/559487114498/locations/us-central1/builds/0e42d3c3-9762-4afa-9432-892fabc55e16",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "jsaLegacyEvidence/function-source.zip",
+          "generation": "1795628493393764"
+        }
+      },
+      "revision": "jsalegacyevidence-00001-rij"
+    }
+  ],
+  "otherFunctionsUnchanged": 308,
+  "rulesUnchanged": true,
+  "strictCandidateRulesDeployed": false,
+  "indexes": [
+    {
+      "existing": true,
+      "name": "projects/wellbuilt-sync/databases/(default)/collectionGroups/jsas/indexes/CICAgNjpr5sK",
+      "state": "READY",
+      "fields": [
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "driverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "existing": true,
+      "name": "projects/wellbuilt-sync/databases/(default)/collectionGroups/jsas/indexes/CICAgPifq5IK",
+      "state": "READY",
+      "fields": [
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "driverHash",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "indexMethod": "Firestore Admin additive create only; no index deletion, existing index replacement, field override or rules update.",
+  "liveSourceHashes": {
+    "jsaLegacyEvidence": {
+      "wrapper": "d1735967831409fdc9e1e74d43e43fcfb1378a21372df1f4856914388c025418",
+      "core": "c30de6416a7c73975f1d2225efe315502326b266c26d81c902940da8c525fa19",
+      "compatibility": "0be69ca209e7b0dbea8ffc9df1d966cee4559abe70fa61a4d860b172444c9c7c"
+    },
+    "submitJsaRecord": {
+      "wrapper": "d1735967831409fdc9e1e74d43e43fcfb1378a21372df1f4856914388c025418",
+      "core": "c30de6416a7c73975f1d2225efe315502326b266c26d81c902940da8c525fa19",
+      "compatibility": "0be69ca209e7b0dbea8ffc9df1d966cee4559abe70fa61a4d860b172444c9c7c"
+    }
+  },
+  "liveAuthRefusals": [
+    {
+      "name": "jsaLegacyEvidence",
+      "http": 401,
+      "status": "UNAUTHENTICATED"
+    },
+    {
+      "name": "submitJsaRecord",
+      "http": 401,
+      "status": "UNAUTHENTICATED"
+    }
+  ],
+  "s24": {
+    "jsaVersion": 123,
+    "installed": true,
+    "apkSha256": "bd64baa5811010c553fc17b56d64b0be7fbf1898f06fc7971b256dc6f4244ff5",
+    "signerSha256": "fc833ec7502cead7c5f7b0e5e394a2f7958ded629e92edb5ec7ff9522722d459",
+    "checks": [
+      "Native governed session restored; existing open off-shift JSA retained",
+      "Saved JSAs shows25 retained records; existing signed Gab1 report opens with original signed timestamp and returns to history",
+      "No S24 getWellData requests logged17:48:15-17:51UTC during home/history/report canary; no manual catalog search focused",
+      "No signature, preparedness confirmation, new JSA submission, End JSA or print action performed"
+    ],
+    "limits": [
+      "Read/view/catalog canary only; no new production signed-write or complete fresh Tickets/SSO signoff canary. Prior exact emulator receipt/retry/owner and guided backend checks remain separate evidence.",
+      "Pre-existing theme/unfinished-status direct REST403 warnings remain; not a bridge acceptance failure and not fixed by weakening rules."
+    ]
+  },
+  "fold": {
+    "installed": false,
+    "versionRemaining": 122,
+    "reason": "ADB disconnected before install began; reconnect requested. No Fold app/job navigation or operation."
+  },
+  "exclusions": [
+    "strict rules",
+    "Hosting",
+    "other Functions",
+    "invoice allocation",
+    "Watchdog",
+    "signed-record migration or mutation"
+  ]
+}
