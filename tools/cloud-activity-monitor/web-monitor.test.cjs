@@ -8,6 +8,9 @@ test('loopback display serves only aggregates and static assets, rejects cross-o
   assert.equal((await fetch(url+'/status',{method:'POST'})).status,405);
   assert.equal((await fetch(url+'/status',{headers:{Origin:'https://evil.example'}})).status,403);
   assert.equal((await fetch(url+'/credentials.json')).status,404);
+  assert.equal((await fetch(url+'/history')).status,200);
+  assert.equal((await fetch(url+'/history',{method:'POST'})).status,405);
+  assert.match(await(await fetch(url+'/history-view')).text(),/Hourly totals/);
   assert.match((await fetch(url)).headers.get('content-security-policy'),/frame-ancestors 'none'/);
  }finally{child.kill();}
 });

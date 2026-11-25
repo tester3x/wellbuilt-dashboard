@@ -2,6 +2,7 @@ const refs=Object.fromEntries(['panel','health','cause','photo','reads','writes'
 let audio=null,sound=false,previous='',lastAlarm=0,testUntil=0;
 const count=value=>value?Math.round(value.count).toLocaleString()+'/min':'No recent data';
 refs.detailsButton.onclick=()=>{refs.details.hidden=!refs.details.hidden;refs.detailsButton.textContent=refs.details.hidden?'Details':'Less';};
+document.getElementById('historyButton').onclick=()=>window.open(location.origin+'/history-view','wb-cloud-history');
 refs.sound.onclick=async()=>{try{audio=audio||new AudioContext();await audio.resume();sound=!sound;refs.sound.textContent=sound?'Sound on':'Sound off';}catch{refs.sound.textContent='Sound unavailable';}};
 document.getElementById('testAlert').onclick=async()=>{
  try{audio=audio||new AudioContext();await audio.resume();sound=true;refs.sound.textContent='Sound on';}
@@ -27,7 +28,7 @@ async function refresh(){try{
  const status=age>150000?'STALE':s.status;
  refs.panel.style.setProperty('--status',({NORMAL:'#52c788',WARNING:'#f0be46',CRITICAL:'#ff6262'})[status]||'#a7aeb8');
  refs.health.textContent=({NORMAL:'Activity normal',WARNING:'High activity',CRITICAL:'ACTIVITY SPIKE',STALE:'Monitor is offline',NO_RECENT_DATA:'No recent metrics'})[status]||'Metrics unavailable';
- refs.demo.textContent=s.demo?'· DEMO':'';refs.cause.textContent=(s.alerts||[])[0]||'';
+ refs.demo.textContent=s.demo?'· DEMO':'';refs.cause.textContent=(s.alerts||[])[0]||s.historyError||'';
  refs.photo.textContent=count(s.photo);refs.reads.textContent=count(s.reads);refs.writes.textContent=count(s.writes);
  refs.fresh.textContent='Cloud sample '+(s.sampleAt?new Date(s.sampleAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'unavailable')+' · checked '+Math.max(0,Math.round(age/1000))+'s ago';
  refs.details.textContent=['wellbuilt-sync · read-only','Google metrics can lag by several minutes.',...(s.alerts||[]),...(s.errors||[]),...(s.functions||[]).map(f=>f.name+': '+Math.round(f.count).toLocaleString()+'/min ('+f.errors+' server errors)')].join('\n');

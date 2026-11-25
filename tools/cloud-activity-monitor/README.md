@@ -44,3 +44,14 @@ The earlier `CloudWatch.cs` / `build-monitor.ps1` native prototype compiles, but
 Windows Application Control blocked its executable on the laptop. It is not the
 supported launcher. No policy, whitelist or trust setting was changed. The
 browser panel uses the installed browser's normal Picture-in-Picture feature.
+
+Rolling history: the collector now journals its existing completed minute samples
+locally under `history/metrics-YYYY-MM-DD.jsonl` for30 days and writes
+`history-summary.json` for the viewer. Click History for hourly totals, a minute
+trend, measured spike times and per-metric coverage. No extra metric queries or
+Firestore calls are added to ongoing collection. Overlap/restart/corrections
+replace the same minute rather than inflating totals. Missing data is never zero.
+Relative read/write bursts are marked in history; live alert thresholds remain
+separate. Fake test alerts are renderer-only and never enter measured history.
+Keep the local monitor running; closed/sleeping periods are gaps, not invented
+zero-traffic hours. Every PC keeps its own local history and own CLI sign-in.
