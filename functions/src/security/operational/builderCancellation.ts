@@ -87,6 +87,9 @@ export async function resolveBuilderCancellation(db: Firestore,
       const seq = new Set<number>();
       for (const member of family) {
         owned(member.data);
+        // Removed stops keep their original sequence in immutable history.
+        // Surviving stops are resequenced; only retained/active topology counts.
+        if (['cancelled','canceled','declined','dismissed'].includes(member.data.status)) continue;
         const n = member.data.splitSequence;
         if (!Number.isSafeInteger(n) || n < 1 || seq.has(n)) fail('Split family topology is ambiguous');
         seq.add(n);

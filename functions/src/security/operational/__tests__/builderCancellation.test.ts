@@ -82,6 +82,24 @@ test('unloaded A cancels the unresolved family atomically, preserving completed 
  Object.assign(rows.get('dispatches/job'),{splitGroupId:'g',splitSequence:1});rows.set('dispatches/b',{companyId:'company',driverId:'driver',source:'driver',assignedBy:'driver',splitGroupId:'g',splitSequence:2,status:'pending'});rows.set('dispatches/complete',{companyId:'company',driverId:'driver',source:'driver',assignedBy:'driver',splitGroupId:'g',splitSequence:3,status:'completed'});
  expect(await call()).toMatchObject({affectedDispatchIds:['job','b']});expect(rows.get('dispatches/b').status).toBe('cancelled');expect(written).not.toContain('dispatches/complete');expect(written.every(path=>/^(dispatches|invoices|split_load_ledgers)\//.test(path))).toBe(true);
 });
+
+test('unloaded family still cancels after removing a stop and resequencing its survivors',async()=>{
+ Object.assign(rows.get('dispatches/job'),{splitGroupId:'g',splitSequence:1});
+ const removed={companyId:'company',driverId:'driver',source:'driver',assignedBy:'driver',splitGroupId:'g',
+  splitSequence:2,status:'cancelled',cancelReason:'Original removed-stop history'};
+ rows.set('dispatches/removed',removed);
+ rows.set('dispatches/survivor',{companyId:'company',driverId:'driver',source:'driver',assignedBy:'driver',
+  splitGroupId:'g',splitSequence:2,status:'pending'});
+ expect(await call()).toMatchObject({affectedDispatchIds:['job','survivor']});
+ expect(rows.get('dispatches/removed')).toEqual(removed);expect(written).not.toContain('dispatches/removed');
+ expect(rows.get('dispatches/survivor').status).toBe('cancelled');
+});
+
+test('a historical removed stop cannot bypass family ownership checks',async()=>{
+ Object.assign(rows.get('dispatches/job'),{splitGroupId:'g',splitSequence:1});
+ rows.set('dispatches/removed',{companyId:'foreign',driverId:'driver',splitGroupId:'g',splitSequence:1,status:'cancelled'});
+ await expect(call()).rejects.toThrow('ownership');expect(written).toEqual([]);
+});
 test('one loaded sibling or foreign family member refuses the whole A transaction',async()=>{
  Object.assign(rows.get('dispatches/job'),{splitGroupId:'g',splitSequence:1});rows.set('dispatches/b',{companyId:'foreign',driverId:'driver',splitGroupId:'g',splitSequence:2,status:'pending'});await expect(call()).rejects.toThrow('ownership');expect(written).toEqual([]);rows.get('dispatches/b').companyId='company';Object.assign(rows.get('dispatches/b'),{source:'driver',invoiceDocId:'b-inv'});rows.set('invoices/b-inv',{companyId:'company',driverId:'driver',dispatchId:'b',status:'open',totalBBL:10});await expect(call()).rejects.toThrow('Loaded');expect(written).toEqual([]);
 });
