@@ -1,4 +1,5 @@
 import {runningPipeline} from './pipelineOperation';
+import { needsPickupWatermark, latestPhysicalPickup } from './pickupWatermark';
 export {reconcileWatchdogAppRecords} from './watchdog/lateAppMatchTrigger';
 import {validateAppMatchDeletion,finishAppMatchDeletion} from './watchdog/appMatchDeletion';
 import { deliverLevelReport } from './levelReportDelivery';
@@ -928,6 +929,23 @@ export const processIncomingPull = functionsV1.database
     // well state (isDown, outgoing, processed, performance, production,
     // wellStatus, enrichment) is touched. A failed quarantine write leaves
     // the incoming packet intact for retry. See packetGuards.ts.
+    // A newer zero-BBL level observation must not suppress a delayed physical
+    // pickup. Resolve the latest REAL pickup for both stale protection and the
+    // production interval. Never discard its evidence or bypass real pickups.
+    if (needsPickupWatermark(data, prevResponse)) {
+      const history = (await db.ref('packets/processed').orderByChild('wellName')
+        .equalTo(wellName).once('value')).val() || {};
+      const previousPickup = latestPhysicalPickup(history, wellName);
+      prevTimestamp = previousPickup?.dateTimeUTC || '';
+      prevTankAfterInches = previousPickup?.tankAfterInches ?? 0;
+      prevResponse = previousPickup ? {
+        ...prevResponse,
+        lastPullDateTimeUTC: previousPickup.dateTimeUTC,
+        lastPullPacketId: previousPickup.packetId,
+        lastPullBbls: previousPickup.bblsTaken,
+        lastPullBottomLevel: previousPickup.tankAfterFeet,
+      } : null;
+    }
     const guardVerdict = evaluateIncomingPull({
       incomingDateTimeUTC: data.dateTimeUTC,
       hasOutgoingResponse: prevResponse !== null,
