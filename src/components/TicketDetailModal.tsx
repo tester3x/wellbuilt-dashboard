@@ -2,6 +2,7 @@
 import { freshWaterLabel } from '@/lib/freshWater';
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { Ticket, InvoiceDetail, TimelineEvent, fetchInvoiceForTicket, fetchSiblingTickets } from '@/lib/tickets';
 
@@ -46,24 +47,35 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
 
   const isVoid = ticket.status === 'void';
   const isAggregate = ticket.packageId === 'aggregate';
+  const invoiceNumber = invoice?.invoiceNumber || ticket.invoiceNumber;
+  const hasInvoice = !!invoiceNumber;
   const timeline = invoice?.timeline || [];
   const sortedTimeline = [...timeline].sort((a, b) =>
     new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
   );
 
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 overflow-y-auto py-8" onClick={onClose}>
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div className="ticket-invoice-modal fixed inset-0 bg-black/70 flex items-start justify-center z-50 overflow-y-auto py-8" onClick={onClose}>
       <div
-        className="w-full max-w-2xl mx-4"
+        className="ticket-invoice-shell w-full max-w-2xl mx-4"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header bar (dark, outside the paper) */}
-        <div className="flex items-center justify-between px-4 py-3 mb-0">
+        <div className="ticket-invoice-header flex items-center justify-between px-4 py-3 mb-0">
           <button onClick={onClose} className="text-gray-400 hover:text-white text-sm flex items-center gap-1">
             <span className="text-lg">&larr;</span>
           </button>
-          <h2 className="text-white font-semibold">Invoice Detail</h2>
-          <div className="w-8" />
+          <h2 className="text-white font-semibold">{hasInvoice ? 'Invoice Detail' : 'Ticket Detail'}</h2>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            disabled={loading || !!loadError}
+            className="text-cyan-300 hover:text-white text-sm font-semibold disabled:opacity-50"
+          >
+            Print {hasInvoice ? 'invoice' : 'ticket'}
+          </button>
         </div>
 
         {loading ? (
@@ -72,12 +84,12 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
           <div className="bg-[#FAFAF8] rounded-lg p-8 text-center text-red-600" role="alert">{loadError}</div>
         ) : (
           /* Paper card */
-          <div className={`bg-[#FAFAF8] rounded-lg shadow-lg ${isVoid ? 'border-l-4 border-red-500' : 'border-l-4 border-yellow-500'}`}>
+          <div className={`ticket-invoice-paper bg-[#FAFAF8] rounded-lg shadow-lg ${isVoid ? 'border-l-4 border-red-500' : 'border-l-4 border-yellow-500'}`}>
             <div className="p-6 space-y-0">
 
               {/* ═══ INVOICE HEADER ═══ */}
               <div className="flex items-start justify-between mb-4">
-                <h3 className="text-[#111] font-black text-xl tracking-tight">INVOICE</h3>
+                <h3 className="text-[#111] font-black text-xl tracking-tight">{hasInvoice ? 'INVOICE' : 'TICKET'}</h3>
                 <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${
                   isVoid
                     ? 'border-red-400 text-red-600'
@@ -85,11 +97,11 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                     ? 'border-green-500 text-green-700 bg-green-50'
                     : 'border-gray-400 text-gray-600'
                 }`}>
-                  {isVoid ? 'VOID' : (invoice?.status || 'CLOSED').toUpperCase()}
+                  {isVoid ? 'VOID' : (invoice?.status || ticket.status || 'ACTIVE').toUpperCase()}
                 </span>
               </div>
 
-              <PaperRow label="Invoice #" value={ticket.invoiceNumber || '--'} mono />
+              <PaperRow label={hasInvoice ? 'Invoice #' : 'Ticket #'} value={invoiceNumber || ticket.ticketNumber || '--'} mono />
               <PaperRow label="Date" value={ticket.date} />
               <PaperRow label="Type" value={freshWaterLabel(ticket.type || invoice?.commodityType || '--', ticket.waterTemperature)} />
 
@@ -339,7 +351,8 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
