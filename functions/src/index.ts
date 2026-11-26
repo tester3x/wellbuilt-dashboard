@@ -1,4 +1,5 @@
 import {runningPipeline} from './pipelineOperation';
+export { driverWellOperatingStatus, reviewWellOperatingStatus } from './security/operational/wellOperatingStatus';
 import { needsPickupWatermark, latestPhysicalPickup } from './pickupWatermark';
 export {reconcileWatchdogAppRecords} from './watchdog/lateAppMatchTrigger';
 import {validateAppMatchDeletion,finishAppMatchDeletion} from './watchdog/appMatchDeletion';

@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
 import { getFirebaseFunctions } from '@/lib/firebase';
 import { JobExceptionReviews } from '@/components/JobExceptionReviews';
+import { WellOperatingReviews } from '@/components/WellOperatingReviews';
 
 type Request = { id: string; locationName: string; locationType: string; latitude: number; longitude: number;
   accuracy: number; observedAt: string; driverName: string; driverId: string; jobId: string };
@@ -73,6 +74,7 @@ export default function LocationReviewPage() {
       {!busy && !error && items.length === 0 && <p>No pending location requests.</p>}
       {items.map(item => <ReviewItem key={item.id} item={item} onReview={review} />)}
       <JobExceptionReviews allowed={allowed} />
+      <WellOperatingReviews />
     </>}
   </main></>;
 }
