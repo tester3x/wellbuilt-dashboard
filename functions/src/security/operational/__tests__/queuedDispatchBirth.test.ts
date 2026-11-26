@@ -4,7 +4,7 @@ jest.mock('firebase-admin', () => ({ firestore: jest.fn() }));
 jest.mock('firebase-admin/firestore', () => ({ FieldValue: { serverTimestamp: () => 'COMMIT_TIME' } }));
 jest.mock('../../requireDriverAuth', () => ({ requireSecureDriver: async () => ({ companyId: 'company', driverId: 'driver' }) }));
 jest.mock('../dispatchPacketPin', () => ({ parsePacketRef: () => ({ ok: true, packetRef: {} }) }));
-jest.mock('../dispatchPinRuntime', () => ({ loadAuthorizedWellNames: async () => [], checkWell: () => ({ ok: true }),
+jest.mock('../dispatchPinRuntime', () => ({ loadAuthorizedWellCatalog: async () => ({ok:true,names:[],ambiguous:[]}), checkWell: () => ({ ok: true }),
   loadVerifiedRevision: async () => ({ ok: true, envelope: {} }) }));
 jest.mock('../createDriverDispatch', () => ({ driverMayJoinProject: () => true, evaluateDriverDispatchBirth: jest.fn() }));
 import * as admin from 'firebase-admin';
