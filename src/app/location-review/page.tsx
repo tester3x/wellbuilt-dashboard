@@ -52,6 +52,7 @@ export default function LocationReviewPage() {
   const [items, setItems] = useState<Request[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [lastReview, setLastReview] = useState('');
   const load = useCallback(async () => {
     if (!user || !allowed) return;
     setBusy(true); setError('');
@@ -62,17 +63,27 @@ export default function LocationReviewPage() {
   useEffect(() => { void load(); }, [load]);
   const review = async (id: string, action: string, point?: Record<string, unknown>) => {
     await httpsCallable(getFirebaseFunctions(), 'reviewArrivalLocations')({ id, action, ...point });
+    setLastReview(action === 'approve' ? 'Saved location approved.' : 'Location request rejected.');
     await load();
   };
-  return <><AppHeader /><main className="mx-auto max-w-4xl space-y-5 p-6 text-white">
-    <h1 className="text-2xl font-bold">Location Review</h1>
-    <p className="text-gray-300">Driver GPS proposals stay pending until dispatch/admin verifies and approves the location. Use Anyway acknowledgments do not change saved locations.</p>
+  return <div className="min-h-screen bg-[#0b1220] text-white"><AppHeader /><main className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:px-6">
+    <div className="space-y-2">
+      <h1 className="text-3xl font-bold">Location Review</h1>
+      <p className="text-gray-300">Review driver GPS proposals and job exceptions. Changes to saved locations require dispatch or admin approval.</p>
+    </div>
     {loading ? <p>Loading…</p> : !allowed ? <p>Dispatch or company administration access is required.</p> : <>
-      <button onClick={() => void load()} disabled={busy} className="rounded bg-gray-800 px-4 py-2">{busy ? 'Loading…' : 'Refresh requests'}</button>
-      {error && <p role="alert" className="text-red-400">{error}</p>}
-      {!busy && !error && items.length === 0 && <p>No pending location requests.</p>}
-      {items.map(item => <ReviewItem key={item.id} item={item} onReview={review} />)}
+      <section className="space-y-4" aria-labelledby="location-requests-heading">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="location-requests-heading" className="text-xl font-bold">Saved location requests</h2>
+          <button onClick={() => void load()} disabled={busy} className="rounded bg-gray-800 px-4 py-2">{busy ? 'Loading…' : 'Refresh requests'}</button>
+        </div>
+        <p className="text-gray-300">Verify each proposed point on a map before approving it. Use Anyway acknowledgments do not change saved locations.</p>
+        {lastReview && <p role="status" className="rounded border border-green-700 bg-green-950/50 px-4 py-3 text-green-200">{lastReview}</p>}
+        {error && <p role="alert" className="text-red-400">{error}</p>}
+        {!busy && !error && items.length === 0 && <p className="rounded-xl border border-gray-700 bg-gray-900 p-5 text-gray-200">All caught up. No location requests need review.</p>}
+        {items.map(item => <ReviewItem key={item.id} item={item} onReview={review} />)}
+      </section>
       <JobExceptionReviews allowed={allowed} />
     </>}
-  </main></>;
+  </main></div>;
 }

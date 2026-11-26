@@ -32,6 +32,7 @@ function ExceptionItem({ item, review }: { item: Item; review: (id: string, acti
 }
 export function JobExceptionReviews({ allowed }: { allowed: boolean }) {
   const [items, setItems] = useState<Item[]>([]), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const [lastReview, setLastReview] = useState('');
   const load = useCallback(async () => {
     if (!allowed) { setItems([]); return; }
     setBusy(true); setError('');
@@ -42,14 +43,17 @@ export function JobExceptionReviews({ allowed }: { allowed: boolean }) {
   }, [allowed]);
   useEffect(() => { void load(); }, [load]);
   const review = async (id: string, action: string, note: string) => {
-    await httpsCallable(getFirebaseFunctions(), 'reviewJobExceptions')({ id, action, note }); await load();
+    await httpsCallable(getFirebaseFunctions(), 'reviewJobExceptions')({ id, action, note });
+    setLastReview(action === 'approve' ? 'Job exception approved.' : 'Job exception rejected.');
+    await load();
   };
   if (!allowed) return null;
-  return <section className="space-y-4 border-t border-gray-700 pt-6"><h2 className="text-xl font-bold">Job exceptions</h2>
+  return <section className="space-y-4 border-t border-gray-700 pt-8" aria-labelledby="job-exceptions-heading"><h2 id="job-exceptions-heading" className="text-xl font-bold">Job exceptions</h2>
     <p className="text-gray-300">Dispatch-only and hybrid drivers request review here, including drivers who also have a staff role. Approval is an explicit staff action.</p>
     <button disabled={busy} onClick={() => void load()} className="rounded bg-gray-800 px-4 py-2">Refresh job exceptions</button>
+    {lastReview && <p role="status" className="rounded border border-green-700 bg-green-950/50 px-4 py-3 text-green-200">{lastReview}</p>}
     {error && <p role="alert" className="text-red-400">{error}</p>}
-    {!busy && !error && !items.length && <p>No pending job exceptions.</p>}
+    {!busy && !error && !items.length && <p className="rounded-xl border border-gray-700 bg-gray-900 p-5 text-gray-200">All caught up. No job exceptions need review.</p>}
     {items.map(item => <ExceptionItem key={item.id} item={item} review={review} />)}
   </section>;
 }
