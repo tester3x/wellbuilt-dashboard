@@ -3576,6 +3576,7 @@ export {
 // WB-T supplies a stable child dispatchId for retry-safe field-added legs.
 export { addSplitLeg } from './security/addSplitLegCallable';
 export { removeSplitLeg } from './security/removeSplitLegCallable';
+export { resequenceSplitFamily } from './security/resequenceSplitFamilyCallable';
 export { resolveExhaustedSplitFamily } from './security/resolveExhaustedSplitFamilyCallable';
 export { declineSplitFamily } from './security/declineSplitFamilyCallable';
 export { startPickupSplit } from './security/startPickupSplitCallable';
