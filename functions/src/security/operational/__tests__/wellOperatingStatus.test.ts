@@ -63,3 +63,9 @@ test('company administration can approve even without dispatch permission', asyn
   await staff({ auth: { uid: 'admin', token: {} }, data: { action: 'approve', id: intent.operationId } });
   expect(mockGet('wells/Test Well/status/isDown')).toBe(true);
 });
+test('an old company token cannot read or request changes after the profile moves company', async () => {
+  mockSet('drivers/profiles/driver/companyId', 'other');
+  await expect(driver(req('status'))).rejects.toThrow('company changed');
+  await expect(driver(req('request', intent))).rejects.toThrow('company changed');
+  expect(mockGet('wellOperatingRequests')).toBeNull();
+});

@@ -72,8 +72,9 @@ export async function driverWellOperatingStatusHandler(request: any) {
   const driver = await requireSecureDriver(request, { allowLegacyHash: false });
   if (!driver.companyId) throw fail('Company required');
   const data = request.data || {}, key = wellKey(data.wellConfigKey);
-  const current = await load(driver.companyId, key);
   const profile = (await admin.database().ref(`drivers/profiles/${driver.driverId}`).once('value')).val() || {};
+  if (profile.companyId !== driver.companyId || profile.active === false) throw new HttpsError('permission-denied', 'Driver company changed. Sign in again.');
+  const current = await load(driver.companyId, key);
   const canChange = canManageWellStatus(profile, driver.companyId, key, current.config);
   if (data.action === 'status') return { down: current.down, canChange, route: current.config.route || null };
   let intent;
