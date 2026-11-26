@@ -137,6 +137,7 @@ execSync('node tools/test-independent-dispatch-shell.mjs', { stdio: 'inherit' })
 execSync('node tools/test-independent-dispatch-ui.mjs', { stdio: 'inherit' });
 execSync('node tools/test-independent-driver-profiles-ui.mjs', { stdio: 'inherit' });
 execSync('node tools/test-job-package-install.mjs', { stdio: 'inherit' });
+execSync('node tools/test-ticket-invoice-print.mjs', { stdio: 'inherit' });
 console.log('\n--- Running Mandatory Pre-Deploy Test Suites on Fresh Build ---');
 try {
   for (const test of ['tools/test-dashboardReturnState.cjs', 'tools/test-officeAlertPreferences.cjs', 'tools/test-driver-arrival-panel.mjs', 'tools/test-dispatch-shift-picker.cjs', 'tools/test-water-order-driver-picker.cjs', 'tools/test-water-order-workflow.cjs', 'tools/test-hosting-release-state.cjs', 'tools/test-staffChatDelivery.cjs', 'tools/test-chat-text-selection.mjs']) {
