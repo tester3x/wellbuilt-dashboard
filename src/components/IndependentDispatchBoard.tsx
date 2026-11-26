@@ -1,0 +1,599 @@
+'use client';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { independentDispatchJobs, type IndependentJob, type IndependentJobDetails, type IndependentJobStatus, type LinkedWellBuiltDriver } from '@/lib/independentDispatchJobs';
+import { listExternalDrivers, type ExternalDriver } from '@/lib/externalAssignmentDelivery';
+import { independentDispatchCatalog, independentDispatchDirectory, independentOperatorWells, type IndependentDirectory } from '@/lib/independentDispatchDirectory';
+import { SECTOR_FIELDS, sectorLabel, type IndependentSector } from '@/lib/independentDispatchSectors';
+import { dialpadCallHref } from '@/lib/dialpad';
+import { parsePastedJobRequest, type ParsedJobRequest } from '@/lib/independentRequestParser';
+import { ACTIVE_LANES, pickupTiming, sortDispatchJobs } from '@/lib/independentDispatchBoard';
+import { driverAvailability } from '@/lib/independentDriverAvailability';
+import { listIndependentDriverProfiles, type IndependentDriverProfile } from '@/lib/independentDriverProfiles';
+import { independentDriverContact } from '@/lib/independentDriverContact';
+import { IndependentDriverPicker, type SelectedDriverShifts } from './IndependentDriverPicker';
+import { IndependentWhatsAppLinks } from './IndependentWhatsAppLinks';
+import { independentWhatsAppDriverUrl, normalizeWhatsAppNumber } from '@/lib/independentWhatsAppDispatch';
+import { openIndependentWhatsApp } from '@/lib/independentWhatsAppWindow';
+import { searchDisposals, type NdicOperator, type NdicWell } from '@/lib/firestoreWells';
+import { combinedLocationResults } from '@/lib/builderWellSearch';
+import { matchIndependentOperator } from '@/lib/independentOperatorMatch';
+import { BuilderAutocomplete } from './BuilderAutocomplete';
+import { LocationSearchResult } from './LocationSearchResult';
+import { googleMapsDirectionsUrl, googleMapsSearchUrl, identifiedPadPin, jobLocationMapUrl, padPinsForJob, plannedGoogleRouteUrl, routeGuidesForJob } from '@/lib/independentRouteGuides';
+
+const EMPTY: IndependentJobDetails = { title: '', customer: '', reference: '', pickup: '', destination: '', additionalStops: [], cargo: '', scheduledAt: '', scheduleText: '', notes: '',
+  jobContactName: '', jobContactRole: '', jobContactPhoneE164: '', shift: '', ongoing: false, requestedDriverCount: null };
+const STATUS: Record<IndependentJobStatus, string> = { unassigned: 'Unassigned', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
+const FIELDS = [
+  ['title', 'Job name', 180, true],
+  ['reference', 'Customer reference / load number', 120, false],
+  ['pickup', 'Pickup address / location', 500, false], ['destination', 'Delivery address / location', 500, false],
+  ['cargo', 'Cargo / equipment / quantity', 500, false], ['notes', 'Instructions', 4000, false],
+] as const;
+const inputClass = 'w-full rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white';
+const buttonClass = 'rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-40';
+function jobCrew(job: IndependentJob) {
+  if (Array.isArray(job.drivers)) return job.drivers;
+  const shift = job.shift === 'day' || job.shift === 'night' ? job.shift : '';
+  if (job.externalDriverId) return [{ key: `outside:${job.externalDriverId}`, name: job.driverName || '', source: 'outside' as const, shift }];
+  if (job.wbDriverId) return [{ key: `wellbuilt:${job.wbDriverId}`, name: job.driverName || '', source: 'wellbuilt' as const, shift }];
+  return [];
+}
+
+function JobDialpadLinks({ job, directory, drivers, profiles }: { job: IndependentJob; directory: IndependentDirectory | null; drivers: ExternalDriver[]; profiles: IndependentDriverProfile[] }) {
+  const customer = directory?.customers.find(item => item.id === job.customerId);
+  const customerHref = dialpadCallHref(customer?.phoneE164, job.id, directory?.dispatchPhoneE164);
+  const contactHref = dialpadCallHref(job.jobContactPhoneE164, job.id, directory?.dispatchPhoneE164);
+  const driverLinks = jobCrew(job).map(member => ({
+    name: member.name, key: member.key,
+    href: dialpadCallHref(independentDriverContact(member, profiles, drivers).phoneE164, job.id, directory?.dispatchPhoneE164),
+  })).filter(link => link.href);
+  if (!customerHref && !contactHref && !driverLinks.length) return null;
+  return <div className="mt-2 flex flex-wrap gap-3 text-sm text-cyan-300 underline">
+    {customerHref && <a href={customerHref}>Call customer in Dialpad</a>}
+    {contactHref && <a href={contactHref}>Call job contact in Dialpad</a>}
+    {driverLinks.map(link => <a key={link.key} href={link.href || undefined}>{driverLinks.length === 1 ? 'Call driver in Dialpad' : `Call ${link.name} in Dialpad`}</a>)}
+  </div>;
+}
+
+export function IndependentDispatchBoard({ companyId, canWrite, canManageDrivers }: {
+  companyId: string; canWrite: boolean; canManageDrivers: boolean;
+}) {
+  const [jobs, setJobs] = useState<IndependentJob[]>([]);
+  const [drivers, setDrivers] = useState<ExternalDriver[]>([]);
+  const [wbDrivers, setWbDrivers] = useState<LinkedWellBuiltDriver[]>([]);
+  const [driverProfiles, setDriverProfiles] = useState<IndependentDriverProfile[]>([]);
+  const [form, setForm] = useState(EMPTY);
+  const [editing, setEditing] = useState<IndependentJob | null>(null);
+  const [scheduledLocal, setScheduledLocal] = useState('');
+  const [estimatedEndLocal, setEstimatedEndLocal] = useState('');
+  const [availabilityNow, setAvailabilityNow] = useState(() => Date.now());
+  const [filter, setFilter] = useState('active');
+  const [search, setSearch] = useState('');
+  const [error, setError] = useState('');
+  const [jobActionError, setJobActionError] = useState<{ jobId: string; message: string } | null>(null);
+  const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [assignments, setAssignments] = useState<Record<string, SelectedDriverShifts>>({});
+  const [pickerEpochs, setPickerEpochs] = useState<Record<string, number>>({});
+  const [directory, setDirectory] = useState<IndependentDirectory | null>(null);
+  const [catalogOperators, setCatalogOperators] = useState<NdicOperator[]>([]);
+  const [catalogWells, setCatalogWells] = useState<NdicWell[]>([]);
+  const [catalogDisposals, setCatalogDisposals] = useState<NdicWell[]>([]);
+  const [operatorOverride, setOperatorOverride] = useState<string | null>(null);
+  const [catalogError, setCatalogError] = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [contactId, setContactId] = useState('');
+  const [newCustomer, setNewCustomer] = useState(false);
+  const [saveCustomer, setSaveCustomer] = useState(false);
+  const [savePickup, setSavePickup] = useState(false);
+  const [saveDestination, setSaveDestination] = useState(false);
+  const [sector, setSector] = useState<IndependentSector | ''>('');
+  const [sectorFields, setSectorFields] = useState<Record<string, string>>({});
+  const [categoryId, setCategoryId] = useState('');
+  const [asset, setAsset] = useState('');
+  const [pastedRequest, setPastedRequest] = useState('');
+  const [parseReport, setParseReport] = useState<ParsedJobRequest | null>(null);
+  const [intakeOpen, setIntakeOpen] = useState(false);
+  const [selectedJobId, setSelectedJobId] = useState('');
+  const [focusedWaitingJobId, setFocusedWaitingJobId] = useState('');
+  const [appHeaderHeight, setAppHeaderHeight] = useState(0);
+  const needsDriverDialog = useRef<HTMLDialogElement>(null);
+  // Keep create identity through an ambiguous network failure, avoiding duplicate jobs.
+  const creation = useRef({ jobId: crypto.randomUUID(), requestId: crypto.randomUUID() });
+  useEffect(() => {
+    const header = document.querySelector<HTMLElement>('header');
+    if (!header) return;
+    const measure = () => setAppHeaderHeight(Math.ceil(header.getBoundingClientRect().height));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+  const refresh = useCallback(async () => {
+    const result = await independentDispatchJobs({ op: 'list' });
+    if (result.companyId !== companyId) throw Error('Your staff account belongs to a different company.');
+    setJobs(result.jobs || []);
+    setWbDrivers(result.wbDrivers || []);
+    const setup = await independentDispatchDirectory({ op: 'list' });
+    if (setup.companyId !== companyId) throw Error('Your directory belongs to a different company.');
+    setDirectory(setup);
+    if (canManageDrivers) setDrivers(await listExternalDrivers());
+    setLoaded(true);
+  }, [companyId, canManageDrivers]);
+  useEffect(() => { void refresh().catch(e => setError(e.message)); }, [refresh]);
+  useEffect(() => {
+    void independentDispatchCatalog().then(({ operators, disposals }) => {
+      setCatalogOperators(operators); setCatalogDisposals(disposals);
+    }).catch(() => setCatalogError('Well catalog unavailable. You can enter locations manually.'));
+  }, []);
+  useEffect(() => { if (canManageDrivers) void listIndependentDriverProfiles().then(setDriverProfiles).catch(() => setDriverProfiles([])); }, [canManageDrivers, companyId]);
+  useEffect(() => { const timer = window.setInterval(() => setAvailabilityNow(Date.now()), 60_000); return () => window.clearInterval(timer); }, []);
+  async function run(payload: Record<string, unknown>, after?: () => void) {
+    setBusy(true); setError(''); setJobActionError(null); setNotice('');
+    try {
+      await independentDispatchJobs(payload);
+      after?.();
+      setNotice('Saved.');
+      await refresh();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unable to save. Refresh and try again.';
+      setError(message);
+      if (typeof payload.jobId === 'string') setJobActionError({ jobId: payload.jobId, message });
+    }
+    finally { setBusy(false); }
+  }
+  function resetForm() {
+    setForm(EMPTY); setEditing(null); setScheduledLocal(''); setEstimatedEndLocal(''); setCustomerId(''); setContactId(''); setNewCustomer(false); setSaveCustomer(false); setSector(''); setSectorFields({}); setCategoryId(''); setAsset('');
+    setOperatorOverride(null);
+    setSavePickup(false); setSaveDestination(false);
+    setPastedRequest(''); setParseReport(null);
+    creation.current = { jobId: crypto.randomUUID(), requestId: crypto.randomUUID() };
+  }
+  function scrollBelowBoardToolbar(targetId: string) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const target = document.getElementById(targetId);
+      const toolbar = document.querySelector<HTMLElement>('[data-testid="independent-board-toolbar"]');
+      if (!target) return;
+      const offset = appHeaderHeight + (toolbar?.getBoundingClientRect().height || 0) + 16;
+      window.scrollTo({ top: Math.max(0, window.scrollY + target.getBoundingClientRect().top - offset), behavior: 'smooth' });
+    }));
+  }
+  function returnToBoardJob(job: IndependentJob) {
+    setIntakeOpen(false); setSelectedJobId(job.id); setFilter(job.status); setSearch('');
+    scrollBelowBoardToolbar(`independent-job-${job.id}`);
+  }
+  function leaveEdit() {
+    const job = editing;
+    resetForm();
+    if (job) returnToBoardJob(job);
+  }
+  function edit(job: IndependentJob) {
+    setOperatorOverride(null);
+    setSavePickup(false); setSaveDestination(false);
+    setSelectedJobId(job.id);
+    setIntakeOpen(true);
+    setEditing(job);
+    setForm({ ...EMPTY, ...Object.fromEntries(Object.keys(EMPTY).map(k => [k, job[k as keyof IndependentJobDetails] ?? EMPTY[k as keyof IndependentJobDetails]])) } as IndependentJobDetails);
+    setCustomerId(job.customerId || ''); setNewCustomer(!!job.sector && !job.customerId); setSaveCustomer(false);
+    const savedContact = directory?.customers.find(customer => customer.id === job.customerId)?.contacts?.find(contact =>
+      contact.name === job.jobContactName && contact.phoneE164 === job.jobContactPhoneE164 && contact.role === job.jobContactRole);
+    setContactId(savedContact?.id || '');
+    setSector((job.sector as IndependentSector) || ''); setSectorFields(job.sectorFields || {});
+    setCategoryId(job.categoryId || ''); setAsset(job.asset || '');
+    const date = job.scheduledAt ? new Date(job.scheduledAt) : null;
+    setScheduledLocal(date ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
+    const end = job.estimatedEndAt ? new Date(job.estimatedEndAt) : null;
+    setEstimatedEndLocal(end ? new Date(end.getTime() - end.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
+    scrollBelowBoardToolbar('independent-job-form');
+  }
+  const visible = jobs.filter(job => (filter === 'all' || (filter === 'active' ? !['completed', 'cancelled'].includes(job.status) : filter === job.status))
+    && [job.title, job.customer, job.reference, job.pickup, job.destination, ...(job.additionalStops || []), ...jobCrew(job).map(driver => driver.name), job.jobContactName].join(' ').toLowerCase().includes(search.toLowerCase()));
+  const lanes = filter === 'active' ? ACTIVE_LANES : filter === 'all'
+    ? [...ACTIVE_LANES, { status: 'completed' as const, label: 'Completed', hint: 'Finished work' }, { status: 'cancelled' as const, label: 'Cancelled', hint: 'Retained history' }]
+    : [{ status: filter as IndependentJobStatus, label: STATUS[filter as IndependentJobStatus], hint: '' }];
+  const displayedLanes = filter === 'active' ? lanes.filter(lane => visible.some(job => job.status === lane.status)) : lanes;
+  const workingLaneCount = displayedLanes.filter(lane => lane.status === 'assigned' || lane.status === 'in_progress').length;
+  const selectedCustomer = directory?.customers.find(customer => customer.id === customerId);
+  const mappedOperators = (selectedCustomer?.wellCatalogOperators || [])
+    .filter(name => catalogOperators.some(operator => operator.name === name));
+  const allowedOperators = directory?.catalogOperators?.length
+    ? catalogOperators.filter(operator => directory.catalogOperators?.includes(operator.name) || mappedOperators.includes(operator.name)) : catalogOperators;
+  const matchedOperator = matchIndependentOperator([selectedCustomer?.name || form.customer, ...(selectedCustomer?.alternateNames || [])], allowedOperators);
+  const operatorName = operatorOverride ?? (mappedOperators.length > 1 ? '__customer__' : mappedOperators[0] || matchedOperator);
+  const operatorNamesKey = JSON.stringify(operatorName === '__customer__' ? mappedOperators : operatorName ? [operatorName] : []);
+  useEffect(() => {
+    const operatorNames = JSON.parse(operatorNamesKey) as string[];
+    if (!operatorNames.length) { setCatalogWells([]); return; }
+    let active = true;
+    setCatalogWells([]);
+    void Promise.all(operatorNames.map(independentOperatorWells)).then(groups => { if (active) { setCatalogWells(groups.flat()); setCatalogError(''); } })
+      .catch(() => { if (active) setCatalogError('Well catalog unavailable. You can enter locations manually.'); });
+    return () => { active = false; };
+  }, [operatorNamesKey]);
+  const locationResults = (key: 'pickup' | 'destination') => {
+    const query = form[key];
+    const saved = key === 'pickup' ? selectedCustomer?.pickupLocations || [] : selectedCustomer?.deliveryLocations || [];
+    return combinedLocationResults(query, {
+      wells: [], operatorWells: catalogWells,
+      disposalMatches: searchDisposals(query, catalogDisposals, 15),
+      customLocations: saved.map(locationName => ({ locationName, company: selectedCustomer?.name || form.customer })),
+    });
+  };
+  const availableCategories = (selectedCustomer?.workCategories || []).filter(category => category.sector === sector);
+  const selectedCategory = availableCategories.find(category => category.id === categoryId);
+  const availableSectors = newCustomer ? directory?.sectors || [] : (selectedCustomer?.sectors || []).filter(id => directory?.sectors.includes(id));
+  function canAddSelection(job: IndependentJob, replacing = false) {
+    const selected = Object.keys(assignments[job.id] || {});
+    if (!selected.length || (!replacing && jobCrew(job).length + selected.length > 30)) return false;
+    return selected.every(key => {
+      const active = key.startsWith('outside:') ? drivers.some(driver => `outside:${driver.externalDriverId}` === key && driver.active)
+        : wbDrivers.some(driver => `wellbuilt:${driver.driverId}` === key && driver.active);
+      return active && !jobCrew(job).some(member => member.key === key)
+        && driverAvailability(job, key, jobs, active, availabilityNow).available;
+    });
+  }
+  function crewRow(job: IndependentJob, driver: ReturnType<typeof jobCrew>[number]) {
+    const contact = independentDriverContact(driver, driverProfiles, drivers);
+    const missingPhone = !normalizeWhatsAppNumber(contact.phoneE164);
+    const chatUrl = independentWhatsAppDriverUrl(job, contact.whatsappName, contact.phoneE164, directory?.routeGuides);
+    const sent = job.whatsappSent?.find(entry => entry.driverKey === driver.key && entry.sentAt >= ('assignedAt' in driver ? driver.assignedAt : ''));
+    return <div key={driver.key} className="grid min-h-[4.75rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 border-t border-gray-700/70 px-2 py-2 first:border-t-0">
+      <div className="min-w-0">
+        <p className={`flex flex-wrap items-center gap-1 text-xs ${missingPhone ? 'text-red-300' : 'text-white'}`}>
+          <span className="min-w-0 break-words whitespace-normal" title={driver.name}>{driver.name}</span>
+          {missingPhone && <span className="rounded border border-red-600 bg-red-950/80 px-1 py-0.5 text-[10px] font-semibold text-red-200">No Contact Info</span>}
+        </p>
+        {!driver.shift && crewShift(driver) && <p className="text-[10px] text-gray-400">Using {crewShift(driver)} shift from profile</p>}
+        {canWrite && chatUrl && ['assigned', 'in_progress'].includes(job.status) && <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+          <a href={chatUrl} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline"
+            onClick={event => { event.preventDefault(); if (!openIndependentWhatsApp(event.currentTarget.href)) window.alert('Your browser blocked the WhatsApp tab. Allow popups for WellBuilt and try again.'); }}
+            title={`Open WhatsApp by ${contact.phoneE164}; saved name: ${contact.whatsappName}`}>Prepare job message</a>
+          {sent ? <span className="rounded border border-emerald-700 px-1 text-emerald-200" title={`Marked by dispatch at ${sent.sentAt}`}>Marked sent</span>
+            : <button type="button" disabled={busy} className="rounded border border-sky-700 px-1 text-sky-200 disabled:opacity-50"
+              onClick={() => void run({ op: 'markWhatsAppSent', jobId: job.id, driverKey: driver.key,
+                expectedRevision: job.revision, requestId: crypto.randomUUID() })}>Mark sent</button>}
+        </div>}
+      </div>
+      {canWrite && canManageDrivers && ['assigned', 'in_progress'].includes(job.status) && <div className="flex flex-col items-end gap-1 text-xs">
+        <select aria-label={`Assignment shift for ${driver.name} on ${job.title}`} value={crewShift(driver)} disabled={busy}
+          className="rounded border border-gray-600 bg-gray-950 px-1 py-0.5 text-xs text-white"
+          onChange={event => void run({ op: 'setDriverShift', jobId: job.id, expectedRevision: job.revision,
+            requestId: crypto.randomUUID(), driverKey: driver.key, shift: event.target.value })}>
+          <option value="" disabled>Set shift</option><option value="day">Day</option><option value="night">Night</option>
+        </select>
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" disabled={busy || Object.keys(assignments[job.id] || {}).length !== 1 || !canAddSelection(job, true)}
+            className="text-cyan-300 underline disabled:opacity-40" title="Replace with the selected driver" onClick={() => {
+              const key = Object.keys(assignments[job.id] || {})[0];
+              const [kind, id] = key.split(':'); if (!id) return;
+              void run({ op: 'replaceDriver', jobId: job.id, driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID(),
+                shift: assignments[job.id]?.[key] ?? driver.shift ?? '', ...(kind === 'wellbuilt' ? { wbDriverId: id } : { externalDriverId: id }) },
+                () => setAssignments(current => ({ ...current, [job.id]: {} })));
+            }}>Swap</button>
+          <button type="button" disabled={busy || (job.status === 'in_progress' && jobCrew(job).length === 1)}
+            className="text-red-300 underline disabled:opacity-40" onClick={() => void run({ op: 'removeDriver', jobId: job.id,
+              driverKey: driver.key, expectedRevision: job.revision, requestId: crypto.randomUUID() })}>Remove</button>
+        </div>
+      </div>}
+    </div>;
+  }
+  function crewShift(driver: ReturnType<typeof jobCrew>[number]): '' | 'day' | 'night' {
+    if (driver.shift === 'day' || driver.shift === 'night') return driver.shift;
+    const preference = driver.source === 'outside'
+      ? drivers.find(item => `outside:${item.externalDriverId}` === driver.key)?.shiftPreference
+      : driverProfiles.find(item => item.driverKey === driver.key)?.shiftPreference;
+    return preference === 'day' || preference === 'night' ? preference : '';
+  }
+  function chooseSavedCustomer(id: string) {
+    setOperatorOverride(null);
+    setSavePickup(false); setSaveDestination(false);
+    const next = directory?.customers.find(customer => customer.id === id);
+    const retainParsed = !!parseReport && !customerId;
+    setNewCustomer(false); setSaveCustomer(false); setCustomerId(next?.id || ''); setContactId('');
+    setForm(current => ({ ...current, customer: next?.name || '',
+      ...(retainParsed ? {} : { title: '', pickup: '', destination: '', jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' }) }));
+    const choices = (next?.sectors || []).filter(value => directory?.sectors.includes(value));
+    const parsedSector = retainParsed ? parseReport?.sector : '';
+    const nextSector = parsedSector && choices.includes(parsedSector) ? parsedSector : choices.length === 1 ? choices[0] : '';
+    setSector(nextSector);
+    setSectorFields(retainParsed && nextSector === parsedSector ? parseReport?.sectorFields || {} : {});
+    setCategoryId(''); setAsset('');
+  }
+  function fillFromRequest() {
+    if (!directory || !pastedRequest.trim() || editing) return;
+    const result = parsePastedJobRequest(pastedRequest, directory);
+    const customer = directory.customers.find(item => item.id === result.customerId);
+    setCustomerId(result.customerId);
+    setContactId('');
+    setNewCustomer(!!result.customerLabel && !customer && result.customerSuggestions.length === 0); setSaveCustomer(false);
+    setSector(result.sector);
+    setSectorFields(result.sectorFields);
+    setCategoryId(''); setAsset('');
+    setScheduledLocal(result.scheduledLocal);
+    setEstimatedEndLocal('');
+    setForm({ ...EMPTY, ...result.fields, customer: customer?.name || result.customerLabel });
+    setParseReport(result);
+    document.getElementById('independent-job-form')?.scrollIntoView({ behavior: 'smooth' });
+  }
+  return <div className="flex flex-col gap-4">
+    {error && <div role="alert" className="rounded border border-red-700 bg-red-950 p-3 text-red-200">{error}</div>}
+    {notice && <p role="status" className="text-green-300">{notice}</p>}
+    <section aria-labelledby="dispatch-board-title" className="space-y-4">
+    <div data-testid="independent-board-toolbar" className="sticky z-30 space-y-3 rounded-lg border border-gray-700 bg-gray-900/95 p-3 shadow-lg backdrop-blur" style={{ top: appHeaderHeight }}>
+      <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="dispatch-board-title" className="text-lg font-semibold text-white">Dispatch board</h2><p className="text-sm text-gray-400">Save requests now. Assign a driver when one is available. Driver phone app delivery is not connected yet.</p></div>
+        <div className="flex flex-wrap items-center gap-3">{canManageDrivers && <a href="/dispatch/independent/drivers/" className="text-sm text-cyan-300 underline">Driver profiles</a>}{canWrite && <button type="button" aria-expanded={intakeOpen} aria-controls="independent-intake" className={buttonClass} onClick={() => { setIntakeOpen(true); scrollBelowBoardToolbar('independent-intake'); }}>New job / paste request</button>}</div>
+        <div className="flex flex-wrap gap-2 text-xs"><span className="rounded bg-amber-900/40 px-2 py-1 text-amber-200">{jobs.filter(job => job.status === 'unassigned').length} need drivers</span><span className="rounded bg-blue-900/40 px-2 py-1 text-blue-200">{jobs.filter(job => job.status === 'assigned').length} assigned</span><span className="rounded bg-emerald-900/40 px-2 py-1 text-emerald-200">{jobs.filter(job => job.status === 'in_progress').length} in progress</span></div>
+      </div>
+    <div className="flex flex-wrap gap-2">
+      <input aria-label="Search dispatch jobs" placeholder="Search jobs, customers, locations, drivers…" value={search} onChange={e => setSearch(e.target.value)} className={`${inputClass} flex-1 min-w-48`} />
+      <select aria-label="Job status" className={inputClass + ' !w-auto'} value={filter} onChange={e => setFilter(e.target.value)}><option value="active">Active jobs</option><option value="all">All jobs</option>{Object.entries(STATUS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
+      <button type="button" className={buttonClass} disabled={busy} onClick={() => { setError(''); void refresh().catch(e => setError(e.message)); }}>Refresh</button>
+    </div>
+    </div>
+    {!loaded ? <p className="text-gray-400">Loading jobs…</p> : displayedLanes.length === 0 ? <p className="rounded border border-dashed border-gray-700 p-4 text-sm text-gray-400">No active jobs. New requests will appear here.</p> : <div className={`grid items-start gap-3 ${filter === 'active' ? 'lg:grid-cols-2' : lanes.length > 1 ? 'lg:grid-cols-3' : ''}`}>
+      {displayedLanes.map(lane => {
+        const isWaitingQueue = filter === 'active' && lane.status === 'unassigned';
+        const laneJobs = sortDispatchJobs(visible.filter(job => job.status === lane.status), ['completed', 'cancelled'].includes(lane.status));
+        const focusedWaitingJob = isWaitingQueue ? laneJobs.find(job => job.id === focusedWaitingJobId) : undefined;
+        const shownJobs = focusedWaitingJob ? [focusedWaitingJob] : laneJobs;
+        const cards = <div className={focusedWaitingJob ? 'mx-auto w-full max-w-3xl' : isWaitingQueue || (filter === 'active' && workingLaneCount === 1) ? 'grid gap-3 lg:grid-cols-2 2xl:grid-cols-3' : 'space-y-3'}>{shownJobs.length === 0 ? <p className="rounded border border-dashed border-gray-700 p-4 text-sm text-gray-500">No jobs here.</p> : shownJobs.map(job => <article key={job.id} id={`independent-job-${job.id}`} tabIndex={0} aria-label={`${job.customer} · ${job.title}`}
+          onClickCapture={() => setSelectedJobId(job.id)} onFocusCapture={() => setSelectedJobId(job.id)}
+          onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setSelectedJobId(job.id); } }}
+          className={`min-w-0 rounded border p-4 transition-colors ${selectedJobId === job.id ? 'border-amber-400 bg-amber-950/30 ring-2 ring-amber-400/70 shadow-lg shadow-amber-950/30' : `bg-gray-800 ${job.status === 'unassigned' ? 'border-amber-700/70' : 'border-gray-700'}`}`}>
+      <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold text-white">{job.title}</h2><span className="text-cyan-300">{STATUS[job.status]}</span></div>
+      <p className="text-sm text-gray-300">{job.customer}{job.sector ? ` · ${sectorLabel(job.sector)}` : ''}{job.reference ? ` · ${job.reference}` : ''}</p>
+      {(job.categoryId || job.asset) && <p className="text-sm text-cyan-200">{directory?.customers.find(customer => customer.id === job.customerId)?.workCategories?.find(category => category.id === job.categoryId)?.name || (job.categoryId ? 'Archived category' : '')}{job.asset ? ` · ${job.asset}` : ''}</p>}
+      <p className={`mt-2 text-sm font-medium ${pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? 'text-red-300' : pickupTiming(job) === 'soon' ? 'text-amber-200' : 'text-gray-300'}`}>Schedule: {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : job.scheduleText || 'Time not set'}{pickupTiming(job) === 'overdue' && !['completed', 'cancelled'].includes(job.status) ? ' · Past requested time' : ''}</p>
+      {job.scheduledAt && job.scheduleText && <p className="text-sm text-gray-300">Requested timing: {job.scheduleText}</p>}
+      {job.estimatedEndAt && <p className="text-sm text-gray-300">Estimated finish: {new Date(job.estimatedEndAt).toLocaleString()}</p>}
+      {(job.shift || job.ongoing) && <p className="text-sm text-cyan-200">{job.shift === 'day' ? 'Day shift' : job.shift === 'night' ? 'Night shift' : job.shift === 'both' ? 'Day and night shifts' : 'Any shift'}{job.ongoing ? ' · Ongoing work' : ''}</p>}
+      {job.requestedDriverCount && <p className="text-sm text-amber-200">Drivers requested: {job.requestedDriverCount} · Assigned: {jobCrew(job).length}{jobCrew(job).length < job.requestedDriverCount ? ` · ${job.requestedDriverCount - jobCrew(job).length} still needed` : ''}</p>}
+      {job.jobContactName && <p className="text-sm text-gray-300">Job contact: {job.jobContactName}{job.jobContactRole ? ` · ${job.jobContactRole}` : ''}{job.jobContactPhoneE164 ? ` · ${job.jobContactPhoneE164}` : ''}</p>}
+      <JobDialpadLinks job={job} directory={directory} drivers={drivers} profiles={driverProfiles} />
+      {canWrite && <IndependentWhatsAppLinks job={job} guides={directory?.routeGuides} />}
+      <dl className="mt-2 grid gap-2 text-sm md:grid-cols-2">{[
+        ...(job.pickup ? [{ label: 'Pickup', location: job.pickup }] : []),
+        ...(job.additionalStops || []).map((location, index) => ({ label: `Stop ${index + 1}`, location })),
+        ...(job.destination ? [{ label: 'Delivery', location: job.destination }] : []),
+      ].map(({ label, location }) => <div key={`${label}:${location}`}><dt className="text-gray-400">{label}</dt><dd className="whitespace-pre-wrap break-words text-white">{(jobLocationMapUrl(location, directory?.routeGuides) || googleMapsSearchUrl(location))
+        ? <a href={(jobLocationMapUrl(location, directory?.routeGuides) || googleMapsSearchUrl(location))!} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline">{location}</a> : location}</dd></div>)}</dl>
+      {!routeGuidesForJob(job, directory?.routeGuides).length && <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-sky-200">
+        {!routeGuidesForJob(job, directory?.routeGuides).length && googleMapsDirectionsUrl(job.pickup, job.destination) &&
+          <a href={googleMapsDirectionsUrl(job.pickup, job.destination)!} target="_blank" rel="noopener noreferrer" className="underline">Google Maps directions</a>}
+      </div>}
+      {routeGuidesForJob(job, directory?.routeGuides).map(guide => <aside key={guide.id} className="mt-3 rounded border border-amber-600 bg-amber-950/40 p-3 text-sm text-amber-100">
+        <p className="font-semibold">Approved access: {guide.title}</p>
+        <p className="mt-1">Use the approved route through turns 1, 2 and 3. Google may recalculate; check the photos for the safe turn and avoid the road by the farmer’s home.</p>
+        <div className="mt-2 flex flex-wrap gap-3">{identifiedPadPin(job, guide) && plannedGoogleRouteUrl(guide, identifiedPadPin(job, guide)!) && <a href={plannedGoogleRouteUrl(guide, identifiedPadPin(job, guide)!)!} target="_blank" rel="noopener noreferrer" className="rounded border border-amber-400 bg-amber-800/60 px-2 py-1 font-semibold underline">Drive to {identifiedPadPin(job, guide)!.label} — approved route via turns 1–3</a>}
+          {guide.directionsUrl && <a href={guide.directionsUrl} target="_blank" rel="noopener noreferrer" className="underline">Open saved driving route (verify turns)</a>}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-3 text-xs">{guide.imageUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="underline">{index === 0 ? 'Photo 1 — satellite overview' : index === 1 ? 'Photo 2 — marked safe turn' : `Photo ${index + 1} — access map`}</a>)}</div>
+        {padPinsForJob(job, guide).length > 0 && <div className="mt-2 text-xs"><p className="font-semibold">Pad location pins only — these do not show the driving route:</p>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{padPinsForJob(job, guide).map(pin => <span key={pin.url} className="flex flex-wrap gap-1">
+            <a href={pin.url} target="_blank" rel="noopener noreferrer" className="underline">{pin.label} — pin only</a>
+          </span>)}</div>
+        </div>}
+        <details className="mt-2"><summary className="cursor-pointer text-xs underline">Preview approved route maps</summary>
+          <div className="mt-2 flex flex-wrap gap-2">{guide.imageUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener noreferrer">
+            <img src={url} alt={`${guide.title} route map ${index + 1}`} loading="lazy" className="h-36 w-64 rounded border border-amber-700 object-cover object-center" />
+          </a>)}</div>
+        </details>
+      </aside>)}
+      {(job.cargo || job.notes || (job.sector && Object.values(job.sectorFields || {}).some(Boolean))) && <details className="mt-3 rounded border border-gray-700 bg-gray-900/60 p-2 text-sm"><summary className="cursor-pointer text-cyan-200">Details and instructions</summary>
+        {job.cargo && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">Cargo: {job.cargo}</p>}
+        {job.sector && job.sectorFields && <dl className="mt-2 grid gap-1 text-xs text-gray-300">{SECTOR_FIELDS[job.sector as IndependentSector]?.map(field => job.sectorFields?.[field.key] ? <div key={field.key}><dt className="inline text-gray-400">{field.label}: </dt><dd className="inline">{job.sectorFields[field.key]}</dd></div> : null)}</dl>}
+        {job.notes && <p className="mt-2 whitespace-pre-wrap break-words text-gray-300">{job.notes}</p>}
+      </details>}
+      <div className="mt-2 text-sm text-amber-200">{jobCrew(job).length ? <><span className="font-medium">Drivers ({jobCrew(job).length})</span>
+        <div className="mt-2 grid w-full grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-3">
+          {(['day', 'night'] as const).map(shift => <div key={shift} role="region" aria-label={`${shift === 'day' ? 'Day' : 'Night'} Shift drivers`} className="min-w-0 rounded border border-gray-700 bg-gray-900/70 px-3 py-2">
+            <div className="flex items-center justify-between gap-2 border-b border-gray-700 pb-1 text-xs font-semibold text-cyan-200"><span>{shift === 'day' ? 'Day Shift' : 'Night Shift'}</span><span aria-label={`${jobCrew(job).filter(driver => crewShift(driver) === shift).length} ${shift} shift drivers`}>{jobCrew(job).filter(driver => crewShift(driver) === shift).length}</span></div>
+            <div className="min-h-[4.75rem] max-h-[14.25rem] overflow-y-auto">{jobCrew(job).filter(driver => crewShift(driver) === shift).map(driver => crewRow(job, driver))}</div>
+          </div>)}
+        </div>
+        {jobCrew(job).some(driver => !crewShift(driver)) && <div className="mx-auto mt-2 w-full max-w-2xl text-xs text-gray-300">
+          <p>Shift needs review ({jobCrew(job).filter(driver => !crewShift(driver)).length})</p>
+          {jobCrew(job).filter(driver => !crewShift(driver)).map(driver => crewRow(job, driver))}
+        </div>}
+      </> : 'Needs a driver'}</div>
+      {canWrite && canManageDrivers && ['unassigned', 'assigned', 'in_progress'].includes(job.status) && <div className="mt-3 rounded border border-cyan-900/60 bg-cyan-950/10 p-2">
+        <IndependentDriverPicker key={`${job.id}-${pickerEpochs[job.id] || 0}`} job={job} jobs={jobs} outside={drivers} linked={wbDrivers} profiles={driverProfiles}
+          now={availabilityNow} selected={assignments[job.id] || {}} disabled={busy}
+          onChange={next => setAssignments(current => ({ ...current, [job.id]: next }))} />
+        <div className="mt-2 flex justify-start">
+          <button disabled={busy || !canAddSelection(job)} className={buttonClass} onClick={() => {
+            const selected = Object.entries(assignments[job.id] || {}).map(([key, shift]) => ({ key, shift }));
+            if (!selected.length) return;
+            void run({ op: 'addDrivers', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), drivers: selected },
+              () => {
+                setAssignments(current => ({ ...current, [job.id]: {} }));
+                setPickerEpochs(current => ({ ...current, [job.id]: (current[job.id] || 0) + 1 }));
+              });
+          }}>{jobCrew(job).length ? 'Add selected drivers' : 'Assign selected drivers'}</button>
+        </div>
+      </div>}
+      {jobActionError?.jobId === job.id && <p role="alert" className="mt-2 text-sm text-red-300">Assignment was not saved: {jobActionError.message}</p>}
+      {canWrite && !['completed', 'cancelled'].includes(job.status) && <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-gray-600/80 pt-3">
+        {['unassigned', 'assigned'].includes(job.status) && <button className={buttonClass} disabled={busy} onClick={() => { if (isWaitingQueue) needsDriverDialog.current?.close(); edit(job); }}>Edit</button>}
+        {(job.status === 'assigned' || job.status === 'in_progress') && <button disabled={busy} className={buttonClass} onClick={() => void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: job.status === 'assigned' ? 'in_progress' : 'completed' })}>{job.status === 'assigned' ? 'Mark started' : 'Mark completed'}</button>}
+        <button disabled={busy} className="ml-auto rounded border border-red-700 px-3 py-2 text-sm text-red-300" onClick={() => { if (window.confirm(`Cancel ${job.title}? Its history will be retained.`)) void run({ op: 'status', jobId: job.id, expectedRevision: job.revision, requestId: crypto.randomUUID(), status: 'cancelled' }); }}>Cancel job</button>
+      </div>}
+      <p className="mt-2 text-xs text-gray-500">Progress recorded by dispatch staff · last updated {new Date(job.updatedAt).toLocaleString()}</p>
+    </article>)}</div>;
+        return <section key={lane.status} aria-label={`${lane.label} jobs`} className={`min-w-0 rounded-lg border ${isWaitingQueue ? 'border-amber-700/70 bg-amber-950/20' : 'border-gray-700 bg-gray-950/60'} p-3 ${filter === 'active' && (isWaitingQueue || workingLaneCount === 1) ? 'lg:col-span-2' : ''}`}>
+          {isWaitingQueue ? <>
+            <button type="button" className="flex w-full items-center justify-between gap-3 text-left" onClick={() => { setFocusedWaitingJobId(''); needsDriverDialog.current?.showModal(); }}>
+              <span className="flex items-center gap-2 font-semibold text-amber-100">Needs a driver <span className="rounded bg-amber-700 px-2 py-0.5 text-sm text-white">{laneJobs.length}</span></span>
+              <span className="text-sm text-cyan-200">Review and assign →</span>
+            </button>
+            <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">{laneJobs.slice(0, 3).map(job => <button type="button" key={job.id} className="min-w-0 rounded border border-amber-900/60 bg-gray-900/70 px-3 py-2 text-left hover:border-amber-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400" onClick={() => { setFocusedWaitingJobId(job.id); setSelectedJobId(job.id); needsDriverDialog.current?.showModal(); }}>
+              <p className="truncate font-medium text-white">{job.customer} · {job.title}</p>
+              <p className="truncate text-gray-300">Schedule {job.scheduledAt ? new Date(job.scheduledAt).toLocaleString() : job.scheduleText || 'time not set'} · {job.pickup || job.destination || job.additionalStops?.[0] || ''}{job.requestedDriverCount ? ` · ${job.requestedDriverCount} drivers requested` : ''}</p>
+            </button>)}</div>
+            {laneJobs.length > 3 && <p className="mt-2 text-xs text-amber-200">+{laneJobs.length - 3} more waiting</p>}
+            <dialog ref={needsDriverDialog} aria-label="Jobs needing a driver" className={`fixed inset-0 m-auto max-h-[90vh] ${focusedWaitingJob ? 'w-[min(96vw,60rem)]' : 'w-[min(96vw,90rem)]'} max-w-none overflow-y-auto rounded-xl border border-amber-700 bg-gray-950 p-4 text-white shadow-2xl backdrop:bg-black/75`}>
+              <div className="mb-4 flex items-start justify-between gap-3"><div><h3 className="text-xl font-semibold">{focusedWaitingJob ? focusedWaitingJob.title : <>Needs a driver <span className="text-amber-300">{laneJobs.length}</span></>}</h3><p className="text-sm text-gray-300">Review requests and assign drivers. Press Escape or Close to return to the board.</p></div><div className="flex gap-2">{focusedWaitingJob && <button type="button" className={buttonClass} onClick={() => setFocusedWaitingJobId('')}>All waiting jobs</button>}<button type="button" className={buttonClass} onClick={() => needsDriverDialog.current?.close()}>Close</button></div></div>
+              {cards}
+            </dialog>
+          </> : <>
+            <div className="mb-3 flex items-start justify-between gap-2"><div><h3 className="font-semibold text-white">{lane.label}</h3>{lane.hint && <p className="text-xs text-gray-400">{lane.hint}</p>}</div><span className="rounded bg-gray-800 px-2 py-0.5 text-sm text-gray-200">{laneJobs.length}</span></div>
+            {cards}
+          </>}
+        </section>;
+      })}
+    </div>}
+    </section>
+    <div id="independent-intake" hidden={!intakeOpen} className="max-w-5xl space-y-4">
+    {canWrite && <section className="rounded border border-cyan-800 bg-cyan-950/20 p-4" aria-labelledby="paste-request-title">
+      <h2 id="paste-request-title" className="font-semibold text-cyan-300">Paste a job request</h2>
+      <p className="mt-1 text-sm text-gray-300">Paste a text or WhatsApp request, then review the filled form. Nothing is saved or sent until you create the job. Phone requests can be entered directly below.</p>
+      <textarea aria-label="Job request text" value={pastedRequest} onChange={event => setPastedRequest(event.target.value)}
+        maxLength={10000} rows={5} placeholder={'Customer: Example Hauling\nSector: Water hauling\nJob: Production water run\nPickup: Well pad\nDelivery: Disposal site\nBarrels: 120'}
+        className={`${inputClass} mt-3`} />
+      <button type="button" className={`${buttonClass} mt-2 px-3 py-2`} disabled={!loaded || !pastedRequest.trim() || !!editing}
+        onClick={fillFromRequest}>Fill job form from text</button>
+      {editing && <p className="mt-2 text-sm text-amber-200">Finish editing or choose Clear / new job before parsing another request.</p>}
+      {parseReport && <div role="status" className="mt-3 space-y-1 text-sm text-gray-200">
+        <p>Initial extraction applied. Check every field before creating the job.</p>
+        {parseReport.missing.filter(item => item !== 'Customer' || (!customerId && !newCustomer)).length > 0
+          && <p className="text-amber-200">Still needed: {parseReport.missing.filter(item => item !== 'Customer' || (!customerId && !newCustomer)).join(', ')}.</p>}
+        {parseReport.warnings.map(warning => <p key={warning} className="text-amber-200">{warning}</p>)}
+      </div>}
+    </section>}
+    {canWrite && <form id="independent-job-form" className={`rounded p-4 ${editing ? 'border-2 border-amber-400 bg-amber-950/30 ring-2 ring-amber-500/30 shadow-xl shadow-amber-950/30' : 'border border-gray-700 bg-gray-800'}`} onSubmit={event => {
+      event.preventDefault();
+      if (!form.pickup.trim() && !form.destination.trim() && !(form.additionalStops || []).some(stop => stop.trim())) {
+        setError('Enter at least one job location.'); return;
+      }
+      const job = { ...form, additionalStops: (form.additionalStops || []).map(stop => stop.trim()).filter(Boolean),
+        scheduledAt: scheduledLocal ? new Date(scheduledLocal).toISOString() : '',
+        estimatedEndAt: estimatedEndLocal ? new Date(estimatedEndLocal).toISOString() : '',
+        ...(sector ? { ...(customerId ? { customerId } : {}), sector, sectorFields } : {}),
+        ...(customerId ? { categoryId, asset: categoryId ? asset.trim() : '' } : {}) };
+      void run({ op: editing ? 'update' : 'create', jobId: editing?.id || creation.current.jobId,
+        requestId: editing ? crypto.randomUUID() : creation.current.requestId,
+        ...(editing ? { expectedRevision: editing.revision } : {}),
+        ...(!editing && newCustomer && saveCustomer ? { saveCustomer: true } : {}),
+        ...(savePickup || saveDestination ? { saveLocations: { pickup: savePickup, destination: saveDestination } } : {}), job }, () => {
+          const editedJob = editing;
+          resetForm();
+          if (editedJob) returnToBoardJob(editedJob);
+          else requestAnimationFrame(() => document.getElementById('dispatch-board-title')?.scrollIntoView({ behavior: 'smooth' }));
+        });
+    }}>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2"><div><h2 className={`text-lg font-semibold ${editing ? 'text-amber-200' : 'text-cyan-300'}`}>{editing ? `Editing job: ${editing.title}` : 'New Independent Dispatch job'}</h2>{editing && <p className="mt-1 text-sm text-amber-100">{editing.customer} · Review the details below, then Save changes.</p>}</div><button type="button" className="text-sm text-cyan-200 underline" onClick={editing ? leaveEdit : () => setIntakeOpen(false)}>{editing ? 'Cancel edit / back to board' : 'Hide intake'}</button></div>
+      <fieldset disabled={busy || !loaded} className="grid gap-3 md:grid-cols-2">
+        {(!editing || editing.sector) ? <>
+          <div className="text-xs text-gray-300">Customer *<select aria-label="Customer" required value={newCustomer ? '__new__' : customerId} className={inputClass} onChange={event => {
+            if (event.target.value === '__new__') { setOperatorOverride(null); setNewCustomer(true); setSaveCustomer(false); setSavePickup(false); setSaveDestination(false); setCustomerId(''); setContactId('');
+              setForm(current => ({ ...current, customer: parseReport?.customerLabel || '',
+                ...(parseReport ? {} : { jobContactName: '', jobContactRole: '', jobContactPhoneE164: '' }) }));
+              setSector(parseReport?.sector || ''); setSectorFields(parseReport?.sectorFields || {}); setCategoryId(''); setAsset(''); return; }
+            chooseSavedCustomer(event.target.value);
+          }}><option value="">Choose customer…</option>{directory?.customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}</option>)}<option value="__new__">NEW customer…</option></select>
+            {newCustomer && <div className="mt-2 space-y-2"><label className="block">NEW customer · enter the official company name
+              <input aria-label="New customer's official company name" required maxLength={180} value={form.customer}
+                onChange={event => setForm(current => ({ ...current, customer: event.target.value }))} className={inputClass} />
+            </label>{!editing && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={saveCustomer} onChange={event => { setSaveCustomer(event.target.checked); if (!event.target.checked) { setSavePickup(false); setSaveDestination(false); } }} />Save this customer for future jobs</label>}</div>}
+            {!!parseReport?.customerSuggestions.length && !customerId && <div className="mt-2 text-amber-200">Possible saved customers — confirm the company: {parseReport.customerSuggestions.map(suggestion => <button key={suggestion.id} type="button" className="mr-2 underline" onClick={() => chooseSavedCustomer(suggestion.id)}>{suggestion.name}{suggestion.sectorMatch ? ' · matches job sector' : ''}</button>)}</div>}
+          </div>
+          <label className="text-xs text-gray-300">Transportation sector *<select aria-label="Transportation sector" required value={sector} className={inputClass} onChange={event => { setSector(event.target.value as IndependentSector); setSectorFields({}); setCategoryId(''); setAsset(''); }}>
+            <option value="">{availableSectors.length ? 'Choose sector…' : 'Choose a customer first…'}</option>
+            {availableSectors.map(id => <option key={id} value={id}>{sectorLabel(id)}</option>)}
+          </select></label>
+        </> : <label className="text-xs text-gray-300">Customer *<input required maxLength={180} value={form.customer} onChange={event => setForm({ ...form, customer: event.target.value })} className={inputClass} /></label>}
+        {(!!availableCategories.length || !!categoryId) && <div className="grid gap-3 md:col-span-2 md:grid-cols-2">
+          <label className="text-xs text-gray-300">Customer category<select aria-label="Customer category" value={categoryId} className={inputClass} onChange={event => { setCategoryId(event.target.value); setAsset(''); }}>
+            <option value="">General job / no category</option>{categoryId && !selectedCategory && <option value={categoryId}>Archived category</option>}{availableCategories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+          </select></label>
+          {selectedCategory && <label className="text-xs text-gray-300">Rig, site, or asset<input aria-label="Rig, site, or asset" list="independent-category-assets" maxLength={180} value={asset} onChange={event => setAsset(event.target.value)} className={inputClass} />
+            <datalist id="independent-category-assets">{selectedCategory.assets.map(value => <option key={value} value={value} />)}</datalist>
+          </label>}
+          {selectedCategory?.sourceChannels.length ? <p className="text-xs text-gray-400 md:col-span-2">Known source channels: {selectedCategory.sourceChannels.join(', ')}. Select the actual job details from the request.</p> : null}
+        </div>}
+        <div className="rounded border border-cyan-700/40 bg-cyan-950/20 p-3 md:col-span-2">
+          <h3 className="text-sm font-medium text-cyan-300">Company man / job contact</h3>
+          <p className="mt-1 text-xs text-gray-400">Choose this job’s contact or enter the person and phone supplied with the request. Changes here apply to this job only.</p>
+          {!!selectedCustomer?.contacts?.length && <label className="mt-2 block text-xs text-gray-300">Saved customer contacts
+            <select aria-label="Saved job contact" value={contactId} className={inputClass} onChange={event => {
+              const contact = selectedCustomer.contacts?.find(item => item.id === event.target.value);
+              setContactId(contact?.id || '');
+              setForm(current => ({ ...current, jobContactName: contact?.name || '', jobContactRole: contact?.role || '', jobContactPhoneE164: contact?.phoneE164 || '' }));
+            }}><option value="">Enter a contact for this job…</option>{selectedCustomer.contacts.map(contact => <option key={contact.id} value={contact.id}>{contact.name}{contact.role ? ` · ${contact.role}` : ''}</option>)}</select>
+          </label>}
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            <label className="text-xs text-gray-300">Contact name<input maxLength={120} value={form.jobContactName || ''} onChange={event => { setContactId(''); setForm(current => ({ ...current, jobContactName: event.target.value })); }} className={inputClass} /></label>
+            <label className="text-xs text-gray-300">Role / title<input maxLength={80} value={form.jobContactRole || ''} onChange={event => { setContactId(''); setForm(current => ({ ...current, jobContactRole: event.target.value })); }} placeholder="Company man" className={inputClass} /></label>
+            <label className="text-xs text-gray-300">Contact phone (+country code)<input type="tel" pattern="\+[1-9][0-9]{7,14}" value={form.jobContactPhoneE164 || ''} onChange={event => { setContactId(''); setForm(current => ({ ...current, jobContactPhoneE164: event.target.value })); }} placeholder="+17015550123" className={inputClass} /></label>
+          </div>
+        </div>
+        <div className="text-xs text-gray-300 md:col-span-2">
+          <label htmlFor="independent-well-operator">NDIC well data source</label>
+          <select id="independent-well-operator" aria-label="Well catalog operator" className={inputClass} value={operatorName}
+            onChange={event => setOperatorOverride(event.target.value)}>
+            <option value="">No NDIC wells — saved locations and manual entry</option>
+            {mappedOperators.length > 1 && <option value="__customer__">All {mappedOperators.length} sources saved for {selectedCustomer?.name}</option>}
+            {operatorName && operatorName !== '__customer__' && !allowedOperators.some(operator => operator.name === operatorName) && <option value={operatorName}>{operatorName}</option>}
+            {allowedOperators.map(operator => <option key={operator.name} value={operator.name}>{operator.name}{operator.well_count != null ? ` · ${operator.well_count} wells` : ''}</option>)}
+          </select>
+          <p className="mt-1 text-gray-400">The paying customer stays {selectedCustomer?.name || form.customer || 'the chosen customer'}. This source controls which NDIC wells appear. Set its usual sources in that customer’s profile; saved locations and disposal sites remain available.</p>
+          {catalogError && <p className="mt-1 text-amber-200">{catalogError}</p>}
+        </div>
+        {FIELDS.map(([key, label, max, required]) => key === 'pickup' || key === 'destination' ? <div key={key} className="relative text-xs text-gray-300">
+          <label htmlFor={`independent-${key}`}>{label}</label>
+          <BuilderAutocomplete value={form[key]} onValueChange={value => { setForm(current => ({ ...current, [key]: value }));
+            if (!value.trim()) { if (key === 'pickup') setSavePickup(false); else setSaveDestination(false); } }}
+            items={locationResults(key)} onSelect={item => { setForm(current => ({ ...current, [key]: item.value }));
+              if (key === 'pickup') setSavePickup(false); else setSaveDestination(false); }}
+            renderItem={item => <LocationSearchResult item={item} />} getItemKey={(item, index) => `${item.kind}:${item.value}:${index}`}
+            inputId={`independent-${key}`} ariaLabel={label} minChars={2} inputClassName={inputClass}
+            listClassName="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded border border-cyan-700 bg-gray-950 shadow-xl"
+            optionClassName="wb-option-row block w-full border-b border-gray-800 px-2 text-left last:border-0" />
+          {form[key].trim() && (selectedCustomer || (newCustomer && saveCustomer))
+            && !(key === 'pickup' ? selectedCustomer?.pickupLocations : selectedCustomer?.deliveryLocations)
+              ?.some(value => value.trim().toLowerCase() === form[key].trim().toLowerCase())
+            && <label className="mt-1 flex items-center gap-1 text-xs text-cyan-200">
+              <input type="checkbox" checked={key === 'pickup' ? savePickup : saveDestination}
+                disabled={form[key].trim().length > 180}
+                onChange={event => key === 'pickup' ? setSavePickup(event.target.checked) : setSaveDestination(event.target.checked)} />
+              Save this {key === 'pickup' ? 'pickup' : 'delivery'} location to {selectedCustomer?.name || form.customer}’s list
+            </label>}
+        </div> : <label key={key} className={`text-xs text-gray-300 ${key === 'notes' ? 'md:col-span-2' : ''}`}>
+          {label}{required ? ' *' : ''}
+          {key === 'notes' ? <textarea className={inputClass} rows={3} maxLength={max} value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} />
+            : <input list={key === 'title' ? 'independent-job-names' : undefined}
+              className={inputClass} required={required} maxLength={max} value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} />}
+        </label>)}
+        <datalist id="independent-job-names">{selectedCustomer?.jobNames.map(value => <option key={value} value={value} />)}</datalist>
+        <div className="md:col-span-2"><div className="flex items-center justify-between gap-2"><p className="text-xs text-gray-300">Additional stops (in travel order)</p><button type="button" className="text-xs text-cyan-200 underline" disabled={(form.additionalStops || []).length >= 12} onClick={() => setForm(current => ({ ...current, additionalStops: [...(current.additionalStops || []), ''] }))}>Add stop</button></div>
+          {(form.additionalStops || []).map((stop, index) => <div key={index} className="mt-2 flex gap-2"><input aria-label={`Stop ${index + 1} location`} className={inputClass} maxLength={500} value={stop} onChange={event => setForm(current => ({ ...current, additionalStops: (current.additionalStops || []).map((value, position) => position === index ? event.target.value : value) }))} /><button type="button" className="text-xs text-red-200 underline" onClick={() => setForm(current => ({ ...current, additionalStops: (current.additionalStops || []).filter((_, position) => position !== index) }))}>Remove</button></div>)}
+          <p className="mt-1 text-xs text-gray-400">For one-site work, enter that site in Pickup or Delivery and leave the other blank. Every listed stop gets its own map link in the driver handoff.</p>
+        </div>
+        {sector && <div className="rounded border border-cyan-700/50 bg-cyan-950/20 p-3 md:col-span-2">
+          <h3 className="mb-2 text-sm font-semibold text-cyan-300">{sectorLabel(sector)} details</h3>
+          <div className="grid gap-3 md:grid-cols-2">{SECTOR_FIELDS[sector].map(field => <label key={field.key} className="text-xs text-gray-300">
+            {field.label}{field.required ? ' *' : ''}
+            {field.options ? <select aria-label={field.label} required={field.required} value={sectorFields[field.key] || ''} className={inputClass}
+              onChange={event => setSectorFields(current => ({ ...current, [field.key]: event.target.value }))}>
+              <option value="">Choose…</option>{field.options.map(value => <option key={value} value={value}>{value}</option>)}
+            </select> : <input aria-label={field.label} required={field.required} type={field.type || 'text'} min={field.type === 'number' ? 0.01 : undefined}
+              step={field.type === 'number' ? '0.01' : undefined} maxLength={160} value={sectorFields[field.key] || ''}
+              onChange={event => setSectorFields(current => ({ ...current, [field.key]: event.target.value }))} className={inputClass} />}
+          </label>)}</div>
+        </div>}
+        <label className="text-xs text-gray-300">Scheduled time (your local time)<input type="datetime-local" className={inputClass} value={scheduledLocal} onChange={e => setScheduledLocal(e.target.value)} /></label>
+        <label className="text-xs text-gray-300 md:col-span-2">Schedule details from request<input maxLength={500} className={inputClass} value={form.scheduleText || ''} onChange={e => setForm(current => ({ ...current, scheduleText: e.target.value }))} placeholder="Be there by 6 AM; job starts at 7 AM" /></label>
+        <label className="text-xs text-gray-300">Estimated finish (your local time)<input type="datetime-local" className={inputClass} value={estimatedEndLocal} min={scheduledLocal || undefined} onChange={e => setEstimatedEndLocal(e.target.value)} /></label>
+        <label className="text-xs text-gray-300">Shift<select aria-label="Job shift" className={inputClass} value={form.shift || ''} onChange={e => setForm(current => ({ ...current, shift: e.target.value as IndependentJobDetails['shift'] }))}><option value="">Not specified</option><option value="day">Day shift</option><option value="night">Night shift</option><option value="both">Day and night shifts</option></select></label>
+        <label className="text-xs text-gray-300">Drivers requested<input aria-label="Drivers requested" type="number" min={1} max={30} step={1} className={inputClass} value={form.requestedDriverCount ?? ''} onChange={e => setForm(current => ({ ...current, requestedDriverCount: e.target.value ? Number(e.target.value) : null }))} /></label>
+        <label className="flex items-center gap-2 text-sm text-gray-200"><input type="checkbox" checked={form.ongoing || false} onChange={e => setForm(current => ({ ...current, ongoing: e.target.checked }))} />Ongoing / recurring work</label>
+        <p className="text-xs text-gray-400 md:col-span-2">If the finish is unknown, an assigned driver stays unavailable for other jobs until this job is completed or cancelled.</p>
+        <div className="flex items-end gap-2"><button disabled={!editing && ((!customerId && !newCustomer) || !sector || !form.customer.trim())} className={buttonClass}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create job'}</button>
+          <button type="button" className="text-sm text-gray-300" onClick={resetForm}>Clear / new job</button></div>
+      </fieldset>
+    </form>}
+    </div>
+  </div>;
+}

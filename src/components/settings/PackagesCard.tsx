@@ -2,8 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
-import { getFirestoreDb } from '@/lib/firebase';
-import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
+import { httpsCallable } from 'firebase/functions';
+import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
+import { type CompanyConfig } from '@/lib/companySettings';
+import { independentDispatchCatalog } from '@/lib/independentDispatchCatalog';
 
 interface JobPackage {
   id: string;
@@ -70,6 +72,9 @@ export function PackagesCard({ company, onSave, canEdit }: Props) {
         snap.forEach(d => {
           list.push({ id: d.id, ...d.data() } as JobPackage);
         });
+        // Built-in discovery keeps the new package installable while the shared
+        // catalog is rolled out. Existing published package definitions win.
+        if (!list.some(pkg => pkg.id === independentDispatchCatalog.id)) list.push(independentDispatchCatalog);
         list.sort((a, b) => a.name.localeCompare(b.name));
         setPackages(list);
       } catch (err) {
@@ -88,8 +93,9 @@ export function PackagesCard({ company, onSave, canEdit }: Props) {
     setSaving(packageId);
     setError(null);
     try {
-      const updated = [...activePackages, packageId];
-      await updateCompanyFields(company.id, { activePackages: updated });
+      await httpsCallable(getFirebaseFunctions(), 'staffSetCompanyJobPackage')({
+        companyId: company.id, packageId, action: 'install',
+      });
       onSave();
     } catch (err) {
       console.error('Failed to install package:', err);
@@ -105,8 +111,9 @@ export function PackagesCard({ company, onSave, canEdit }: Props) {
     setSaving(packageId);
     setError(null);
     try {
-      const updated = activePackages.filter(id => id !== packageId);
-      await updateCompanyFields(company.id, { activePackages: updated });
+      await httpsCallable(getFirebaseFunctions(), 'staffSetCompanyJobPackage')({
+        companyId: company.id, packageId, action: 'remove',
+      });
       onSave();
     } catch (err) {
       console.error('Failed to remove package:', err);
@@ -206,6 +213,7 @@ export function PackagesCard({ company, onSave, canEdit }: Props) {
                         {pkg.description && (
                           <p className="text-gray-500 text-xs mb-1.5">{pkg.description}</p>
                         )}
+                        {pkg.id === independentDispatchCatalog.id && <a href="/dispatch/independent" className="mb-2 inline-block text-xs text-cyan-300 hover:underline">Open Independent Dispatch →</a>}
 
                         {pkg.jobTypes && pkg.jobTypes.length > 0 && (
                           <div className="flex flex-wrap gap-1">

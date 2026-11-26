@@ -13,6 +13,7 @@ export const AUTH_ROUTES = [
   '/chat',
   '/demo',
   '/dispatch',
+  '/dispatch/independent',
   '/driverlogs',
   '/equipment',
   '/job-history',

@@ -54,6 +54,9 @@ import { adminGetDashboardCatalog, adminGetDemoDriverRoster, adminGetWellPool, c
 import { canViewGovernedWellPool, docBelongsToTenant, viewedCompanyId as resolveViewedCompanyId } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { LoadTransferPanel } from '@/components/LoadTransferPanel';
+import { ExternalAssignmentDeliveryPanel } from '@/components/ExternalAssignmentDeliveryPanel';
+import { getExternalDeliveryAccess } from '@/lib/externalAssignmentDelivery';
+import { hasIndependentDispatchPackage, hasOnlyIndependentDispatchPackage } from '@/lib/independentDispatchPackage';
 import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -314,8 +317,36 @@ function DispatchPageInner() {
   // WB owners have no company on their login. Their header selection still
   // scopes what Dispatch displays; an empty selection is the explicit all view.
   const viewedCompanyId = resolveViewedCompanyId(user?.companyId, operatingCompanyId, isPlatformAdmin(user));
+  const [independentJobPackage, setIndependentJobPackage] = useState<{ companyId: string; active: boolean; onlyIndependent: boolean; failed?: boolean } | null>(null);
+  const [independentDispatchAccess, setIndependentDispatchAccess] = useState<{ companyId: string; enabled: boolean } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!viewedCompanyId) {
+      setIndependentDispatchAccess(null);
+      return () => { cancelled = true; };
+    }
+    // The backend determines the trusted tenant and whether this is an
+    // Independent Dispatch customer or an approved outside-contractor company.
+    setIndependentDispatchAccess(null);
+    if (!user || !hasCapability(user, 'createDispatch') || !hasCapability(user, 'manageDrivers')) {
+      return () => { cancelled = true; };
+    }
+    void getExternalDeliveryAccess().then(access => {
+      if (!cancelled) setIndependentDispatchAccess({
+        companyId: viewedCompanyId,
+        enabled: access.companyId === viewedCompanyId && access.enabled,
+      });
+    }).catch(() => {
+      if (!cancelled) setIndependentDispatchAccess({ companyId: viewedCompanyId, enabled: false });
+    });
+    return () => { cancelled = true; };
+  }, [viewedCompanyId, user]);
   const router = useRouter();
   const dispatchPathname = usePathname();
+  const independentOnly = Boolean(user?.companyId && independentJobPackage?.companyId === user.companyId && independentJobPackage.onlyIndependent);
+  useEffect(() => {
+    if (independentOnly) router.replace('/dispatch/independent');
+  }, [independentOnly, router]);
 
   // Capability gate for ALL dispatch mutations. The Dispatch tab is visible to
   // any role with `viewDispatch` (e.g. `viewer`), but only `createDispatch`
@@ -997,6 +1028,7 @@ function DispatchPageInner() {
   // WB admins resolve the operating company from the server-authorized catalog
   // Hauler admin: loads only their company's active packages
   useEffect(() => {
+    setIndependentJobPackage(null);
     if (!user) return;
     let cancelled = false;
     setAllOperatorWells([]);
@@ -1017,6 +1049,12 @@ function DispatchPageInner() {
 
         if (companyId) {
           companyConfig = await loadCompanyById(companyId);
+          if (cancelled) return;
+          setIndependentJobPackage({ companyId,
+            active: hasIndependentDispatchPackage(companyConfig?.activePackages),
+            onlyIndependent: hasOnlyIndependentDispatchPackage(companyConfig?.activePackages),
+            failed: !companyConfig,
+          });
           setAssignedBuilderOperators(companyConfig?.assignedOperators || []);
           activeFilter = companyConfig?.activePackages || [];
 
@@ -1107,6 +1145,9 @@ function DispatchPageInner() {
         }
       } catch (err) {
         if (cancelled) return;
+        const scopedCompanyId = user.companyId;
+        if (scopedCompanyId) setIndependentJobPackage(previous => previous?.companyId === scopedCompanyId
+          ? previous : { companyId: scopedCompanyId, active: false, onlyIndependent: false, failed: true });
         setReadErrors(prev => ({ ...prev, operatorCatalog: classifiedReadFailure('company operator catalog', err) }));
         console.error('Failed to load job package types:', err);
         // Keep fallback on error
@@ -2901,6 +2942,15 @@ function DispatchPageInner() {
 
   if (!user) return null;
 
+  // A scoped company with only Independent Dispatch must never render the
+  // standard water-hauling workspace, including while its package check loads.
+  if (user.companyId && (!independentJobPackage || independentJobPackage.companyId !== user.companyId
+    || independentJobPackage.onlyIndependent || independentJobPackage.failed)) {
+    return <div className="min-h-screen bg-gray-900 text-white"><AppHeader />
+      <main className="p-4">{independentJobPackage?.failed ? 'Unable to verify company packages. Refresh to retry.' : 'Checking company packages…'}</main>
+    </div>;
+  }
+
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -2927,6 +2977,9 @@ function DispatchPageInner() {
         </div>}
 
         <nav aria-label="Dispatch workspace" className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-2">
+          {independentJobPackage?.companyId === viewedCompanyId && independentJobPackage?.active === true && (
+            <a href="/dispatch/independent" className="inline-flex items-center rounded px-4 py-2 text-sm font-medium text-cyan-300 hover:bg-gray-800">Independent Dispatch</a>
+          )}
           <a href="/dispatch/fresh-water" className="inline-flex items-center rounded px-4 py-2 text-sm font-medium text-cyan-300 hover:bg-gray-800">Fresh Water Tanks</a>
           {([
             ['jobs', 'Jobs'],
@@ -2945,7 +2998,17 @@ function DispatchPageInner() {
           })}
         </nav>
 
-        {workspaceTab === 'jobs' && <LoadTransferPanel companyId={viewedCompanyId || null} />}
+        {workspaceTab === 'jobs' && <>
+          {independentDispatchAccess?.companyId === viewedCompanyId && independentDispatchAccess?.enabled === true && (
+          <ExternalAssignmentDeliveryPanel
+            canManage={canCreateDispatch && hasCapability(user, 'manageDrivers')}
+            jobs={dispatches
+              .filter(job => Boolean(job.id) && ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused'].includes(job.status))
+              .map(job => ({ id: job.id as string, wellName: job.wellName, driverName: job.driverName, status: job.status }))}
+          />
+          )}
+          <LoadTransferPanel companyId={viewedCompanyId || null} />
+        </>}
 
         <div className={`dispatch-workspace${queueDetached ? ' is-queue-detached' : ''}${jobsDetached ? ' is-jobs-detached' : ''}`}>
 

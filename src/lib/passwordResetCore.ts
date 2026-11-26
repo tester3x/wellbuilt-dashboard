@@ -6,7 +6,7 @@
 
 /** Always-generic acknowledgement — never reveals whether an account exists. */
 export const GENERIC_RESET_ACK =
-  'If an account exists for that email, a password-reset link has been sent.';
+  'If an account exists for that email, a reset email was requested. Check Inbox and Junk. Delivery may take a few minutes.';
 
 /** Collapsed, non-enumerating sign-in failure message. */
 export const GENERIC_LOGIN_ERROR = 'Email or password is incorrect.';

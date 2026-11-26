@@ -14,13 +14,17 @@ import { ChatSidebar } from './chat/ChatSidebar';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions, getFirebaseDatabase } from '@/lib/firebase';
 import { rememberedTabHref, rememberTabHref } from '@/lib/dashboardReturnState';
+import { hasFreeOwnerWorkspace, hasOnlyIndependentDispatchPackage } from '@/lib/independentDispatchPackage';
 
 export function AppHeader() {
   const { user, userCompany, signOut, operatingCompanyId, selectOperatingCompany } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const activeTabId = getActiveTab(pathname);
-  const canReviewLocations = hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany);
+  const independentOnly = !!user?.companyId && hasOnlyIndependentDispatchPackage(userCompany?.activePackages);
+  const freeOwner = hasFreeOwnerWorkspace(userCompany, user?.uid);
+  const limitedWorkspace = independentOnly || freeOwner;
+  const canReviewLocations = !limitedWorkspace && (hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany));
   const [pendingLocations, setPendingLocations] = useState(0);
   useEffect(() => {
     if (!user || !canReviewLocations) { setPendingLocations(0); return; }
@@ -53,7 +57,7 @@ export function AppHeader() {
   // This is independent of the notification bell. Bell = awareness, pulse = persistent reminder.
   // Pulse stops ONLY when the actual pending drivers are approved/rejected.
   useEffect(() => {
-    if (!user) return;
+    if (!user || limitedWorkspace) return;
     if (!hasCapability(user, 'manageDrivers', userCompany)) return;
 
     const db = getFirebaseDatabase();
@@ -77,7 +81,7 @@ export function AppHeader() {
       ).catch(() => setPendingDriverCount(0));
     });
     return () => unsub();
-  }, [user, userCompany]);
+  }, [user, userCompany, limitedWorkspace]);
 
   if (!user) return null;
 
@@ -99,7 +103,7 @@ export function AppHeader() {
             {companies.map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
           </select>
         </label>}
-          {hasCapability(user, 'viewAdmin', userCompany) && (
+          {!limitedWorkspace && hasCapability(user, 'viewAdmin', userCompany) && (
             <Link
               href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
               className="relative px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-xs"
@@ -164,7 +168,7 @@ export function AppHeader() {
               </div>
             </details>
           )}
-          {(hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany)) && (
+          {canReviewLocations && (
             <Link href="/location-review" className="rounded-lg bg-gray-700 px-2.5 py-1.5 text-xs text-yellow-400 hover:bg-gray-600">Location Review{pendingLocations > 0 ? ' (' + pendingLocations + ')' : ''}</Link>
           )}
           <button
@@ -181,16 +185,18 @@ export function AppHeader() {
           >
             {user.uid === 'wellbuilt-demo-shared-viewer' ? 'Leave Demo' : 'Sign Out'}
           </button>
-          <div aria-label="Chat and notifications" className="ml-auto flex items-center gap-2">
+          {!limitedWorkspace && <div aria-label="Chat and notifications" className="ml-auto flex items-center gap-2">
             <ChatIcon onClick={() => setChatOpen(!chatOpen)} unreadCount={chatUnread} />
             <NotificationBell />
-          </div>
+          </div>}
         </div>
 
         {/* Main navigation keeps its own centered row. */}
         <div className="contents">
           <nav aria-label="Main navigation" className="order-3 flex w-full min-w-0 flex-wrap justify-center gap-x-1 gap-y-0">
             {TABS.filter(tab => {
+              if (independentOnly) return tab.id === 'dispatch' || tab.id === 'settings';
+              if (freeOwner) return tab.id === 'equipment' || tab.id === 'safety' || tab.id === 'settings';
               if (tab.id === 'equipment') return hasEQuipmentAccess(user, userCompany);
               // Capability-based gate wins when set. Falls back to legacy minRole
               // only if capability is unset (e.g., Home tab with no gate at all).
@@ -199,23 +205,31 @@ export function AppHeader() {
               return true;
             }).map((tab) => {
               const isActive = tab.id === activeTabId;
+              const href = independentOnly && tab.id === 'dispatch' ? '/dispatch/independent'
+                : freeOwner ? tab.href : returnLinks[tab.id] || tab.href;
+              const className = `relative whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors border-b-2 ${
+                isActive
+                  ? 'border-blue-500 text-white'
+                  : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600'
+              }`;
+              const label = independentOnly && tab.id === 'dispatch' ? 'Independent Dispatch' : tab.label;
+              // These small package workspaces use normal document navigation.
+              // It also discards a stale App Router state when moving between
+              // Settings and Independent Dispatch after company hydration.
+              if (limitedWorkspace) return <a key={tab.id} href={href} className={className}>{label}</a>;
               return (
                 <Link
                   key={tab.id}
-                  href={returnLinks[tab.id] || tab.href}
+                  href={href}
                   onClick={event => {
                     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                     rememberTabHref(user.uid, operatingCompanyId);
-                    const href = rememberedTabHref(user.uid, operatingCompanyId, tab.id, tab.href);
-                    event.preventDefault(); router.push(href);
+                    const targetHref = rememberedTabHref(user.uid, operatingCompanyId, tab.id, tab.href);
+                    event.preventDefault(); router.push(targetHref);
                   }}
-                  className={`relative whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors border-b-2 ${
-                    isActive
-                      ? 'border-blue-500 text-white'
-                      : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600'
-                  }`}
+                  className={className}
                 >
-                  {tab.label}
+                  {label}
                 </Link>
               );
             })}
@@ -225,13 +239,13 @@ export function AppHeader() {
       </div>
 
       {/* Chat Sidebar */}
-      <ChatSidebar
+      {!limitedWorkspace && <ChatSidebar
         visible={chatOpen}
         onClose={() => setChatOpen(false)}
         userId={user?.uid || ''}
         companyId={user?.companyId || ''}
         onUnreadChange={setChatUnread}
-      />
+      />}
     </header>
   );
 }

@@ -42,6 +42,13 @@ export {
 } from './adminDashboardCatalog';
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
+export { staffExternalAssignmentDelivery } from './externalAssignmentDeliveryCallable';
+export { staffIndependentDispatchJobs } from './independentDispatchJobsCallable';
+export { staffIndependentDispatchDirectory } from './independentDispatchDirectoryCallable';
+export { staffIndependentDriverProfiles } from './independentDriverProfilesCallable';
+export { staffSetCompanyJobPackage } from './companyJobPackagesCallable';
+export { staffCreateExternalGuestLink, externalGuestAssignment } from './externalGuestAssignmentCallable';
+export { adminSetOutsideDriverAccess } from './externalDriverCompanyAccess';
 export { createDriverDispatchIfAbsent } from './createDriverDispatchCallable';
 export { acceptDriverDispatch } from './acceptDriverDispatchCallable';
 export { resolveExecutionBinding } from './resolveExecutionBindingCallable';

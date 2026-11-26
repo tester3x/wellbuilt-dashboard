@@ -290,3 +290,37 @@ body {
 .sw-onsite-visible-picker::-webkit-calendar-picker-indicator {
   filter: invert(1);
 }
+
+/* Print the open Tickets invoice once, without paginating the ticket list behind it. */
+@media print {
+  @page { size: letter; margin: 0.45in; }
+  body:has(> .ticket-invoice-modal) > :not(.ticket-invoice-modal) {
+    display: none !important;
+  }
+  body > .ticket-invoice-modal {
+    position: static !important;
+    display: block !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: white !important;
+  }
+  .ticket-invoice-shell {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+  }
+  .ticket-invoice-header {
+    display: none !important;
+  }
+  .ticket-invoice-paper {
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+  .ticket-invoice-paper > div {
+    padding: 0 !important;
+  }
+  .ticket-invoice-paper .rounded-lg {
+    break-inside: avoid;
+  }
+}

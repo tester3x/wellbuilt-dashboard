@@ -184,7 +184,7 @@ function shot(){
     <input type="password" value="••••••••"/><button class="btn">Sign In</button>
     <div class="muted">Need an account? <span style="color:#60a5fa">Create one</span></div></div>
   <div class="card"><h1>WellBuilt</h1><div class="sub">Reset your password</div>
-    <div class="ack">If an account exists for that email, a password-reset link has been sent.</div>
+    <div class="ack">If an account exists for that email, a reset email was requested. Check Inbox and Junk. Delivery may take a few minutes.</div>
     <label>Email</label><input value="you@example.com"/><button class="btn">Send reset link</button>
     <div class="muted"><span style="color:#60a5fa">Back to sign in</span></div></div>
   </body></html>`;

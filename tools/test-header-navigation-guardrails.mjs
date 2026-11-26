@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
@@ -211,19 +212,28 @@ export async function runHeaderNavigationGuardrails() {
   console.log('✓ AppHeader source verified: legacy 3-column grid absent; compact centered wrappers present.');
 
   // Step E: Playwright Headless Layout Proof across viewports
+  let headerMode = 'full';
+  let currentPath = '/dispatch';
   const { AppHeader } = transpileAndLoad('src/components/AppHeader.tsx', {
     'next/link': { default: ({ children, ...props }) => React.createElement('a', props, children) },
-    'next/navigation': { usePathname: () => '/dispatch', useRouter: () => ({}) },
+    'next/navigation': { usePathname: () => currentPath, useRouter: () => ({}) },
     'firebase/database': {},
     '@/contexts/AuthContext': {
       useAuth: () => ({
-        user: { uid: 'guardrail-test-uid', email: 'dispatch-admin@wellbuilt.test', role: 'admin' },
+        user: { uid: 'guardrail-test-uid', email: 'dispatch-admin@wellbuilt.test', role: 'admin',
+          ...(headerMode !== 'full' ? { companyId: 'co_test' } : {}) },
+        userCompany: headerMode === 'independent' ? { activePackages: ['independent-dispatch'] }
+          : headerMode === 'free' ? { id: 'co_test', ownerUid: 'guardrail-test-uid', wellbuiltContract: { planId: 'free-co-test' }, activePackages: [] } : null,
         operatingCompanyId: null,
         selectOperatingCompany: () => {},
         signOut: async () => {},
       }),
     },
     '@/lib/tabs': tabsModule,
+    '@/lib/independentDispatchPackage': {
+      hasOnlyIndependentDispatchPackage: value => Array.isArray(value) && value.length === 1 && value[0] === 'independent-dispatch',
+      hasFreeOwnerWorkspace: (company, uid) => !!company && company.ownerUid === uid && company.wellbuiltContract?.planId === `free-${company.id.replace(/_/g, '-')}` && company.activePackages?.length === 0,
+    },
     '@/lib/dashboardReturnState': {
       rememberedTabHref: (_uid, _company, _tab, fallback) => fallback,
       rememberTabHref: () => {},
@@ -233,7 +243,7 @@ export async function runHeaderNavigationGuardrails() {
       hasCapability: () => true,
       hasEQuipmentAccess: () => true,
       hasRole: () => true,
-      isPlatformAdmin: () => true,
+      isPlatformAdmin: user => !user?.companyId,
     },
     './NotificationBell': { NotificationBell: () => React.createElement('button', null, 'Alerts') },
     './chat/ChatIcon': { ChatIcon: () => React.createElement('button', null, 'Chat') },
@@ -322,6 +332,53 @@ export async function runHeaderNavigationGuardrails() {
       }
       console.log(`✓ Viewport ${width}px passed (height: ${metrics.headerHeight.toFixed(0)}px, titleLeft: ${metrics.titleLeft.toFixed(1)}px, overflow: false).`);
     }
+
+    headerMode = 'independent';
+    currentPath = '/settings';
+    await page.setContent(`<style>${css}</style>${renderToStaticMarkup(React.createElement(AppHeader))}`);
+    const packageTabs = await page.locator('nav[aria-label="Main navigation"] a').allTextContents();
+    if (JSON.stringify(packageTabs) !== JSON.stringify(['Independent Dispatch', 'Settings']))
+      throw new Error(`Independent-only navigation leaked tabs: ${packageTabs.join(', ')}`);
+    const extras = {
+      admin: await page.getByRole('link', { name: 'Admin', exact: true }).count(),
+      locationReview: await page.getByRole('link', { name: 'Location Review' }).count(),
+      chat: await page.getByLabel('Chat and notifications').count(),
+    };
+    if (Object.values(extras).some(Boolean))
+      throw new Error(`Independent-only navigation exposed standard workspace controls: ${JSON.stringify(extras)}`);
+    if (await page.getByRole('link', { name: 'Independent Dispatch' }).getAttribute('href') !== '/dispatch/independent')
+      throw new Error('Independent-only tab did not open its own workspace.');
+    const settingsHeader = renderToStaticMarkup(React.createElement(AppHeader));
+    const server = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(req.url?.startsWith('/dispatch/independent')
+        ? '<main>Independent Dispatch board opened</main>'
+        : `<style>${css}</style>${settingsHeader}`);
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const clickPage = await browser.newPage();
+      try {
+        await clickPage.goto(`http://127.0.0.1:${server.address().port}/settings`);
+        await clickPage.getByRole('link', { name: 'Independent Dispatch' }).click();
+        await clickPage.getByText('Independent Dispatch board opened').waitFor();
+        if (new URL(clickPage.url()).pathname !== '/dispatch/independent')
+          throw new Error('Settings link did not navigate to the Independent Dispatch route.');
+      } finally { await clickPage.close(); }
+    } finally { await new Promise(resolve => server.close(resolve)); }
+    console.log('✓ Independent-only tenant sees only its dispatch workspace and settings.');
+
+    headerMode = 'free';
+    currentPath = '/welcome';
+    await page.setContent(`<style>${css}</style>${renderToStaticMarkup(React.createElement(AppHeader))}`);
+    const freeTabs = await page.locator('nav[aria-label="Main navigation"] a').allTextContents();
+    if (JSON.stringify(freeTabs) !== JSON.stringify(['eQuipment', 'Safety', 'Settings']))
+      throw new Error(`Free owner navigation leaked unavailable modules: ${freeTabs.join(', ')}`);
+    if (await page.getByRole('link', { name: 'Admin', exact: true }).count()
+      || await page.getByRole('link', { name: 'Location Review' }).count()
+      || await page.getByLabel('Chat and notifications').count())
+      throw new Error('Free owner navigation exposed unavailable standard workspace controls.');
+    console.log('✓ New free-plan owner sees equipment, safety, and settings only.');
 
     console.log('=== All Header & Navigation Guardrail Tests Passed Mechanically ===');
   } finally {
