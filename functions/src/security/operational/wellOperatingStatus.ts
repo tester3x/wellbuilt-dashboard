@@ -64,7 +64,11 @@ async function apply(companyId: string, actor: string, intent: ReturnType<typeof
   await db.ref().update(patch);
   return { status: 'applied', down: intent.down };
   } finally {
-    await lockRef.transaction(current => current?.token === token ? null : undefined);
+    // RTDB can invoke this first with an empty local cache. Returning undefined
+    // then aborts without consulting the server and strands our successful lock.
+    // Propose null for that cache miss: server CAS retries with the real value,
+    // where the token check still protects a different invocation's lock.
+    await lockRef.transaction(current => current === null || current?.token === token ? null : undefined);
   }
 }
 

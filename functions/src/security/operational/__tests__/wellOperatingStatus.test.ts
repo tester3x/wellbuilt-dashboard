@@ -11,7 +11,12 @@ class MockRef {
   async once() { let v = mockGet(this.path); if (this.filter && v) v = Object.fromEntries(Object.entries(v).filter(([, row]: any) => row[this.filter!] === this.value));
     return { val: () => v, exists: () => v !== null }; }
   async update(patch: any) { for (const [k, v] of Object.entries(patch)) mockSet([this.path, k].filter(Boolean).join('/'), v); }
-  async transaction(update: any) { const v = update(mockGet(this.path)); if (v !== undefined) mockSet(this.path, v);
+  async transaction(update: any) {
+    // A cold SDK cache first supplies null. Undefined aborts locally; a proposal
+    // makes it to server CAS, which retries against the actual stored value.
+    if (this.path.startsWith('wellOperatingLocks/') && update(null) === undefined)
+      return { committed: false, snapshot: { val: () => mockGet(this.path) } };
+    const v = update(mockGet(this.path)); if (v !== undefined) mockSet(this.path, v);
     return { committed: v !== undefined, snapshot: { val: () => mockGet(this.path) } }; }
 }
 jest.mock('firebase-admin', () => ({ database: () => ({ ref: (p = '') => new MockRef(p) }) }));
@@ -38,6 +43,7 @@ test('authorized change updates flags and audit once without a zero-BBL packet o
   expect(mockGet('well_config/Test Well/isDown')).toBe(true);
   expect(mockGet('packets/outgoing/test/lastPullBbls')).toBe('140');
   expect(mockGet('packets/incoming')).toBeNull(); expect(mockGet('invoices')).toBeNull();
+  expect(mockGet('wellOperatingLocks/liquid-gold/Test Well')).toBeNull();
 });
 test('unassigned driver requests approval; staff approval applies without changing pickup evidence', async () => {
   mockSet('drivers/profiles/driver/assignedRoutes', []);
