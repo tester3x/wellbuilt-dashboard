@@ -96,7 +96,7 @@ export async function reviewWellOperatingStatusHandler(request: any) {
   if (request.auth?.token?.kind === 'driver') throw new HttpsError('permission-denied', 'Open dispatch/admin review with a staff session');
   let staff;
   try { staff = await requireTrustedCompanyCapability(request.auth?.uid, 'createDispatch'); }
-  catch { staff = await requireTrustedCompanyCapability(request.auth?.uid, 'manageWells'); }
+  catch { staff = await requireTrustedCompanyCapability(request.auth?.uid, 'manageCompany'); }
   const data = request.data || {}, db = admin.database();
   if (data.action === 'list') {
     const rows = (await db.ref(`wellOperatingRequests/${staff.companyId}`).once('value')).val() || {};

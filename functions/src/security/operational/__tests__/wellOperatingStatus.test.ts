@@ -18,8 +18,8 @@ jest.mock('firebase-admin', () => ({ database: () => ({ ref: (p = '') => new Moc
 jest.mock('../../requireDriverAuth', () => ({ requireSecureDriver: async (r: any) => {
   if (!r.auth) throw Error('unauthenticated'); return { companyId: r.auth.companyId || 'liquid-gold', driverId: r.auth.uid, displayName: r.auth.uid };
 } }));
-jest.mock('../../trustedStaffAuthority', () => ({ requireTrustedCompanyCapability: async (uid: string) => {
-  if (uid !== 'office') throw Error('denied'); return { uid, companyId: 'liquid-gold' };
+jest.mock('../../trustedStaffAuthority', () => ({ requireTrustedCompanyCapability: async (uid: string, capability: string) => {
+  if (uid !== 'office' && !(uid === 'admin' && capability === 'manageCompany')) throw Error('denied'); return { uid, companyId: 'liquid-gold' };
 } }));
 import { driverWellOperatingStatusHandler as driver, reviewWellOperatingStatusHandler as staff } from '../wellOperatingStatus';
 const req = (action: string, extra: any = {}, uid = 'driver') => ({ auth: { uid, token: {} }, data: { action, wellConfigKey: 'Test Well', ...extra } });
@@ -56,4 +56,10 @@ test('wrong company, stale state and reused operation identity fail closed', asy
   await expect(driver(req('set', intent))).rejects.toThrow('status changed');
   mockSet('wells/Test Well/status/isDown', false); await driver(req('set', intent));
   await expect(driver(req('set', { ...intent, expectedDown: true, down: false }))).rejects.toThrow('original request');
+});
+test('company administration can approve even without dispatch permission', async () => {
+  mockSet('drivers/profiles/driver/assignedRoutes', []);
+  await driver(req('request', intent));
+  await staff({ auth: { uid: 'admin', token: {} }, data: { action: 'approve', id: intent.operationId } });
+  expect(mockGet('wells/Test Well/status/isDown')).toBe(true);
 });
