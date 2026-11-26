@@ -1,0 +1,33 @@
+{
+  "project": "wellbuilt-sync",
+  "scope": "Only createDriverDispatchIfAbsent, resequenceSplitFamily and resolveDriverJobCancellation updated. No rules, hosting or indexes deployed; strict rules remain held.",
+  "sources": {
+    "createDriverDispatchIfAbsent": "06b834fa",
+    "resequenceSplitFamily": "8b42c9db",
+    "resolveDriverJobCancellation": "8b308a3b"
+  },
+  "liveVerification": "All three ACTIVE; deployed source archives match each scoped entry point, required authority helpers and changed plans. Private live-split-source-verification.json and cancellation-history-live-source.json.",
+  "reorderSecurity": "Canonical authenticated driver/company, optional legacy hash ignored as authority; exact unique live ID set; anchor and started positions locked; transfer and departed-next-stop protection; all reads before writes; same transaction for route, sequence, linked open invoice mirror and one separate audit record; no writes for identical replay.",
+  "history": "Cancelled/declined/dismissed records retained, owner checked but excluded from live topology. Completed signed work unchanged.",
+  "checks": [
+    "117 stop/catalog/packet/birth/cancellation tests and TypeScript pass",
+    "66 reorder/removal/cancellation contract tests and TypeScript pass",
+    "66 final cancellation/history/custody/reorder tests and TypeScript pass",
+    "Live no-token spoofed-hash reorder probe returns401 UNAUTHENTICATED",
+    "Native S24476: remove B, swap remaining B/C, reopen persists and pending pickup reroutes, cancel entire unloaded remainder"
+  ],
+  "nativeAcceptance": {
+    "nativeVersion": 476,
+    "createdDocuments": 4,
+    "allTestLegsCancelled": true,
+    "removedHistoryUnchanged": true,
+    "birthAndAssignmentUnchanged": true,
+    "auditEvents": 1,
+    "auditMatchesAuthenticatedOwner": true,
+    "queuedTestFamilyGone": true,
+    "printed": false,
+    "signedRecordsTouched": false
+  },
+  "testsOnly": "All mutations limited to newly created S24 family dplan_mwxsqp3q99ff4b35511 and earlier S24 repair family. No Fold job operations, signed inspections or JSA mutations; no printing in split tests.",
+  "privateEvidence": "C:\\dev\\release-artifacts\\wbt-s24-split-repair"
+}
