@@ -69,3 +69,15 @@ test('an old company token cannot read or request changes after the profile move
   await expect(driver(req('request', intent))).rejects.toThrow('company changed');
   expect(mockGet('wellOperatingRequests')).toBeNull();
 });
+test('explicit Up after Down restores the recorded level and leaves pickup identity untouched', async () => {
+  await driver(req('set', intent));
+  mockSet('packets/outgoing/test/currentLevel', 'Down');
+  mockSet('packets/outgoing/test/lastPullBottomLevel', '4\'2"');
+  await driver(req('set', { operationId: 'wos_up_test123456', expectedDown: true, down: false }));
+  expect(mockGet('wells/Test Well/status/isDown')).toBe(false);
+  expect(mockGet('packets/outgoing/test/wellDown')).toBe(false);
+  expect(mockGet('packets/outgoing/test/currentLevel')).toBe('4\'2"');
+  expect(mockGet('packets/outgoing/test/lastPullPacketId')).toBe('existing-pickup');
+  expect(mockGet('packets/incoming')).toBeNull();
+  expect(Object.keys(mockGet('wellOperatingOperations/liquid-gold'))).toHaveLength(2);
+});
