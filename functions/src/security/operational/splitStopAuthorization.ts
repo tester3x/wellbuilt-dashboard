@@ -24,15 +24,19 @@ export async function authorizeSplitDeliveryStop(input: {
   if (!grant?.capabilities.includes('splitTicket')
       || !input.envelope.capabilities.some(g => g.capabilityId === 'splitTicket')) return fail('split_ticket_not_authorized');
   if (!same(r.wellName, r.disposal || r.hauledTo)) return fail('split_delivery_stop_mismatch');
-  const family = await input.getFamily(group);
+  const history = await input.getFamily(group);
+  // Removed stops remain as audit records and can share an old sequence with
+  // a survivor after resequencing. They never count as a live slot or anchor.
+  // Even historical records must still belong to this exact owner and family.
+  if (history.some(j => j.data.companyId !== c.companyId || j.data.driverId !== c.driverId
+      || j.data.splitGroupId !== group)) return fail('split_family_owner_mismatch');
+  const family = history.filter(j => !['cancelled','declined','dismissed'].includes(j.data.status));
   const sequences = family.map(j => j.data.splitSequence);
   if (family.length > total || sequences.some(n => !Number.isSafeInteger(n) || n < 1 || n > total)
       || new Set(sequences).size !== sequences.length) return fail('split_family_ambiguous');
   const anchors = family.filter(j => j.data.splitSequence === 1);
   if (anchors.length !== 1) return fail('split_anchor_unconfirmed');
   const anchor = anchors[0], a = anchor.data;
-  if (family.some(j => j.data.companyId !== c.companyId || j.data.driverId !== c.driverId
-      || j.data.splitGroupId !== group)) return fail('split_family_owner_mismatch');
   if (a.builderOwnership?.kind !== 'driver' || a.builderOwnership.actorId !== c.driverId
       || !['pending','accepted','in_progress','paused','completed'].includes(a.status)
       || a.splitTotal !== total || a.jobTypeId !== input.jobTypeId

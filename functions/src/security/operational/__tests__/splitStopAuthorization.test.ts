@@ -50,3 +50,13 @@ test('cancelled source cannot resurrect a held leg; completed pickup may finish 
   const f=fixture();f.anchor.status='completed';expect((await authorizeSplitDeliveryStop(f.input)).ok).toBe(true);
   f.anchor.status='cancelled';expect((await authorizeSplitDeliveryStop(f.input)).ok).toBe(false);
 });
+
+test('cancelled stop history does not occupy a resequenced live slot or increase live total',async()=>{
+  const f=fixture();
+  f.family.push({id:'old-b',data:{...f.anchor,splitSequence:2,status:'cancelled'}},
+    {id:'old-c',data:{...f.anchor,splitSequence:4,status:'dismissed'}},
+    {id:'old-d',data:{...f.anchor,splitSequence:3,status:'declined'}});
+  expect((await authorizeSplitDeliveryStop(f.input)).ok).toBe(true);
+  f.family[1].data.companyId='foreign';
+  expect(await authorizeSplitDeliveryStop(f.input)).toMatchObject({ok:false,reason:'split_family_owner_mismatch'});
+});
