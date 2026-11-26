@@ -6,8 +6,8 @@ test('WB M route access enables direct change; roles and client flags cannot gra
   expect(canManageWellStatus({ ...profile, assignedRoutes: [], roles: ['admin'], canChange: true }, 'liquid-gold', 'Well', config)).toBe(false);
   expect(canManageWellStatus({ ...profile, assignedRoutes: ['Other'] }, 'liquid-gold', 'Well', config)).toBe(false);
 });
-test('individual WB M well assignment is also respected; empty or missing access fails closed', () => {
-  expect(canManageWellStatus({ ...profile, assignedRoutes: [], assignedWells: ['Well'] }, 'liquid-gold', 'Well', config)).toBe(true);
+test('individual WB M visibility is not route ownership; missing ownership fails closed', () => {
+  expect(canManageWellStatus({ ...profile, assignedRoutes: [], assignedWells: ['Well'] }, 'liquid-gold', 'Well', config)).toBe(false);
   for (const p of [{ companyId: 'liquid-gold' }, { ...profile, assignedRoutes: [], assignedWells: [] }, { ...profile, active: false }])
     expect(canManageWellStatus(p, 'liquid-gold', 'Well', config)).toBe(false);
 });

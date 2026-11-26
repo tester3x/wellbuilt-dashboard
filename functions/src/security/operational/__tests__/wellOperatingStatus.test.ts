@@ -87,3 +87,18 @@ test('explicit Up after Down restores the recorded level and leaves pickup ident
   expect(mockGet('packets/incoming')).toBeNull();
   expect(Object.keys(mockGet('wellOperatingOperations/liquid-gold'))).toHaveLength(2);
 });
+test('Depart intent requires current route ownership; revocation never auto-creates a report', async () => {
+  mockSet('drivers/profiles/driver/assignedRoutes', []);
+  await expect(driver(req('saveOnDepart', intent))).rejects.toThrow('requires ownership');
+  expect(mockGet('wells/Test Well/status/isDown')).toBe(false);
+  expect(mockGet('wellOperatingOperations')).toBeNull();
+  expect(mockGet('wellOperatingRequests')).toBeNull();
+});
+test('Depart applies an authorized checkbox; unchanged actual status creates no operation', async () => {
+  const result = await driver(req('saveOnDepart', intent));
+  expect(result.status).toBe('applied');
+  expect(mockGet('wells/Test Well/status/isDown')).toBe(true);
+  const replay = await driver(req('saveOnDepart', intent));
+  expect(replay.unchanged).toBe(true);
+  expect(Object.keys(mockGet('wellOperatingOperations/liquid-gold'))).toHaveLength(1);
+});

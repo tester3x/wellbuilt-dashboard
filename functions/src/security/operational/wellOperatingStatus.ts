@@ -83,6 +83,13 @@ export async function driverWellOperatingStatusHandler(request: any) {
   if (data.action === 'status') return { down: current.down, canChange, route: current.config.route || null };
   let intent;
   try { intent = statusIntent(data); } catch (e) { throw new HttpsError('invalid-argument', (e as Error).message); }
+  if (data.action === 'saveOnDepart') {
+    // A route owner's login supplies authority. Never silently convert a
+    // formerly-authorized checkbox into a report after ownership is revoked.
+    if (!canChange) throw new HttpsError('permission-denied', 'Well status requires ownership of this route. Report the change instead.');
+    if (current.down === intent.down) return { status: 'applied', down: current.down, unchanged: true };
+    return apply(driver.companyId, driver.driverId, intent);
+  }
   if (data.action === 'set') {
     if (!canChange) throw new HttpsError('permission-denied', 'Request dispatch/admin approval for this well');
     return apply(driver.companyId, driver.driverId, intent);

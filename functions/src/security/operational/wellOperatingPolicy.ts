@@ -1,9 +1,12 @@
-import { evaluateWbmWellScope, wellBelongsToDriverCompany, wellMatchesWbmScope } from './wbmWellScope';
+import { wellBelongsToDriverCompany, isRealRouteName } from './wbmWellScope';
 
 export function canManageWellStatus(profile: Record<string, any>, companyId: string, key: string, config: Record<string, any>): boolean {
   if (profile.active === false || profile.companyId !== companyId || !wellBelongsToDriverCompany(config, companyId)) return false;
-  const scope = evaluateWbmWellScope(profile.assignedRoutes, profile.assignedWells);
-  return scope.ok && wellMatchesWbmScope(key, config, scope);
+  void key; // Individual well visibility is not route ownership.
+  return typeof config.route === 'string' && isRealRouteName(config.route)
+    && Array.isArray(profile.assignedRoutes)
+    && profile.assignedRoutes.every((route: unknown) => typeof route === 'string')
+    && profile.assignedRoutes.includes(config.route);
 }
 export function statusIntent(raw: any): { operationId: string; wellConfigKey: string; expectedDown: boolean; down: boolean } {
   if (!raw || !/^[a-zA-Z0-9_-]{12,100}$/.test(raw.operationId || '')
