@@ -99,13 +99,19 @@ export async function reviewWellOperatingStatusHandler(request: any) {
   catch { staff = await requireTrustedCompanyCapability(request.auth?.uid, 'manageWells'); }
   const data = request.data || {}, db = admin.database();
   if (data.action === 'list') {
-    const rows = (await db.ref(`wellOperatingRequests/${staff.companyId}`).limitToFirst(200).once('value')).val() || {};
-    return { items: Object.entries(rows).filter(([, value]) => (value as any).status === 'pending').map(([id, value]) => ({ id, ...(value as any) })) };
+    const rows = (await db.ref(`wellOperatingRequests/${staff.companyId}`).once('value')).val() || {};
+    return { items: Object.entries(rows).filter(([, value]) => (value as any).status === 'pending').slice(0, 100).map(([id, value]) => ({ id, ...(value as any) })) };
   }
   if (!/^[a-zA-Z0-9_-]{12,100}$/.test(data.id || '') || !['approve', 'reject'].includes(data.action)) throw new HttpsError('invalid-argument', 'Invalid review');
   const ref = db.ref(`wellOperatingRequests/${staff.companyId}/${data.id}`), row = (await ref.once('value')).val();
   if (!row || row.companyId !== staff.companyId) throw new HttpsError('not-found', 'Request not found');
   if (row.status !== 'pending') return { status: row.status };
+  const decision = await ref.transaction(current => {
+    if (!current || current.status !== 'pending' || (current.reviewDecision
+      && (current.reviewDecision !== data.action || current.reviewDecisionBy !== staff.uid))) return;
+    return { ...current, reviewDecision: data.action, reviewDecisionBy: staff.uid };
+  });
+  if (!decision.committed) throw fail('Another reviewer already handled this request');
   if (data.action === 'reject') {
     await ref.update({ status: 'rejected', reviewedBy: staff.uid, reviewedAt: new Date().toISOString() });
     return { status: 'rejected' };
