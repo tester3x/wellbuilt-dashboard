@@ -1,0 +1,16 @@
+{
+  "sourceCommit": "56d34aaa",
+  "project": "wellbuilt-sync",
+  "function": "createDriverDispatchIfAbsent",
+  "state": "ACTIVE",
+  "updateTime": "2026-11-26T15:46:11.064929716Z",
+  "deployedSourceVerified": {
+    "src/security/createDriverDispatchCallable.ts": "1d494259e3a3118c5664ab6634556034f721e4d83531e0afd4d33d42888d39d1",
+    "src/security/operational/splitStopAuthorization.ts": "c64db5a2d43d357f72d272ffb8fb21617b9c12694e7e0154e94dd80e3808b20e",
+    "src/security/operational/splitStopCatalog.ts": "f4f4539ea392b0dcfc2b00d96306adf30178c200f9a3341f6f8eb08d9fc7121f"
+  },
+  "checks": "116 passing focused backend tests; TypeScript build passed; source dependencies compared to previous deployed archive; cancellation guards unchanged",
+  "scope": "One function only. No rules, hosting, signed records or existing dispatches changed.",
+  "privateEvidence": "C:\\dev\\release-artifacts\\wbt-s24-split-repair",
+  "nativeAcceptance": "Pending S24474 test; Fold C21215 remains open."
+}
