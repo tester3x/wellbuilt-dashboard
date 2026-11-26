@@ -51,3 +51,12 @@ Device test remains pending: a separate test job is at its new guided JSA,
 page1 of4, awaiting Mike's review and certifications before the pickup form.
 No device Up/Down change or pickup-preservation pass is claimed yet.
 Private snapshots, device logs and real-record identifiers remain outside Git.
+
+
+## Final owner-checkbox contract — WB T478
+
+Mike clarified that visibility is not ownership. Only an exact well route in the active driver profile assignedRoutes permits changing status. assignedWells and WB M locally selected routes grant no status authority. Helpers see the saved Well down checkbox disabled and can submit an explicit Report from Well details. Owner edits remain local until Depart, then use the direct saveOnDepart action; a revoked owner is rejected, never silently turned into an approval request. Ordinary pickup packets do not set status.
+
+Source0eb727b6 deployed only driverWellOperatingStatus under dashboard codebase. Live ACTIVE archive byte matched functions/lib/security/operational/wellOperatingStatus.js.12 targeted authorization/handler tests and TypeScript passed. Earlier40678df6 cold-cache lock release repair retained. Strict rules held; no Hosting/rules deployment in this follow-up.
+
+Native S24 on478: checkbox draft did not change RTDB; Depart applied Burger1 Down exactly once without approval, and the pickup left it Down. Devices disconnected before returning this test well to Up. WBT source862b81f4, release receipt docs/wbt478-destination-commit-release.json. Fold got an in-place478 install only; no real job operated.
