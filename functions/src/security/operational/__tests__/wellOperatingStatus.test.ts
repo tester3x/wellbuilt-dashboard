@@ -32,7 +32,7 @@ const intent = { operationId: 'wos_test123456', expectedDown: false, down: true 
 beforeEach(() => { for (const k of Object.keys(mockTree)) delete mockTree[k];
   mockSet('well_config/Test Well', { companyId: 'liquid-gold', route: 'Test Route', isDown: false });
   mockSet('wells/Test Well/status', { isDown: false, lastPull: { packetId: 'existing-pickup', bblsTaken: 140 } });
-  mockSet('drivers/profiles/driver', { companyId: 'liquid-gold', active: true, assignedRoutes: ['Test Route'] });
+  mockSet('drivers/profiles/driver', { companyId: 'liquid-gold', active: true, assignedRoutes: ['Test Route'], primaryRoutes: ['Test Route'] });
   mockSet('packets/outgoing/test', { wellName: 'Test Well', wellDown: false, lastPullPacketId: 'existing-pickup', lastPullBbls: '140' });
 });
 test('authorized change updates flags and audit once without a zero-BBL packet or changed job', async () => {
@@ -101,4 +101,25 @@ test('Depart applies an authorized checkbox; unchanged actual status creates no 
   const replay = await driver(req('saveOnDepart', intent));
   expect(replay.unchanged).toBe(true);
   expect(Object.keys(mockGet('wellOperatingOperations/liquid-gold'))).toHaveLength(1);
+});
+
+
+test('route access helper is read-only until company explicitly grants primary access', async () => {
+  mockSet('drivers/profiles/driver/primaryRoutes', []);
+  expect((await driver(req('status'))).canChange).toBe(false);
+  await expect(driver(req('saveOnDepart', intent))).rejects.toThrow('requires ownership');
+  expect(mockGet('wellOperatingOperations')).toBeNull();
+  await driver(req('request', intent));
+  expect(mockGet('wellOperatingRequests/liquid-gold/'+intent.operationId+'/status')).toBe('pending');
+  expect(mockGet('wells/Test Well/status/isDown')).toBe(false);
+});
+
+test('two explicitly granted owners may independently manage the same route', async () => {
+  mockSet('drivers/profiles/second', {companyId:'liquid-gold',active:true,assignedRoutes:['Test Route'],primaryRoutes:['Test Route']});
+  expect((await driver(req('status'))).canChange).toBe(true);
+  expect((await driver(req('status',{},'second'))).canChange).toBe(true);
+  await driver(req('saveOnDepart',intent));
+  await driver(req('saveOnDepart',{operationId:'wos_second_up123',expectedDown:true,down:false},'second'));
+  expect(mockGet('wells/Test Well/status/isDown')).toBe(false);
+  expect(mockGet('wells/Test Well/status/lastPull/packetId')).toBe('existing-pickup');
 });
