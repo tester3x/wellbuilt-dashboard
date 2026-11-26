@@ -1123,8 +1123,11 @@ export const processIncomingPull = functionsV1.database
 
     // Calculate window-averaged and overnight bbls/day
     // bblPerFoot is the configured total active bank calibration.
-    const historicalPulls = await getHistoricalPulls(wellName, 500);
     const pullTimeMs = new Date(data.dateTimeUTC).getTime();
+    // Recovery is evaluated at the pickup's real time. A later observation
+    // must not create a seconds-long production interval after this pickup.
+    const historicalPulls = (await getHistoricalPulls(wellName, 500))
+      .filter(p => p.timestamp <= pullTimeMs);
 
     // Include current pull in historical data — it's not in packets/processed yet
     historicalPulls.push({

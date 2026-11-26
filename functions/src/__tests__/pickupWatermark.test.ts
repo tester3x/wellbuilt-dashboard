@@ -37,4 +37,5 @@ test('handler resolves the physical pickup before guard and production math', ()
   expect(handler.indexOf('needsPickupWatermark(data, prevResponse)')).toBeLessThan(handler.indexOf('const guardVerdict = evaluateIncomingPull'));
   expect(handler).toContain('prevTimestamp = previousPickup?.dateTimeUTC');
   expect(handler).toContain('prevTankAfterInches = previousPickup?.tankAfterInches');
+  expect(handler).toContain('.filter(p => p.timestamp <= pullTimeMs)');
 });
