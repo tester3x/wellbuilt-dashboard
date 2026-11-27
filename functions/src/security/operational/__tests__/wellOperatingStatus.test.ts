@@ -1,4 +1,7 @@
 const mockTree: any = {};
+let mockJob: any;
+const mockReportDelivery = jest.fn();
+jest.mock('../../../levelReportDelivery', () => ({ deliverLevelReport: (...args: any[]) => mockReportDelivery(...args) }));
 function mockGet(p: string) { return p.split('/').filter(Boolean).reduce((o, k) => o?.[k], mockTree) ?? null; }
 function mockSet(p: string, v: any) { const parts = p.split('/').filter(Boolean), k = parts.pop()!;
   const parent = parts.reduce((o, k) => o[k] ||= {}, mockTree); if (v === null) delete parent[k]; else parent[k] = JSON.parse(JSON.stringify(v)); }
@@ -19,7 +22,8 @@ class MockRef {
     const v = update(mockGet(this.path)); if (v !== undefined) mockSet(this.path, v);
     return { committed: v !== undefined, snapshot: { val: () => mockGet(this.path) } }; }
 }
-jest.mock('firebase-admin', () => ({ database: () => ({ ref: (p = '') => new MockRef(p) }) }));
+jest.mock('firebase-admin', () => ({ database: () => ({ ref: (p = '') => new MockRef(p) }),
+  firestore: () => ({ doc: () => ({ get: async () => ({ data: () => mockJob }) }) }) }));
 jest.mock('../../requireDriverAuth', () => ({ requireSecureDriver: async (r: any) => {
   if (!r.auth) throw Error('unauthenticated'); return { companyId: r.auth.companyId || 'liquid-gold', driverId: r.auth.uid, displayName: r.auth.uid };
 } }));
@@ -30,6 +34,8 @@ import { driverWellOperatingStatusHandler as driver, reviewWellOperatingStatusHa
 const req = (action: string, extra: any = {}, uid = 'driver') => ({ auth: { uid, token: {} }, data: { action, wellConfigKey: 'Test Well', ...extra } });
 const intent = { operationId: 'wos_test123456', expectedDown: false, down: true };
 beforeEach(() => { for (const k of Object.keys(mockTree)) delete mockTree[k];
+  mockReportDelivery.mockReset().mockResolvedValue({ result: 'delivered' });
+  mockJob = { companyId: 'liquid-gold', driverHash: 'driver', wellConfigKey: 'Test Well' };
   mockSet('well_config/Test Well', { companyId: 'liquid-gold', route: 'Test Route', isDown: false });
   mockSet('wells/Test Well/status', { isDown: false, lastPull: { packetId: 'existing-pickup', bblsTaken: 140 } });
   mockSet('drivers/profiles/driver', { companyId: 'liquid-gold', active: true, assignedRoutes: ['Test Route'], primaryRoutes: ['Test Route'] });
@@ -122,4 +128,30 @@ test('two explicitly granted owners may independently manage the same route', as
   await driver(req('saveOnDepart',{operationId:'wos_second_up123',expectedDown:true,down:false},'second'));
   expect(mockGet('wells/Test Well/status/isDown')).toBe(false);
   expect(mockGet('wells/Test Well/status/lastPull/packetId')).toBe('existing-pickup');
+});
+
+
+test('lost dispatch response retries confirmed status with original job readings, one operation and stable message ID', async () => {
+  const levels = { tankTopInches: 120, tankAfterInches: 117, bblsTaken: 10 };
+  const data = { ...intent, reportVersion: 1, jobId: 'job', levelReport: levels };
+  mockReportDelivery.mockRejectedValueOnce(Error('dispatch unavailable'));
+  await expect(driver(req('saveOnDepart', data))).rejects.toThrow('dispatch unavailable');
+  expect(mockGet('wells/Test Well/status/isDown')).toBe(true);
+  const saved = mockGet('wellOperatingOperations/liquid-gold/' + intent.operationId);
+  expect(saved.reportContext.levels).toEqual(levels);
+  await driver(req('saveOnDepart', { ...data, levelReport: { ...levels, bblsTaken: 999 } }));
+  await driver(req('saveOnDepart', data));
+  expect(mockReportDelivery).toHaveBeenCalledTimes(2);
+  expect(mockReportDelivery.mock.calls[0][1]).toBe(mockReportDelivery.mock.calls[1][1]);
+  expect(mockReportDelivery.mock.calls[1][0].bblsTaken).toBe(10);
+  expect(Object.keys(mockGet('wellOperatingOperations/liquid-gold'))).toHaveLength(1);
+  expect(mockGet('wells/Test Well/status/lastPull/packetId')).toBe('existing-pickup');
+  expect(mockGet('packets/incoming')).toBeNull();
+});
+
+test('rollout does not generate historical reports or announce an unchanged new operation', async () => {
+  await driver(req('saveOnDepart', intent));
+  await driver(req('saveOnDepart', { ...intent, jobId: 'job', levelReport: { tankTopInches: 120, tankAfterInches: 117, bblsTaken: 10 } }));
+  await driver(req('saveOnDepart', { ...intent, operationId: 'wos_unchanged123', jobId: 'job' }));
+  expect(mockReportDelivery).not.toHaveBeenCalled();
 });

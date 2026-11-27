@@ -5,6 +5,7 @@ import { requireTrustedCompanyCapability } from '../trustedStaffAuthority';
 import { wellBelongsToDriverCompany } from './wbmWellScope';
 import { canManageWellStatus, statusIntent } from './wellOperatingPolicy';
 import { randomBytes } from 'crypto';
+import { operatingReportContext, deliverOperatingReport, type OperatingReportContext } from './wellOperatingReport';
 
 const fail = (message: string) => new HttpsError('failed-precondition', message);
 function wellKey(key: unknown): string {
@@ -19,7 +20,7 @@ async function load(companyId: string, key: string) {
   const state = (await db.ref(`wells/${key}/status/isDown`).once('value')).val();
   return { config, down: typeof state === 'boolean' ? state : config.isDown === true };
 }
-async function apply(companyId: string, actor: string, intent: ReturnType<typeof statusIntent>, requestId?: string) {
+async function apply(companyId: string, actor: string, intent: ReturnType<typeof statusIntent>, requestId?: string, reportContext?: OperatingReportContext) {
   const db = admin.database(), key = intent.wellConfigKey;
   const lockRef = db.ref(`wellOperatingLocks/${companyId}/${key}`), token = randomBytes(16).toString('hex');
   const until = Date.now() + 60000;
@@ -33,7 +34,8 @@ async function apply(companyId: string, actor: string, intent: ReturnType<typeof
   const ref = db.ref(`wellOperatingOperations/${companyId}/${intent.operationId}`);
   // Durable deterministic intent: retries cannot turn this into a second event.
   const prior = (await ref.once('value')).val();
-  const binding = JSON.stringify([companyId, actor, key, intent.expectedDown, intent.down, requestId || null]);
+  const binding = JSON.stringify([companyId, actor, key, intent.expectedDown, intent.down, requestId || null,
+    ...(reportContext ? [reportContext.jobId] : [])]);
   if (prior) {
     if (prior.binding !== binding) throw fail('Status operation does not match the original request');
     if (prior.status === 'applied') return { status: 'applied', down: intent.down };
@@ -47,7 +49,8 @@ async function apply(companyId: string, actor: string, intent: ReturnType<typeof
     [`wells/${key}/status/isDown`]: intent.down,
     [`wells/${key}/status/operatingStatusChangedAt`]: at,
     [`wellOperatingOperations/${companyId}/${intent.operationId}`]: { binding, companyId, actor, wellConfigKey: key,
-      previousDown: intent.expectedDown, down: intent.down, at, status: 'applied', requestId: requestId || null },
+      previousDown: intent.expectedDown, down: intent.down, at, status: 'applied', requestId: requestId || null,
+      ...(reportContext ? { reportContext } : {}) },
   };
   for (const [id, value] of Object.entries(outgoing) as [string, any][]) {
     patch[`packets/outgoing/${id}/wellDown`] = intent.down;
@@ -87,8 +90,16 @@ export async function driverWellOperatingStatusHandler(request: any) {
     // A route owner's login supplies authority. Never silently convert a
     // formerly-authorized checkbox into a report after ownership is revoked.
     if (!canChange) throw new HttpsError('permission-denied', 'Well status requires ownership of this route. Report the change instead.');
-    if (current.down === intent.down) return { status: 'applied', down: current.down, unchanged: true };
-    return apply(driver.companyId, driver.driverId, intent);
+    const prior = (await admin.database().ref(`wellOperatingOperations/${driver.companyId}/${intent.operationId}`).once('value')).val();
+    // Do not manufacture notices for old operations during rollout. New
+    // operations retain their original job/readings across every retry.
+    if (prior?.reportContext && data.jobId !== prior.reportContext.jobId) throw fail('Status operation does not match its original job');
+    const reportContext = prior ? prior.reportContext
+      : await operatingReportContext(data, driver.companyId, driver.driverId, key, current.config);
+    if (current.down === intent.down && !prior) return { status: 'applied', down: current.down, unchanged: true };
+    const result = await apply(driver.companyId, driver.driverId, intent, undefined, reportContext);
+    await deliverOperatingReport(driver.companyId, driver.driverId, intent.operationId);
+    return { ...result, ...(current.down === intent.down ? { unchanged: true } : {}) };
   }
   if (data.action === 'set') {
     if (!canChange) throw new HttpsError('permission-denied', 'Request dispatch/admin approval for this well');
