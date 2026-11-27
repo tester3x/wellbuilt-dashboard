@@ -6,10 +6,18 @@
     "authorityAndWaterCustodyTests": 40,
     "functionsTypescript": "passed",
     "driverLogsRegression": 1,
-    "dashboardTypescript": "see local log"
+    "dashboardTypescript": "passed"
   },
   "compatibility": "Old clients and events omit endMode and preserve their existing behavior. Already-closed retries do not rewrite logout or create another event.",
   "hosting": "Matching driverLogs consumer prepared only; no Hosting release in this scope.",
   "suiteSource": "cc546d85c5c87d0ce60d6cb704db7daf9669623e",
-  "deployment": "Pending scoped closeDriverShift deployment verification."
+  "deployment": {
+    "function": "closeDriverShift",
+    "state": "ACTIVE",
+    "sourceCommit": "2feb4e36f2def1455f0c1d9f571b33a5d06ae60b",
+    "updateTime": "2026-11-27T00:40:12.146772280Z",
+    "verification": "Downloaded deployed source archive: adapter, core and unfinished-job guard exact compiled byte matches.",
+    "rules": "No deployment; strict rules remain held."
+  },
+  "suiteInstalled": "121 on S24 only; human pre-trip/post-trip confirmations pending for full native transition test."
 }
