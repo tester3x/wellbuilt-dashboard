@@ -1,0 +1,49 @@
+{
+  "task": "ROG watchdog health and recent WB Mobile receipt audit",
+  "date": "2026-11-27",
+  "main": {
+    "workerId": "rog-main",
+    "runtimeSource": "b4156bba293c691c57feb9a6e39d9ac812316de8",
+    "state": "Connected",
+    "captureHealthy": true,
+    "pending": 0,
+    "review": 0,
+    "channelsConfigured": 9,
+    "pausedGabrielWells": "Preserved 1 through 7; driver handles these in WB M/T.",
+    "recentWindow": "36 hours as exposed by current ROG local queue",
+    "messagesMatched": 44,
+    "uniqueCloudReceipts": 44,
+    "processedPackets": 44,
+    "missingOrDuplicateMatches": 0,
+    "dwyerPhotosMatchedExactlyOnce": 4,
+    "activePostingChannels": 6,
+    "otherChannels": "Configured but no processed posts in this recent snapshot; no fabricated activity or history replay."
+  },
+  "cloudMetrics": {
+    "latestCompletedMinuteStatus": "NORMAL",
+    "documentReads": 13,
+    "documentWrites": 12,
+    "scope": "Whole project, delayed Google metrics; sample only, not a promise of zero future spikes.",
+    "photoFallbackCalls": "No active fallback calls in sampled window."
+  },
+  "backup": {
+    "workerId": "hp-backup",
+    "fault": "Orphan browser prevented reconnect; doubled path separators defeated exact command-line matching.",
+    "repairSource": "d13ee720",
+    "repair": "Installed normalized exact profile comparison in backed-up HP startup supervisor. Closed only verified watchdog receiver/profile; restarted scheduled task. No personal browsers or unrelated apps closed.",
+    "preserved": "worker.json and transport.json byte-identical to before; queue/history/cutoff/roles retained; no queue rewrites or manual resends.",
+    "initialRecovery": "Received messages and reported Connected with healthy capture before supervised restart.",
+    "supervisor": "Final restart launched a new receiver under Running WellBuilt Watchdog scheduled task.",
+    "latestState": "Syncing WhatsApp; not yet reliable. Local health eventually200 but took4.2s; Firebase last report had WhatsApp history timeout.",
+    "resourceLimit": "3745MiB total RAM; only44-70MiB free, severe memory pressure and slow SSH/system queries. No reboot or closing unrelated apps without user review.",
+    "legacyHolds": "16review holds and1payload_conflict retry from Nov13-21 unchanged; not replayed."
+  },
+  "tests": {
+    "recoveryNodeTests": 15,
+    "startupRegression": "passed: saved config, crash restart, hung-worker replacement, healthy-worker retention, existing receiver reuse",
+    "profileMatcher": "passed exact single/doubled/mixed separators; unrelated, relative, descendant and lookalike paths refused"
+  },
+  "changesOutsideScope": "No app installs, phone operations, rules, Hosting or function deployment. ROG worker left running.",
+  "evidence": "Private receipt/message/packet/process/metric evidence saved under C:/dev/release-artifacts; no chat bodies, photos, credentials or device sessions committed.",
+  "followUp": "HP needs memory pressure addressed or replacement backup host before claiming dependable backup coverage."
+}
