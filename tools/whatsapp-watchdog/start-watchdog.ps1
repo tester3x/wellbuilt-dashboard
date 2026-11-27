@@ -22,11 +22,25 @@ try {
  # No existing listener: launch the receiver below.
 } finally { $existingReceiver.Dispose() }
 if($alreadyListening){Write-StartupPhase 'existing receiver owns reconnect and saved monitoring intent';exit 0}
+function Test-WatchdogProfileCommand([string]$CommandLine,[string]$Profile) {
+ # Windows launchers can retain doubled separators in a quoted argument.
+ # Compare resolved paths, never a substring or all Edge/Chrome processes.
+ $argument=[regex]::Match($CommandLine,'(?i)(?:^|\s)--user-data-dir=(?:"([^"]+)"|(\S+))')
+ if(-not $argument.Success){return $false}
+ $candidate=if($argument.Groups[1].Success){$argument.Groups[1].Value}else{$argument.Groups[2].Value}
+ try {
+  $candidate=[regex]::Replace($candidate,'[\\/]+','\')
+  $expected=[regex]::Replace($Profile,'[\\/]+','\')
+  if(-not [IO.Path]::IsPathRooted($candidate)){return $false}
+  $candidate=[IO.Path]::GetFullPath($candidate).TrimEnd('\')
+  $expected=[IO.Path]::GetFullPath($expected).TrimEnd('\')
+  return [StringComparer]::OrdinalIgnoreCase.Equals($candidate,$expected)
+ } catch {return $false}
+}
 function Stop-WatchdogBrowser {
  $profile=Join-Path $env:WBC_WATCHDOG_DATA 'session\session'
- $pattern='(?i)(?:^|\s)--user-data-dir=(?:"'+[regex]::Escape($profile)+'"|'+[regex]::Escape($profile)+')(?=\s|$)'
  $browsers=Get-CimInstance Win32_Process -Filter "Name='msedge.exe' OR Name='chrome.exe'" |
-  Where-Object { $_.CommandLine -match $pattern -and $_.CommandLine -notmatch '(?:^|\s)--type=' }
+  Where-Object { (Test-WatchdogProfileCommand $_.CommandLine $profile) -and $_.CommandLine -notmatch '(?:^|\s)--type=' }
  foreach($browser in $browsers){
   Write-StartupPhase ('clearing Watchdog browser process '+$browser.ProcessId)
   try { & taskkill.exe /PID $browser.ProcessId /T /F 2>$null | Out-Null } catch { Write-StartupPhase 'browser cleanup raced with exit; continuing recovery' }
@@ -36,6 +50,7 @@ function Stop-WatchdogBrowser {
 # Keep supervising after the first successful connection. A Node crash must not
 # exhaust Task Scheduler's three-retry allowance and leave watching stopped.
 while($true){
+ Stop-WatchdogBrowser
  Write-StartupPhase 'launching receiver'
  $node=Start-Process -FilePath 'C:\Program Files\nodejs\node.exe' -ArgumentList 'server.mjs' -WorkingDirectory 'C:\dev\WellBuiltWatchdog\tools\whatsapp-watchdog' -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $env:WBC_WATCHDOG_DATA 'server.stdout.log') -RedirectStandardError (Join-Path $env:WBC_WATCHDOG_DATA 'server.stderr.log')
  $node.PriorityClass='Normal'
