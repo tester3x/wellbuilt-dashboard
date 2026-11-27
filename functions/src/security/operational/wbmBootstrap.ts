@@ -22,6 +22,8 @@ export type WbmBootstrapSnapshot = {
   wellCount: number;
   /** Canonical Suite logout signal, milliseconds since epoch, or null. */
   logoutAt: number | null;
+  wellOperatingGrant: { version: 1; active: boolean; assignedRoutes: string[]; primaryRoutes: string[]; primaryAllRoutes: boolean; isViewer: boolean; revision: number };
+
 };
 
 export function normalizeLogoutAt(raw: unknown): number | null {
@@ -94,5 +96,14 @@ export function buildWbmBootstrapSnapshot(input: {
     wells,
     wellCount: Object.keys(wells).length,
     logoutAt: normalizeLogoutAt(input.profile.logoutAt),
+    // Reuse the profile already read for this bootstrap; no extra request/read.
+    wellOperatingGrant: {
+      version: 1, active: input.profile.active !== false && input.profile.companyId === input.companyId,
+      assignedRoutes: Array.isArray(input.profile.assignedRoutes) && input.profile.assignedRoutes.every(r => typeof r === 'string') ? input.profile.assignedRoutes as string[] : [],
+      primaryRoutes: Array.isArray(input.profile.primaryRoutes) && input.profile.primaryRoutes.every(r => typeof r === 'string') ? input.profile.primaryRoutes as string[] : [],
+      primaryAllRoutes: input.profile.primaryAllRoutes === true,
+      isViewer: input.profile.isViewer === true,
+      revision: Number.isSafeInteger(input.profile.primaryRouteRevision) ? input.profile.primaryRouteRevision as number : 0,
+    },
   };
 }
