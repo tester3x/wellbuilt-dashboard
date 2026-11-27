@@ -1,0 +1,15 @@
+{
+  "task": "Support WB S already-at-yard close",
+  "date": "2026-11-26",
+  "scope": "closeDriverShift accepts optional endMode=already_at_yard; same authenticated current-period transaction, unfinished-ticket guard, server clock and origin date. No rules or inspection mutations.",
+  "checks": {
+    "authorityAndWaterCustodyTests": 40,
+    "functionsTypescript": "passed",
+    "driverLogsRegression": 1,
+    "dashboardTypescript": "see local log"
+  },
+  "compatibility": "Old clients and events omit endMode and preserve their existing behavior. Already-closed retries do not rewrite logout or create another event.",
+  "hosting": "Matching driverLogs consumer prepared only; no Hosting release in this scope.",
+  "suiteSource": "cc546d85c5c87d0ce60d6cb704db7daf9669623e",
+  "deployment": "Pending scoped closeDriverShift deployment verification."
+}

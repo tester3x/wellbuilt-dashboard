@@ -452,8 +452,10 @@ export function buildLifecycleEvent(
   type: ServerEventType,
   shiftId: string,
   serverIsoNow: string,
-): ShiftLifecycleEvent {
-  return { type, timestamp: serverIsoNow, shiftId, source: "server" };
+  endMode?: unknown,
+): ShiftLifecycleEvent & { endMode?: 'already_at_yard' } {
+  if (endMode !== undefined && (type !== 'logout' || endMode !== 'already_at_yard')) throw Error('invalid_end_mode');
+  return { type, timestamp: serverIsoNow, shiftId, source: "server", ...(endMode === 'already_at_yard' ? { endMode } : {}) };
 }
 
 export type OperationalDecision =

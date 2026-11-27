@@ -31,7 +31,7 @@ const WHO = { driverId: DRIVER, companyId: COMPANY };
 const PERIOD = '2026-08-08_211725';
 const DAY = '2026-08-08';
 /** Mirrors CLOSE_KEYS in the adapter — asserted, not assumed. */
-const CLOSE_INPUT_KEYS = ['periodId', 'odometerMiles'];
+const CLOSE_INPUT_KEYS = ['periodId', 'odometerMiles', 'endMode'];
 
 const initializedNone = (): ShiftAuthorityRecord => ({
   driverId: DRIVER, companyId: COMPANY, initialized: true,
@@ -335,7 +335,20 @@ describe('atomic start/close events', () => {
     expect(src).not.toMatch(/serverIsoNow\.slice\(0, 10\)/);
     expect(src).toMatch(/shiftDayPath\(who\.driverId, decision\.originLocalDate\)/);
     // Still no date input on close — the client cannot choose a document.
-    expect(CLOSE_INPUT_KEYS).toEqual(['periodId', 'odometerMiles']);
+    expect(CLOSE_INPUT_KEYS).toEqual(['periodId', 'odometerMiles', 'endMode']);
     expect(CLOSE_INPUT_KEYS).not.toContain('closeLocalDate');
   });
+});
+
+
+test('already-at-yard close adds a mode only, retaining actual server time and period', () => {
+  const now = '2026-11-27T04:00:00.000Z';
+  expect(buildLifecycleEvent('logout', PERIOD, now, 'already_at_yard')).toEqual({
+    type: 'logout', shiftId: PERIOD, timestamp: now, source: 'server', endMode: 'already_at_yard',
+  });
+  expect(buildLifecycleEvent('logout', PERIOD, now)).not.toHaveProperty('endMode');
+  for (const mode of ['driving', null, {}, false]) expect(() => buildLifecycleEvent('logout', PERIOD, now, mode)).toThrow('invalid_end_mode');
+  expect(() => buildLifecycleEvent('login', PERIOD, now, 'already_at_yard')).toThrow('invalid_end_mode');
+  const src = readFileSync(join(__dirname, '../operational/shiftAuthorityCallables.ts'), 'utf8');
+  expect(src.indexOf('await assertNoUnfinishedTicketJobs', src.indexOf('export const closeDriverShift'))).toBeLessThan(src.indexOf('tx.set(authorityRef', src.indexOf('export const closeDriverShift')));
 });

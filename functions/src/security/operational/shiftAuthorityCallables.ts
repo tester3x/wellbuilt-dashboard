@@ -74,7 +74,7 @@ const CLAIM_KEYS = ['periodId', 'originLocalDate'];
  *  arrival modal that already drives the close. Folding it in keeps the
  *  odometer and the authoritative logout atomic — they describe the same
  *  moment, and two separate unauthenticated writes is what we are replacing. */
-const CLOSE_KEYS = ['periodId', 'odometerMiles'];
+const CLOSE_KEYS = ['periodId', 'odometerMiles', 'endMode'];
 export const RETURN_ATTEMPT_KEYS = ['periodId', 'attemptId'];
 
 function requireExactKeys(data: unknown, allowed: string[]): Record<string, unknown> {
@@ -293,6 +293,12 @@ export const closeDriverShift = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'invalid_odometer_miles');
     }
     const odometerMiles = d.odometerMiles as number | undefined;
+    if (d.endMode !== undefined && d.endMode !== 'already_at_yard') {
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_end_mode');
+    }
+    // Describes this close only; does not author a drive, backdate a timestamp,
+    // skip the unfinished-job guard or mutate any inspection.
+    const endMode = d.endMode as 'already_at_yard' | undefined;
     // One server clock reading. NOTE: the close DAY is no longer derived from
     // it. `serverIsoNow.slice(0,10)` is a UTC date, and an evening close in
     // America/Chicago falls on the NEXT UTC day — a 20:37 close became 01:37
@@ -329,7 +335,7 @@ export const closeDriverShift = httpsV2.onCall(
         currentShiftId: '',
         updatedAt: FieldValue.serverTimestamp(),
         events: FieldValue.arrayUnion(
-          buildLifecycleEvent('logout', decision.periodId, serverIsoNow),
+          buildLifecycleEvent('logout', decision.periodId, serverIsoNow, endMode),
         ),
         // Total miles for THIS shift, so it belongs on the period's document
         // alongside the close it was captured with.

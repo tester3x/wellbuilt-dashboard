@@ -16,6 +16,7 @@ export interface ShiftEvent {
   lat: number;
   lng: number;
   source: string;
+  endMode?: 'already_at_yard';
   synthetic?: boolean;
 }
 
@@ -72,6 +73,7 @@ export interface UnifiedEvent {
   totalBBL?: number;
   totalHours?: number;
   commodityType?: string;
+  endMode?: 'already_at_yard';
   synthetic?: boolean;
   locationName?: string | null;
   leg?: number;
@@ -251,6 +253,7 @@ export function buildDriverTimeline(
         lng: evt.lng ?? null,
         source: evt.source,
         synthetic: evt.synthetic,
+        endMode: evt.endMode,
       });
     }
   }
@@ -432,12 +435,12 @@ export function calculateDriveAndOnSiteTime(timeline: UnifiedEvent[]): {
       isDrive = true;
     }
     // Return drive: depart_return → logout (explicit return-to-yard)
-    else if (curr.type === 'depart_return' && next.type === 'logout') {
+    else if (curr.type === 'depart_return' && next.type === 'logout' && next.endMode !== 'already_at_yard') {
       driveMs += diffMs;
       isDrive = true;
     }
     // Return drive (legacy/fallback): last close/depart_site → shift end
-    else if ((curr.type === 'close' || curr.type === 'depart_site') && next.type === 'logout') {
+    else if ((curr.type === 'close' || curr.type === 'depart_site') && next.type === 'logout' && next.endMode !== 'already_at_yard') {
       driveMs += diffMs;
       isDrive = true;
     }
