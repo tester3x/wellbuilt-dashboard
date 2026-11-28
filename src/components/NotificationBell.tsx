@@ -38,6 +38,7 @@ export function NotificationBell() {
   const [syncAlertStatus, setSyncAlertStatus] = useState('');
   const [syncHiddenCount, setSyncHiddenCount] = useState(0);
   const [syncOpenCount, setSyncOpenCount] = useState(0);
+  const [syncOpenIds, setSyncOpenIds] = useState<string[]>([]);
   const [syncRefresh, setSyncRefresh] = useState(0);
   const dismissedRef = useRef<Set<string>>(new Set());
   const readIdsRef = useRef<Set<string>>(new Set());
@@ -90,7 +91,7 @@ export function NotificationBell() {
   }, [user?.uid, operatingCompanyId]);
   useEffect(() => {
     let current = true;
-    setSyncHiddenCount(0); setSyncOpenCount(0);
+    setSyncHiddenCount(0); setSyncOpenCount(0); setSyncOpenIds([]);
     if (!authResolved || !user || !hasCapability(user, 'manageDrivers', userCompany)) {
       setSyncAlertStatus('');
       setNotifications(prev => prev.filter(n => n.category !== 'sync_attention'));
@@ -113,6 +114,7 @@ export function NotificationBell() {
         if (!current) return;
         const open = rows.filter(r => (allCompanies || r.companyId === operatingCompanyId) && r.status === 'open');
         setSyncOpenCount(open.length);
+        setSyncOpenIds(open.map(r => `sync_${r.id}`));
         setSyncHiddenCount(open.filter(r => dismissedRef.current.has(`sync_${r.id}`)).length);
         setSyncAlertStatus('');
         const items: NotificationItem[] = open.filter(r => !dismissedRef.current.has(`sync_${r.id}`)).map(r => ({
@@ -531,7 +533,7 @@ export function NotificationBell() {
                 {!prefs.includes('sync_attention') ? <button className="underline text-blue-300" onClick={() => togglePref('sync_attention')}>Turn on sync alerts</button>
                   : <button className="underline text-blue-300" onClick={() => setSyncRefresh(n => n + 1)}>Refresh alerts</button>}
                 {syncHiddenCount > 0 && <button className="underline text-blue-300" onClick={() => {
-                  for (const id of dismissedRef.current) if (id.startsWith('sync_')) dismissedRef.current.delete(id);
+                  for (const id of syncOpenIds) dismissedRef.current.delete(id);
                   saveDismissedIds(dismissedRef.current);
                   setSyncRefresh(n => n + 1);
                 }}>Show {syncHiddenCount} hidden sync alerts</button>}
