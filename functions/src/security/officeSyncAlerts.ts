@@ -66,8 +66,15 @@ export const reportDriverSyncAlert = onCall({ timeoutSeconds: 20, enforceAppChec
 export const adminListSyncAlerts = onCall({ timeoutSeconds: 20, enforceAppCheck: false }, async request => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'staff_required');
   const raw = request.data;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => k !== 'companyId')) throw new HttpsError('invalid-argument', 'invalid_scope');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !['companyId', 'allCompanies'].includes(k))
+    || (raw.allCompanies !== undefined && raw.allCompanies !== true)
+    || (raw.allCompanies && raw.companyId !== undefined)) throw new HttpsError('invalid-argument', 'invalid_scope');
   const staff = await requireRegisteredDashboardUser(request.auth.uid);
+  if (raw.allCompanies) {
+    if (!staff.isPlatformAdmin) throw new HttpsError('permission-denied', 'platform_admin_required');
+    const result = await admin.firestore().collection('office_sync_alerts').where('status', '==', 'open').limit(50).get();
+    return { alerts: result.docs.map(doc => ({ id: doc.id, ...doc.data() })) };
+  }
   let companyId: string;
   if (staff.isPlatformAdmin) companyId = raw.companyId;
   else {

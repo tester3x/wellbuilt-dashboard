@@ -7,7 +7,7 @@ import { collection, query, where, onSnapshot, Timestamp } from 'firebase/firest
 import { docBelongsToTenant } from '@/lib/tenantScope';
 import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
-import { hasCapability } from '@/lib/auth';
+import { hasCapability, isPlatformAdmin } from '@/lib/auth';
 import { listOfficeSyncAlerts } from '@/lib/officeSyncAlerts';
 import { listWellOperatingRequests } from '@/lib/wellOperatingRequests';
 import {
@@ -35,6 +35,10 @@ export function NotificationBell() {
   const [prefs, setPrefs] = useState<NotificationCategory[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [readVersion, setReadVersion] = useState(0); // bumped to trigger re-render on read changes
+  const [syncAlertStatus, setSyncAlertStatus] = useState('');
+  const [syncHiddenCount, setSyncHiddenCount] = useState(0);
+  const [syncOpenCount, setSyncOpenCount] = useState(0);
+  const [syncRefresh, setSyncRefresh] = useState(0);
   const dismissedRef = useRef<Set<string>>(new Set());
   const readIdsRef = useRef<Set<string>>(new Set());
   const knownIdsRef = useRef<Set<string>>(new Set());
@@ -86,7 +90,16 @@ export function NotificationBell() {
   }, [user?.uid, operatingCompanyId]);
   useEffect(() => {
     let current = true;
-    if (!authResolved || !user || !operatingCompanyId || !hasCapability(user, 'manageDrivers', userCompany) || !prefs.includes('sync_attention')) {
+    setSyncHiddenCount(0); setSyncOpenCount(0);
+    if (!authResolved || !user || !hasCapability(user, 'manageDrivers', userCompany)) {
+      setSyncAlertStatus('');
+      setNotifications(prev => prev.filter(n => n.category !== 'sync_attention'));
+      return;
+    }
+    const allCompanies = !operatingCompanyId && isPlatformAdmin(user);
+    if ((!operatingCompanyId && !allCompanies) || !prefs.includes('sync_attention')) {
+      setSyncAlertStatus(!operatingCompanyId && !allCompanies ? 'Select a company above to see its sync review alerts.'
+        : 'Sync review alerts are turned off in this browser.');
       setNotifications(prev => prev.filter(n => n.category !== 'sync_attention'));
       return;
     }
@@ -94,10 +107,15 @@ export function NotificationBell() {
     const refresh = async () => {
       if (inFlight || document.visibilityState === 'hidden') return;
       inFlight = true;
+      setSyncAlertStatus('Checking sync review alerts…');
       try {
         const rows = await listOfficeSyncAlerts(operatingCompanyId);
         if (!current) return;
-        const items: NotificationItem[] = rows.filter(r => r.companyId === operatingCompanyId && r.status === 'open' && !dismissedRef.current.has(`sync_${r.id}`)).map(r => ({
+        const open = rows.filter(r => (allCompanies || r.companyId === operatingCompanyId) && r.status === 'open');
+        setSyncOpenCount(open.length);
+        setSyncHiddenCount(open.filter(r => dismissedRef.current.has(`sync_${r.id}`)).length);
+        setSyncAlertStatus('');
+        const items: NotificationItem[] = open.filter(r => !dismissedRef.current.has(`sync_${r.id}`)).map(r => ({
           id: `sync_${r.id}`, category: 'sync_attention', title: 'Saved update needs office review',
           message: `${r.driverName || 'Driver'} · ${r.kind} · ${r.attempts} attempts`,
           timestamp: r.firstReportedAtMs, read: false, actionLabel: 'Review', actionHref: '/sync-alerts',
@@ -105,14 +123,16 @@ export function NotificationBell() {
         if (items.some(n => !knownIdsRef.current.has(n.id)) && soundEnabled) playNotificationSound();
         items.forEach(n => knownIdsRef.current.add(n.id));
         setNotifications(prev => [...prev.filter(n => n.category !== 'sync_attention'), ...items].sort((a, b) => b.timestamp - a.timestamp));
-      } catch { /* Retain last known incidents on temporary loss of service. */ }
+      } catch {
+        if (current) setSyncAlertStatus('Could not check sync review alerts. Try Refresh; previous results are retained.');
+      }
       finally { inFlight = false; }
     };
     void refresh();
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => { current = false; window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
-  }, [authResolved, user, operatingCompanyId, userCompany, prefs, isOpen, soundEnabled]);
+  }, [authResolved, user, operatingCompanyId, userCompany, prefs, isOpen, soundEnabled, syncRefresh]);
 
   // Load preferences on mount
   useEffect(() => {
@@ -504,10 +524,26 @@ export function NotificationBell() {
             </div>
           </div>
 
+          {authResolved && user && hasCapability(user, 'manageDrivers', userCompany) && (
+            <div className="px-4 py-3 border-b border-gray-700 text-xs text-gray-300" role="status">
+              <p>{syncAlertStatus || `${syncOpenCount} open sync review alerts ${operatingCompanyId ? 'for the selected company' : 'across companies'}.`}</p>
+              {(operatingCompanyId || isPlatformAdmin(user)) && <div className="mt-2 flex gap-3">
+                {!prefs.includes('sync_attention') ? <button className="underline text-blue-300" onClick={() => togglePref('sync_attention')}>Turn on sync alerts</button>
+                  : <button className="underline text-blue-300" onClick={() => setSyncRefresh(n => n + 1)}>Refresh alerts</button>}
+                {syncHiddenCount > 0 && <button className="underline text-blue-300" onClick={() => {
+                  for (const id of dismissedRef.current) if (id.startsWith('sync_')) dismissedRef.current.delete(id);
+                  saveDismissedIds(dismissedRef.current);
+                  setSyncRefresh(n => n + 1);
+                }}>Show {syncHiddenCount} hidden sync alerts</button>}
+              </div>}
+            </div>
+          )}
+
           {/* Settings panel */}
           {showSettings && (
             <div className="px-4 py-3 border-b border-gray-700 bg-gray-750">
               <p className="text-gray-400 text-xs mb-2 font-medium">Notify me about:</p>
+              <p className="text-gray-400 text-xs mb-2">Settings, read badges and dismissals are saved in this browser. The badge counts unread notifications.</p>
               <div className="grid grid-cols-2 gap-1.5">
                 {(Object.keys(CATEGORY_LABELS) as NotificationCategory[]).map(cat => (
                   <label key={cat} className="flex items-center gap-2 text-xs cursor-pointer py-0.5">

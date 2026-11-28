@@ -78,3 +78,16 @@ test('staff reads are server-company-scoped, capability-checked, and reject clie
   expect(filters).toContainEqual(['status', '==', 'open']);
   expect(requireTrustedCompanyCapability).toHaveBeenCalledWith('staff', 'manageDrivers');
 });
+
+test('all-company inbox requires server-verified platform admin, never a client role or tenant admin', async () => {
+  await expect((adminListSyncAlerts as any)({auth:{uid:'staff'},data:{allCompanies:true}})).rejects.toThrow('platform_admin_required');
+  await expect((adminListSyncAlerts as any)({auth:{uid:'staff'},data:{allCompanies:true,role:'it'}})).rejects.toThrow('invalid_scope');
+  await expect((adminListSyncAlerts as any)({auth:{uid:'staff'},data:{allCompanies:true,companyId:'company1'}})).rejects.toThrow('invalid_scope');
+  await expect((adminListSyncAlerts as any)({auth:{uid:'staff'},data:{allCompanies:false}})).rejects.toThrow('invalid_scope');
+  expect(filters).toHaveLength(0);
+  (requireRegisteredDashboardUser as jest.Mock).mockResolvedValueOnce({isPlatformAdmin:true});
+  await (adminListSyncAlerts as any)({auth:{uid:'platform'},data:{allCompanies:true}});
+  expect(filters).toEqual([['status','==','open']]);
+  expect(requireTrustedCompanyCapability).not.toHaveBeenCalled();
+  expect(writes).toHaveLength(0);
+});
