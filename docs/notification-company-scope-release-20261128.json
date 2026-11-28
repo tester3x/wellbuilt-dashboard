@@ -1,0 +1,52 @@
+{
+  "state": "Deployed and live browser verified",
+  "at": "2026-11-28T14:12:47.066588+00:00",
+  "problem": "Same platform account showed12 sync alerts for Liquid Gold but zero after selecting Show all companies; operating-company selection and notification preferences are browser-local.",
+  "desktopObservationLimit": "Actual remote desktop browser settings were not directly inspected. Reproduced the reported empty-versus12 symptom with the same signed-in account in the available browser; desktop reload/user confirmation remains external.",
+  "hosting": {
+    "project": "wellbuilt-sync",
+    "sourceCommit": "139816161bac325e4720db0833e71e76f175569e",
+    "verification": "Mandatory certified preflight passed;430live artifacts byte-matched; shared approved checkpoint advanced normally"
+  },
+  "backend": {
+    "resource": "functions:dashboard:adminListSyncAlerts",
+    "sourceCommit": "36ffece5",
+    "state": "ACTIVE",
+    "updateTime": "2026-11-28T14:06:11.814188901Z",
+    "compiledSourceSha256": "7388efebeabb6740e476fa5984a941f3ee1712c3cc1c6adbf6b7c8e9994cd924",
+    "scope": "Explicit allCompanies request allowed only for server-verified platform administrator; ordinary staff remain trusted-company scoped; mixed scope/client role injection rejected. Read-only queries, bounded50 rows."
+  },
+  "changes": [
+    "Platform Show all companies now includes sync alerts instead of silently skipping the feed",
+    "Sync-review page accepts the same authorized all-company scope",
+    "Bell shows open-alert count separately from browser-local unread badge",
+    "Disabled preference and failed reads explain why alerts are absent",
+    "Explicit refresh and scope-limited restoration of locally dismissed open sync alerts",
+    "No interval polling added; existing entry/focus/bell refreshes retained"
+  ],
+  "validation": {
+    "backend": "7officeSyncAlerts tests passed plus functions TypeScript",
+    "frontend": "Actual notification effect regression added to mandatory Hosting preflight: all-company versus tenant filtering, missing scope, disabled preference, hidden counts, read error, no polling, concurrent read coalescing and disposed callbacks; existing preference migration and full Hosting checks passed",
+    "liveBrowser": [
+      "Before repair: same account12underLiquid Gold, zero/No notifications with Show all companies",
+      "After repair: Show all companies badge12 and12visible sync alerts",
+      "After repair: Liquid Gold badge12 and same12visible sync alerts",
+      "Turning sync alerts off displayed browser-specific explanation and Turn on action",
+      "Turn on action restored12; original enabled preference and Liquid Gold company selection restored"
+    ],
+    "serverOpenAlertCount": 12,
+    "serverAllCompanyOpenAlertCount": 12,
+    "allOpenAlertsCompany": "liquid-gold"
+  },
+  "preserved": {
+    "alertsResolvedOrDismissed": false,
+    "pendingWorkResent": false,
+    "signedRecordsChanged": false,
+    "phoneAccessed": false,
+    "jobOperated": false,
+    "rulesDeployed": false,
+    "otherFunctionsDeployed": false
+  },
+  "knownBehavior": "Read badges, sound/preferences and dismissals remain local to each browser, now explicitly explained. This release does not synchronize read/dismissal state across devices.",
+  "privateEvidence": "C:/dev/release-artifacts/notification-scope-function-deploy.txt; notification-scope-hosting-deploy.txt; notifications-all-companies-backend-tests.txt; adminListSyncAlerts-live.json/.zip; dashboard-alert-count-all-before.json; live CUA observations in task"
+}
