@@ -1,0 +1,40 @@
+{
+  "hosting": {
+    "sourceCommit": "765db98009d219fd11c1f8d5126113f67783a815",
+    "project": "wellbuilt-sync",
+    "verification": "430 live artifacts byte-matched by mandatory postdeploy gate; approved checkpoint advanced",
+    "checks": "Certified full Hosting preflight passed, including responsive header/photo review, authenticated routes, src/lib tests and retained behavior checks"
+  },
+  "backend": {
+    "sourceCommit": "b00cf2ee",
+    "resource": "functions:dashboard:reviewWellOperatingStatus",
+    "project": "wellbuilt-sync",
+    "updateTime": "2026-11-28T01:28:00.915144408Z",
+    "state": "ACTIVE",
+    "verifiedCompiledSourceSha256": "2198a04d34ddcfc7d7cd397ded2e868ae0f1554839891724a5ec1424a7076f3e",
+    "driverWellOperatingStatusUnchangedUpdateTime": "2026-11-28T00:01:10.319330921Z",
+    "checks": "19 tests passed across wellOperatingStatus, wellOperatingReport and wellOperatingBootstrap; functions TypeScript passed",
+    "fix": "Cold RTDB transaction null cache caused an immediate local abort reported as reviewer conflict. Null proposal now allows server CAS retry without resurrecting a missing row; committed reviewer/action verified before applying. Competing reviewer rejection remains tested."
+  },
+  "nativeVerification": {
+    "app": "WB Tickets485, S24",
+    "profile": "MBiPhone helper",
+    "well": "Burger 1 test well",
+    "requestId": "wos_report_1795829015424_ub374jg5",
+    "requestCount": 1,
+    "statusBeforeApproval": "pending; well Up",
+    "dispatchBell": "Well status approval requested; MBiPhone \u00b7 Burger 1 \u2192 Down",
+    "reviewLink": "/location-review#well-status-requests",
+    "statusAfterApproval": "approved; well Down",
+    "appliedOperationCount": 1,
+    "requestRemovedFromQueueAndBell": true,
+    "lastPhysicalPickupUnchanged": true,
+    "signedInspectionsChanged": false,
+    "foldTouched": false,
+    "testJobLeftOpen": true
+  },
+  "refreshPolicy": "Authenticated company-scoped bounded list on entry/focus/visibility/bell opening; coalesced in-flight reads per account and company; no interval polling or rules change. Review completion refreshes bell.",
+  "rulesDeployed": false,
+  "historicalResends": false,
+  "privateEvidence": "C:/dev/release-artifacts/well-status-notification-hosting.txt; wbt485-review-function-deploy.txt; wbt485-helper-before-approval.json; wbt485-helper-after-approval.json"
+}
