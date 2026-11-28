@@ -1,0 +1,26 @@
+{
+  "sourceCommit": "faa01c6c5c18fd60e7b7d2460da2d3c4fa45a97f",
+  "project": "wellbuilt-sync",
+  "deployedFunction": "driverWellOperatingStatus",
+  "codebase": "dashboard",
+  "region": "us-central1",
+  "updateTimeUTC": "2026-11-28T00:01:10.319330921Z",
+  "state": "ACTIVE",
+  "tests": "34 passed across5 suites; TypeScript/function build passed",
+  "verifiedSource": {
+    "wellOperatingStatusNormalizedSha256": "78d9861d5373d6b2f1cb496c5fafa3fd553f391c9d317ffdbc617c3091f09be3",
+    "wellOperatingReportNormalizedSha256": "935e6833306c1761ebbff1ab79dee81821fe09420915af3abb9091dd0bd19ca9",
+    "normalizedSourceMatchesLocal": true
+  },
+  "otherFunctionCheck": {
+    "reviewWellOperatingStatusUpdateTimeUTC": "2026-11-26T21:00:40.237945342Z",
+    "unchanged": true
+  },
+  "scope": "Only dashboard:driverWellOperatingStatus. No rules/indexes/Hosting/other functions/watchdog changes; strict rules held. No historical resends.",
+  "nativeS24InProgress": "WB T484 Down on Depart and Up on Close each delivered one job-bound dispatch level message,10bbl top120in bottom117in. Unchanged-status separate job awaiting user JSA acknowledgment.",
+  "evidence": [
+    "C:/dev/release-artifacts/wbt483-driverWellOperatingStatus-deploy-scoped.txt",
+    "C:/dev/release-artifacts/wbt484-live-function-source-check.json",
+    "C:/dev/release-artifacts/wbt-status-report-backend-tests.txt"
+  ]
+}
