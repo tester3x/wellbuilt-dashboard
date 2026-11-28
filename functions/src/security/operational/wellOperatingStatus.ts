@@ -130,11 +130,16 @@ export async function reviewWellOperatingStatusHandler(request: any) {
   if (!row || row.companyId !== staff.companyId) throw new HttpsError('not-found', 'Request not found');
   if (row.status !== 'pending') return { status: row.status };
   const decision = await ref.transaction(current => {
-    if (!current || current.status !== 'pending' || (current.reviewDecision
+    // A cold SDK cache may supply null before the server CAS reads the row.
+    // Propose null (never recreate a missing request) so an existing server row
+    // is retried, rather than aborting locally as a false reviewer conflict.
+    if (current === null) return null;
+    if (current.status !== 'pending' || (current.reviewDecision
       && (current.reviewDecision !== data.action || current.reviewDecisionBy !== staff.uid))) return;
     return { ...current, reviewDecision: data.action, reviewDecisionBy: staff.uid };
   });
-  if (!decision.committed) throw fail('Another reviewer already handled this request');
+  if (!decision.committed || decision.snapshot.val()?.reviewDecision !== data.action
+    || decision.snapshot.val()?.reviewDecisionBy !== staff.uid) throw fail('Another reviewer already handled this request');
   if (data.action === 'reject') {
     await ref.update({ status: 'rejected', reviewedBy: staff.uid, reviewedAt: new Date().toISOString() });
     return { status: 'rejected' };

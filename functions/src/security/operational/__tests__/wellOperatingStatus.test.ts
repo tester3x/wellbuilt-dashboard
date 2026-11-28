@@ -17,7 +17,7 @@ class MockRef {
   async transaction(update: any) {
     // A cold SDK cache first supplies null. Undefined aborts locally; a proposal
     // makes it to server CAS, which retries against the actual stored value.
-    if (this.path.startsWith('wellOperatingLocks/') && update(null) === undefined)
+    if ((this.path.startsWith('wellOperatingLocks/') || this.path.startsWith('wellOperatingRequests/')) && update(null) === undefined)
       return { committed: false, snapshot: { val: () => mockGet(this.path) } };
     const v = update(mockGet(this.path)); if (v !== undefined) mockSet(this.path, v);
     return { committed: v !== undefined, snapshot: { val: () => mockGet(this.path) } }; }
@@ -74,6 +74,17 @@ test('company administration can approve even without dispatch permission', asyn
   await driver(req('request', intent));
   await staff({ auth: { uid: 'admin', token: {} }, data: { action: 'approve', id: intent.operationId } });
   expect(mockGet('wells/Test Well/status/isDown')).toBe(true);
+});
+
+test('cold-cache review still respects another reviewer reservation and rejection', async () => {
+  await driver(req('request', intent));
+  mockSet('wellOperatingRequests/liquid-gold/'+intent.operationId+'/reviewDecision', 'reject');
+  mockSet('wellOperatingRequests/liquid-gold/'+intent.operationId+'/reviewDecisionBy', 'admin');
+  await expect(staff({auth:{uid:'office',token:{}},data:{action:'approve',id:intent.operationId}})).rejects.toThrow('Another reviewer');
+  expect(mockGet('wells/Test Well/status/isDown')).toBe(false);
+  await staff({auth:{uid:'admin',token:{}},data:{action:'reject',id:intent.operationId}});
+  expect(mockGet('wellOperatingRequests/liquid-gold/'+intent.operationId+'/status')).toBe('rejected');
+  expect(mockGet('wellOperatingOperations')).toBeNull();
 });
 test('an old company token cannot read or request changes after the profile moves company', async () => {
   mockSet('drivers/profiles/driver/companyId', 'other');
