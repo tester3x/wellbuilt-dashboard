@@ -9,6 +9,7 @@ import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
 import { listOfficeSyncAlerts } from '@/lib/officeSyncAlerts';
+import { listWellOperatingRequests } from '@/lib/wellOperatingRequests';
 import {
   NotificationItem,
   NotificationCategory,
@@ -40,6 +41,44 @@ export function NotificationBell() {
   const pendingInitialLoadDone = useRef(false);
   const dispatchInitialLoadDone = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let current = true;
+    setNotifications(prev => prev.filter(n => !n.id.startsWith('well_status_request_')));
+    if (!authResolved || !user || !operatingCompanyId || !prefs.includes('dispatch_update')
+      || !(hasCapability(user, 'createDispatch', userCompany) || hasCapability(user, 'manageCompany', userCompany))) return;
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight || document.visibilityState === 'hidden') return;
+      inFlight = true;
+      try {
+        const rows = await listWellOperatingRequests(user.uid, operatingCompanyId);
+        if (!current) return;
+        const items: NotificationItem[] = rows.filter(r => r.companyId === operatingCompanyId
+          && !dismissedRef.current.has(`well_status_request_${r.id}`)).map(r => ({
+          id: `well_status_request_${r.id}`, category: 'dispatch_update', title: 'Well status approval requested',
+          message: `${r.driverName || 'Driver'} · ${r.wellConfigKey} → ${r.down ? 'Down' : 'Up'}`,
+          timestamp: Date.parse(r.requestedAt), read: false, actionLabel: 'Review request',
+          actionHref: '/location-review#well-status-requests',
+        }));
+        if (soundEnabled && items.some(n => !knownIdsRef.current.has(n.id))) playNotificationSound();
+        items.forEach(n => knownIdsRef.current.add(n.id));
+        setNotifications(prev => [...prev.filter(n => !n.id.startsWith('well_status_request_')), ...items]
+          .sort((a, b) => b.timestamp - a.timestamp));
+      } catch { /* Keep the last known requests if temporarily offline. */ }
+      finally { inFlight = false; }
+    };
+    void refresh();
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('well-status-reviewed', refresh);
+    return () => {
+      current = false;
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('well-status-reviewed', refresh);
+    };
+  }, [authResolved, user, operatingCompanyId, userCompany, prefs, isOpen, soundEnabled]);
 
   // Bounded server-scoped reads on entry, focus and opening the bell. No polling.
   useEffect(() => {
@@ -236,7 +275,7 @@ export function NotificationBell() {
       dispatchInitialLoadDone.current = true;
 
       setNotifications(prev => {
-        const nonDispatch = prev.filter(n => n.category !== 'dispatch_update');
+        const nonDispatch = prev.filter(n => !n.id.startsWith('dispatch_'));
         const merged = [...nonDispatch, ...items];
         // Deduplicate by ID
         const seen = new Set<string>();

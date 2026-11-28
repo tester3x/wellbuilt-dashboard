@@ -1,27 +1,32 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from '@/lib/firebase';
+import { listWellOperatingRequests, type WellOperatingRequest } from '@/lib/wellOperatingRequests';
+import { useAuth } from '@/contexts/AuthContext';
 
-type Item = { id: string; wellConfigKey: string; driverName: string; down: boolean; requestedAt: string };
+type Item = WellOperatingRequest;
 export function WellOperatingReviews() {
+  const { user, operatingCompanyId } = useAuth();
   const [items, setItems] = useState<Item[] | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
   async function load() {
+    if (!user || !operatingCompanyId) return;
     setBusy(true); setError('');
-    try { const result = await httpsCallable(getFirebaseFunctions(), 'reviewWellOperatingStatus')({ action: 'list' });
-      setItems((result.data as { items: Item[] }).items); }
+    try { setItems(await listWellOperatingRequests(user.uid, operatingCompanyId)); }
     catch (e) { setError(e instanceof Error ? e.message : 'Could not load status requests'); }
     finally { setBusy(false); }
   }
   async function review(id: string, action: string) {
     setBusy(true); setError('');
-    try { await httpsCallable(getFirebaseFunctions(), 'reviewWellOperatingStatus')({ id, action }); await load(); }
+    try { await httpsCallable(getFirebaseFunctions(), 'reviewWellOperatingStatus')({ id, action }); await load();
+      window.dispatchEvent(new Event('well-status-reviewed')); }
     catch (e) { setError(e instanceof Error ? e.message : 'Could not review status request'); }
     finally { setBusy(false); }
   }
-  return <section className="space-y-3 border-t border-gray-700 pt-6">
+  useEffect(() => { setItems(null); void load(); }, [user?.uid, operatingCompanyId]);
+  return <section id="well-status-requests" className="space-y-3 border-t border-gray-700 pt-6">
     <h2 className="text-xl font-bold">Well Up / Down requests</h2>
-    <p>Drivers without this well in their WB Mobile route access need approval to change its operating status.</p>
+    <p>Drivers without explicit permission to manage this route need approval to change its operating status.</p>
     <button disabled={busy} onClick={() => void load()} className="rounded bg-gray-800 px-4 py-2">{busy ? 'Loading…' : 'Load status requests'}</button>
     {error && <p role="alert" className="text-red-400">{error}</p>}
     {items?.length === 0 && <p>No pending well status requests.</p>}
